@@ -26,8 +26,9 @@ section with the notices that apply to the device and its contracts.
 | Add, change or delete notices and contracts, change the alert settings, run the alert check | `lifecycle` and `lifecycle.write` (admins have both) |
 
 Grant the features to an access group in Settings. Accounts limited to
-selected inventory groups do not get the lifecycle feature (the lifecycle
-pages are not filtered by inventory group).
+selected inventory groups see the lifecycle status and contracts of their
+devices; notices are read only and the alert settings and check are refused
+(see [object-level permissions](object-permissions.md)).
 
 Every change is written to the audit log under the `lifecycle` category and
 to the change log (`hardware_notice`, `support_contract`), and is sent to

@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { MemoryRouter } from 'react-router';
 import { describe, expect, it, vi } from 'vitest';
 
-import { SSO_ERROR_MESSAGES, ssoErrorMessage, ssoLoginHref, type SsoStatus } from '@/api/auth';
+import { SSO_ERROR_MESSAGES, enabledSsoMethods, ssoErrorMessage, ssoLoginHref, type SsoStatus } from '@/api/auth';
 
 import { Login } from './Login';
 
@@ -73,5 +73,40 @@ describe('Login', () => {
     expect(html).not.toContain('sso_error=account');
     const primary = render('/login?sso_error=state', enabled(true));
     expect(primary).toContain('The sign-in request expired or did not match.');
+  });
+});
+
+describe('Login with SAML', () => {
+  const both = (samlPrimary = false): SsoStatus => ({
+    oidc: { enabled: true, label: 'Sign in with Example ID', primary: false },
+    saml: { enabled: true, label: 'Sign in with Example SAML', primary: samlPrimary },
+  });
+
+  it('builds the SAML login href', () => {
+    expect(ssoLoginHref('/devices/7', '', 'saml')).toBe('/api/auth/saml/login?next=%2Fdevices%2F7');
+    expect(ssoLoginHref('/', '', 'saml')).toBe('/api/auth/saml/login');
+  });
+
+  it('lists enabled methods, OIDC first', () => {
+    expect(enabledSsoMethods(undefined)).toEqual([]);
+    expect(enabledSsoMethods(both()).map((m) => m.protocol)).toEqual(['oidc', 'saml']);
+    expect(
+      enabledSsoMethods({ saml: { enabled: false, label: 'x', primary: true } }).map((m) => m.protocol),
+    ).toEqual([]);
+  });
+
+  it('offers both buttons under the password form', () => {
+    const html = render('/devices/7', both());
+    expect(html).toContain('href="/api/auth/oidc/login?next=%2Fdevices%2F7"');
+    expect(html).toContain('href="/api/auth/saml/login?next=%2Fdevices%2F7"');
+    expect(html).toContain('Sign in with Example SAML');
+    expect(html).toContain('login-password');
+  });
+
+  it('leads with SSO when SAML alone is primary', () => {
+    const html = render('/', { saml: { enabled: true, label: 'Sign in with Example SAML', primary: true } });
+    expect(html).toContain('href="/api/auth/saml/login"');
+    expect(html).toContain('Use a local account');
+    expect(html).not.toContain('login-password');
   });
 });

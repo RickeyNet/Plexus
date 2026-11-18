@@ -12,6 +12,7 @@ import { EmptyState } from '@/components/EmptyState';
 import { ImportDialog } from '@/components/ImportDialog';
 import { LoadingState } from '@/components/LoadingState';
 import { QueryError } from '@/components/QueryError';
+import { ObjectDataPanel } from '@/components/ObjectDataPanel';
 import { clickableProps } from '@/lib/clickable';
 import { addressRoleLabel, formatInterfaceAddress } from '@/lib/networkObjects';
 import { usePendingKeys } from '@/lib/usePendingKeys';
@@ -19,6 +20,7 @@ import { DETAIL_STACK_STYLE } from '@/lib/wideDetail';
 
 import { VrfModal } from './NetworkObjectModals';
 import { DetailSection, OriginBadge, SplitLayout } from './NetworkObjectParts';
+import { VrfRouteTargetsSection } from './VrfRouteTargetsModal';
 
 const RIGHT = { textAlign: 'right' } as const;
 
@@ -174,6 +176,7 @@ export function VrfsTab() {
 
 export function VrfDetailPanel({ id }: { id: number | null }) {
   const q = useVrf(id);
+  const isAdmin = useAuthStatus().data?.role === 'admin';
   if (id === null) {
     return (
       <>
@@ -200,9 +203,11 @@ export function VrfDetailPanel({ id }: { id: number | null }) {
         <h3 style={{ margin: 0 }}>VRF {v.name}</h3>
         <div className="text-muted" style={{ fontSize: '0.9em' }}>
           {v.rd ? `RD ${v.rd}` : 'No route distinguisher'}
+          {v.namespace_name ? ` · Namespace ${v.namespace_name}` : ''}
           {v.description ? ` · ${v.description}` : ''}
         </div>
       </div>
+      <VrfRouteTargetsSection vrf={v} canEdit={isAdmin} />
       <DetailSection title="Devices" count={v.devices.length} empty="No device has an interface or route in this VRF.">
         <DataTable compact aria-label={`Devices in VRF ${v.name}`} maxHeight={240}>
           <thead>
@@ -267,6 +272,7 @@ export function VrfDetailPanel({ id }: { id: number | null }) {
         </DataTable>
       </DetailSection>
       <ChangelogPanel objectType="vrf" objectId={v.id} pageSize={10} />
+      <ObjectDataPanel objectType="vrf" objectId={v.id} />
     </div>
   );
 }

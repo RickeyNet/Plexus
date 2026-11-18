@@ -12,6 +12,7 @@ import ipaddress
 import json
 import os
 import re
+from collections.abc import Iterable
 from datetime import UTC, datetime, timedelta
 
 import routes.database as _dbcore
@@ -22,6 +23,7 @@ from routes.database import (
     row_to_dict,
     rows_to_list,
 )
+from routes.db.inventory import group_ids_condition
 
 __all__ = [
     "upsert_metric_baseline",
@@ -348,10 +350,25 @@ async def create_upgrade_campaign(name, description, image_map, options, created
         await db.close()
 
 
-async def get_all_upgrade_campaigns():
+async def get_all_upgrade_campaigns(*, group_ids: Iterable[int] | None = None):
+    """Every upgrade campaign, newest first. ``group_ids`` (object scope):
+    only campaigns with devices that are all inventory hosts in those
+    groups (an ad-hoc device or a host in another group hides it)."""
+    if group_ids is None:
+        query, params = "SELECT * FROM upgrade_campaigns ORDER BY created_at DESC", ()
+    else:
+        group_sql, params = group_ids_condition("scope_h.group_id", group_ids)
+        query = (
+            "SELECT c.* FROM upgrade_campaigns c"
+            " WHERE EXISTS (SELECT 1 FROM upgrade_devices scope_d WHERE scope_d.campaign_id = c.id)"
+            " AND NOT EXISTS (SELECT 1 FROM upgrade_devices scope_d"
+            " LEFT JOIN hosts scope_h ON scope_h.id = scope_d.host_id"
+            f" WHERE scope_d.campaign_id = c.id AND (scope_h.id IS NULL OR NOT ({group_sql})))"
+            " ORDER BY c.created_at DESC"
+        )
     db = await _dbcore.get_db(read_only=True)
     try:
-        cursor = await db.execute("SELECT * FROM upgrade_campaigns ORDER BY created_at DESC")
+        cursor = await db.execute(query, params)  # nosec B608
         return [dict(r) for r in await cursor.fetchall()]
     finally:
         await db.close()

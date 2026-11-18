@@ -215,6 +215,16 @@ server for its **OpenVPN server** details and **Connected clients**. An
 IPsec tunnel's details list its **Child SAs**: each installed child SA with
 its state, local and remote networks, mode, encryption and traffic.
 
+When the firewall runs an OpenVPN server, the firewall node lists **All
+users**: every OpenVPN user Plexus has seen connected to any of its server
+instances, connected now or not. OPNsense keeps no list of the users allowed
+to connect, so the clients connected at collection time are recorded (the
+user name, else the certificate's common name; the tunnel address; the public
+address; the common name as the device when the user logged in with a user
+name of their own), and a user seen by an earlier collection stays listed as
+*disconnected*, with the last addresses seen, for 180 days after they were
+last seen. The search box finds a user who is not connected right now there.
+
 The installed child SAs are read per connection that has an SA
 (`ipsec/sessions/search_phase2`), the configured ones per connection of the
 "Connections" model (`ipsec/connections/search_child`; a legacy tunnel has

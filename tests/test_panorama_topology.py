@@ -13,7 +13,8 @@ Covers the pipeline with no network access:
   * normalize        - HA pair box, WAN stubs, the detail sections of the
                        contract, template variables, the effective rule
                        order with targets and default rules, NAT, tunnels,
-                       GlobalProtect users, the Panorama node
+                       GlobalProtect users (connected and logged out, the
+                       remote user directory), the Panorama node
   * subnets / merge  - the subnet index, the merge into the Topology graph,
                        the VM-Series joined to its AWS instance
   * forwarding       - interfaces, routes, IPsec, the security policy, NAT
@@ -27,6 +28,7 @@ import asyncio
 import copy
 import json
 import xml.etree.ElementTree as ElementTree
+from datetime import UTC, datetime
 from urllib.parse import parse_qs
 
 import httpx
@@ -62,8 +64,9 @@ from netcontrol.integrations.panorama.collector import (
     scope_root,
     template_device_xpath,
 )
-from netcontrol.integrations.panorama.normalize import PANORAMA_NODE_ID, PANORAMA_SITE_ID, build_snapshot
+from netcontrol.integrations.panorama.normalize import PANORAMA_NODE_ID, PANORAMA_SITE_ID, _gp_time, build_snapshot
 from netcontrol.integrations.panorama.sample import AWS_VM, BRANCH, HQ_1, HQ_2, PARTNER_PEER, build_sample_raw
+from netcontrol.integrations.remote_users import DIRECTORY_KEY, SECTION_TITLE, apply_user_directory
 from netcontrol.integrations.software.versions import snapshot_devices
 
 API_KEY = "LUFRPT1-test-key=="
@@ -467,10 +470,30 @@ async def test_collect_panorama_is_best_effort_past_the_device_list():
     assert raw["security_rules"]["Corporate"]["pre"] == [] and "gp_users" not in raw["state"][HQ_1]
     snapshot = build_snapshot(raw)
     assert len(snapshot["collection"]["errors"]) == 5 and snapshot["summary"]["devices"] == 4
+    assert "gp_previous_users" not in raw["state"][HQ_1] and DIRECTORY_KEY not in snapshot
     # Without the flow table the IPsec SAs still tell the tunnels' state.
     hq = _node(snapshot, f"d:{HQ_1}")
     states = {r["Tunnel"]: r["State"] for r in _table(hq, "IPsec tunnels")}
     assert states == {"tun-branch": "up", "tun-partner": "down"}
+
+
+@pytest.mark.asyncio
+async def test_collect_panorama_records_a_failed_previous_user_read_and_still_builds():
+    fake = _FakePanorama()
+    previous_cmd = "<show><global-protect-gateway><previous-user/></global-protect-gateway></show>"
+    fake.fail = {"<previous-user/>": 500}
+    async with _client(fake, max_retries=0) as client:
+        raw = await collect_panorama(client, "", None)
+    assert [e["path"] for e in raw["errors"]] == [previous_cmd] * 4
+    assert all("gp_previous_users" not in state for state in raw["state"].values())
+    assert raw["state"][HQ_1]["gp_users"]
+    snapshot = build_snapshot(raw)
+    assert len(snapshot["collection"]["errors"]) == 4 and snapshot["summary"]["remote_users"] == 3
+    # The connected users are still the directory; the logged-out ones were not read.
+    directory = snapshot[DIRECTORY_KEY]
+    assert directory["node_id"] == PANORAMA_NODE_ID and len(directory["users"]) == 3
+    assert {u["status"] for u in directory["users"]} == {"connected"}
+    assert _kv(_node(snapshot, f"u:{HQ_1}"), "Remote access users")["Logged out"] == "not collected"
 
 
 @pytest.mark.asyncio
@@ -551,6 +574,7 @@ def test_snapshot_summary_counts_every_part(snapshot):
     assert snapshot["provider"] == "panorama" and snapshot["collection"]["sources"] == ["Palo Alto Panorama XML API"]
     assert summary["sites"] == 3 and summary["devices"] == 4 and summary["ha_pairs"] == 1
     assert summary["vpn_tunnels"] == 2 and summary["wan_uplinks"] == 4 and summary["remote_users"] == 3
+    assert summary["registered_users"] == 5
     assert summary["device_groups"] == 2 and summary["security_rules"] == 13 and summary["nat_rules"] == 5
 
 
@@ -715,6 +739,94 @@ def test_snapshot_globalprotect_users_and_pools(snapshot):
     assert _section(site, "VPN address pools")["rows"] == [
         ["10.252.0.0/22", "10.252.0.0/22", "10.252.0.0/22", "GP-HQ-Gateway"]
     ]
+
+
+def test_snapshot_directory_lists_connected_and_logged_out_users(snapshot):
+    directory = snapshot[DIRECTORY_KEY]
+    assert directory["node_id"] == PANORAMA_NODE_ID
+    users = {u["name"]: u for u in directory["users"]}
+    # alex.kim logged out earlier but is connected now: listed once, connected.
+    assert list(users) == [
+        "corp\\alex.kim",
+        "corp\\dana.reyes",
+        "corp\\sam.okafor",
+        "corp\\priya.nair",
+        "corp\\jordan.lee",
+    ]
+    alex = users["corp\\alex.kim"]
+    assert (alex["status"], alex["source"], alex["address"]) == ("connected", "session", "10.252.0.11")
+    priya = users["corp\\priya.nair"]
+    assert (priya["status"], priya["source"]) == ("disconnected", "registry")
+    assert priya["last_seen"] == "2026-10-08T17:40:05+00:00" and priya["device"] == "LT-PNAIR"
+    # A logged-out user has no tunnel address now.
+    assert priya["address"] == "" and priya["public_ip"] == "198.51.100.151"
+    # No UTC time: the firewall's text time, the year taken from the collection.
+    assert users["corp\\jordan.lee"]["last_seen"] == "2026-10-07T12:05:30+00:00"
+    holder = _node(snapshot, f"u:{HQ_1}")
+    remote = _kv(holder, "Remote access users")
+    assert remote["Connected now"] == "3" and remote["Logged out"] == "2"
+    # Stored, the directory becomes the "All users" table of its node.
+    stored = copy.deepcopy(snapshot)
+    assert apply_user_directory(stored, None, now=datetime(2026, 10, 9, 8, 30, tzinfo=UTC)) == 5
+    table = {r["User"]: r for r in _table(_node(stored, PANORAMA_NODE_ID), SECTION_TITLE)}
+    assert table["corp\\jordan.lee"]["Status"] == "disconnected"
+    assert table["corp\\jordan.lee"]["Known from"] == "The source's user list"
+
+
+def test_snapshot_logged_out_users_are_no_subnet_and_no_path_end(snapshot):
+    # Their last virtual addresses (192.0.2.41-43) are in no pool, subnet,
+    # forwarding table or section: only the directory knows the users.
+    rest = {k: v for k, v in snapshot.items() if k != DIRECTORY_KEY}
+    text = json.dumps(rest)
+    assert "192.0.2.4" not in text and "priya.nair" not in text and "jordan.lee" not in text
+    assert not any(s["cidr"].startswith("192.0.2.") for s in subnet_index(snapshot))
+    assert [r["User"] for r in _table(_node(snapshot, f"u:{HQ_1}"), "Connected users")] == [
+        "alex.kim",
+        "dana.reyes",
+        "sam.okafor",
+    ]
+
+
+def test_snapshot_directory_node_exists_with_no_one_connected():
+    raw = build_sample_raw()
+    raw["state"][HQ_1]["gp_users"] = None
+    snapshot = build_snapshot(raw)
+    assert snapshot["summary"]["remote_users"] == 0 and snapshot["summary"]["registered_users"] == 3
+    directory = snapshot[DIRECTORY_KEY]
+    assert directory["node_id"] == PANORAMA_NODE_ID
+    assert _node(snapshot, f"u:{HQ_1}")["label"] == "GlobalProtect users (0)"
+    assert {u["status"] for u in directory["users"]} == {"disconnected"}
+    assert {u["source"] for u in directory["users"]} == {"registry"}
+    # A firewall whose gateway configuration was not read still lists its users.
+    raw = build_sample_raw()
+    for serial in (HQ_1, HQ_2):
+        raw["state"][serial]["gp_users"] = None
+        raw["state"][serial]["gp_previous_users"] = None
+    raw["state"][BRANCH]["gp_previous_users"] = [
+        {"domain": "corp", "username": "lee.park@example.com", "logout-time": "Oct.09 07:00:00"}
+    ]
+    snapshot = build_snapshot(raw)
+    directory = snapshot[DIRECTORY_KEY]
+    assert directory["node_id"] == PANORAMA_NODE_ID and _node(snapshot, f"u:{BRANCH}")["kind"] == "users"
+    assert directory["users"][0]["email"] == "lee.park@example.com"
+    assert directory["users"][0]["name"] == "lee.park@example.com"
+    # Nothing read: no directory, the stored one is kept as history.
+    raw = build_sample_raw()
+    for state in raw["state"].values():
+        state.pop("gp_users", None)
+        state.pop("gp_previous_users", None)
+    assert DIRECTORY_KEY not in build_snapshot(raw)
+
+
+def test_gp_time_reads_the_utc_epoch_or_the_yearless_text():
+    reference = datetime(2027, 1, 2, 9, 0, tzinfo=UTC)
+    assert _gp_time({"logout-time-utc": "1791481205"}, "logout-time", reference) == "2026-10-08T17:40:05+00:00"
+    # December seen in January is last year's.
+    assert _gp_time({"logout-time": "Dec.31 23:00:00"}, "logout-time", reference) == "2026-12-31T23:00:00+00:00"
+    assert _gp_time({"logout-time": "Jan.02 08:00:00"}, "logout-time", reference) == "2027-01-02T08:00:00+00:00"
+    assert _gp_time({"logout-time": "2026/12/30 10:00:00"}, "logout-time", reference) == "2026-12-30T10:00:00+00:00"
+    assert _gp_time({"logout-time": "garbage"}, "logout-time", reference) == ""
+    assert _gp_time({}, "logout-time", reference) == ""
 
 
 def test_snapshot_panorama_node_lists_the_whole_panorama(snapshot):
@@ -1016,7 +1128,8 @@ def test_api_panorama_sample_is_merged_into_the_topology(api):
     assert lan["provider"] == "panorama" and lan["kind"] == "connected" and lan["node_id"] == f"d:{BRANCH}"
     assert any(s["cidr"] == "10.252.0.0/22" and s["kind"] == "pool" for s in subnets)
     hits = api.get("/api/topology/search/deep?q=dana.reyes").json()["results"]
-    assert [(h["org_ref"], h["node_id"]) for h in hits] == [(org_ref, f"u:{HQ_1}")]
+    # The firewall's connected users, and All users on the Panorama node.
+    assert {(h["org_ref"], h["node_id"]) for h in hits} == {(org_ref, f"u:{HQ_1}"), (org_ref, PANORAMA_NODE_ID)}
     source = next(s for s in api.get("/api/topology/sources").json()["sources"] if s["type"] == "panorama")
     assert source["demo"] and not source["can_collect"] and source["status"] == "success"
     export = api.get("/api/topology/export.html")

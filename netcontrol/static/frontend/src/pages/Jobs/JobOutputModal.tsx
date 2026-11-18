@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 
+import { ApprovalSection } from '@/components/ApprovalSection';
 import { Badge, StatusBadge } from '@/components/Badge';
 import { BusyButton } from '@/components/BusyButton';
 import { CopyButton } from '@/components/CopyButton';
@@ -18,7 +19,7 @@ import {
 } from '@/api/jobs';
 import { formatBackendTime } from '@/lib/datetime';
 
-import { priorityLabel, priorityTone } from './helpers';
+import { isJobFinished, isJobRetryable, priorityLabel, priorityTone } from './helpers';
 import { formatJobInputs } from './jobInputs';
 
 interface Props {
@@ -136,7 +137,9 @@ export function JobOutputModal({ jobId, onClose, onRetried }: Props) {
   const historicalEvents: JobEvent[] = eventsQuery.data ?? [];
   const showLive = liveEvents.length > 0 || wsState === 'open' || wsState === 'connecting';
   const effectiveStatus = liveStatus || job?.status || '';
-  const isFinished = effectiveStatus && !['running', 'queued'].includes(effectiveStatus);
+  // Not finished while awaiting approval, queued or running (cancellable).
+  const isFinished = isJobFinished(effectiveStatus);
+  const approvalStatus = job?.approval_status && job.approval_status !== 'not_required' ? job.approval_status : null;
   const isDry = Boolean(job?.dry_run);
 
   function handleCancel() {
@@ -199,7 +202,7 @@ export function JobOutputModal({ jobId, onClose, onRetried }: Props) {
               {!isFinished && (
                 <button type="button" className="btn btn-danger" onClick={handleCancel}>Cancel Job</button>
               )}
-              {(effectiveStatus === 'failed' || effectiveStatus === 'cancelled') && (
+              {isJobRetryable(effectiveStatus) && (
                 <BusyButton className="btn btn-primary" busy={retryMut.isPending} busyLabel="Retrying…" onClick={handleRetry}>
                   Retry
                 </BusyButton>
@@ -234,6 +237,26 @@ export function JobOutputModal({ jobId, onClose, onRetried }: Props) {
           {formatJobInputs(job.parameters) && (
             <div className="text-muted" style={{ fontSize: '0.85rem', marginBottom: '0.5rem', overflowWrap: 'anywhere' }}>
               Inputs: {formatJobInputs(job.parameters)}
+            </div>
+          )}
+          {approvalStatus && (
+            <div style={{ marginBottom: '0.5rem' }}>
+              <ApprovalSection
+                heading="Approval:"
+                status={approvalStatus}
+                approvedBy={job.approved_by || ''}
+                approvedAt={job.approved_at || ''}
+                comment={job.approval_comment || ''}
+                requestedAt={job.queued_at || ''}
+                canApprove={false}
+                approverInput=""
+                onApproverInput={() => {}}
+                isPending={false}
+                busyAction={null}
+                onApprove={() => {}}
+                onReject={() => {}}
+                pendingNote="This job waits for approval from a user other than the requester (Delegator → Approvals). It does not run until approved."
+              />
             </div>
           )}
 

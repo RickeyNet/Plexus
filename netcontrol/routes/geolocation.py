@@ -1,4 +1,12 @@
-"""geolocation.py - Site, floor plan, and device placement API routes."""
+"""geolocation.py - Site, floor plan, and device placement API routes.
+
+Object scope: sites and floors follow the ``site`` and ``floor`` models (a
+caller limited to selected inventory groups reads a site that holds one of
+its hosts, or one its tenant or a scope rule grants, and changes one through
+its tenant or a writable rule); device counts cover its hosts, and a
+placement follows its host: it is listed when the host is readable and
+placed or removed when the host is writable.
+"""
 
 from __future__ import annotations
 
@@ -12,6 +20,16 @@ from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
+from netcontrol.object_scope import (
+    filter_rows,
+    group_filter,
+    readable_host_ids,
+    request_scope,
+    require_host,
+    require_new_row,
+    require_row,
+    scoped,
+)
 from netcontrol.organization import (
     FACILITY_MAX,
     TIME_ZONE_MAX,
@@ -133,24 +151,63 @@ class GeoPlacementUpsert(BaseModel):
 # ── Overview ──────────────────────────────────────────────────────────────────
 
 
+_SITE_NOT_FOUND = "Site not found"
+_FLOOR_NOT_FOUND = "Floor not found"
+
+
+async def _readable_sites(request: Request | None) -> list[dict]:
+    """The sites the caller may read, with device counts over its hosts."""
+    scope_kwargs = await group_filter(request)
+    sites = await db.list_geo_sites(**scope_kwargs)
+    return await filter_rows("site", sites, request) if scope_kwargs else sites
+
+
+async def _require_site(request: Request | None, site_id: int, *, write: bool = False) -> dict:
+    site = await db.get_geo_site(site_id)
+    if not site:
+        raise HTTPException(404, _SITE_NOT_FOUND)
+    await require_row(request, "site", site, write=write, not_found=_SITE_NOT_FOUND)
+    return site
+
+
+async def _require_floor(
+    request: Request | None, floor_id: int, *, write: bool = False, not_found: str = _FLOOR_NOT_FOUND
+) -> dict:
+    floor = await db.get_geo_floor(floor_id)
+    if not floor:
+        raise HTTPException(404, not_found)
+    await require_row(request, "floor", floor, write=write, not_found=not_found)
+    return floor
+
+
 @router.get("/api/geo/overview")
-async def geo_overview_api():
-    return await db.get_geo_overview()
+@scoped("list")
+async def geo_overview_api(request: Request = None):  # type: ignore[assignment]
+    scope_kwargs = await group_filter(request)
+    overview = await db.get_geo_overview(**scope_kwargs)
+    if not scope_kwargs:
+        return overview
+    readable = {int(site["id"]) for site in await _readable_sites(request)}
+    return [site for site in overview if int(site["id"]) in readable]
 
 
 # ── Sites ─────────────────────────────────────────────────────────────────────
 
 
 @router.get("/api/geo/sites")
-async def list_geo_sites_api():
-    return await db.list_geo_sites()
+@scoped("list")
+async def list_geo_sites_api(request: Request = None):  # type: ignore[assignment]
+    return await _readable_sites(request)
 
 
 @router.post("/api/geo/sites", status_code=201)
+@scoped("create")
 async def create_geo_site_api(body: GeoSiteCreate, request: Request):
     session = _get_session(request)
     user = session.get("user", "unknown") if session else "unknown"
     org = await _org_values(body)
+    if (await request_scope(request)).restricted:
+        await require_new_row(request, "site", {"id": None, "tenant_id": org.get("tenant_id")})
     try:
         site = await db.create_geo_site(
             name=body.name,
@@ -168,21 +225,21 @@ async def create_geo_site_api(body: GeoSiteCreate, request: Request):
 
 
 @router.get("/api/geo/sites/{site_id}")
-async def get_geo_site_api(site_id: int):
-    site = await db.get_geo_site(site_id)
-    if not site:
-        raise HTTPException(404, "Site not found")
+@scoped("site")
+async def get_geo_site_api(site_id: int, request: Request = None):  # type: ignore[assignment]
+    site = await _require_site(request, site_id)
     floors = await db.list_geo_floors(site_id)
     return {**site, "floors": floors}
 
 
 @router.put("/api/geo/sites/{site_id}")
+@scoped("site")
 async def update_geo_site_api(site_id: int, body: GeoSiteUpdate, request: Request):
-    existing = await db.get_geo_site(site_id)
-    if not existing:
-        raise HTTPException(404, "Site not found")
+    existing = await _require_site(request, site_id, write=True)
     updates = body.model_dump(exclude_none=True)
     updates.update(await _org_values(body))
+    if "tenant_id" in updates and (await request_scope(request)).restricted:
+        await require_new_row(request, "site", {**existing, "tenant_id": updates["tenant_id"]})
     try:
         site = await db.update_geo_site(site_id, **updates)
     except ValueError as exc:
@@ -192,10 +249,9 @@ async def update_geo_site_api(site_id: int, body: GeoSiteUpdate, request: Reques
 
 
 @router.delete("/api/geo/sites/{site_id}")
+@scoped("site")
 async def delete_geo_site_api(site_id: int, request: Request):
-    existing = await db.get_geo_site(site_id)
-    if not existing:
-        raise HTTPException(404, "Site not found")
+    existing = await _require_site(request, site_id, write=True)
     # Racks and power panels (DCIM) keep their site: delete them first.
     dcim_records = await db.count_site_dcim_records(site_id)
     if dcim_records:
@@ -214,10 +270,10 @@ async def delete_geo_site_api(site_id: int, request: Request):
 
 
 @router.post("/api/geo/sites/{site_id}/floors", status_code=201)
+@scoped("site")
 async def create_geo_floor_api(site_id: int, body: GeoFloorCreate, request: Request):
-    site = await db.get_geo_site(site_id)
-    if not site:
-        raise HTTPException(404, "Site not found")
+    await _require_site(request, site_id)
+    await require_new_row(request, "floor", {"site_id": site_id})
     try:
         floor = await db.create_geo_floor(
             site_id=site_id,
@@ -231,18 +287,15 @@ async def create_geo_floor_api(site_id: int, body: GeoFloorCreate, request: Requ
 
 
 @router.get("/api/geo/floors/{floor_id}")
-async def get_geo_floor_api(floor_id: int):
-    floor = await db.get_geo_floor(floor_id)
-    if not floor:
-        raise HTTPException(404, "Floor not found")
-    return floor
+@scoped("floor")
+async def get_geo_floor_api(floor_id: int, request: Request = None):  # type: ignore[assignment]
+    return await _require_floor(request, floor_id)
 
 
 @router.put("/api/geo/floors/{floor_id}")
+@scoped("floor")
 async def update_geo_floor_api(floor_id: int, body: GeoFloorUpdate, request: Request):
-    floor = await db.get_geo_floor(floor_id)
-    if not floor:
-        raise HTTPException(404, "Floor not found")
+    await _require_floor(request, floor_id, write=True)
     updates = body.model_dump(exclude_none=True)
     try:
         updated = await db.update_geo_floor(floor_id, **updates)
@@ -253,10 +306,9 @@ async def update_geo_floor_api(floor_id: int, body: GeoFloorUpdate, request: Req
 
 
 @router.delete("/api/geo/floors/{floor_id}")
+@scoped("floor")
 async def delete_geo_floor_api(floor_id: int, request: Request):
-    floor = await db.get_geo_floor(floor_id)
-    if not floor:
-        raise HTTPException(404, "Floor not found")
+    floor = await _require_floor(request, floor_id, write=True)
     _remove_floor_image(floor.get("image_filename"))
     await db.delete_geo_floor(floor_id)
     await _geo_audit(request, "geo_floor_delete", f"Deleted floor id={floor_id}")
@@ -284,14 +336,13 @@ def _remove_floor_image(filename: str | None) -> None:
 
 
 @router.post("/api/geo/floors/{floor_id}/image")
+@scoped("floor")
 async def upload_floor_image_api(
     floor_id: int,
     request: Request,
     file: UploadFile = File(...),
 ):
-    floor = await db.get_geo_floor(floor_id)
-    if not floor:
-        raise HTTPException(404, "Floor not found")
+    floor = await _require_floor(request, floor_id, write=True)
 
     content_type = (file.content_type or "").split(";")[0].strip()
     if content_type not in _ALLOWED_CONTENT_TYPES:
@@ -349,10 +400,9 @@ async def upload_floor_image_api(
 
 
 @router.get("/api/geo/floors/{floor_id}/image")
-async def get_floor_image_api(floor_id: int):
-    floor = await db.get_geo_floor(floor_id)
-    if not floor:
-        raise HTTPException(404, "Floor not found")
+@scoped("floor")
+async def get_floor_image_api(floor_id: int, request: Request = None):  # type: ignore[assignment]
+    floor = await _require_floor(request, floor_id)
     filename = floor.get("image_filename")
     if not filename:
         raise HTTPException(404, "No floor plan image uploaded")
@@ -387,24 +437,30 @@ async def get_floor_image_api(floor_id: int):
 
 
 @router.get("/api/geo/floors/{floor_id}/placements")
-async def get_floor_placements_api(floor_id: int):
-    floor = await db.get_geo_floor(floor_id)
-    if not floor:
-        raise HTTPException(404, "Floor not found")
-    return await db.get_geo_placements(floor_id)
+@scoped("floor")
+async def get_floor_placements_api(floor_id: int, request: Request = None):  # type: ignore[assignment]
+    await _require_floor(request, floor_id)
+    placements = await db.get_geo_placements(floor_id)
+    hosts = await readable_host_ids(request)
+    if hosts is not None:
+        placements = [p for p in placements if int(p["host_id"]) in hosts]
+    return placements
 
 
 @router.put("/api/geo/floors/{floor_id}/placements/{host_id}")
+@scoped("host")
 async def upsert_floor_placement_api(
     floor_id: int,
     host_id: int,
     body: GeoPlacementUpsert,
     request: Request,
 ):
-    floor = await db.get_geo_floor(floor_id)
-    if not floor:
-        raise HTTPException(404, "Floor not found")
-    host = await db.get_host(host_id)
+    await _require_floor(request, floor_id)
+    host: dict | None = (
+        await require_host(request, host_id, write=True)
+        if (await request_scope(request)).restricted
+        else await db.get_host(host_id)
+    )
     if not host:
         raise HTTPException(404, "Host not found")
     placement = await db.upsert_geo_placement(floor_id, host_id, body.x_pct, body.y_pct)
@@ -417,7 +473,12 @@ async def upsert_floor_placement_api(
 
 
 @router.delete("/api/geo/floors/{floor_id}/placements/{host_id}")
+@scoped("host")
 async def delete_floor_placement_api(floor_id: int, host_id: int, request: Request):
+    if (await request_scope(request)).restricted:
+        # An unreadable floor or host answers like a missing placement.
+        await _require_floor(request, floor_id, not_found="Placement not found")
+        await require_host(request, host_id, write=True, not_found="Placement not found")
     removed = await db.delete_geo_placement(floor_id, host_id)
     if not removed:
         raise HTTPException(404, "Placement not found")

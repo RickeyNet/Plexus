@@ -29,8 +29,9 @@ is a hypervisor of.
 | Run the cloud sync by hand | An admin |
 
 Grant the features to an access group in Settings. Accounts limited to
-selected inventory groups do not get the virtualization feature (the pages
-are not filtered by inventory group).
+selected inventory groups see the clusters of their tenants, sites and
+devices and the virtual machines in them; cluster types and groups are read
+only for them (see [object-level permissions](object-permissions.md)).
 
 Every change is written to the audit log under the `virtualization`
 category and to the change log (`cluster_type`, `cluster_group`, `cluster`,

@@ -27,6 +27,17 @@ export function upsBatteryTone(code: number | null | undefined, needsReplacing?:
   return 'neutral';
 }
 
+/** A reading with its unit ("229.8 V"), "N/A" when the UPS did not report it. */
+export function unit(value: number | null | undefined, suffix: string): string {
+  return value != null ? `${value} ${suffix}` : 'N/A';
+}
+
+/** Input voltage and frequency as "231.2 V, 49.9 Hz" (either may be missing). */
+export function formatPower(volts: number | null | undefined, hertz: number | null | undefined): string {
+  const parts = [volts != null && unit(volts, 'V'), hertz != null && unit(hertz, 'Hz')].filter(Boolean);
+  return parts.length ? parts.join(', ') : 'N/A';
+}
+
 /** Minutes of runtime as "1 h 05 min" / "23 min", "N/A" when unknown. */
 export function formatRuntime(minutes: number | null | undefined): string {
   if (minutes == null) return 'N/A';

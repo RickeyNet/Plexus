@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { TopologyInstanceRef, TopologyNode } from '@/api/topology';
 
-import { merakiNodeShape, nodeIconUrl, nodeKindIconUrl, nodeKindLabel, nodeSearchText, nodeTitle } from './helpers';
+import { DEVICE_ROLES, merakiNodeShape, nodeIconUrl, nodeKindIconUrl, nodeKindLabel, nodeSearchText, nodeTitle } from './helpers';
 
 const INSTANCE: TopologyInstanceRef = {
   provider: 'aws',
@@ -179,5 +179,44 @@ describe('vpn_server nodes', () => {
   it('is found by searching for its kind', () => {
     expect(nodeSearchText(VPN_SERVER_NODE)).toContain('vpn server');
     expect(nodeSearchText(AWS_NODE)).not.toContain('server');
+  });
+});
+
+describe('a source device that is an inventory host', () => {
+  // A Meraki switch added to the inventory as an ICMP-only host: no role of its own.
+  const HOST: TopologyNode = {
+    id: 31,
+    label: 'branch-sw1',
+    ip: '192.0.2.31',
+    device_type: 'icmp_only',
+    device_category: '',
+    in_inventory: true,
+    source_category: 'switch',
+  };
+
+  it('keeps the icon of the role its source gives it', () => {
+    expect(nodeIconUrl(HOST)).toBe('/static/img/topo/switch.svg');
+    // A host no source knows is drawn by its device type alone.
+    expect(nodeIconUrl({ ...HOST, source_category: undefined })).toBeUndefined();
+  });
+
+  it('is drawn with its own role, or the one its device type implies, first', () => {
+    expect(nodeIconUrl({ ...HOST, device_category: 'router' })).toBe('/static/img/topo/router.svg');
+    expect(nodeIconUrl({ ...HOST, device_type: 'cisco_asa' })).toBe('/static/img/topo/firewall.svg');
+  });
+});
+
+describe('UPS hosts', () => {
+  const UPS_NODE: TopologyNode = { id: 40, label: 'ups-a1', ip: '192.0.2.40', device_type: 'apc_ups', in_inventory: true };
+
+  it('draws a UPS with the UPS icon, from its role or else its device type', () => {
+    expect(nodeIconUrl({ ...UPS_NODE, device_category: 'ups' })).toBe('/static/img/topo/ups.svg');
+    expect(nodeIconUrl(UPS_NODE)).toBe('/static/img/topo/ups.svg');
+    // A role someone set wins over the device type.
+    expect(nodeIconUrl({ ...UPS_NODE, device_category: 'server' })).toBe('/static/img/topo/server.svg');
+  });
+
+  it('offers UPS as a role', () => {
+    expect(DEVICE_ROLES).toContain('ups');
   });
 });

@@ -8,8 +8,10 @@ import { FieldError } from '@/components/FieldError';
 import { Modal } from '@/components/Modal';
 import { ModalActions } from '@/components/ModalActions';
 import { NameInput } from '@/components/NameInput';
+import { RecordKindSelect } from '@/components/RecordKindSelect';
 import { TenantSelect } from '@/components/TenantSelect';
 import { idToSelect, selectToId } from '@/lib/deviceModel';
+import { GLOBAL_NAMESPACE_ID, vidRangeLabel } from '@/lib/ipamModel';
 import { parseVid, VID_MAX, VID_MIN, VLAN_NAME_MAX, VRF_NAME_MAX, VRF_RD_MAX } from '@/lib/networkObjects';
 import { runSave } from '@/lib/recordSave';
 import { serverFieldErrors } from '@/lib/serverFieldErrors';
@@ -26,6 +28,7 @@ export function VrfModal({ vrf, onClose }: { vrf: Vrf | null; onClose: () => voi
   const [rd, setRd] = useState(vrf?.rd ?? '');
   const [description, setDescription] = useState(vrf?.description ?? '');
   const [tenantId, setTenantId] = useState<number | null>(vrf?.tenant_id ?? null);
+  const [namespaceId, setNamespaceId] = useState<number | null>(vrf?.namespace_id ?? GLOBAL_NAMESPACE_ID);
   const [failure, setFailure] = useState<string | null>(null);
   // Messages the server gave per field (data validation rules).
   const [serverErrors, setServerErrors] = useState<Record<string, string>>({});
@@ -39,7 +42,12 @@ export function VrfModal({ vrf, onClose }: { vrf: Vrf | null; onClose: () => voi
     }
     if (rd.trim().length > VRF_RD_MAX) return;
     setServerErrors({});
-    const data = { rd: rd.trim(), description: description.trim(), tenant_id: tenantId };
+    const data = {
+      rd: rd.trim(),
+      description: description.trim(),
+      tenant_id: tenantId,
+      namespace_id: namespaceId ?? GLOBAL_NAMESPACE_ID,
+    };
     void runSave(
       () => (vrf ? update.mutateAsync({ id: vrf.id, data }) : create.mutateAsync({ name: name.trimmed, ...data })),
       vrf ? null : name,
@@ -124,6 +132,18 @@ export function VrfModal({ vrf, onClose }: { vrf: Vrf | null; onClose: () => voi
           setServerErrors((prev) => ({ ...prev, tenant_id: '' }));
         }}
       />
+      <RecordKindSelect
+        id={`${id}-namespace`}
+        kind="namespace"
+        label="Namespace"
+        value={namespaceId}
+        help="The VRF and its prefixes live in this namespace; the same address space may repeat in another."
+        error={serverErrors.namespace_id}
+        onChange={(v) => {
+          setNamespaceId(v);
+          setServerErrors((prev) => ({ ...prev, namespace_id: '' }));
+        }}
+      />
     </Modal>
   );
 }
@@ -142,6 +162,7 @@ export function VlanModal({ vlan, onClose }: { vlan: Vlan | null; onClose: () =>
   const [siteId, setSiteId] = useState<number | null>(vlan?.site_id ?? null);
   const [description, setDescription] = useState(vlan?.description ?? '');
   const [tenantId, setTenantId] = useState<number | null>(vlan?.tenant_id ?? null);
+  const [groupId, setGroupId] = useState<number | null>(vlan?.vlan_group_id ?? null);
   const [failure, setFailure] = useState<string | null>(null);
   const [siteError, setSiteError] = useState<string | undefined>();
   // Messages the server gave per field (data validation rules).
@@ -160,7 +181,13 @@ export function VlanModal({ vlan, onClose }: { vlan: Vlan | null; onClose: () =>
     setFailure(null);
     setSiteError(undefined);
     setServerErrors({});
-    const data = { name: name.trim(), site_id: siteId, description: description.trim(), tenant_id: tenantId };
+    const data = {
+      name: name.trim(),
+      site_id: siteId,
+      description: description.trim(),
+      tenant_id: tenantId,
+      vlan_group_id: groupId,
+    };
     try {
       if (vlan) await update.mutateAsync({ id: vlan.id, data });
       else await create.mutateAsync({ vid, ...data });
@@ -268,6 +295,20 @@ export function VlanModal({ vlan, onClose }: { vlan: Vlan | null; onClose: () =>
         </div>
         <FieldError id={`${id}-site-error`}>{siteError}</FieldError>
       </div>
+      <RecordKindSelect
+        id={`${id}-group`}
+        kind="vlan_group"
+        label="VLAN group"
+        noneLabel="No group"
+        value={groupId}
+        labelOf={(g) => `${String(g.name)} (${vidRangeLabel(g)})`}
+        help="A VLAN id is unique within its group and must be in the group's range."
+        error={serverErrors.vlan_group_id}
+        onChange={(v) => {
+          setGroupId(v);
+          setServerErrors((prev) => ({ ...prev, vlan_group_id: '' }));
+        }}
+      />
       <DescriptionInput
         id={id}
         value={description}

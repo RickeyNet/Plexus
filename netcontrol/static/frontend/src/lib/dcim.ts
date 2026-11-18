@@ -31,6 +31,7 @@ const TRACE_STATUS: Record<TraceStatus, string> = {
   missing: 'Ends at a record that no longer exists',
   ambiguous: 'Enters a multi-position rear port without a position',
   loop: 'The path loops back on itself',
+  restricted: 'Continues through records outside your access',
 };
 
 export function traceStatusText(status: TraceStatus | string): string {

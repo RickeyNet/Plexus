@@ -103,6 +103,17 @@ listed in the node's details (user, assigned IP, public IP, connection
 profile, group policy, client, OS, protocol, login time, duration, bytes) and
 found by the search box.
 
+The FMC node also lists **All users**: every AnyConnect / Secure Client user
+Plexus has seen on any headend, connected now or not. The FMC keeps no list
+of the users allowed to connect, so the users connected at collection time
+are recorded, and a user seen by an earlier collection stays listed as
+*disconnected* (with the last VPN address, public IP and client seen) for 180
+days after they were last seen. The search box finds a user who is not
+connected right now there. The table is on the FMC node, which every
+collection draws, so the history of a user who moved between the members of
+an HA pair or between headends stays in one place. When sessions are not
+collected, everyone listed shows as disconnected.
+
 ### How an FTD joins the rest of the map
 
 - **Inventory hosts.** An FTD whose serial number, management address or an

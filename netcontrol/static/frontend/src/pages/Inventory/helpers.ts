@@ -5,6 +5,7 @@ import type {
   SnmpTestResponse,
   SshEnrichmentSummary,
 } from '@/api/inventory';
+import { credentialIdFromChoice, SETTINGS_SERVICE_CREDENTIAL } from '@/lib/credentialChoice';
 import { type CustomDataFilterValue, isEmptyFilter, matchesCustomData } from '@/lib/customData';
 import { isEmptyDeviceFilter, matchesDeviceFilter } from '@/lib/deviceModel';
 import { descendantIdsOf, treeOrder } from '@/lib/tree';
@@ -242,18 +243,46 @@ export function saveCompactMode(on: boolean): void {
  */
 export function describeSshEnrichment(summary: SshEnrichmentSummary | null | undefined): string {
   if (!summary) return '';
+  const note = summary.note ? ` ${summary.note}.` : '';
   if (!summary.enabled) return 'SSH show version: off.';
-  if (summary.skipped_reason) return `SSH show version skipped: ${summary.skipped_reason}.`;
+  if (summary.skipped_reason) return `SSH show version skipped: ${summary.skipped_reason}.${note}`;
   const name = summary.credential || 'credential';
-  const who = summary.credential_source === 'service' ? `${name}, service credential` : name;
+  const who =
+    summary.credential_source === 'service'
+      ? `${name}, service credential`
+      : summary.credential_source === 'group'
+        ? `${name}, remembered for this group`
+        : name;
   const attempted = summary.attempted ?? 0;
   const enriched = summary.enriched ?? 0;
   const failed = summary.failed ?? 0;
-  if (attempted === 0) return `SSH show version (${who}): no host answered on SSH.`;
+  if (attempted === 0) return `SSH show version (${who}): no host answered on SSH.${note}`;
   return (
     `SSH show version (${who}): read ${enriched} of ${attempted} host${attempted === 1 ? '' : 's'}` +
-    (failed ? `, ${failed} failed.` : '.')
+    (failed ? `, ${failed} failed.` : '.') +
+    note
   );
+}
+
+/**
+ * What a discovery scan or sync sends for the SSH credential select.
+ * Untouched, with the group's remembered credential missing from the
+ * user's list: nothing, so the server uses the group's credential if the
+ * user may, else the service credential (and says why). Otherwise the
+ * choice; the Settings service credential placeholder also tells the group
+ * to forget its credential.
+ */
+export function discoveryCredentialOptions(
+  choice: string,
+  picked: boolean,
+  groupCredentialId: number | null | undefined,
+): { credentialId: number | null; useServiceCredential: boolean } {
+  if (!picked && groupCredentialId != null && choice !== String(groupCredentialId))
+    return { credentialId: null, useServiceCredential: false };
+  return {
+    credentialId: credentialIdFromChoice(choice),
+    useServiceCredential: choice === SETTINGS_SERVICE_CREDENTIAL,
+  };
 }
 
 /** "C9300-48P · 17.09.04a · S/N FOC2345X0AB" from what discovery learned. */

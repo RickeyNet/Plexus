@@ -31,7 +31,9 @@ An admin opens **Settings > Device Model**. There are four tables.
   number, a height in rack units and a description. A model name is unique
   within its manufacturer.
 - **Roles:** a name, a color and an optional description. Plexus starts with
-  Router, Switch, Firewall, Wireless, WLC, Phone, Server and Unknown.
+  Router, Switch, Firewall, Wireless, WLC, Phone, Server, UPS and Unknown.
+  A new host whose device type tells its role (an APC Smart-UPS, `apc_ups`,
+  is a UPS) gets that role.
 - **Statuses:** a name, a color and an optional description. Plexus starts
   with Active, Planned, Staged, Maintenance, Decommissioning and Retired.
   One status is the default; new hosts get it.
@@ -69,6 +71,34 @@ host as before.
   to tags and custom fields. Several choices in one filter are alternatives;
   different filters must all match. "None" finds hosts with no value.
 
+## Component templates
+
+A device type can list the components every device of the type has:
+interfaces, console ports, power ports (with their maximum and allocated
+draw), rear ports (with their positions), front ports (each mapped to one
+position of a rear port template of the same type) and module bays. Select
+**Components** on a device type in **Settings → Device model**.
+
+A device gets the missing components as DCIM records (see
+[DCIM](dcim.md)) when it is given the device type: in the host dialog,
+with **Edit…** on several hosts, or by a bulk import. **Create components
+from device type** in the device's **Rack and cables** section does the
+same at any time, for example after a template was added.
+
+- A component is matched to its template by name, ignoring case (a module
+  bay by its bay). One the device has already is never changed or doubled,
+  so running it again creates nothing new; one deleted by hand is made
+  again.
+- A module bay becomes a module record for the bay with no module type yet,
+  status `planned`; fill in the module when it is installed.
+- Interfaces are not DCIM records: Plexus learns them from the device. An
+  interface template is compared with the interfaces Plexus knows for the
+  device, and the answer names the ones the device has not reported.
+- Discovery filling in a device type does not create components; only a
+  person assigning one does.
+- Deleting a device type deletes its templates. A rear port template a
+  front port template maps to cannot be deleted first.
+
 ## Rules worth knowing
 
 - **Deleting a record that hosts use** asks first and names how many hosts
@@ -87,6 +117,9 @@ host as before.
 | See manufacturers, device types, roles and statuses | Any signed-in user |
 | Create, change or delete them | Admin |
 | Set the values on a host, one or many | The Inventory feature |
+| See a device type's component templates | Any signed-in user |
+| Create, change or delete component templates | Admin |
+| Create a device's components from its device type | The Inventory feature, with write access to the device's group |
 
 Every change is written to the audit log under the `device_model` category.
 
@@ -199,3 +232,42 @@ GET /api/inventory?include_hosts=true&role_id=2&role_id=3&site_id=none
 ```
 
 A value that is neither a number nor `none` gives `400`.
+
+### Component templates
+
+```
+GET    /api/dcim/device-types/{id}/components
+POST   /api/dcim/component-templates        {device_type_id, component_type, name, type?, positions?,
+                                             rear_port_template_id?, rear_port_position?,
+                                             maximum_draw?, allocated_draw?, description?}
+PUT    /api/dcim/component-templates/{id}   (the same keys but device_type_id and component_type)
+DELETE /api/dcim/component-templates/{id}
+POST   /api/hosts/{host_id}/components/instantiate
+```
+
+`component_type` is `interface`, `console_port`, `power_port`, `rear_port`,
+`front_port` or `module_bay`. `type` is free text for an interface
+(`1000base-t`), a connector for a console port (`rj-45`, `db-9`, `usb-a`,
+`usb-c`, `usb-mini-b`, `usb-micro-b`, `other`) or a front or rear port (the
+DCIM port types), and empty otherwise. A name taken for the component type
+of the device type gives `409`; a value the component type does not take, a
+front port template without a rear port template (or with one of another
+device type, a position it does not have or one another front port template
+maps to) `422`.
+
+Instantiating answers what it did:
+
+```json
+{
+  "host_id": 12, "device_type_id": 3,
+  "created": { "console_port": ["Console"], "rear_port": ["Rear1"], "front_port": ["Front1", "Front2"] },
+  "created_count": 4, "skipped": 1, "errors": [],
+  "interfaces": { "expected": ["Gi1/0/1", "Gi1/0/2"], "missing": ["Gi1/0/2"] }
+}
+```
+
+`device_type_id` is null (and nothing is created) for a device with no
+device type. `errors` lists a component a DCIM rule refused (`kind`,
+`name`, `message`). The route is checked against the caller's inventory
+groups like a host edit: a device outside them gives `404`, one in a
+read-only group `403`.

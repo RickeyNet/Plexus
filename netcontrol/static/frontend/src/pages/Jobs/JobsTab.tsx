@@ -19,6 +19,9 @@ import { usePendingKeys } from '@/lib/usePendingKeys';
 
 import {
   compareJobsDesc,
+  isJobCancellable,
+  isJobRetryable,
+  jobTargetLabel,
   parseDeps,
   priorityLabel,
   priorityTone,
@@ -27,7 +30,15 @@ import {
 import { JobOutputModal } from './JobOutputModal';
 import { LaunchJobModal } from './LaunchJobModal';
 
-type StatusFilter = 'all' | 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
+type StatusFilter =
+  | 'all'
+  | 'pending_approval'
+  | 'queued'
+  | 'running'
+  | 'completed'
+  | 'failed'
+  | 'cancelled'
+  | 'denied';
 type DryRunFilter = 'all' | 'yes' | 'no';
 type DateRange = 'all' | 'today' | '7d' | '30d';
 
@@ -105,11 +116,13 @@ export function JobsTab() {
         <input className="form-input" placeholder="Search jobs…" aria-label="Search jobs" value={query} onChange={(e) => setQuery(e.target.value)} style={{ width: 220 }} />
         <select className="form-select" aria-label="Filter by status" value={status} onChange={(e) => setStatus(e.target.value as StatusFilter)}>
           <option value="all">All Statuses</option>
+          <option value="pending_approval">Awaiting approval</option>
           <option value="queued">Queued</option>
           <option value="running">Running</option>
           <option value="completed">Completed</option>
           <option value="failed">Failed</option>
           <option value="cancelled">Cancelled</option>
+          <option value="denied">Denied</option>
         </select>
         <select className="form-select" aria-label="Filter by run mode" value={dryRun} onChange={(e) => setDryRun(e.target.value as DryRunFilter)}>
           <option value="all">Dry+Live</option>
@@ -240,7 +253,7 @@ function JobRow({
           {deps.length > 0 && <Badge title={`Depends on jobs: ${deps.join(', ')}`}>deps: {deps.join(', ')}</Badge>}
         </div>
         <div className="text-muted" style={{ fontSize: '0.85rem', marginTop: '0.25rem' }}>
-          {job.dynamic_group_name ? `Dynamic group: ${job.dynamic_group_name}` : `Group: ${job.group_name || 'Unknown'}`} • {timeLabel} •{' '}
+          {jobTargetLabel(job)} • {timeLabel} •{' '}
           <StatusBadge status={job.status} size="sm" />
           {job.dry_run
             ? <> • <span style={{ color: 'var(--warning)' }}>DRY RUN</span></>
@@ -249,12 +262,12 @@ function JobRow({
         </div>
       </div>
       <div style={{ display: 'flex', gap: '0.4rem' }}>
-        {(job.status === 'running' || job.status === 'queued') && (
+        {isJobCancellable(job.status) && (
           <BusyButton className="btn btn-sm btn-danger" busy={isBusy} onClick={(e) => { e.stopPropagation(); onCancel(); }}>
             Cancel
           </BusyButton>
         )}
-        {(job.status === 'failed' || job.status === 'cancelled') && (
+        {isJobRetryable(job.status) && (
           <BusyButton className="btn btn-sm btn-primary" busy={isBusy} onClick={(e) => { e.stopPropagation(); onRetry(); }}>
             Retry
           </BusyButton>

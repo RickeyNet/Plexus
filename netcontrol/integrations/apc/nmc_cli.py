@@ -230,7 +230,10 @@ def parse_alarm_count(output: str | None) -> int | None:
 
 # ── upsfwupdate ──────────────────────────────────────────────────────────────
 
-IDLE_MARKER = "no firmware update is in progress"
+# Nothing running. Wording differs by card firmware: the Schneider FAQ shows
+# "No firmware update is in progress", an NMC3 (su v2.0) answers "No firmware
+# update in progress".
+_IDLE_RE = re.compile(r"\bno\s+(?:firmware\s+)?update\s+(?:is\s+)?in\s+progress\b", re.IGNORECASE)
 _FAILURE_WORDS = ("fail", "error", "abort", "invalid", "refused", "reject", "mismatch", "incompatible", "not valid")
 
 
@@ -248,8 +251,9 @@ class UpdateStatus:
 
 
 def parse_update_status(output: str | None) -> UpdateStatus:
-    """``upsfwupdate -status``: ``Status: No firmware update is in progress``
-    means nothing is running (a finished update looks the same)."""
+    """``upsfwupdate -status``: ``Status: No firmware update in progress``
+    (or ``... is in progress``) means nothing is running (a finished update
+    looks the same)."""
     error = command_error(output)
     if error:
         return UpdateStatus("error", error)
@@ -257,8 +261,8 @@ def parse_update_status(output: str | None) -> UpdateStatus:
     status = values.get("status", "")
     text = status or " ".join(line.strip() for line in (output or "").splitlines() if line.strip() and ">" not in line)
     low = text.lower()
-    if IDLE_MARKER in low or IDLE_MARKER in (output or "").lower():
-        return UpdateStatus("idle", status or IDLE_MARKER)
+    if _IDLE_RE.search(text) or _IDLE_RE.search(output or ""):
+        return UpdateStatus("idle", status or "No firmware update in progress")
     if any(word in low for word in _FAILURE_WORDS):
         return UpdateStatus("failed", text)
     return UpdateStatus("in_progress", text)

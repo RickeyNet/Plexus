@@ -71,6 +71,7 @@ from netcontrol.integrations.meraki.normalize import (
     table_section,
     text_section,
 )
+from netcontrol.integrations.remote_users import DIRECTORY_KEY, directory_entry
 
 FMC_SITE_ID = "__fmc__"
 FMC_NODE_ID = "fmc"
@@ -150,6 +151,27 @@ def _first(item: dict, *keys: str) -> Any:
         if value not in (None, "", [], {}):
             return value
     return None
+
+
+def session_fields(session: dict) -> dict[str, str]:
+    """What one remote access session says, read from the spellings of
+    ``health/ravpnsessions`` and of a parsed ``show vpn-sessiondb``."""
+    return {
+        "user": _name(_first(session, "username", "userName", "user")),
+        "assigned_ip": _text(
+            _first(session, "assignedIp", "assignedIpv4", "assignedIpv4Address", "assignedIPv4", "clientIp", "vpnIp")
+        ),
+        "public_ip": _text(_first(session, "publicIp", "publicIpAddress", "publicIpv4", "remoteIp", "clientPublicIp")),
+        "profile": _name(_first(session, "connectionProfile", "tunnelGroup", "connectionProfileName")),
+        "group_policy": _name(_first(session, "groupPolicy", "groupPolicyName")),
+        "client": _name(_first(session, "clientApplication", "clientVersion", "anyConnectVersion", "clientType")),
+        "os": _name(_first(session, "clientOs", "clientOS", "osType", "clientOsType")),
+        "protocol": _name(_first(session, "protocol", "encryption", "tunnelProtocol")),
+        "login_time": _text(_first(session, "loginTime", "loginTimeStamp", "connectedSince")),
+        "duration": _text(_first(session, "duration", "connectionDuration", "sessionDuration")),
+        "bytes_rx": _text(_first(session, "bytesRx", "rxBytes", "bytesReceived")),
+        "bytes_tx": _text(_first(session, "bytesTx", "txBytes", "bytesTransmitted")),
+    }
 
 
 def _dict(value: Any) -> dict[str, Any]:
@@ -1684,29 +1706,34 @@ class _Builder:
         return sorted(rows, key=lambda r: (r[0] == "", r[0], _text(r[1])))
 
     def _session_rows(self, sessions: list[dict]) -> list[list[Any]]:
-        rows: list[list[Any]] = []
-        for s in sessions[:MAX_LISTED_SESSIONS]:
-            rows.append(
-                [
-                    _name(_first(s, "username", "userName", "user")),
-                    _text(
-                        _first(
-                            s, "assignedIp", "assignedIpv4", "assignedIpv4Address", "assignedIPv4", "clientIp", "vpnIp"
-                        )
-                    ),
-                    _text(_first(s, "publicIp", "publicIpAddress", "publicIpv4", "remoteIp", "clientPublicIp")),
-                    _name(_first(s, "connectionProfile", "tunnelGroup", "connectionProfileName")),
-                    _name(_first(s, "groupPolicy", "groupPolicyName")),
-                    _name(_first(s, "clientApplication", "clientVersion", "anyConnectVersion", "clientType")),
-                    _name(_first(s, "clientOs", "clientOS", "osType", "clientOsType")),
-                    _name(_first(s, "protocol", "encryption", "tunnelProtocol")),
-                    _text(_first(s, "loginTime", "loginTimeStamp", "connectedSince")),
-                    _text(_first(s, "duration", "connectionDuration", "sessionDuration")),
-                    _text(_first(s, "bytesRx", "rxBytes", "bytesReceived")),
-                    _text(_first(s, "bytesTx", "txBytes", "bytesTransmitted")),
-                ]
-            )
+        rows = [list(session_fields(s).values()) for s in sessions[:MAX_LISTED_SESSIONS]]
         return sorted(rows, key=lambda r: (str(r[0]).lower(), str(r[1])))
+
+    def user_directory(self) -> dict[str, Any] | None:
+        """Every AnyConnect / Secure Client user connected now, for the
+        remote user directory (see ``netcontrol.integrations.remote_users``).
+        The FMC keeps no registry of enrolled users, so users who are not
+        connected come from earlier collections, carried forward on store.
+        It is listed on the FMC node, which is drawn on every snapshot and
+        spans every headend (one users node per device would split a user's
+        history between the members of an HA pair). ``None`` when the FMC
+        has no remote access VPN."""
+        if not (self.device_policy or self.sessions):
+            return None
+        users = []
+        for session in self.sessions:
+            fields = session_fields(session)
+            entry = directory_entry(
+                name=fields["user"],
+                connected=True,
+                source="session",
+                address=fields["assigned_ip"],
+                public_ip=fields["public_ip"],
+                device=" ".join(v for v in (fields["client"], fields["os"]) if v),
+            )
+            if entry is not None:
+                users.append(entry)
+        return {"node_id": FMC_NODE_ID, "users": users}
 
     def _access(self, policy: dict) -> tuple[list[dict], dict]:
         """The access interface entries of a policy and its port settings."""
@@ -2414,4 +2441,5 @@ def build_snapshot(raw: dict, inventory: InventoryIndex | None = None) -> dict[s
         "sites": sites,
         "nodes": nodes,
         "edges": builder.edges,
+        **({DIRECTORY_KEY: directory} if (directory := builder.user_directory()) is not None else {}),
     }

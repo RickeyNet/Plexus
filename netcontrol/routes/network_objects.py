@@ -9,6 +9,11 @@ Three routers, each registered in ``app.py``:
 - ``host_router`` (gated like ``GET /api/hosts/{host_id}/interface-inventory``):
   a host's interface addresses.
 
+Object scope: a scoped caller reads the VRFs and VLANs of their tenants and
+sites and those with no tenant or site (shared), with the devices,
+addresses, prefixes and counts of their own hosts and prefixes only; and
+the interface addresses of their hosts.
+
 ``sync_host_bindings`` is the one place a stored running configuration
 becomes interface addresses; ``store_device_config`` calls it on every
 capture. Rules live in ``netcontrol.network_objects``, storage in
@@ -29,6 +34,7 @@ from netcontrol.custom_fields import CustomFieldError
 from netcontrol.data_validation import enforce as enforce_validation_rules, pick as rule_values
 from netcontrol.device_model import parse_device_filters
 from netcontrol.integrations.pathtrace.platforms import platform_of
+from netcontrol.ipam_model import GLOBAL_NAMESPACE_ID
 from netcontrol.network_objects import (
     DESCRIPTION_MAX,
     bindings_from_config,
@@ -38,7 +44,18 @@ from netcontrol.network_objects import (
     clean_vlan_name,
     clean_vrf_name,
 )
+from netcontrol.object_scope import (
+    filter_rows,
+    readable_host_ids,
+    request_scope,
+    require_host,
+    require_row,
+    scoped,
+    sql_condition,
+)
+from netcontrol.routes.custom_fields import custom_list, with_custom_data
 from netcontrol.routes.device_model import check_device_values
+from netcontrol.routes.ipam_model import check_namespace, check_vlan_group, readable_vrf_route_targets
 from netcontrol.routes.shared import _audit, _corr_id, _session_user
 
 LOGGER = logging.getLogger("plexus.network_objects")
@@ -65,17 +82,20 @@ class VrfCreate(BaseModel):
     rd: str = Field(default="", max_length=_RAW_MAX)
     description: str = Field(default="", max_length=DESCRIPTION_MAX)
     tenant_id: int | None = None
+    namespace_id: int = GLOBAL_NAMESPACE_ID
 
 
 class VrfUpdate(BaseModel):
     """The name of a VRF never changes: a ``name`` key is refused.
-    ``tenant_id`` left out keeps the tenant; ``null`` clears it."""
+    ``tenant_id`` left out keeps the tenant; ``null`` clears it.
+    ``namespace_id`` left out (or null) keeps the namespace."""
 
     model_config = ConfigDict(extra="forbid")
 
     rd: str | None = Field(default=None, max_length=_RAW_MAX)
     description: str | None = Field(default=None, max_length=DESCRIPTION_MAX)
     tenant_id: int | None = None
+    namespace_id: int | None = None
 
 
 class VlanCreate(BaseModel):
@@ -84,11 +104,13 @@ class VlanCreate(BaseModel):
     site_id: int | None = None
     description: str = Field(default="", max_length=DESCRIPTION_MAX)
     tenant_id: int | None = None
+    vlan_group_id: int | None = None
 
 
 class VlanUpdate(BaseModel):
     """The VLAN id never changes: a ``vid`` key is refused. ``site_id``
-    left out keeps the site; ``null`` moves the VLAN to no site."""
+    left out keeps the site; ``null`` moves the VLAN to no site.
+    ``vlan_group_id`` likewise for its VLAN group."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -96,6 +118,7 @@ class VlanUpdate(BaseModel):
     site_id: int | None = None
     description: str | None = Field(default=None, max_length=DESCRIPTION_MAX)
     tenant_id: int | None = None
+    vlan_group_id: int | None = None
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -141,6 +164,18 @@ async def _changed_tenant(body: VrfUpdate | VlanUpdate, current: dict) -> Tenant
     if "tenant_id" not in body.model_fields_set or body.tenant_id == current.get("tenant_id"):
         return TENANT_UNCHANGED
     return await _new_tenant(body.tenant_id)
+
+
+async def _scope_filters(request: Request, *, prefixes: bool = True) -> dict:
+    """Keyword arguments of the VRF (``prefixes``) and VLAN readers that keep
+    a scoped caller's counts and detail rows to their hosts (and prefixes);
+    ``{}`` for an unrestricted caller."""
+    host_ids = await readable_host_ids(request)
+    if host_ids is None:
+        return {}
+    if not prefixes:
+        return {"host_ids": host_ids}
+    return {"host_ids": host_ids, "prefix_scope": await sql_condition("ipam_prefix", request, alias="p")}
 
 
 def _describe_usage(usage: dict[str, int]) -> str:
@@ -222,13 +257,27 @@ async def backfill_interface_addresses() -> dict[str, int] | None:
 
 
 @router.get(f"{PREFIX}/vrfs")
-async def list_vrfs() -> dict:
-    return {"vrfs": await db.list_vrfs()}
+@scoped("list")
+async def list_vrfs(request: Request) -> dict:
+    """``tag=`` and ``cf.<key>=`` filter by tag and custom field value."""
+    rows = await filter_rows("vrf", await db.list_vrfs(**await _scope_filters(request)), request)
+    return {"vrfs": await custom_list("vrf", rows, request)}
 
 
 @router.get(f"{PREFIX}/vrfs/{{vrf_id}}")
-async def get_vrf(vrf_id: int) -> dict:
-    return _found(await db.get_vrf_detail(vrf_id, DETAIL_LIMIT), "VRF")
+@scoped("object")
+async def get_vrf(vrf_id: int, request: Request) -> dict:
+    """The VRF with its devices, addresses, prefixes and ``route_targets``
+    (``import`` and ``export``)."""
+    detail = await require_row(
+        request,
+        "vrf",
+        await db.get_vrf_detail(vrf_id, DETAIL_LIMIT, **await _scope_filters(request)),
+        not_found="VRF not found",
+    )
+    # Only the route targets the caller may read (of their tenants or of none).
+    detail["route_targets"] = await readable_vrf_route_targets(vrf_id, request)
+    return await with_custom_data("vrf", detail)
 
 
 @admin_router.post(f"{PREFIX}/vrfs", status_code=201)
@@ -237,9 +286,12 @@ async def create_vrf(body: VrfCreate, request: Request) -> dict:
     rd = _clean(clean_rd, body.rd)
     description = _clean(clean_description, body.description)
     tenant_id = await _new_tenant(body.tenant_id)
+    await check_namespace(body.namespace_id)
     await enforce_validation_rules("vrf", {"name": name, "rd": rd, "description": description})
     try:
-        record = await db.create_vrf(name=name, rd=rd, description=description, tenant_id=tenant_id)
+        record = await db.create_vrf(
+            name=name, rd=rd, description=description, tenant_id=tenant_id, namespace_id=body.namespace_id
+        )
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     await _audit_write(request, "vrf_create", f"id={record['id']} name={name}")
@@ -255,7 +307,14 @@ async def update_vrf(vrf_id: int, body: VrfUpdate, request: Request) -> dict:
     )
     await enforce_validation_rules("vrf", {"rd": rd, "description": description}, existing=rule_values(current, "vrf"))
     tenant_id = await _changed_tenant(body, current)
-    record = _found(await db.update_vrf(vrf_id, rd=rd, description=description, tenant_id=tenant_id), "VRF")
+    if body.namespace_id is not None and body.namespace_id != current["namespace_id"]:
+        await check_namespace(body.namespace_id)
+    record = _found(
+        await db.update_vrf(
+            vrf_id, rd=rd, description=description, tenant_id=tenant_id, namespace_id=body.namespace_id
+        ),
+        "VRF",
+    )
     await _audit_write(request, "vrf_update", f"id={vrf_id} name={record['name']}")
     return record
 
@@ -283,11 +342,16 @@ async def delete_vrf(vrf_id: int, request: Request) -> dict:
 
 
 @router.get(f"{PREFIX}/vlans")
+@scoped("list")
 async def list_vlans(
+    request: Request,
     site_id: str | None = Query(default=None, max_length=20),
     vid: int | None = Query(default=None, ge=1, le=4094),
+    vlan_group_id: int | None = Query(default=None),
 ) -> dict:
-    """``site_id``: a site id, or ``none`` for the VLANs of no site."""
+    """``site_id``: a site id, or ``none`` for the VLANs of no site;
+    ``vlan_group_id`` one VLAN group's; ``tag=`` and ``cf.<key>=`` filter by
+    tag and custom field value."""
     site: int | None = None
     no_site = False
     if site_id is not None:
@@ -296,12 +360,21 @@ async def list_vlans(
             raise HTTPException(status_code=400, detail={"message": errors["site_id"], "fields": errors})
         site = filters["site_id"][0]
         no_site = site is None
-    return {"vlans": await db.list_vlans(site_id=site, no_site=no_site, vid=vid)}
+    rows = await db.list_vlans(
+        site_id=site,
+        no_site=no_site,
+        vid=vid,
+        vlan_group_id=vlan_group_id,
+        **await _scope_filters(request, prefixes=False),
+    )
+    return {"vlans": await custom_list("vlan", await filter_rows("vlan", rows, request), request)}
 
 
 @router.get(f"{PREFIX}/vlans/{{vlan_id}}")
-async def get_vlan(vlan_id: int) -> dict:
-    return _found(await db.get_vlan_detail(vlan_id, DETAIL_LIMIT), "VLAN")
+@scoped("object")
+async def get_vlan(vlan_id: int, request: Request) -> dict:
+    detail = await db.get_vlan_detail(vlan_id, DETAIL_LIMIT, **await _scope_filters(request, prefixes=False))
+    return await with_custom_data("vlan", await require_row(request, "vlan", detail, not_found="VLAN not found"))
 
 
 @admin_router.post(f"{PREFIX}/vlans", status_code=201)
@@ -311,10 +384,16 @@ async def create_vlan(body: VlanCreate, request: Request) -> dict:
     description = _clean(clean_description, body.description)
     await _check_site(body.site_id)
     tenant_id = await _new_tenant(body.tenant_id)
+    await check_vlan_group(body.vlan_group_id, vid, body.site_id)
     await enforce_validation_rules("vlan", {"vid": vid, "name": name, "description": description})
     try:
         record = await db.create_vlan(
-            vid=vid, name=name, site_id=body.site_id, description=description, tenant_id=tenant_id
+            vid=vid,
+            name=name,
+            site_id=body.site_id,
+            description=description,
+            tenant_id=tenant_id,
+            vlan_group_id=body.vlan_group_id,
         )
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -333,12 +412,21 @@ async def update_vlan(vlan_id: int, body: VlanUpdate, request: Request) -> dict:
     if site_id != current["site_id"]:
         await _check_site(site_id)
     tenant_id = await _changed_tenant(body, current)
+    group_id = body.vlan_group_id if "vlan_group_id" in body.model_fields_set else current["vlan_group_id"]
+    if group_id is not None and (group_id != current["vlan_group_id"] or site_id != current["site_id"]):
+        await check_vlan_group(group_id, current["vid"], site_id)
+    group_arg: TenantArg = group_id if group_id != current["vlan_group_id"] else TENANT_UNCHANGED
     await enforce_validation_rules(
         "vlan", {"name": name, "description": description}, existing=rule_values(current, "vlan")
     )
     try:
         record = await db.update_vlan(
-            vlan_id, name=name, site_id=site_id, description=description, tenant_id=tenant_id
+            vlan_id,
+            name=name,
+            site_id=site_id,
+            description=description,
+            tenant_id=tenant_id,
+            vlan_group_id=group_arg,
         )
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -368,5 +456,8 @@ async def rebuild(request: Request) -> dict:
 
 
 @host_router.get("/api/hosts/{host_id}/interface-addresses")
-async def host_interface_addresses(host_id: int) -> dict:
+@scoped("host")
+async def host_interface_addresses(host_id: int, request: Request) -> dict:
+    if (await request_scope(request)).restricted:
+        await require_host(request, host_id)
     return {"host_id": host_id, **await db.get_interface_addresses_for_host(host_id)}

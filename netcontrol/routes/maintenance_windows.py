@@ -14,6 +14,12 @@ Windows define when production changes are allowed. Each window has a
 
 A window applies to a target group if its ``maintenance_window_scopes``
 includes that group, or if the window has no scope rows (global).
+
+Object scope (model ``maintenance_window``): an account limited to selected
+inventory groups sees the global windows and those covering a readable
+group (with only its readable groups listed), and creates, changes or
+deletes a window only when every group it covers is writable; global
+windows are changed by unrestricted callers only.
 """
 
 from __future__ import annotations
@@ -24,11 +30,56 @@ import routes.database as db
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from netcontrol.object_scope import (
+    READ_ONLY_DETAIL,
+    WRITE_SCOPE_DETAIL,
+    ObjectScope,
+    ScopeModel,
+    filter_rows,
+    register_model,
+    request_scope,
+    require_group,
+    require_row,
+    scoped,
+)
 from netcontrol.routes.shared import _audit, _corr_id, _get_session
 from netcontrol.telemetry import configure_logging
 
 router = APIRouter()
 LOGGER = configure_logging("plexus.maintenance_windows")
+
+_WINDOW_NOT_FOUND = "Maintenance window not found"
+# A window is placed by the inventory groups it covers (``group_ids``); a
+# window covering no group is global (shared).
+register_model(
+    ScopeModel(
+        "maintenance_window",
+        {"group": "group_ids"},
+        shared=True,
+        not_found=_WINDOW_NOT_FOUND,
+        description="Maintenance windows (by the inventory groups they cover; none: global)",
+    )
+)
+
+
+def _visible_groups(scope: ObjectScope, window: dict) -> dict:
+    """``window`` with only the groups the caller may read listed."""
+    if scope.unrestricted:
+        return window
+    window["group_ids"] = [g for g in window.get("group_ids") or [] if scope.can_read_group(g)]
+    if "scopes" in window:
+        window["scopes"] = [sc for sc in window["scopes"] or [] if scope.can_read_group(sc.get("group_id"))]
+    return window
+
+
+async def _require_groups_writable(request: Request, group_ids: list[int] | None, *, detail: str) -> None:
+    """For a scoped caller: 403 ``detail`` unless every group is writable;
+    a window covering no group is global (unrestricted callers only)."""
+    scope = await request_scope(request)
+    if scope.unrestricted:
+        return
+    if not group_ids or not all(scope.can_write_group(g) for g in group_ids):
+        raise HTTPException(status_code=403, detail=detail)
 
 
 # ── Models ────────────────────────────────────────────────────────────────────
@@ -229,8 +280,13 @@ async def evaluate_change_gate(group_ids: list[int]) -> dict:
 
 
 @router.get("/api/maintenance-windows")
-async def list_windows():
-    windows = await db.list_maintenance_windows()
+@scoped("list")
+async def list_windows(request: Request):
+    scope = await request_scope(request)
+    windows = [
+        _visible_groups(scope, w)
+        for w in await filter_rows("maintenance_window", await db.list_maintenance_windows(), scope)
+    ]
     now = datetime.now(UTC)
     for w in windows:
         try:
@@ -241,10 +297,10 @@ async def list_windows():
 
 
 @router.get("/api/maintenance-windows/{window_id}")
-async def get_window(window_id: int):
-    window = await db.get_maintenance_window(window_id)
-    if not window:
-        raise HTTPException(status_code=404, detail="Maintenance window not found")
+@scoped("maintenance_window")
+async def get_window(window_id: int, request: Request):
+    window = await require_row(request, "maintenance_window", await db.get_maintenance_window(window_id))
+    _visible_groups(await request_scope(request), window)
     try:
         window["is_active"] = window_is_active(window)
     except Exception:
@@ -253,7 +309,9 @@ async def get_window(window_id: int):
 
 
 @router.post("/api/maintenance-windows", status_code=201)
+@scoped("create")
 async def create_window(body: MaintenanceWindowCreate, request: Request):
+    await _require_groups_writable(request, body.group_ids, detail=WRITE_SCOPE_DETAIL)
     # Validate timestamps and policy up front so we surface 400 not 500.
     try:
         start = _parse_iso(body.start_at)
@@ -294,10 +352,12 @@ async def create_window(body: MaintenanceWindowCreate, request: Request):
 
 
 @router.put("/api/maintenance-windows/{window_id}")
+@scoped("maintenance_window")
 async def update_window(window_id: int, body: MaintenanceWindowUpdate, request: Request):
-    existing = await db.get_maintenance_window(window_id)
-    if not existing:
-        raise HTTPException(status_code=404, detail="Maintenance window not found")
+    existing = await require_row(request, "maintenance_window", await db.get_maintenance_window(window_id))
+    await _require_groups_writable(request, existing.get("group_ids"), detail=READ_ONLY_DETAIL)
+    if body.group_ids is not None:
+        await _require_groups_writable(request, body.group_ids, detail=WRITE_SCOPE_DETAIL)
     try:
         await db.update_maintenance_window(
             window_id,
@@ -325,10 +385,10 @@ async def update_window(window_id: int, body: MaintenanceWindowUpdate, request: 
 
 
 @router.delete("/api/maintenance-windows/{window_id}")
+@scoped("maintenance_window")
 async def delete_window(window_id: int, request: Request):
-    existing = await db.get_maintenance_window(window_id)
-    if not existing:
-        raise HTTPException(status_code=404, detail="Maintenance window not found")
+    existing = await require_row(request, "maintenance_window", await db.get_maintenance_window(window_id))
+    await _require_groups_writable(request, existing.get("group_ids"), detail=READ_ONLY_DETAIL)
     await db.delete_maintenance_window(window_id)
     session = _get_session(request)
     await _audit(
@@ -342,10 +402,15 @@ async def delete_window(window_id: int, request: Request):
 
 
 @router.post("/api/maintenance-windows/check")
-async def check_window_gate(payload: dict):
-    """Frontend preview: given group_ids, what's the current verdict?"""
+@scoped("groups")
+async def check_window_gate(payload: dict, request: Request):
+    """Frontend preview: given group_ids, what's the current verdict? (A
+    scoped caller: every group must be readable.)"""
     group_ids = payload.get("group_ids") or []
     if not isinstance(group_ids, list):
         raise HTTPException(status_code=400, detail="group_ids must be a list")
+    if (await request_scope(request)).restricted:
+        for gid in group_ids:
+            await require_group(request, int(gid))
     verdict = await evaluate_change_gate([int(g) for g in group_ids])
     return verdict

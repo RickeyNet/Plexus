@@ -25,6 +25,7 @@ import asyncio
 import copy
 import importlib
 import json
+from datetime import UTC, datetime
 
 import httpx
 import netcontrol.app as app_module
@@ -63,6 +64,7 @@ from netcontrol.integrations.meraki.unified import (
     search_index,
     virtual_appliance_pairs,
 )
+from netcontrol.integrations.remote_users import DIRECTORY_KEY, apply_user_directory
 
 DOMAINS_HEADER = json.dumps([{"name": "Global", "uuid": DOMAIN_UUID}, {"name": "Global/Branch", "uuid": "branch-uuid"}])
 LOGIN_HEADERS = {
@@ -1137,6 +1139,46 @@ def test_snapshot_draws_users_of_a_device_whose_policy_was_not_read():
     assert f"u:{D2}" not in ids and f"u:{D3}" not in ids
 
 
+def test_snapshot_publishes_the_connected_users_as_the_remote_user_directory(snapshot):
+    directory = snapshot[DIRECTORY_KEY]
+    # On the FMC node: drawn on every snapshot, across every headend.
+    assert directory["node_id"] == FMC_NODE_ID
+    users = {u["name"]: u for u in directory["users"]}
+    assert sorted(users) == ["dana.reyes", "ext.contractor1", "priya.nair", "sam.okafor"]
+    dana = users["dana.reyes"]
+    assert dana["status"] == "connected" and dana["source"] == "session"
+    assert dana["address"] == "10.220.0.14" and dana["public_ip"] == "198.51.100.77"
+    assert dana["device"] == "AnyConnect 5.1.2.42 Windows 11"
+
+
+def test_remote_user_directory_carries_users_who_left_forward_on_the_fmc_node():
+    first = build_snapshot(build_sample_raw())
+    raw = build_sample_raw()
+    raw["sessions"] = [s for s in raw["sessions"] if s["username"] == "dana.reyes"]
+    second = build_snapshot(raw)
+    now = datetime(2026, 10, 1, tzinfo=UTC)
+    apply_user_directory(first, None, now=now)
+    assert apply_user_directory(second, first, now=now) == 4
+    rows = {r["User"]: r for r in _table(_node(second, FMC_NODE_ID), "All users")}
+    assert rows["dana.reyes"]["Status"] == "connected"
+    assert rows["sam.okafor"]["Status"] == "disconnected"
+    assert rows["sam.okafor"]["Known from"] == "Seen by an earlier collection"
+    assert rows["sam.okafor"]["Last VPN address"] == "10.220.1.3"
+
+
+def test_remote_user_directory_is_set_with_nobody_connected_and_skipped_without_a_headend():
+    raw = build_sample_raw()
+    raw["sessions"] = []
+    snapshot = build_snapshot(raw)
+    assert snapshot[DIRECTORY_KEY] == {"node_id": FMC_NODE_ID, "users": []}
+    # Sessions not collected: still the directory's node, so history lands.
+    raw["sessions"] = None
+    assert build_snapshot(raw)[DIRECTORY_KEY] == {"node_id": FMC_NODE_ID, "users": []}
+    # No remote access VPN at all: no directory.
+    raw["policies"], raw["policy_details"], raw["assignments"] = [], {}, []
+    assert DIRECTORY_KEY not in build_snapshot(raw)
+
+
 def test_snapshot_fmc_node_lists_the_whole_fmc(snapshot):
     fmc = _node(snapshot, FMC_NODE_ID)
     assert fmc["kind"] == "cloud" and fmc["ip"] == "10.210.2.20"
@@ -1440,7 +1482,10 @@ def test_api_fmc_crud_keeps_the_password_write_only(api):
     bad["base_url"] = "https://fmc.example.com/api/fmc_platform"
     assert api.post("/api/sources", json=bad).status_code == 400
     unknown = api.post("/api/sources", json={"name": "X", "provider": "fortinet"})
-    assert unknown.status_code == 400 and "Provider must be meraki, cato, fmc, panorama, appgate or opnsense" in unknown.text
+    assert (
+        unknown.status_code == 400
+        and "Provider must be meraki, cato, fmc, panorama, appgate or opnsense" in unknown.text
+    )
 
     updated = api.put(f"/api/sources/{org['id']}", json={"options": {"username": "ro", "include_sessions": False}})
     assert updated.status_code == 200
@@ -1525,7 +1570,8 @@ def test_api_fmc_sample_is_merged_into_the_topology(api):
 
     # A remote user, a network object and a static route are found by name.
     hits = api.get("/api/topology/search/deep?q=dana.reyes").json()["results"]
-    assert [(h["org_ref"], h["node_id"]) for h in hits] == [(org_ref, f"u:{D1}")]
+    # On the headend's users node, and in the FMC node's "All users" directory.
+    assert sorted((h["org_ref"], h["node_id"]) for h in hits) == [(org_ref, FMC_NODE_ID), (org_ref, f"u:{D1}")]
     hits = api.get("/api/topology/search/deep?q=Partner-B-Range").json()["results"]
     assert {h["node_id"] for h in hits} >= {FMC_NODE_ID, f"d:{D3}"}
     hits = api.get("/api/topology/search/deep?q=10.70.0.0/16").json()["results"]

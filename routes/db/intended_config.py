@@ -4,7 +4,7 @@ configuration of each host.
 Star re-exported by routes/database.py so the ``routes.database`` facade
 keeps its full public surface.
 
-Tables: migration 0087. Template and context scope ids (``role_id``,
+Tables: migration 0087; remediation ignore rules: migration 0108. Template and context scope ids (``role_id``,
 ``site_id``, ``group_id``, ``host_id``) are plain integers with no foreign
 key; the rules that read them live in ``netcontrol.intended_config``. Names
 are unique ignoring case. ``intended_configs`` holds one row per host that
@@ -26,25 +26,30 @@ from routes.db.inventory import group_ids_condition
 
 __all__ = [
     "count_hosts",
+    "create_remediation_ignore",
     "create_config_context",
     "create_config_template",
     "delete_config_context",
     "delete_config_template",
     "delete_intended_configs",
+    "delete_remediation_ignore",
     "get_config_context",
     "get_config_template",
     "get_intended_config",
+    "get_remediation_ignore",
     "get_interfaces_for_hosts",
     "get_vrfs_for_hosts",
     "list_config_contexts",
     "list_config_templates",
     "list_intended_configs",
+    "list_remediation_ignores",
     "list_vlan_records",
     "save_intended_config",
     "set_intended_comparison",
     "summarize_intended_configs",
     "update_config_context",
     "update_config_template",
+    "update_remediation_ignore",
 ]
 
 _TEMPLATE_COUNTS = "(SELECT template_id, COUNT(*) AS n FROM intended_configs GROUP BY template_id)"
@@ -497,6 +502,56 @@ async def delete_intended_configs(host_ids: Iterable[int]) -> int:
         return removed
     finally:
         await db.close()
+
+
+# ── Remediation ignore rules ─────────────────────────────────────────────────
+
+_IGNORE_SELECT = """
+    SELECT id, kind, pattern, device_type, description, enabled, created_at, updated_at, updated_by
+    FROM intended_remediation_ignores
+"""
+
+
+def _ignore(row: dict) -> dict:
+    return {
+        "id": int(row["id"]),
+        "kind": row["kind"],
+        "pattern": row["pattern"],
+        "device_type": row["device_type"] or "",
+        "description": row["description"] or "",
+        "enabled": bool(row["enabled"]),
+        **_stamps(row),
+    }
+
+
+async def list_remediation_ignores() -> list[dict]:
+    """Every remediation ignore rule, by id."""
+    return [_ignore(r) for r in await _select(_IGNORE_SELECT + " ORDER BY id")]
+
+
+async def get_remediation_ignore(rule_id: int) -> dict | None:
+    rows = await _select(_IGNORE_SELECT + " WHERE id = ?", (int(rule_id),))
+    return _ignore(rows[0]) if rows else None
+
+
+async def create_remediation_ignore(values: dict, user: str = "") -> dict:
+    """``values``: ``kind``, ``pattern``, ``device_type``, ``description``,
+    ``enabled`` (already validated)."""
+    new_id = await _insert("intended_remediation_ignores", _written(values, user), ValueError("not unique"))
+    return await _must(get_remediation_ignore(new_id))
+
+
+async def update_remediation_ignore(rule_id: int, values: dict, user: str = "") -> dict | None:
+    """Replace the writable fields; ``None`` when the rule does not exist."""
+    if not await _update(
+        "intended_remediation_ignores", int(rule_id), _written(values, user), ValueError("not unique")
+    ):
+        return None
+    return await get_remediation_ignore(rule_id)
+
+
+async def delete_remediation_ignore(rule_id: int) -> bool:
+    return await _delete("intended_remediation_ignores", rule_id)
 
 
 async def _must(coro) -> dict:

@@ -33,6 +33,8 @@ vi.mock('@/api/floorPlan', () => ({
   useGeoSites: () => ({ data: [{ id: 3, name: 'Branch 1' }] }),
 }));
 vi.mock('@/api/auth', () => ({ useAuthStatus: () => ({ data: { role: state.role } }) }));
+// The shared tags / custom fields panel has its own tests.
+vi.mock('@/components/ObjectDataPanel', () => ({ ObjectDataPanel: () => null }));
 vi.mock('@/components/ExportTemplatesMenu', () => ({ ExportTemplatesMenu: () => null }));
 vi.mock('@/api/objectChanges', () => ({
   useObjectChanges: () => query({ data: { changes: [], total: 0, limit: 10, offset: 0, object_types: [] } }),

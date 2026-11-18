@@ -9,7 +9,7 @@ import type { AccessGroup } from '@/api/settings';
 
 import { AccessGroupModal } from './AccessGroupModal';
 import { AccessGroupsTab } from './AccessGroupsTab';
-import { choicesFromGrants, grantsFromChoices, scopePayload, scopeSummary } from './accessGroupScope';
+import { choicesFromGrants, grantsFromChoices, normaliseRules, scopePayload, scopeSummary } from './accessGroupScope';
 
 // The real Modal portals into document.body, which the node test environment
 // has none of; render its title, body and footer in place instead.
@@ -124,8 +124,9 @@ describe('AccessGroupModal', () => {
     expect(html).toMatch(/aria-label="Access to site-a"[^>]*>(?:(?!<\/select>).)*value="none" selected=""/s);
     // Sub-groups are indented under their parent.
     expect(html).toContain('padding-left:1.25rem');
-    // The note names the pages scoped accounts can use.
-    expect(html).toContain('these pages only: Inventory');
+    // The note says scoped accounts keep their pages, filtered, and offers scope rules.
+    expect(html).toContain('keep every page their features allow');
+    expect(html).toContain('Add scope rule');
   });
 });
 
@@ -140,5 +141,21 @@ describe('AccessGroupsTab', () => {
     );
     expect(html).toContain('Devices: Selected inventory groups: site-a / floor-1 (read and write), site-b (read)');
     expect(html).toContain('Devices: All devices');
+  });
+});
+
+describe('normaliseRules', () => {
+  it('drops incomplete rules, merges duplicates (write wins) and sorts', () => {
+    expect(
+      normaliseRules([
+        { model: 'circuit', attribute: 'tenant', value_id: 4, can_write: false },
+        { model: '*', attribute: 'site', value_id: undefined, can_write: true },
+        { model: 'circuit', attribute: 'tenant', value_id: 4, can_write: true },
+        { model: '*', attribute: 'site', value_id: 2, can_write: false },
+      ]),
+    ).toEqual([
+      { model: '*', attribute: 'site', value_id: 2, can_write: false },
+      { model: 'circuit', attribute: 'tenant', value_id: 4, can_write: true },
+    ]);
   });
 });

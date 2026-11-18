@@ -7,7 +7,13 @@ Two routers, each registered in ``app.py``:
 - ``router`` (signed-in user with the ``config-drift`` feature): read the
   templates, contexts, rows, a host's detail and variables; generate.
 - ``admin_router`` (admin): create, change and delete templates and
-  contexts; preview a template against a host.
+  contexts; preview a template against a host; manage remediation ignore
+  rules.
+
+Remediation (``remediation_for_hosts``): the commands that close a host's
+gap to its intended configuration, previewed here and turned into
+deployments by ``netcontrol.routes.deployments`` (rules in
+``netcontrol.intended_remediation``).
 
 ``generate_for_hosts`` renders and compares; ``recompare_host`` compares a
 host's stored intended configuration again (``store_device_config`` calls it
@@ -29,6 +35,7 @@ from pydantic import BaseModel, Field
 
 from netcontrol.custom_fields import CustomFieldError
 from netcontrol.device_model import MAX_ID
+from netcontrol.dynamic_groups import resolve_group
 from netcontrol.integrations.pathtrace.route_tables import interface_key
 from netcontrol.intended_config import (
     COMPLIANCE_STATES,
@@ -47,7 +54,15 @@ from netcontrol.intended_config import (
     select_template,
     verdict,
 )
+from netcontrol.intended_remediation import (
+    IGNORE_PATTERN_MAX,
+    clean_ignore_description,
+    clean_ignore_kind,
+    clean_ignore_pattern,
+    generate_remediation,
+)
 from netcontrol.object_scope import (
+    READ_ONLY_DETAIL,
     group_filter,
     request_scope,
     require_group,
@@ -120,6 +135,26 @@ class PreviewBody(BaseModel):
 class GenerateBody(BaseModel):
     host_ids: list[int] | None = Field(default=None, max_length=100_000)
     group_id: int | None = _ID
+
+
+# Most hosts one remediation preview or deployment request covers.
+REMEDIATION_HOSTS_MAX = 500
+
+
+class RemediationTargets(BaseModel):
+    """Exactly one of: hosts, an inventory group, a dynamic group."""
+
+    host_ids: list[int] | None = Field(default=None, max_length=REMEDIATION_HOSTS_MAX)
+    group_id: int | None = _ID
+    dynamic_group_id: int | None = _ID
+
+
+class IgnoreRuleBody(BaseModel):
+    kind: str = Field(max_length=20)
+    pattern: str = Field(max_length=IGNORE_PATTERN_MAX * 2)
+    device_type: str = Field(default="", max_length=_RAW_MAX)
+    description: str = Field(default="", max_length=_RAW_MAX * 4)
+    enabled: bool = True
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -708,3 +743,165 @@ async def generate(body: GenerateBody, request: Request) -> dict:
         f"{scope} generated={result['generated']} changed={result['changed']} errors={result['errors']}",
     )
     return result
+
+
+# ── Remediation ──────────────────────────────────────────────────────────────
+
+
+def _unavailable(reason: str) -> dict:
+    return {
+        "state": "unavailable",
+        "reason": reason,
+        "supported": True,
+        "platform": "",
+        "commands": [],
+        "added": 0,
+        "removed": 0,
+        "ignored": 0,
+        "notes": [],
+    }
+
+
+async def _host_remediation(host: dict, ignores: list[dict]) -> dict:
+    host_id = int(host["id"])
+    out: dict[str, Any] = {
+        "host_id": host_id,
+        "hostname": host.get("hostname") or "",
+        "ip_address": host.get("ip_address") or "",
+        "device_type": host.get("device_type") or "",
+        "group_id": host.get("group_id"),
+        "template_name": "",
+        "backup": None,
+    }
+    row = await db.get_intended_config(host_id)
+    if row is None:
+        return {**out, **_unavailable("No intended configuration: no enabled device template matches this host.")}
+    out["template_name"] = row["template_name"]
+    if row["status"] != "ok":
+        return {**out, **_unavailable(f"The template did not render: {row['error'] or 'no detail'}.")}
+    backup = await db.get_config_backup(row["backup_id"]) if row["backup_id"] else None
+    if backup is None or int(backup.get("host_id") or 0) != host_id:
+        return {**out, **_unavailable("No configuration backup to compare with: capture one first.")}
+    out["backup"] = {"id": int(backup["id"]), "captured_at": backup.get("captured_at") or ""}
+    result = await asyncio.to_thread(
+        generate_remediation,
+        row["config_text"],
+        str(backup.get("config_text") or ""),
+        out["device_type"],
+        ignores,
+    )
+    return {**out, "state": "ok" if result.supported else "unsupported", **result.as_dict()}
+
+
+async def remediation_for_hosts(hosts: list[dict]) -> list[dict]:
+    """The remediation of each host, in order: ``state`` ``ok`` (with
+    ``commands``, empty when the host already matches), ``unsupported`` (its
+    driver) or ``unavailable`` (no intended configuration, a render error or
+    no backup), ``reason`` saying why. Compares the backup the stored
+    comparison used, so the commands match the diff the detail shows."""
+    ignores = await db.list_remediation_ignores()
+    return [await _host_remediation(host, ignores) for host in hosts]
+
+
+async def resolve_remediation_targets(request: Request, body: RemediationTargets, *, write: bool) -> list[dict]:
+    """The hosts ``body`` names, within the caller's scope: every one
+    readable (``write``: writable) or the request fails, like other bulk
+    actions. A dynamic group resolves among the readable hosts."""
+    given = [k for k in ("host_ids", "group_id", "dynamic_group_id") if getattr(body, k) is not None]
+    if len(given) != 1:
+        raise HTTPException(status_code=400, detail="Give exactly one of host_ids, group_id or dynamic_group_id.")
+    scope = await request_scope(request)
+    if body.host_ids is not None:
+        hosts = await require_hosts(request, body.host_ids, write=write)
+    elif body.group_id is not None:
+        if scope.restricted:
+            await require_group(request, body.group_id, write=write)
+        else:
+            _found(await db.get_group(body.group_id), "Group")
+        hosts = await db.get_hosts_for_group(body.group_id)
+    else:
+        resolved = await resolve_group(int(body.dynamic_group_id or 0), scope)
+        if resolved is None:
+            raise HTTPException(status_code=404, detail="Dynamic group not found")
+        hosts = resolved
+        if write and any(not scope.can_write_group(h.get("group_id")) for h in hosts):
+            raise HTTPException(status_code=403, detail=READ_ONLY_DETAIL)
+    if len(hosts) > REMEDIATION_HOSTS_MAX:
+        raise HTTPException(
+            status_code=400, detail=f"At most {REMEDIATION_HOSTS_MAX} hosts at a time; this selection has {len(hosts)}."
+        )
+    return hosts
+
+
+@router.get(f"{PREFIX}/hosts/{{host_id}}/remediation")
+@scoped("host")
+async def host_remediation(host_id: int, request: Request) -> dict:
+    """The commands that close the host's gap to its intended configuration
+    (nothing is stored or pushed)."""
+    host = await require_host(request, host_id, not_found=_INTENDED_NOT_FOUND)
+    return (await remediation_for_hosts([host]))[0]
+
+
+@router.post(f"{PREFIX}/remediation")
+@scoped("hosts")
+async def bulk_remediation(body: RemediationTargets, request: Request) -> dict:
+    """The remediation of several hosts (``host_ids``, an inventory group or a
+    dynamic group); nothing is stored or pushed."""
+    rows = await remediation_for_hosts(await resolve_remediation_targets(request, body, write=False))
+    return {
+        "hosts": rows,
+        "counts": {
+            "hosts": len(rows),
+            "with_commands": sum(1 for r in rows if r["state"] == "ok" and r["commands"]),
+            "unsupported": sum(1 for r in rows if r["state"] == "unsupported"),
+            "unavailable": sum(1 for r in rows if r["state"] == "unavailable"),
+        },
+    }
+
+
+# ── Remediation ignore rules (admin) ─────────────────────────────────────────
+
+IGNORES = f"{PREFIX}/remediation-ignores"
+
+
+def _ignore_values(body: IgnoreRuleBody) -> dict:
+    kind = _clean(clean_ignore_kind, body.kind)
+    try:
+        pattern = clean_ignore_pattern(body.pattern, kind)
+    except CustomFieldError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {
+        "kind": kind,
+        "pattern": pattern,
+        "device_type": _clean(clean_device_type, body.device_type),
+        "description": _clean(clean_ignore_description, body.description),
+        "enabled": body.enabled,
+    }
+
+
+@admin_router.get(IGNORES)
+async def list_ignore_rules() -> dict:
+    return {"rules": await db.list_remediation_ignores()}
+
+
+@admin_router.post(IGNORES, status_code=201)
+async def create_ignore_rule(body: IgnoreRuleBody, request: Request) -> dict:
+    record = await db.create_remediation_ignore(_ignore_values(body), _session_user(request))
+    await _audit_write(request, "intended_ignore_create", f"id={record['id']} kind={record['kind']}")
+    return record
+
+
+@admin_router.put(f"{IGNORES}/{{rule_id}}")
+async def update_ignore_rule(rule_id: int, body: IgnoreRuleBody, request: Request) -> dict:
+    values = _ignore_values(body)
+    record = _found(await db.update_remediation_ignore(rule_id, values, _session_user(request)), "Ignore rule")
+    await _audit_write(request, "intended_ignore_update", f"id={rule_id} kind={record['kind']}")
+    return record
+
+
+@admin_router.delete(f"{IGNORES}/{{rule_id}}")
+async def delete_ignore_rule(rule_id: int, request: Request) -> dict:
+    record = _found(await db.get_remediation_ignore(rule_id), "Ignore rule")
+    await db.delete_remediation_ignore(rule_id)
+    await _audit_write(request, "intended_ignore_delete", f"id={rule_id} kind={record['kind']}")
+    return {"ok": True}

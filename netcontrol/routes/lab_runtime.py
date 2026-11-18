@@ -26,6 +26,10 @@ Endpoints exposed (registered by app.py):
     POST /api/lab/devices/{id}/runtime/refresh
     GET  /api/lab/devices/{id}/runtime/events
     POST /api/lab/devices/{id}/simulate-live
+
+Object scope: a lab device follows the inventory host it was cloned from
+(``netcontrol.routes.lab.require_lab_device``); a twin of a host outside a
+scoped caller's read scope answers 404.
 """
 
 from __future__ import annotations
@@ -42,11 +46,13 @@ import routes.database as db
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
+from netcontrol.object_scope import scope_exempt, scoped
 from netcontrol.routes.lab import (
     _evaluate_compliance_impact,
     _resolve_commands,
     _resolve_session_user,
     _user_can_access_env,
+    require_lab_device,
 )
 from netcontrol.routes.risk_analysis import (
     _classify_change_areas,
@@ -539,6 +545,7 @@ async def _get_device_or_403(device_id: int, request: Request) -> tuple[dict, di
     device = await db.get_lab_device(device_id)
     if not device:
         raise HTTPException(status_code=404, detail="Lab device not found")
+    await require_lab_device(request, device)
     env = await db.get_lab_environment(device["environment_id"])
     session, _, role = await _resolve_session_user(request)
     if not _user_can_access_env(env or {}, session, role):
@@ -547,11 +554,13 @@ async def _get_device_or_403(device_id: int, request: Request) -> tuple[dict, di
 
 
 @router.get("/api/lab/runtime")
+@scope_exempt("containerlab availability; no host data")
 async def runtime_status_endpoint():
     return await get_runtime_status()
 
 
 @router.post("/api/lab/devices/{device_id}/runtime/deploy")
+@scoped("lab_device")
 async def deploy_endpoint(device_id: int, body: DeployRequest, request: Request):
     device, session = await _get_device_or_403(device_id, request)
     actor = session["user"] if session else ""
@@ -573,6 +582,7 @@ async def deploy_endpoint(device_id: int, body: DeployRequest, request: Request)
 
 
 @router.post("/api/lab/devices/{device_id}/runtime/destroy")
+@scoped("lab_device")
 async def destroy_endpoint(device_id: int, request: Request):
     device, session = await _get_device_or_403(device_id, request)
     actor = session["user"] if session else ""
@@ -588,6 +598,7 @@ async def destroy_endpoint(device_id: int, request: Request):
 
 
 @router.post("/api/lab/devices/{device_id}/runtime/refresh")
+@scoped("lab_device")
 async def refresh_endpoint(device_id: int, request: Request):
     device, session = await _get_device_or_403(device_id, request)
     actor = session["user"] if session else ""
@@ -595,12 +606,14 @@ async def refresh_endpoint(device_id: int, request: Request):
 
 
 @router.get("/api/lab/devices/{device_id}/runtime/events")
+@scoped("lab_device")
 async def events_endpoint(device_id: int, request: Request, limit: int = 50):
     device, _ = await _get_device_or_403(device_id, request)
     return await db.list_lab_runtime_events(device["id"], limit=max(1, min(500, limit)))
 
 
 @router.post("/api/lab/devices/{device_id}/simulate-live")
+@scoped("lab_device")
 async def simulate_live_endpoint(
     device_id: int,
     body: SimulateLiveRequest,

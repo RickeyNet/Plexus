@@ -4,12 +4,17 @@
  * initial values and the tag picker's option list.
  */
 import type {
+  Cardinality,
+  ComputedField,
   CustomField,
   CustomFieldInput,
   CustomValue,
   FieldType,
+  FullObjectData,
+  IdObjectType,
   ObjectDataPut,
   ObjectType,
+  RelationshipGroup,
   TagRef,
 } from '@/api/customData';
 
@@ -22,13 +27,38 @@ export type TagColor = (typeof TAG_COLORS)[number];
 export const TAG_NAME_MAX = 50;
 export const FIELD_KEY_RE = /^[a-z][a-z0-9_]{0,49}$/;
 
-export const OBJECT_TYPES: readonly ObjectType[] = ['host', 'group', 'prefix'];
 export const FIELD_TYPES: readonly FieldType[] = ['text', 'number', 'boolean', 'date', 'url', 'select'];
 
+/** Every object type that carries custom data, in the server registry's order. */
 export const OBJECT_TYPE_LABELS: Record<ObjectType, { one: string; many: string; title: string }> = {
   host: { one: 'host', many: 'hosts', title: 'Hosts' },
   group: { one: 'group', many: 'groups', title: 'Groups' },
   prefix: { one: 'IPAM prefix', many: 'IPAM prefixes', title: 'IPAM prefixes' },
+  vrf: { one: 'VRF', many: 'VRFs', title: 'VRFs' },
+  vlan: { one: 'VLAN', many: 'VLANs', title: 'VLANs' },
+  region: { one: 'region', many: 'regions', title: 'Regions' },
+  site: { one: 'site', many: 'sites', title: 'Sites' },
+  tenant: { one: 'tenant', many: 'tenants', title: 'Tenants' },
+  manufacturer: { one: 'manufacturer', many: 'manufacturers', title: 'Manufacturers' },
+  device_type: { one: 'device type', many: 'device types', title: 'Device types' },
+  device_role: { one: 'device role', many: 'device roles', title: 'Device roles' },
+  circuit_provider: { one: 'circuit provider', many: 'circuit providers', title: 'Circuit providers' },
+  circuit: { one: 'circuit', many: 'circuits', title: 'Circuits' },
+  cluster: { one: 'cluster', many: 'clusters', title: 'Clusters' },
+  virtual_machine: { one: 'virtual machine', many: 'virtual machines', title: 'Virtual machines' },
+  autonomous_system: { one: 'autonomous system', many: 'autonomous systems', title: 'Autonomous systems' },
+  bgp_peering: { one: 'BGP peering', many: 'BGP peerings', title: 'BGP peerings' },
+  rack: { one: 'rack', many: 'racks', title: 'Racks' },
+  cable: { one: 'cable', many: 'cables', title: 'Cables' },
+};
+export const OBJECT_TYPES = Object.keys(OBJECT_TYPE_LABELS) as readonly ObjectType[];
+/** The types relationships and computed fields apply to (every type but prefix). */
+export const ID_OBJECT_TYPES = OBJECT_TYPES.filter((t): t is IdObjectType => t !== 'prefix');
+
+export const CARDINALITY_LABELS: Record<Cardinality, string> = {
+  'one-to-one': 'One to one',
+  'one-to-many': 'One to many',
+  'many-to-many': 'Many to many',
 };
 
 export const FIELD_TYPE_LABELS: Record<FieldType, string> = {
@@ -243,5 +273,43 @@ export function validateFieldForm(input: CustomFieldInput, isCreate: boolean): F
   if (input.field_type === 'select' && input.default_value && !input.choices.includes(input.default_value)) {
     errors.default_value = 'The default must be one of the choices.';
   }
+  return errors;
+}
+
+// ── Object panel and definitions ───────────────────────────────────────────
+
+/** "Owner: net", in field order, for the values that are set. */
+export function fieldRows(fields: CustomField[], values: FullObjectData['fields']): [string, string][] {
+  const known = new Set(fields.map((f) => f.key));
+  const rows: [string, string][] = fields
+    .filter((f) => valueText(values[f.key]) !== '')
+    .map((f) => [f.label, valueText(values[f.key])]);
+  for (const [key, value] of Object.entries(values)) {
+    if (!known.has(key) && valueText(value) !== '') rows.push([key, valueText(value)]);
+  }
+  return rows;
+}
+
+/** Computed values by their field's label, in definition order (keys without a definition last). */
+export function computedRows(defs: ComputedField[], values: Record<string, string>): [string, string][] {
+  const rows: [string, string][] = defs.filter((d) => d.key in values).map((d) => [d.label, values[d.key] || '—']);
+  const known = new Set(defs.map((d) => d.key));
+  for (const [key, value] of Object.entries(values)) if (!known.has(key)) rows.push([key, value || '—']);
+  return rows;
+}
+
+/** "Provides transit (to VRFs)" / "Provides transit (from circuit providers)". */
+export function relationshipTitle(group: RelationshipGroup): string {
+  const peers = OBJECT_TYPE_LABELS[group.peer_type]?.many ?? group.peer_type;
+  return `${group.relationship.label} (${group.side === 'source' ? 'to' : 'from'} ${peers})`;
+}
+
+/** The problems of a definition's key and label, by field. */
+export function definitionErrors(key: string, label: string, isNew: boolean): Record<string, string> {
+  const errors: Record<string, string> = {};
+  if (isNew && !FIELD_KEY_RE.test(key.trim())) {
+    errors.key = 'Start with a lowercase letter; use only a-z, 0-9 and _ (at most 50).';
+  }
+  if (!label.trim()) errors.label = 'Enter a label.';
   return errors;
 }

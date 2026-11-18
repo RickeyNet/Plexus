@@ -372,10 +372,20 @@ async def list_run_entries(
     outcome: str | None = None,
     limit: int = 500,
     offset: int = 0,
+    device_names: Iterable[str] | None = None,
 ) -> tuple[list[dict], int]:
     """A page of a run's entries (by object type order of the run, then
-    id) and the number matching."""
+    id) and the number matching. ``device_names`` (object scope): keep only
+    the device entries whose key is one of these names (case folded);
+    ``None`` keeps every entry."""
     clauses, params = ["run_id = ?"], [int(run_id)]
+    if device_names is not None:
+        names = sorted({str(n).lower() for n in device_names if n})
+        if names:
+            clauses.append(f"object_type = 'devices' AND lower(object_key) IN ({','.join('?' * len(names))})")
+            params.extend(names)
+        else:
+            clauses.append("1 = 0")
     if object_type:
         clauses.append("object_type = ?")
         params.append(object_type)

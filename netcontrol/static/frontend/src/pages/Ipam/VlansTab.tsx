@@ -13,6 +13,7 @@ import { ExportTemplatesMenu } from '@/components/ExportTemplatesMenu';
 import { ImportDialog } from '@/components/ImportDialog';
 import { LoadingState } from '@/components/LoadingState';
 import { QueryError } from '@/components/QueryError';
+import { ObjectDataPanel } from '@/components/ObjectDataPanel';
 import { clickableProps } from '@/lib/clickable';
 import { siteFilterFromSelect, siteFilterToSelect, type VlanSiteFilter, vrfLabel } from '@/lib/networkObjects';
 import { usePendingKeys } from '@/lib/usePendingKeys';
@@ -313,6 +314,7 @@ export function VlanDetailPanel({ id }: { id: number | null }) {
         </DataTable>
       </DetailSection>
       <ChangelogPanel objectType="vlan" objectId={v.id} pageSize={10} />
+      <ObjectDataPanel objectType="vlan" objectId={v.id} />
     </div>
   );
 }

@@ -1,6 +1,12 @@
 """
 compliance.py -- Compliance profile CRUD, assignment management, scan execution,
 admin scheduling, and background compliance check loop.
+
+Object scope: profiles are a shared catalogue (read by everyone, changed by
+unrestricted callers only); an assignment follows its inventory group and a
+scan result, status row or scan its hosts, so an account limited to
+selected inventory groups sees and runs them for its own groups and hosts
+(writable ones to change or scan).
 """
 
 from __future__ import annotations
@@ -16,6 +22,17 @@ from routes.user_regex import UserRegex, compile_user_regex
 
 import netcontrol.routes.state as state
 from netcontrol.integrations.meraki.compliance import is_meraki_rule
+from netcontrol.object_scope import (
+    group_filter,
+    request_scope,
+    require_group,
+    require_host,
+    require_host_ids,
+    require_model_write,
+    require_object_host,
+    scope_exempt,
+    scoped,
+)
 from netcontrol.routes import background_jobs
 from netcontrol.routes.device_config import ON_DEMAND_MAX_AGE_SECONDS, get_device_config
 from netcontrol.routes.meraki_compliance import (
@@ -499,12 +516,15 @@ async def _compliance_check_loop() -> None:
 
 
 @router.get("/api/compliance/profiles")
+@scope_exempt("shared compliance profile catalogue: no host or inventory group data")
 async def list_compliance_profiles():
     return await db.get_compliance_profiles()
 
 
 @router.post("/api/compliance/profiles", status_code=201)
+@scoped("catalog")
 async def create_compliance_profile(body: ComplianceProfileCreate, request: Request):
+    await require_model_write(request)
     if body.severity not in ("low", "medium", "high", "critical"):
         raise HTTPException(status_code=400, detail="Severity must be low, medium, high, or critical")
     rule_error = validate_meraki_rules(body.rules) or validate_regex_rules(body.rules)
@@ -529,6 +549,7 @@ async def create_compliance_profile(body: ComplianceProfileCreate, request: Requ
 
 
 @router.get("/api/compliance/profiles/{profile_id}")
+@scope_exempt("shared compliance profile catalogue: no host or inventory group data")
 async def get_compliance_profile(profile_id: int):
     profile = await db.get_compliance_profile(profile_id)
     if not profile:
@@ -537,10 +558,12 @@ async def get_compliance_profile(profile_id: int):
 
 
 @router.put("/api/compliance/profiles/{profile_id}")
+@scoped("catalog")
 async def update_compliance_profile(profile_id: int, body: ComplianceProfileUpdate, request: Request):
     profile = await db.get_compliance_profile(profile_id)
     if not profile:
         raise HTTPException(status_code=404, detail="Compliance profile not found")
+    await require_model_write(request)
     updates = {}
     if body.name is not None:
         updates["name"] = body.name
@@ -568,10 +591,12 @@ async def update_compliance_profile(profile_id: int, body: ComplianceProfileUpda
 
 
 @router.delete("/api/compliance/profiles/{profile_id}")
+@scoped("catalog")
 async def delete_compliance_profile(profile_id: int, request: Request):
     profile = await db.get_compliance_profile(profile_id)
     if not profile:
         raise HTTPException(status_code=404, detail="Compliance profile not found")
+    await require_model_write(request)
     await db.delete_compliance_profile(profile_id)
     session = _get_session(request)
     await _audit(
@@ -586,23 +611,38 @@ async def delete_compliance_profile(profile_id: int, request: Request):
 
 # ── Compliance Assignments ──────────────────────────────────────────────────
 
+_ASSIGNMENT_NOT_FOUND = "Assignment not found"
+
+
+async def _require_assignment(request: Request, assignment_id: int, *, write: bool = False) -> dict:
+    """The assignment; 404 when unknown or (scoped caller) its inventory
+    group is not readable, 403 on ``write`` when it is not writable."""
+    assignment = await db.get_compliance_assignment(assignment_id)
+    if not assignment:
+        raise HTTPException(status_code=404, detail=_ASSIGNMENT_NOT_FOUND)
+    if (await request_scope(request)).restricted:
+        await require_group(request, assignment["group_id"], write=write, not_found=_ASSIGNMENT_NOT_FOUND)
+    return assignment
+
 
 @router.get("/api/compliance/assignments")
+@scoped("list")
 async def list_compliance_assignments(
+    request: Request,
     profile_id: int | None = Query(default=None),
     group_id: int | None = Query(default=None),
 ):
-    return await db.get_compliance_assignments(profile_id=profile_id, group_id=group_id)
+    rows = await db.get_compliance_assignments(profile_id=profile_id, group_id=group_id)
+    return (await request_scope(request)).filter_hosts(rows, key="group_id")
 
 
 @router.post("/api/compliance/assignments", status_code=201)
+@scoped("create")
 async def create_compliance_assignment(body: ComplianceAssignmentCreate, request: Request):
     profile = await db.get_compliance_profile(body.profile_id)
     if not profile:
         raise HTTPException(status_code=404, detail="Compliance profile not found")
-    group = await db.get_group(body.group_id)
-    if not group:
-        raise HTTPException(status_code=404, detail="Inventory group not found")
+    await require_group(request, body.group_id, write=True, not_found="Inventory group not found")
     await require_credential_access(
         body.credential_id,
         session=_get_session(request),
@@ -634,10 +674,9 @@ async def create_compliance_assignment(body: ComplianceAssignmentCreate, request
 
 
 @router.put("/api/compliance/assignments/{assignment_id}")
+@scoped("assignment")
 async def update_compliance_assignment(assignment_id: int, body: ComplianceAssignmentUpdate, request: Request):
-    assignment = await db.get_compliance_assignment(assignment_id)
-    if not assignment:
-        raise HTTPException(status_code=404, detail="Assignment not found")
+    await _require_assignment(request, assignment_id, write=True)
     updates = {}
     if body.enabled is not None:
         updates["enabled"] = 1 if body.enabled else 0
@@ -666,10 +705,9 @@ async def update_compliance_assignment(assignment_id: int, body: ComplianceAssig
 
 
 @router.delete("/api/compliance/assignments/{assignment_id}")
+@scoped("assignment")
 async def delete_compliance_assignment(assignment_id: int, request: Request):
-    assignment = await db.get_compliance_assignment(assignment_id)
-    if not assignment:
-        raise HTTPException(status_code=404, detail="Assignment not found")
+    await _require_assignment(request, assignment_id, write=True)
     await db.delete_compliance_assignment(assignment_id)
     session = _get_session(request)
     await _audit(
@@ -686,7 +724,9 @@ async def delete_compliance_assignment(assignment_id: int, request: Request):
 
 
 @router.get("/api/compliance/results")
+@scoped("list")
 async def list_compliance_scan_results(
+    request: Request,
     host_id: int | None = Query(default=None),
     profile_id: int | None = Query(default=None),
     assignment_id: int | None = Query(default=None),
@@ -699,22 +739,33 @@ async def list_compliance_scan_results(
         assignment_id=assignment_id,
         status=status,
         limit=limit,
+        **await group_filter(request),
     )
 
 
-@router.get("/api/compliance/results/{result_id}")
-async def get_compliance_scan_result(result_id: int):
+_RESULT_NOT_FOUND = "Scan result not found"
+
+
+async def _require_scan_result(request: Request, result_id: int, *, write: bool = False) -> dict:
+    """The scan result; 404 when unknown or (scoped caller) its host is not
+    readable, 403 on ``write`` when it is not writable."""
     result = await db.get_compliance_scan_result(result_id)
     if not result:
-        raise HTTPException(status_code=404, detail="Scan result not found")
+        raise HTTPException(status_code=404, detail=_RESULT_NOT_FOUND)
+    await require_object_host(request, result.get("host_id"), not_found=_RESULT_NOT_FOUND, write=write)
     return result
 
 
+@router.get("/api/compliance/results/{result_id}")
+@scoped("host_record")
+async def get_compliance_scan_result(result_id: int, request: Request):
+    return await _require_scan_result(request, result_id)
+
+
 @router.delete("/api/compliance/results/{result_id}")
+@scoped("host_record")
 async def delete_compliance_scan_result(result_id: int, request: Request):
-    result = await db.get_compliance_scan_result(result_id)
-    if not result:
-        raise HTTPException(status_code=404, detail="Scan result not found")
+    await _require_scan_result(request, result_id, write=True)
     await db.delete_compliance_scan_result(result_id)
     session = _get_session(request)
     await _audit(
@@ -731,15 +782,17 @@ async def delete_compliance_scan_result(result_id: int, request: Request):
 
 
 @router.get("/api/compliance/status")
-async def get_compliance_host_status(profile_id: int | None = Query(default=None)):
+@scoped("list")
+async def get_compliance_host_status(request: Request, profile_id: int | None = Query(default=None)):
     """Get latest compliance status per host."""
-    return await db.get_compliance_host_status(profile_id=profile_id)
+    return await db.get_compliance_host_status(profile_id=profile_id, **await group_filter(request))
 
 
 @router.get("/api/compliance/summary")
-async def get_compliance_summary():
-    """Return compliance summary stats."""
-    return await db.get_compliance_summary()
+@scoped("list")
+async def get_compliance_summary(request: Request):
+    """Return compliance summary stats (a scoped caller: over its groups)."""
+    return await db.get_compliance_summary(**await group_filter(request))
 
 
 # ── On-demand Compliance Scan ────────────────────────────────────────────────
@@ -861,6 +914,9 @@ def _start_host_scan(
     )
     if assignment_id is not None:
         _running_assignment_scans[assignment_id] = job["job_id"]
+    # Object scope: the scan's results are visible to callers who may read
+    # every host it scans (``get_compliance_scan_job``).
+    job["group_ids"] = sorted({h.get("group_id") for h in hosts}, key=lambda g: (g is None, g or 0))
     session = _get_session(request)
     supervise_task(
         asyncio.create_task(
@@ -882,23 +938,31 @@ def _start_host_scan(
 
 
 @router.get("/api/compliance/scans/{job_id}")
-async def get_compliance_scan_job(job_id: str):
-    """Poll a bulk or scan-now host compliance scan job."""
+@scoped("job")
+async def get_compliance_scan_job(job_id: str, request: Request):
+    """Poll a bulk or scan-now host compliance scan job (not found for a
+    scoped caller who may not read every host it scans)."""
     job = background_jobs.get_job(job_id, kind=_SCAN_JOB_KIND)
+    scope = await request_scope(request)
+    if (
+        job is not None
+        and scope.restricted
+        and not all(scope.can_read_group(g) for g in job.get("group_ids") or [None])
+    ):
+        job = None
     if job is None:
         raise HTTPException(status_code=404, detail="Scan job not found (it may have expired)")
     return job
 
 
 @router.post("/api/compliance/assignments/{assignment_id}/scan-now", status_code=202)
+@scoped("assignment")
 async def scan_assignment_now(assignment_id: int, request: Request):
     """Start a compliance scan of every host in an assignment's group.
 
     Returns ``{job_id, status}``; poll ``/api/compliance/scans/{job_id}``.
     """
-    assignment = await db.get_compliance_assignment(assignment_id)
-    if not assignment:
-        raise HTTPException(status_code=404, detail="Assignment not found")
+    assignment = await _require_assignment(request, assignment_id, write=True)
 
     profile = await db.get_compliance_profile(assignment["profile_id"])
     if not profile:
@@ -926,11 +990,10 @@ async def scan_assignment_now(assignment_id: int, request: Request):
 
 
 @router.post("/api/compliance/scan")
+@scoped("host")
 async def run_compliance_scan(body: ComplianceScanRequest, request: Request):
     """Run an on-demand compliance scan for a single host against a profile."""
-    host = await db.get_host(body.host_id)
-    if not host:
-        raise HTTPException(status_code=404, detail="Host not found")
+    host = await require_host(request, body.host_id, write=True)
     profile = await db.get_compliance_profile(body.profile_id)
     if not profile:
         raise HTTPException(status_code=404, detail="Compliance profile not found")
@@ -958,10 +1021,12 @@ async def run_compliance_scan(body: ComplianceScanRequest, request: Request):
 
 
 @router.post("/api/compliance/scan-bulk", status_code=202)
+@scoped("hosts")
 async def run_compliance_scan_bulk(body: ComplianceBulkScanRequest, request: Request):
     """Start a compliance scan of multiple (or all) hosts.
 
-    If host_ids is empty, every host in the inventory is scanned. Returns
+    If host_ids is empty, every host in the inventory is scanned (a scoped
+    caller: every host it may change; named hosts must be writable). Returns
     ``{job_id, status}``; poll ``/api/compliance/scans/{job_id}`` for the
     aggregate stats and per-host result list.
     """
@@ -970,10 +1035,14 @@ async def run_compliance_scan_bulk(body: ComplianceBulkScanRequest, request: Req
         raise HTTPException(status_code=404, detail="Compliance profile not found")
     cred = await require_credential_access(body.credential_id, session=_get_session(request))
 
+    scope = await request_scope(request)
     if body.host_ids:
+        await require_host_ids(request, body.host_ids, write=True)
         hosts = await db.get_hosts_by_ids(body.host_ids)
     else:
         hosts = await db.get_all_hosts()
+        if scope.restricted:
+            hosts = [h for h in hosts if scope.can_write_group(h.get("group_id"))]
 
     if not hosts:
         raise HTTPException(status_code=400, detail="No hosts found to scan")
@@ -993,6 +1062,7 @@ async def run_compliance_scan_bulk(body: ComplianceBulkScanRequest, request: Req
 
 
 @router.post("/api/compliance/remediate")
+@scoped("host_record")
 async def remediate_compliance_finding(body: ComplianceRemediateRequest, request: Request):
     """Push remediation config for a specific failed compliance rule.
 
@@ -1002,10 +1072,8 @@ async def remediate_compliance_finding(body: ComplianceRemediateRequest, request
     After a live push, automatically re-scans the host against the same
     profile and returns updated results.
     """
-    # Load scan result
-    scan_result = await db.get_compliance_scan_result(body.result_id)
-    if not scan_result:
-        raise HTTPException(404, "Scan result not found")
+    # Load scan result (a scoped caller: its host readable; writable to push)
+    scan_result = await _require_scan_result(request, body.result_id, write=not body.dry_run)
 
     # Find the host
     host = await db.get_host(scan_result["host_id"])
@@ -1168,8 +1236,10 @@ async def remediate_compliance_finding(body: ComplianceRemediateRequest, request
 
 
 @router.post("/api/compliance/profiles/load-builtin")
+@scoped("catalog")
 async def load_builtin_compliance_profiles(request: Request):
     """Load all built-in compliance profiles, creating new ones and updating existing ones."""
+    await require_model_write(request)
     from routes.builtin_compliance_profiles import BUILTIN_PROFILES
 
     session = _get_session(request)

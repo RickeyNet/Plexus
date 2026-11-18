@@ -15,8 +15,9 @@ and what nobody planned.
 
 Open it from **Assets > Routing**. Reading needs the **Routing** feature;
 adding, changing and deleting needs **Routing (write)** (`routing.write`).
-Admins have both. Routing is not available to accounts limited to selected
-inventory groups.
+Admins have both. Accounts limited to selected inventory groups see the
+routing instances, peer groups and peerings of their devices and the
+autonomous systems of their tenants (untenanted ones read only).
 
 ## Autonomous systems
 

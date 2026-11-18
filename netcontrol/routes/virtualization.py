@@ -22,6 +22,12 @@ provider, account and region, with its interfaces and addresses. A VM a
 person edited (origin ``manual``) keeps every value; only its link to the
 resource row is refreshed. A discovered VM whose instance is gone is set to
 ``offline``, never deleted. See ``docs/virtualization.md``.
+
+Object scope: cluster types and groups are shared (read by every scoped
+caller, changed by unrestricted callers only, their cluster counts scoped);
+a scoped caller reads and changes the clusters of their tenants or sites or
+with a member host of theirs, and the virtual machines of their tenants or
+of such a cluster's site or hosts (VM interfaces follow their VM).
 """
 
 from __future__ import annotations
@@ -34,6 +40,18 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 from netcontrol.custom_fields import CustomFieldError
+from netcontrol.object_scope import (
+    filter_rows,
+    readable_host_ids,
+    request_scope,
+    require_host,
+    require_model_write,
+    require_new_row,
+    require_row,
+    scope_exempt,
+    scoped,
+)
+from netcontrol.routes.custom_fields import custom_list, with_custom_data
 from netcontrol.routes.shared import _audit, _corr_id, _session_user
 from netcontrol.virtualization import (
     CLOUD_CLUSTER_TYPES,
@@ -298,7 +316,122 @@ _CATALOGS: dict[str, dict[str, Any]] = {
 }
 
 
+# ── Object scope ─────────────────────────────────────────────────────────────
+
+
+async def _member_hosts() -> dict[int, list[int]]:
+    """Cluster id -> its member host ids."""
+    members: dict[int, list[int]] = {}
+    for link in await db.list_cluster_host_links():
+        members.setdefault(int(link["cluster_id"]), []).append(int(link["host_id"]))
+    return members
+
+
+def _keyed_cluster(cluster: dict, members: dict[int, list[int]]) -> dict:
+    """A copy of ``cluster`` with its ``cluster`` scope model keys."""
+    return {**cluster, "scope_host_ids": members.get(int(cluster["id"]), [])}
+
+
+def _keyed_vm(vm: dict, members: dict[int, list[int]]) -> dict:
+    """A copy of ``vm`` with its ``virtual_machine`` scope model keys: its
+    cluster's site (``site_id`` of the VM rows) and member hosts."""
+    cluster_id = vm.get("cluster_id")
+    return {
+        **vm,
+        "cluster_site_id": vm.get("site_id"),
+        "scope_host_ids": members.get(int(cluster_id), []) if cluster_id is not None else [],
+    }
+
+
+async def _readable(request: Request, model: str, rows: list[dict]) -> list[dict]:
+    """The ``rows`` of ``model`` (``cluster`` or ``virtual_machine``) the
+    caller may read, in order."""
+    if (await request_scope(request)).unrestricted:
+        return rows
+    members = await _member_hosts()
+    keyed = _keyed_cluster if model == "cluster" else _keyed_vm
+    allowed = {int(r["id"]) for r in await filter_rows(model, [keyed(r, members) for r in rows], request)}
+    return [r for r in rows if int(r["id"]) in allowed]
+
+
+async def _require_cluster(request: Request, cluster_id: int, *, write: bool = False) -> dict:
+    """The cluster; 404 when unknown or outside the caller's read scope, 403
+    on ``write`` when it is not writable."""
+    row = await db.get_cluster(cluster_id)
+    if row is not None and (await request_scope(request)).restricted:
+        await require_row(
+            request, "cluster", _keyed_cluster(row, await _member_hosts()), write=write, not_found="Cluster not found"
+        )
+    return _found(row, "Cluster")
+
+
+async def _require_vm(request: Request, vm_id: int, *, write: bool = False) -> dict:
+    """The virtual machine; 404 when unknown or outside the caller's read
+    scope, 403 on ``write`` when it is not writable."""
+    row = await db.get_virtual_machine(vm_id)
+    if row is not None and (await request_scope(request)).restricted:
+        await require_row(
+            request,
+            "virtual_machine",
+            _keyed_vm(row, await _member_hosts()),
+            write=write,
+            not_found="Virtual machine not found",
+        )
+    return _found(row, "Virtual machine")
+
+
+async def _require_new_vm(request: Request, tenant_id: Any, cluster_id: Any) -> None:
+    """For a scoped caller: 403 unless a VM of ``tenant_id`` in cluster
+    ``cluster_id`` is writable."""
+    if (await request_scope(request)).unrestricted:
+        return
+    cluster = await db.get_cluster(int(cluster_id)) if cluster_id is not None else None
+    members = await _member_hosts()
+    await require_new_row(
+        request,
+        "virtual_machine",
+        {
+            "tenant_id": tenant_id,
+            "cluster_site_id": (cluster or {}).get("site_id"),
+            "scope_host_ids": members.get(int(cluster_id), []) if cluster_id is not None else [],
+        },
+    )
+
+
+async def _vm_scope_filters(request: Request) -> dict:
+    """``db.list_virtual_machines`` keywords keeping a scoped caller's VMs
+    (SQL, before the limit): those of their tenants and of the clusters
+    whose site or member hosts they reach. ``{}`` when unrestricted."""
+    scope = await request_scope(request)
+    if scope.unrestricted:
+        return {}
+    allowed = await scope.keys("virtual_machine")
+    sites, hosts = allowed.get("site", frozenset()), allowed.get("host", frozenset())
+    members = await _member_hosts()
+    clusters = [
+        int(c["id"])
+        for c in await db.list_clusters()
+        if (c.get("site_id") is not None and int(c["site_id"]) in sites)
+        or any(h in hosts for h in members.get(int(c["id"]), []))
+    ]
+    return {"scope_tenant_ids": sorted(allowed.get("tenant", frozenset())), "scope_cluster_ids": clusters}
+
+
+async def _catalog_counts(request: Request, rows: list[dict], key: str) -> list[dict]:
+    """Catalogue ``rows`` with ``cluster_count`` counting only the caller's
+    clusters (``key``: the cluster column naming the catalogue row);
+    unchanged for an unrestricted caller."""
+    if (await request_scope(request)).unrestricted:
+        return rows
+    counts: dict[int, int] = {}
+    for cluster in await _readable(request, "cluster", await db.list_clusters()):
+        if cluster.get(key) is not None:
+            counts[int(cluster[key])] = counts.get(int(cluster[key]), 0) + 1
+    return [{**r, "cluster_count": counts.get(int(r["id"]), 0)} for r in rows]
+
+
 async def _catalog_create(kind: str, body: CatalogCreate, request: Request) -> dict:
+    await require_model_write(request)
     spec = _CATALOGS[kind]
     values = _clean_values(body, _CATALOG_CLEANERS)
     try:
@@ -312,6 +445,7 @@ async def _catalog_create(kind: str, body: CatalogCreate, request: Request) -> d
 
 
 async def _catalog_update(kind: str, row_id: int, body: CatalogUpdate, request: Request) -> dict:
+    await require_model_write(request)
     spec = _CATALOGS[kind]
     _found(await getattr(db, spec["get"])(row_id), spec["what"])
     values = {k: v for k, v in _clean_values(body, _CATALOG_CLEANERS).items() if v is not None}
@@ -325,6 +459,7 @@ async def _catalog_update(kind: str, row_id: int, body: CatalogUpdate, request: 
 
 
 async def _catalog_delete(kind: str, row_id: int, request: Request) -> dict:
+    await require_model_write(request)
     spec = _CATALOGS[kind]
     row = _found(await getattr(db, spec["get"])(row_id), spec["what"])
     count = int(row.get("cluster_count") or 0)
@@ -342,51 +477,63 @@ async def _catalog_delete(kind: str, row_id: int, request: Request) -> dict:
 
 
 @router.get(f"{PREFIX}/cluster-types")
-async def list_cluster_types() -> dict:
-    return {"cluster_types": await db.list_cluster_types()}
+@scoped("list")
+async def list_cluster_types(request: Request) -> dict:
+    return {"cluster_types": await _catalog_counts(request, await db.list_cluster_types(), "cluster_type_id")}
 
 
 @router.post(f"{PREFIX}/cluster-types", status_code=201)
+@scoped("catalog")
 async def create_cluster_type(body: CatalogCreate, request: Request) -> dict:
     return await _catalog_create("cluster-types", body, request)
 
 
 @router.get(f"{PREFIX}/cluster-types/{{type_id}}")
-async def get_cluster_type(type_id: int) -> dict:
-    return _found(await db.get_cluster_type(type_id), "Cluster type")
+@scoped("object")
+async def get_cluster_type(type_id: int, request: Request) -> dict:
+    row = _found(await db.get_cluster_type(type_id), "Cluster type")
+    return (await _catalog_counts(request, [row], "cluster_type_id"))[0]
 
 
 @router.put(f"{PREFIX}/cluster-types/{{type_id}}")
+@scoped("catalog")
 async def update_cluster_type(type_id: int, body: CatalogUpdate, request: Request) -> dict:
     return await _catalog_update("cluster-types", type_id, body, request)
 
 
 @router.delete(f"{PREFIX}/cluster-types/{{type_id}}")
+@scoped("catalog")
 async def delete_cluster_type(type_id: int, request: Request) -> dict:
     return await _catalog_delete("cluster-types", type_id, request)
 
 
 @router.get(f"{PREFIX}/cluster-groups")
-async def list_cluster_groups() -> dict:
-    return {"cluster_groups": await db.list_cluster_groups()}
+@scoped("list")
+async def list_cluster_groups(request: Request) -> dict:
+    return {"cluster_groups": await _catalog_counts(request, await db.list_cluster_groups(), "cluster_group_id")}
 
 
 @router.post(f"{PREFIX}/cluster-groups", status_code=201)
+@scoped("catalog")
 async def create_cluster_group(body: CatalogCreate, request: Request) -> dict:
     return await _catalog_create("cluster-groups", body, request)
 
 
 @router.get(f"{PREFIX}/cluster-groups/{{group_id}}")
-async def get_cluster_group(group_id: int) -> dict:
-    return _found(await db.get_cluster_group(group_id), "Cluster group")
+@scope_exempt("cluster groups are shared reference data (group_id is a cluster group)")
+async def get_cluster_group(group_id: int, request: Request) -> dict:
+    row = _found(await db.get_cluster_group(group_id), "Cluster group")
+    return (await _catalog_counts(request, [row], "cluster_group_id"))[0]
 
 
 @router.put(f"{PREFIX}/cluster-groups/{{group_id}}")
+@scoped("catalog")
 async def update_cluster_group(group_id: int, body: CatalogUpdate, request: Request) -> dict:
     return await _catalog_update("cluster-groups", group_id, body, request)
 
 
 @router.delete(f"{PREFIX}/cluster-groups/{{group_id}}")
+@scoped("catalog")
 async def delete_cluster_group(group_id: int, request: Request) -> dict:
     return await _catalog_delete("cluster-groups", group_id, request)
 
@@ -395,28 +542,40 @@ async def delete_cluster_group(group_id: int, request: Request) -> dict:
 
 
 @router.get(f"{PREFIX}/clusters")
+@scoped("list")
 async def list_clusters(
+    request: Request,
     cluster_type_id: int | None = Query(default=None),
     cluster_group_id: int | None = Query(default=None),
     site_id: int | None = Query(default=None),
     tenant_id: int | None = Query(default=None),
     search: str | None = Query(default=None, max_length=200),
 ) -> dict:
-    return {
-        "clusters": await db.list_clusters(
-            cluster_type_id=cluster_type_id,
-            cluster_group_id=cluster_group_id,
-            site_id=site_id,
-            tenant_id=tenant_id,
-            search=search,
-        )
-    }
+    rows = await db.list_clusters(
+        cluster_type_id=cluster_type_id,
+        cluster_group_id=cluster_group_id,
+        site_id=site_id,
+        tenant_id=tenant_id,
+        search=search,
+    )
+    rows = await _readable(request, "cluster", rows)
+    host_ids = await readable_host_ids(request)
+    if host_ids is not None:
+        members = await _member_hosts()
+        rows = [{**r, "host_count": sum(h in host_ids for h in members.get(int(r["id"]), []))} for r in rows]
+    return {"clusters": await custom_list("cluster", rows, request)}
 
 
 @router.post(f"{PREFIX}/clusters", status_code=201)
+@scoped("create")
 async def create_cluster(body: ClusterCreate, request: Request) -> dict:
     values = _clean_values(body, _CLUSTER_CLEANERS)
     await _check_references(values)
+    await require_new_row(
+        request,
+        "cluster",
+        {"tenant_id": values.get("tenant_id"), "site_id": values.get("site_id"), "scope_host_ids": []},
+    )
     try:
         row = await db.create_cluster({**values, "origin": "manual"}, user=_session_user(request))
     except db.VirtualizationNameTaken as exc:
@@ -426,22 +585,33 @@ async def create_cluster(body: ClusterCreate, request: Request) -> dict:
 
 
 @router.get(f"{PREFIX}/clusters/{{cluster_id}}")
-async def get_cluster(cluster_id: int) -> dict:
+@scoped("object")
+async def get_cluster(cluster_id: int, request: Request) -> dict:
     """The cluster with its member ``hosts`` and its ``virtual_machines``."""
-    row = _found(await db.get_cluster(cluster_id), "Cluster")
-    row["hosts"] = await db.list_cluster_hosts(cluster_id)
-    row["virtual_machines"] = await db.list_virtual_machines(cluster_id=cluster_id)
-    return row
+    row = await _require_cluster(request, cluster_id)
+    scope = await request_scope(request)
+    row["hosts"] = scope.filter_hosts(await db.list_cluster_hosts(cluster_id))
+    row["virtual_machines"] = await _readable(
+        request, "virtual_machine", await db.list_virtual_machines(cluster_id=cluster_id)
+    )
+    if scope.restricted:
+        row["host_count"], row["vm_count"] = len(row["hosts"]), len(row["virtual_machines"])
+    return await with_custom_data("cluster", row)
 
 
 @router.put(f"{PREFIX}/clusters/{{cluster_id}}")
+@scoped("object")
 async def update_cluster(cluster_id: int, body: ClusterUpdate, request: Request) -> dict:
-    _found(await db.get_cluster(cluster_id), "Cluster")
+    current = await _require_cluster(request, cluster_id, write=True)
     values = _clean_values(body, _CLUSTER_CLEANERS)
     for required in ("name", "cluster_type_id", "description", "comments"):
         if required in values and values[required] is None:
             raise _invalid({required: "This value cannot be cleared."})
     await _check_references(values)
+    if any(k in values and values[k] != current.get(k) for k in ("tenant_id", "site_id")):
+        merged = {k: values.get(k, current.get(k)) for k in ("tenant_id", "site_id")}
+        members = await _member_hosts()
+        await require_new_row(request, "cluster", {**merged, "scope_host_ids": members.get(cluster_id, [])})
     try:
         row = await db.update_cluster(cluster_id, values, user=_session_user(request))
     except db.VirtualizationNameTaken as exc:
@@ -452,8 +622,9 @@ async def update_cluster(cluster_id: int, body: ClusterUpdate, request: Request)
 
 
 @router.delete(f"{PREFIX}/clusters/{{cluster_id}}")
+@scoped("object")
 async def delete_cluster(cluster_id: int, request: Request) -> dict:
-    row = _found(await db.get_cluster(cluster_id), "Cluster")
+    row = await _require_cluster(request, cluster_id, write=True)
     count = int(row.get("vm_count") or 0)
     if count:
         raise HTTPException(
@@ -469,10 +640,16 @@ async def delete_cluster(cluster_id: int, request: Request) -> dict:
 
 
 @router.post(f"{PREFIX}/clusters/{{cluster_id}}/hosts", status_code=201)
+@scoped("object")
 async def add_cluster_host(cluster_id: int, body: ClusterHostAdd, request: Request) -> dict:
     """Add a hypervisor host to the cluster; 409 when it is a member already."""
-    cluster = _found(await db.get_cluster(cluster_id), "Cluster")
+    cluster = await _require_cluster(request, cluster_id, write=True)
     await _check_references({"host_id": body.host_id})
+    if (await request_scope(request)).restricted:
+        # A host the caller cannot read answers like an unknown one.
+        if body.host_id not in (await readable_host_ids(request) or ()):
+            raise _invalid({"host_id": _REFERENCES["host_id"][1]})
+        await require_host(request, body.host_id, write=True)
     if not await db.add_cluster_host(cluster_id, body.host_id, user=_session_user(request)):
         raise HTTPException(status_code=409, detail="The host is already a member of this cluster.")
     await _audit_write(request, "cluster.host_add", f"id={cluster_id} name={cluster['name']} host_id={body.host_id}")
@@ -480,8 +657,12 @@ async def add_cluster_host(cluster_id: int, body: ClusterHostAdd, request: Reque
 
 
 @router.delete(f"{PREFIX}/clusters/{{cluster_id}}/hosts/{{host_id}}")
+@scoped("object")
 async def remove_cluster_host(cluster_id: int, host_id: int, request: Request) -> dict:
-    cluster = _found(await db.get_cluster(cluster_id), "Cluster")
+    cluster = await _require_cluster(request, cluster_id, write=True)
+    readable = await readable_host_ids(request)
+    if readable is not None and host_id not in readable:
+        raise HTTPException(status_code=404, detail="The host is not a member of this cluster.")
     if not await db.remove_cluster_host(cluster_id, host_id):
         raise HTTPException(status_code=404, detail="The host is not a member of this cluster.")
     await _audit_write(request, "cluster.host_remove", f"id={cluster_id} name={cluster['name']} host_id={host_id}")
@@ -489,16 +670,22 @@ async def remove_cluster_host(cluster_id: int, host_id: int, request: Request) -
 
 
 @router.get(f"{PREFIX}/tenants")
-async def tenant_choices() -> dict:
+@scoped("list")
+async def tenant_choices(request: Request) -> dict:
     """The tenants a cluster or VM can name (id and name only), for callers
-    with the virtualization feature but not the organization one."""
-    return {"tenants": [{"id": t["id"], "name": t["name"]} for t in await db.list_tenants()]}
+    with the virtualization feature but not the organization one; a scoped
+    caller's own."""
+    tenants = await filter_rows("tenant", await db.list_tenants(), request)
+    return {"tenants": [{"id": t["id"], "name": t["name"]} for t in tenants]}
 
 
 @router.get(f"{PREFIX}/hosts/{{host_id}}/clusters")
-async def host_clusters(host_id: int) -> dict:
+@scoped("host")
+async def host_clusters(host_id: int, request: Request) -> dict:
     """The clusters a host is a hypervisor of."""
-    return {"host_id": host_id, "clusters": await db.get_host_clusters(host_id)}
+    if (await request_scope(request)).restricted:
+        await require_host(request, host_id)
+    return {"host_id": host_id, "clusters": await _readable(request, "cluster", await db.get_host_clusters(host_id))}
 
 
 # ── Virtual machines ─────────────────────────────────────────────────────────
@@ -524,7 +711,9 @@ async def _cloud_link(values: dict[str, Any], current: dict | None = None) -> No
 
 
 @router.get(f"{PREFIX}/virtual-machines")
+@scoped("list")
 async def list_virtual_machines(
+    request: Request,
     cluster_id: int | None = Query(default=None),
     cluster_type_id: int | None = Query(default=None),
     cluster_group_id: int | None = Query(default=None),
@@ -539,25 +728,28 @@ async def list_virtual_machines(
         raise HTTPException(status_code=422, detail=f"status must be one of {', '.join(VM_STATUSES)}")
     if origin and origin not in ORIGINS:
         raise HTTPException(status_code=422, detail=f"origin must be one of {', '.join(ORIGINS)}")
-    return {
-        "virtual_machines": await db.list_virtual_machines(
-            cluster_id=cluster_id,
-            cluster_type_id=cluster_type_id,
-            cluster_group_id=cluster_group_id,
-            site_id=site_id,
-            tenant_id=tenant_id,
-            role_id=role_id,
-            status=status,
-            origin=origin,
-            search=search,
-        )
-    }
+    rows = await db.list_virtual_machines(
+        cluster_id=cluster_id,
+        cluster_type_id=cluster_type_id,
+        cluster_group_id=cluster_group_id,
+        site_id=site_id,
+        tenant_id=tenant_id,
+        role_id=role_id,
+        status=status,
+        origin=origin,
+        search=search,
+        **await _vm_scope_filters(request),
+    )
+    rows = await _readable(request, "virtual_machine", rows)
+    return {"virtual_machines": await custom_list("virtual_machine", rows, request)}
 
 
 @router.post(f"{PREFIX}/virtual-machines", status_code=201)
+@scoped("create")
 async def create_virtual_machine(body: VmCreate, request: Request) -> dict:
     values = _clean_values(body, _VM_CLEANERS)
     await _check_references(values)
+    await _require_new_vm(request, values.get("tenant_id"), values.get("cluster_id"))
     await _cloud_link(values)
     try:
         row = await db.create_virtual_machine({**values, "origin": "manual"}, user=_session_user(request))
@@ -568,18 +760,20 @@ async def create_virtual_machine(body: VmCreate, request: Request) -> dict:
 
 
 @router.get(f"{PREFIX}/virtual-machines/{{vm_id}}")
-async def get_virtual_machine(vm_id: int) -> dict:
+@scoped("object")
+async def get_virtual_machine(vm_id: int, request: Request) -> dict:
     """The VM with its ``interfaces`` (each with its ``addresses``)."""
-    row = _found(await db.get_virtual_machine(vm_id), "Virtual machine")
+    row = await _require_vm(request, vm_id)
     row["interfaces"] = await db.list_vm_interfaces(vm_id)
-    return row
+    return await with_custom_data("virtual_machine", row)
 
 
 @router.put(f"{PREFIX}/virtual-machines/{{vm_id}}")
+@scoped("object")
 async def update_virtual_machine(vm_id: int, body: VmUpdate, request: Request) -> dict:
     """A person's edit: the VM becomes ``manual``, so the cloud sync no
     longer changes its values."""
-    current = _found(await db.get_virtual_machine(vm_id), "Virtual machine")
+    current = await _require_vm(request, vm_id, write=True)
     values = _clean_values(body, _VM_CLEANERS)
     for required in ("name", "cluster_id", "status", "platform", "primary_ip4", "primary_ip6"):
         if required in values and values[required] is None:
@@ -588,6 +782,10 @@ async def update_virtual_machine(vm_id: int, body: VmUpdate, request: Request) -
         if text in values and values[text] is None:
             values[text] = ""
     await _check_references(values)
+    if any(k in values and values[k] != current.get(k) for k in ("tenant_id", "cluster_id")):
+        await _require_new_vm(
+            request, values.get("tenant_id", current.get("tenant_id")), values.get("cluster_id", current["cluster_id"])
+        )
     await _cloud_link(values, current)
     try:
         row = await db.update_virtual_machine(vm_id, {**values, "origin": "manual"}, user=_session_user(request))
@@ -599,8 +797,9 @@ async def update_virtual_machine(vm_id: int, body: VmUpdate, request: Request) -
 
 
 @router.delete(f"{PREFIX}/virtual-machines/{{vm_id}}")
+@scoped("object")
 async def delete_virtual_machine(vm_id: int, request: Request) -> dict:
-    row = _found(await db.get_virtual_machine(vm_id), "Virtual machine")
+    row = await _require_vm(request, vm_id, write=True)
     await db.delete_virtual_machine(vm_id)
     await _audit_write(request, "virtual_machine.delete", f"id={vm_id} name={row['name']}")
     return {"ok": True}
@@ -639,14 +838,16 @@ async def _claim(vm: dict, request: Request) -> None:
 
 
 @router.get(f"{PREFIX}/virtual-machines/{{vm_id}}/interfaces")
-async def list_vm_interfaces(vm_id: int) -> dict:
-    _found(await db.get_virtual_machine(vm_id), "Virtual machine")
+@scoped("object")
+async def list_vm_interfaces(vm_id: int, request: Request) -> dict:
+    await _require_vm(request, vm_id)
     return {"interfaces": await db.list_vm_interfaces(vm_id)}
 
 
 @router.post(f"{PREFIX}/virtual-machines/{{vm_id}}/interfaces", status_code=201)
+@scoped("object")
 async def create_vm_interface(vm_id: int, body: InterfaceCreate, request: Request) -> dict:
-    vm = _found(await db.get_virtual_machine(vm_id), "Virtual machine")
+    vm = await _require_vm(request, vm_id, write=True)
     values, addresses = await _interface_values(body, None)
     try:
         row = await db.create_vm_interface(vm_id, values, addresses or [], user=_session_user(request))
@@ -658,8 +859,9 @@ async def create_vm_interface(vm_id: int, body: InterfaceCreate, request: Reques
 
 
 @router.put(f"{PREFIX}/virtual-machines/{{vm_id}}/interfaces/{{interface_id}}")
+@scoped("object")
 async def update_vm_interface(vm_id: int, interface_id: int, body: InterfaceUpdate, request: Request) -> dict:
-    vm = _found(await db.get_virtual_machine(vm_id), "Virtual machine")
+    vm = await _require_vm(request, vm_id, write=True)
     current = await _vm_interface(vm_id, interface_id)
     values, addresses = await _interface_values(body, current)
     try:
@@ -672,8 +874,9 @@ async def update_vm_interface(vm_id: int, interface_id: int, body: InterfaceUpda
 
 
 @router.delete(f"{PREFIX}/virtual-machines/{{vm_id}}/interfaces/{{interface_id}}")
+@scoped("object")
 async def delete_vm_interface(vm_id: int, interface_id: int, request: Request) -> dict:
-    vm = _found(await db.get_virtual_machine(vm_id), "Virtual machine")
+    vm = await _require_vm(request, vm_id, write=True)
     current = await _vm_interface(vm_id, interface_id)
     await db.delete_vm_interface(interface_id)
     await _claim(vm, request)

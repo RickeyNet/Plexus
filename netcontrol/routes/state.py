@@ -428,10 +428,41 @@ AUTH_CONFIG_DEFAULTS = {
         "redirect_uri": "",
         "ca_cert_file": "",
     },
+    # SAML 2.0 single sign-on, next to OIDC (netcontrol/saml.py, the
+    # /api/auth/saml/* routes in routes/auth.py, docs/sso-saml.md). The
+    # role and access group keys mean what they mean for OIDC.
+    "saml": {
+        "enabled": False,
+        "idp_entity_id": "",
+        # HTTP-Redirect SingleSignOnService location.
+        "idp_sso_url": "",
+        # PEM signing certificates (several during a rollover), at most 5.
+        "idp_certs": [],
+        # Where the metadata was imported from (the admin can re-import).
+        "idp_metadata_url": "",
+        # Empty = derived from the request (/api/auth/saml/metadata and
+        # /api/auth/saml/acs on the host the browser used).
+        "sp_entity_id": "",
+        "acs_url": "",
+        "ca_cert_file": "",
+        # Empty username attribute = the email attribute, else the NameID.
+        "username_attribute": "",
+        "email_attribute": "",
+        "display_name_attribute": "",
+        "groups_attribute": "groups",
+        "admin_groups": [],
+        "default_role": "user",
+        "default_group_ids": [],
+        "sync_groups": False,
+        "group_mappings": [],
+        "button_label": "Sign in with SAML",
+        "primary": False,
+    },
 }
 
 OIDC_MAX_GROUP_MAPPINGS = 200
 OIDC_BUTTON_LABEL_MAX = 60
+SAML_MAX_CERTS = 5
 _OIDC_TOKEN_AUTH_METHODS = {"client_secret_basic", "client_secret_post"}
 
 _LDAP_TLS_VERIFY_LEVELS = {"never", "allow", "try", "demand", "hard"}
@@ -465,7 +496,16 @@ _FEATURE_CATALOG = [
     # virtualization.write (docs/virtualization.md).
     {"key": "virtualization", "label": "Virtualization", "gateable": True, "writable": True, "visible_in_nav": True},
     {"key": "playbooks", "label": "Playbooks", "gateable": True, "writable": True, "visible_in_nav": True},
-    {"key": "jobs", "label": "Jobs", "gateable": True, "writable": True, "visible_in_nav": True},
+    # jobs.approve: approve or deny jobs whose playbook needs approval
+    # (docs/jobs.md#approvals). Granted on its own, not with jobs.write.
+    {
+        "key": "jobs",
+        "label": "Jobs",
+        "gateable": True,
+        "writable": True,
+        "visible_in_nav": True,
+        "extra_keys": ["approve"],
+    },
     {"key": "templates", "label": "Templates", "gateable": True, "writable": True, "visible_in_nav": True},
     {"key": "credentials", "label": "Credentials", "gateable": True, "writable": True, "visible_in_nav": True},
     {"key": "topology", "label": "Topology", "gateable": True, "writable": True, "visible_in_nav": True},
@@ -522,9 +562,12 @@ _FEATURE_CATALOG = [
     },
 ]
 
-FEATURE_FLAGS = [e["key"] for e in _FEATURE_CATALOG if e["gateable"]] + [
-    f"{e['key']}.write" for e in _FEATURE_CATALOG if e["gateable"] and e["writable"]
-]
+FEATURE_FLAGS = (
+    [e["key"] for e in _FEATURE_CATALOG if e["gateable"]]
+    + [f"{e['key']}.write" for e in _FEATURE_CATALOG if e["gateable"] and e["writable"]]
+    # Further per-feature permissions (``<key>.<name>``, e.g. jobs.approve).
+    + [f"{e['key']}.{extra}" for e in _FEATURE_CATALOG if e["gateable"] for extra in e.get("extra_keys", ())]
+)
 
 FEATURE_VISIBILITY_CATALOG = [{"key": e["key"], "label": e["label"]} for e in _FEATURE_CATALOG if e["visible_in_nav"]]
 
@@ -942,6 +985,7 @@ def _sanitize_auth_config(data: dict | None) -> dict:
     if cfg["ldap"]["default_role"] not in _EXTERNAL_AUTH_ROLES:
         cfg["ldap"]["default_role"] = "user"
     cfg["oidc"] = _sanitize_oidc_config(data.get("oidc") if isinstance(data, dict) else None)
+    cfg["saml"] = _sanitize_saml_config(data.get("saml") if isinstance(data, dict) else None)
     return cfg
 
 
@@ -958,16 +1002,14 @@ def _sanitize_string_list(value, limit: int = 200) -> list[str]:
     return out[:limit]
 
 
-def _sanitize_oidc_config(data) -> dict:
-    """The OIDC block of the auth config. ``client_secret_enc`` is kept as
-    given (ciphertext); the admin route turns a submitted secret into it."""
-    defaults = AUTH_CONFIG_DEFAULTS["oidc"]
-    src = data if isinstance(data, dict) else {}
+def _sso_text(src: dict, defaults: dict, name: str) -> str:
+    value = src.get(name, defaults[name])
+    return str(value).strip() if value is not None else ""
 
-    def text(name: str) -> str:
-        value = src.get(name, defaults[name])
-        return str(value).strip() if value is not None else ""
 
+def _sanitize_sso_common(src: dict, defaults: dict) -> dict:
+    """The keys every single sign-on protocol shares (OIDC and SAML): on/off,
+    role and access group mapping, the login button."""
     mappings: list[dict] = []
     raw_mappings = src.get("group_mappings")
     for item in raw_mappings if isinstance(raw_mappings, list) else []:
@@ -980,8 +1022,30 @@ def _sanitize_oidc_config(data) -> dict:
             continue
         if group and group_id > 0:
             mappings.append({"group": group, "access_group_id": group_id})
-    cfg = {
+    role = _sso_text(src, defaults, "default_role").lower()
+    return {
         "enabled": bool(src.get("enabled", defaults["enabled"])),
+        "admin_groups": _sanitize_string_list(src.get("admin_groups", [])),
+        "default_role": role if role in _EXTERNAL_AUTH_ROLES else "user",
+        "default_group_ids": _sanitize_positive_int_list(src.get("default_group_ids", [])),
+        "sync_groups": bool(src.get("sync_groups", defaults["sync_groups"])),
+        "group_mappings": mappings[:OIDC_MAX_GROUP_MAPPINGS],
+        "button_label": _sso_text(src, defaults, "button_label")[:OIDC_BUTTON_LABEL_MAX] or defaults["button_label"],
+        "primary": bool(src.get("primary", defaults["primary"])),
+    }
+
+
+def _sanitize_oidc_config(data) -> dict:
+    """The OIDC block of the auth config. ``client_secret_enc`` is kept as
+    given (ciphertext); the admin route turns a submitted secret into it."""
+    defaults = AUTH_CONFIG_DEFAULTS["oidc"]
+    src = data if isinstance(data, dict) else {}
+
+    def text(name: str) -> str:
+        return _sso_text(src, defaults, name)
+
+    cfg = {
+        **_sanitize_sso_common(src, defaults),
         "issuer": text("issuer"),
         "client_id": text("client_id"),
         "client_secret_enc": str(src.get("client_secret_enc") or ""),
@@ -990,21 +1054,40 @@ def _sanitize_oidc_config(data) -> dict:
         "username_claim": text("username_claim") or defaults["username_claim"],
         "display_name_claim": text("display_name_claim"),
         "groups_claim": text("groups_claim"),
-        "admin_groups": _sanitize_string_list(src.get("admin_groups", [])),
-        "default_role": text("default_role").lower(),
-        "default_group_ids": _sanitize_positive_int_list(src.get("default_group_ids", [])),
-        "sync_groups": bool(src.get("sync_groups", defaults["sync_groups"])),
-        "group_mappings": mappings[:OIDC_MAX_GROUP_MAPPINGS],
-        "button_label": text("button_label")[:OIDC_BUTTON_LABEL_MAX] or defaults["button_label"],
-        "primary": bool(src.get("primary", defaults["primary"])),
         "redirect_uri": text("redirect_uri"),
         "ca_cert_file": text("ca_cert_file"),
     }
     if cfg["token_auth_method"] not in _OIDC_TOKEN_AUTH_METHODS:
         cfg["token_auth_method"] = "client_secret_basic"
-    if cfg["default_role"] not in _EXTERNAL_AUTH_ROLES:
-        cfg["default_role"] = "user"
     return cfg
+
+
+def _sanitize_saml_config(data) -> dict:
+    """The SAML block of the auth config. Certificates are kept as given
+    (the admin route normalizes and validates them)."""
+    defaults = AUTH_CONFIG_DEFAULTS["saml"]
+    src = data if isinstance(data, dict) else {}
+
+    def text(name: str) -> str:
+        return _sso_text(src, defaults, name)
+
+    certs = src.get("idp_certs")
+    return {
+        **_sanitize_sso_common(src, defaults),
+        "idp_entity_id": text("idp_entity_id"),
+        "idp_sso_url": text("idp_sso_url"),
+        "idp_certs": [str(c).strip() for c in (certs if isinstance(certs, list) else []) if str(c).strip()][
+            :SAML_MAX_CERTS
+        ],
+        "idp_metadata_url": text("idp_metadata_url"),
+        "sp_entity_id": text("sp_entity_id"),
+        "acs_url": text("acs_url"),
+        "ca_cert_file": text("ca_cert_file"),
+        "username_attribute": text("username_attribute"),
+        "email_attribute": text("email_attribute"),
+        "display_name_attribute": text("display_name_attribute"),
+        "groups_attribute": text("groups_attribute"),
+    }
 
 
 def _effective_job_retention_days() -> int:

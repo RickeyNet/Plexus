@@ -15,9 +15,12 @@ Power and Modules. A device's page shows its rack and the cables on its ports
 
 DCIM has its own feature key, `dcim`, granted in access groups like any
 other: `dcim` reads every DCIM record and trace, `dcim.write` adds, edits and
-deletes them. Admins and the API token have both. DCIM is not enrolled in
-object scope, so accounts limited to selected inventory groups do not see it
-(see [object-level permissions](object-permissions.md)).
+deletes them. Admins and the API token have both. Accounts limited to
+selected inventory groups see racks, reservations, power panels and feeds of
+their tenants and sites, ports, modules and placements of their devices and
+cables touching them; other devices in a visible rack show as occupied
+units, and a trace stops (`restricted`) where it leaves their scope (see
+[object-level permissions](object-permissions.md)).
 
 Placing a device in a rack is also part of the host edit
 (`PUT /api/hosts/{id}`, which needs `inventory.write` and honours object
@@ -37,6 +40,7 @@ scope); the DCIM placement endpoint does the same check with `dcim.write`.
 | Power feed | panel | name per panel | rack (at the panel's site), status, `primary`/`redundant`, `ac`/`dc`, `single`/`three` phase, voltage, amperage, maximum utilisation % |
 | Power port | device | name per device | maximum and allocated draw in watts (allocated cannot exceed maximum) |
 | Power outlet | device (a PDU) | name per device | the power port of the same device that feeds it, feed leg A/B/C |
+| Console port | device | name per device | connector `rj-45`, `db-9`, `usb-a`, `usb-c`, `usb-mini-b`, `usb-micro-b`, `other` (no cables yet) |
 | Cable | two endpoints | - | status `connected`, `planned`, `decommissioning`; type (`cat6`, `smf`, `mmf-om4`, `dac-passive`, `power`, ...); label, colour (hex), length and unit, tenant |
 
 A patch panel or a PDU is an ordinary inventory device (give it a role such
@@ -46,7 +50,9 @@ the interface name, and the name pickers offer the names Plexus has collected
 (interface inventory and polled interface statistics).
 
 Plexus does not collect module or entity (ENTITY-MIB) inventory today, so
-modules are entered by hand; there is no import from discovery.
+modules are entered by hand; there is no import from discovery. A device
+type's component templates create a device's console, power, front and rear
+ports and module bays in one go (see [Device model](device-model.md#component-templates)).
 
 ## Placing devices in racks
 
@@ -167,6 +173,7 @@ or panel parent never changes), `DELETE /<kind>/{id}` (409 while in use).
 | `power-feeds` | `power_panel_id`, `rack_id`, `site_id`, `status` |
 | `power-ports` | `host_id` |
 | `power-outlets` | `host_id`, `power_port_id` |
+| `console-ports` | `host_id`, `type` |
 | `cables` | `host_id` (either end), `type`, `status`, `tenant_id`, `endpoint_type`, `q` |
 
 Other paths: `GET /choices` (every fixed choice set), `GET /trace`, `GET

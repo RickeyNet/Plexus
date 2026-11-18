@@ -14,6 +14,11 @@ Mode contract: a lab device is either free-standing (Phase B-1, deployed
 via /api/lab/devices/{id}/runtime/deploy) or a topology member (Phase B-2,
 deployed via /api/lab/topologies/{id}/deploy). Mixing is rejected at
 deploy time.
+
+Object scope: twins follow the inventory host they were cloned from
+(``netcontrol.routes.lab``). A caller limited to selected inventory groups
+sees and uses only topologies whose every member twin they may see (others
+answer 404 like an unknown topology), and adds only twins they may see.
 """
 
 from __future__ import annotations
@@ -27,10 +32,13 @@ import routes.database as db
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field, field_validator
 
+from netcontrol.object_scope import request_scope, scoped
 from netcontrol.routes import lab_runtime
 from netcontrol.routes.lab import (
     _resolve_session_user,
     _user_can_access_env,
+    require_lab_device,
+    visible_lab_devices,
 )
 from netcontrol.routes.lab_runtime import (
     _IMAGE_RE,
@@ -111,7 +119,18 @@ async def _resolve_topology_or_403(topology_id: int, request: Request) -> tuple[
     session, _, role = await _resolve_session_user(request)
     if not _user_can_access_env(env or {}, session, role):
         raise HTTPException(status_code=403, detail="Not allowed")
+    if not await _members_visible(request, topology_id):
+        raise HTTPException(status_code=404, detail="Topology not found")
     return topo, session
+
+
+async def _members_visible(request: Request, topology_id: int) -> bool:
+    """Whether the caller may see every member twin of the topology
+    (always for an unrestricted caller)."""
+    if (await request_scope(request)).unrestricted:
+        return True
+    members = await db.list_topology_devices(topology_id)
+    return len(await visible_lab_devices(request, members)) == len(members)
 
 
 def _validate_endpoint(name: str) -> None:
@@ -455,6 +474,7 @@ async def refresh_topology(topology: dict, *, actor: str = "") -> dict:
 
 
 @router.get("/api/lab/environments/{env_id}/topologies")
+@scoped("lab_environment")
 async def list_topologies_endpoint(env_id: int, request: Request):
     env = await db.get_lab_environment(env_id)
     if not env:
@@ -462,10 +482,11 @@ async def list_topologies_endpoint(env_id: int, request: Request):
     session, _, role = await _resolve_session_user(request)
     if not _user_can_access_env(env, session, role):
         raise HTTPException(status_code=403, detail="Not allowed")
-    return await db.list_lab_topologies(env_id)
+    return [t for t in await db.list_lab_topologies(env_id) if await _members_visible(request, int(t["id"]))]
 
 
 @router.post("/api/lab/environments/{env_id}/topologies")
+@scoped("lab_environment")
 async def create_topology_endpoint(env_id: int, body: TopologyCreate, request: Request):
     env = await db.get_lab_environment(env_id)
     if not env:
@@ -492,6 +513,7 @@ async def create_topology_endpoint(env_id: int, body: TopologyCreate, request: R
 
 
 @router.get("/api/lab/topologies/{topology_id}")
+@scoped("lab_topology")
 async def get_topology_endpoint(topology_id: int, request: Request):
     topo, _ = await _resolve_topology_or_403(topology_id, request)
     devices = await db.list_topology_devices(topology_id)
@@ -502,6 +524,7 @@ async def get_topology_endpoint(topology_id: int, request: Request):
 
 
 @router.delete("/api/lab/topologies/{topology_id}")
+@scoped("lab_topology")
 async def delete_topology_endpoint(topology_id: int, request: Request):
     topo, session = await _resolve_topology_or_403(topology_id, request)
     if topo.get("status") == "running":
@@ -521,6 +544,7 @@ async def delete_topology_endpoint(topology_id: int, request: Request):
 
 
 @router.post("/api/lab/topologies/{topology_id}/devices")
+@scoped("lab_topology")
 async def add_member_endpoint(
     topology_id: int,
     body: TopologyMembershipRequest,
@@ -530,6 +554,7 @@ async def add_member_endpoint(
     device = await db.get_lab_device(body.device_id)
     if not device:
         raise HTTPException(status_code=404, detail="Lab device not found")
+    await require_lab_device(request, device)
     if device["environment_id"] != topo["environment_id"]:
         raise HTTPException(
             status_code=400,
@@ -557,6 +582,7 @@ async def add_member_endpoint(
 
 
 @router.delete("/api/lab/topologies/{topology_id}/devices/{device_id}")
+@scoped("lab_topology")
 async def remove_member_endpoint(topology_id: int, device_id: int, request: Request):
     topo, session = await _resolve_topology_or_403(topology_id, request)
     if topo.get("status") == "running":
@@ -579,6 +605,7 @@ async def remove_member_endpoint(topology_id: int, device_id: int, request: Requ
 
 
 @router.post("/api/lab/topologies/{topology_id}/links")
+@scoped("lab_topology")
 async def add_link_endpoint(
     topology_id: int,
     body: TopologyLinkCreate,
@@ -618,6 +645,7 @@ async def add_link_endpoint(
 
 
 @router.delete("/api/lab/topologies/{topology_id}/links/{link_id}")
+@scoped("lab_topology")
 async def remove_link_endpoint(topology_id: int, link_id: int, request: Request):
     topo, session = await _resolve_topology_or_403(topology_id, request)
     if topo.get("status") == "running":
@@ -637,6 +665,7 @@ async def remove_link_endpoint(topology_id: int, link_id: int, request: Request)
 
 
 @router.post("/api/lab/topologies/{topology_id}/deploy")
+@scoped("lab_topology")
 async def deploy_topology_endpoint(topology_id: int, request: Request):
     topo, session = await _resolve_topology_or_403(topology_id, request)
     actor = session["user"] if session else ""
@@ -652,6 +681,7 @@ async def deploy_topology_endpoint(topology_id: int, request: Request):
 
 
 @router.post("/api/lab/topologies/{topology_id}/destroy")
+@scoped("lab_topology")
 async def destroy_topology_endpoint(topology_id: int, request: Request):
     topo, session = await _resolve_topology_or_403(topology_id, request)
     actor = session["user"] if session else ""
@@ -667,6 +697,7 @@ async def destroy_topology_endpoint(topology_id: int, request: Request):
 
 
 @router.post("/api/lab/topologies/{topology_id}/refresh")
+@scoped("lab_topology")
 async def refresh_topology_endpoint(topology_id: int, request: Request):
     topo, session = await _resolve_topology_or_403(topology_id, request)
     return await refresh_topology(topo, actor=session["user"] if session else "")

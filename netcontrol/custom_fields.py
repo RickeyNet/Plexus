@@ -17,6 +17,17 @@ select     one of the field's choices          a string in ``choices``
 An empty value (``None`` or blank text) canonicalises to ``""``, which the
 storage layer treats as "no value" and never stores.
 
+Object types
+------------
+
+Every object type that carries custom fields, tags, computed fields and
+relationships has one ``ObjectTypeSpec`` in ``_SPECS``: its key, table, id
+column and the features that read and change it. Adding a type is one line
+in ``_SPECS`` plus the ``purge_trigger_sql`` statements in a migration (so
+deleting a row removes its data); the generic API
+(``/api/objects/{type}/{id}/...``), the list helpers and the Settings UI pick
+it up from here.
+
 Used by the API (``netcontrol.routes.custom_fields``) and by tests directly.
 """
 
@@ -24,22 +35,97 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping
+from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal, InvalidOperation
 from typing import Literal, get_args
 from urllib.parse import urlsplit
 
+
+@dataclass(frozen=True)
+class ObjectTypeSpec:
+    """One object type that carries custom data.
+
+    ``read_feature``: the feature its REST routes are read with (``None``:
+    any signed-in user). ``write_feature``: the feature that changes it
+    (``None``: admins only, like IPAM, organization and device model
+    writes). ``scope_model``: the ``netcontrol.object_scope.MODELS`` key
+    whose rules decide which objects a caller limited to selected inventory
+    groups, tenants or sites reads and changes (hosts and groups are checked
+    with ``require_host`` / ``require_group``). ``generic``: served by
+    ``/api/objects/{type}/{id}/...`` and able to take part in relationships
+    (a prefix is keyed by ``subnet|vrf`` and keeps its own endpoints)."""
+
+    key: str
+    label: str
+    table: str
+    read_feature: str | None
+    write_feature: str | None
+    scope_model: str
+    id_column: str = "id"
+    generic: bool = True
+
+
+# The table and column names are fixed here; never user input.
+_SPECS: tuple[ObjectTypeSpec, ...] = (
+    ObjectTypeSpec("host", "Host", "hosts", "inventory", "inventory", "host"),
+    ObjectTypeSpec("group", "Inventory group", "inventory_groups", "inventory", "inventory", "inventory_group"),
+    ObjectTypeSpec("prefix", "Prefix", "ipam_prefixes", "ipam", None, "ipam_prefix", generic=False),
+    ObjectTypeSpec("vrf", "VRF", "vrfs", "ipam", None, "vrf"),
+    ObjectTypeSpec("vlan", "VLAN", "vlans", "ipam", None, "vlan"),
+    ObjectTypeSpec("region", "Region", "regions", "organization", None, "region"),
+    ObjectTypeSpec("site", "Site", "geo_sites", "organization", None, "site"),
+    ObjectTypeSpec("tenant", "Tenant", "tenants", "organization", None, "tenant"),
+    ObjectTypeSpec("manufacturer", "Manufacturer", "manufacturers", None, None, "catalog"),
+    ObjectTypeSpec("device_type", "Device type", "device_types", None, None, "catalog"),
+    ObjectTypeSpec("device_role", "Device role", "device_roles", None, None, "catalog"),
+    ObjectTypeSpec(
+        "circuit_provider", "Circuit provider", "circuit_providers", "circuits", "circuits.write", "circuit_provider"
+    ),
+    ObjectTypeSpec("circuit", "Circuit", "circuits", "circuits", "circuits.write", "circuit"),
+    ObjectTypeSpec("cluster", "Cluster", "clusters", "virtualization", "virtualization.write", "cluster"),
+    ObjectTypeSpec(
+        "virtual_machine",
+        "Virtual machine",
+        "virtual_machines",
+        "virtualization",
+        "virtualization.write",
+        "virtual_machine",
+    ),
+    ObjectTypeSpec(
+        "autonomous_system",
+        "Autonomous system",
+        "autonomous_systems",
+        "routing",
+        "routing.write",
+        "autonomous_system",
+    ),
+    # A peering is scoped by its routing instance's host (``host_id`` on the
+    # rows ``get_bgp_peering`` / ``list_bgp_peerings`` return).
+    ObjectTypeSpec("bgp_peering", "BGP peering", "bgp_peerings", "routing", "routing.write", "routing_instance"),
+    ObjectTypeSpec("rack", "Rack", "racks", "dcim", "dcim.write", "rack"),
+    ObjectTypeSpec("cable", "Cable", "cables", "dcim", "dcim.write", "cable"),
+)
+OBJECT_TYPE_SPECS: dict[str, ObjectTypeSpec] = {spec.key: spec for spec in _SPECS}
+OBJECT_TYPES: tuple[str, ...] = tuple(OBJECT_TYPE_SPECS)
+# The types served by the generic object API; the only ones relationships link.
+GENERIC_TYPES: tuple[str, ...] = tuple(s.key for s in _SPECS if s.generic)
+
 # The Literal types are what request bodies validate against; the tuples are
-# derived from them so each set is written once.
-ObjectType = Literal["host", "group", "prefix"]
+# derived from them so each set is written once. Object types come from the
+# registry above and are checked with ``unknown_object_types``.
 FieldType = Literal["text", "number", "boolean", "date", "url", "select"]
 TagColor = Literal["gray", "red", "orange", "yellow", "green", "teal", "blue", "purple"]
-OBJECT_TYPES: tuple[str, ...] = get_args(ObjectType)
+Cardinality = Literal["one-to-one", "one-to-many", "many-to-many"]
 FIELD_TYPES: tuple[str, ...] = get_args(FieldType)
 TAG_COLORS: tuple[str, ...] = get_args(TagColor)
+CARDINALITIES: tuple[str, ...] = get_args(Cardinality)
 FIELD_KEY_RE = re.compile(r"^[a-z][a-z0-9_]{0,49}$")
 TEXT_MAX = 1000
 TAG_NAME_MAX = 50
+# Computed fields: the template text and the rendered value are bounded.
+COMPUTED_TEMPLATE_MAX = 4000
+COMPUTED_OUTPUT_MAX = 1000
 
 _DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
 _TRUE = {"true", "yes", "1"}
@@ -217,3 +303,26 @@ def clean_text(raw: object, label: str, limit: int) -> str:
 def clean_tag_name(raw: object) -> str:
     """A tag name trimmed; 1 to ``TAG_NAME_MAX`` characters."""
     return clean_name(raw, "Tag name", TAG_NAME_MAX)
+
+
+def object_type_spec(object_type: str) -> ObjectTypeSpec | None:
+    """The registry entry of ``object_type``; ``None`` for an unknown type."""
+    return OBJECT_TYPE_SPECS.get(object_type)
+
+
+def unknown_object_types(object_types: list[str], allowed: tuple[str, ...] = OBJECT_TYPES) -> list[str]:
+    """The entries of ``object_types`` that are not in ``allowed``."""
+    return [t for t in object_types if t not in allowed]
+
+
+def purge_trigger_sql(spec: ObjectTypeSpec) -> tuple[str, str]:
+    """The statements (drop, then create) that make deleting a row of
+    ``spec.table`` remove its tags, custom field values and relationship
+    links, through the ``plexus_purge_object_data`` trigger function of
+    migration 0109. A migration that registers a new type runs both."""
+    name = f"trg_{spec.table}_purge_object_data"
+    return (
+        f"DROP TRIGGER IF EXISTS {name} ON {spec.table}",
+        f"CREATE TRIGGER {name} AFTER DELETE ON {spec.table} FOR EACH ROW "
+        f"EXECUTE FUNCTION plexus_purge_object_data('{spec.key}', '{spec.id_column}')",
+    )

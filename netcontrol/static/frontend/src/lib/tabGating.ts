@@ -28,10 +28,14 @@ export function canUseFeature(feature: string, auth: AuthStatus | undefined): bo
 
 /**
  * Whether this user may change the records of `feature`: an admin, or a user
- * holding `<feature>.write` (the server's `require_feature_method`).
+ * holding `<feature>.write` (the server's `require_feature_method`) whose
+ * object scope is not read only (an account limited to inventory groups it
+ * may only read changes nothing; the server refuses each write).
  */
 export function canWriteFeature(feature: string, auth: AuthStatus | undefined): boolean {
-  return auth?.role === 'admin' || (auth?.feature_access ?? []).includes(`${feature}.write`);
+  if (auth?.role === 'admin') return true;
+  if (auth?.object_scope?.read_only) return false;
+  return (auth?.feature_access ?? []).includes(`${feature}.write`);
 }
 
 function visibilityContext(auth: AuthStatus | undefined): NavVisibilityContext {

@@ -18,13 +18,18 @@ the provider or checks what it returns, so it can be tested with a fake
   must match the ID token's;
 - claim reading: username, display name, groups and group overage.
 
-Every failure raises :class:`OidcError` with a code from
-:data:`SSO_ERROR_CODES` and a short step description. Neither ever holds a
-token, an authorization code, the client secret or the PKCE verifier.
+Every failure raises :class:`OidcError` (a :class:`netcontrol.sso.SsoError`)
+with a code from :data:`SSO_ERROR_CODES` and a short step description.
+Neither ever holds a token, an authorization code, the client secret or the
+PKCE verifier.
 
 HTTP: ``httpx``, 10 s timeout, redirects not followed, TLS verified (with an
 optional CA bundle for a private CA). The issuer and every endpoint from
 discovery must be ``https``, except on a loopback host.
+
+What does not depend on the protocol (URL and return-path rules, log-safe
+text, username cleaning, the identity, the HTTP client) lives in
+:mod:`netcontrol.sso` and is shared with SAML; it is re-exported here.
 """
 
 from __future__ import annotations
@@ -32,21 +37,49 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
-import re
 import secrets
-import ssl
 import time
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
-from urllib.parse import quote_plus, urlencode, urlsplit
+from urllib.parse import quote_plus, urlencode
 
 import httpx
 import jwt
 
-# Codes the callback may put in ``/login?sso_error=``. The login page maps
-# each to a fixed sentence; nothing else from the provider is ever echoed.
-SSO_ERROR_CODES = ("disabled", "state", "provider", "token", "claims", "account", "denied")
+from netcontrol.sso import (
+    HTTP_TIMEOUT_SECONDS,
+    MAX_RESPONSE_BYTES,
+    SSO_ERROR_CODES,
+    USERNAME_MAX_LENGTH,
+    SsoError,
+    SsoIdentity,
+    clean_display_name,
+    clean_username,
+    group_values,
+    http_client,
+    is_allowed_url,
+    log_safe,
+    safe_next,
+)
+
+__all__ = [
+    "ALLOWED_ALGORITHMS",
+    "CALLBACK_PATH",
+    "CLIENT",
+    "HTTP_TIMEOUT_SECONDS",
+    "LOGIN_PATH",
+    "MAX_RESPONSE_BYTES",
+    "SSO_ERROR_CODES",
+    "USERNAME_MAX_LENGTH",
+    "OidcClient",
+    "OidcError",
+    "OidcIdentity",
+    "ProviderMetadata",
+    "is_allowed_url",
+    "log_safe",
+    "safe_next",
+]
 
 ALLOWED_ALGORITHMS = ("RS256", "RS384", "RS512", "PS256", "PS384", "PS512", "ES256", "ES384", "ES512")
 _EC_CURVES = {"ES256": "P-256", "ES384": "P-384", "ES512": "P-521"}
@@ -54,69 +87,21 @@ _EC_CURVES = {"ES256": "P-256", "ES384": "P-384", "ES512": "P-521"}
 CACHE_TTL_SECONDS = 3600
 JWKS_REFETCH_MIN_INTERVAL = 60
 CLOCK_LEEWAY_SECONDS = 60
-HTTP_TIMEOUT_SECONDS = 10.0
-# Discovery documents, JWKS and token responses are small; refuse anything
-# that is not, so a misbehaving endpoint cannot make us hold megabytes.
-MAX_RESPONSE_BYTES = 1_000_000
 
 LOGIN_PATH = "/api/auth/oidc/login"
 CALLBACK_PATH = "/api/auth/oidc/callback"
 TOKEN_AUTH_METHODS = ("client_secret_basic", "client_secret_post")
-USERNAME_MAX_LENGTH = 150
-
-_LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
-_CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f]")
-# Long runs of token-alphabet characters (JWTs, codes, secrets) in a
-# provider's error text are replaced before it is logged.
-_TOKENISH = re.compile(r"[A-Za-z0-9_\-\.~+/=]{24,}")
 
 
-class OidcError(Exception):
-    """A sign-in step failed. ``code`` is one of :data:`SSO_ERROR_CODES`;
-    ``step`` is a short description safe to log and audit."""
+class OidcError(SsoError):
+    """An OpenID Connect sign-in step failed (see :class:`SsoError`)."""
 
-    def __init__(self, code: str, step: str):
-        super().__init__(step)
-        self.code = code if code in SSO_ERROR_CODES else "provider"
-        self.step = step
+
+# The identity is protocol-independent; the OIDC name stays for callers.
+OidcIdentity = SsoIdentity
 
 
 # ── Small pure helpers ───────────────────────────────────────────────────────
-
-
-def is_allowed_url(url: str) -> bool:
-    """``https`` URL, or ``http`` on a loopback host (a lab IdP)."""
-    try:
-        parts = urlsplit(str(url or ""))
-    except ValueError:
-        return False
-    if not parts.netloc or not parts.hostname:
-        return False
-    if parts.scheme == "https":
-        return True
-    return parts.scheme == "http" and parts.hostname.lower() in _LOOPBACK_HOSTS
-
-
-def safe_next(value: str | None) -> str:
-    """A same-site path to return to after sign-in, or ``/``.
-
-    Kept only when it starts with exactly one ``/`` and holds no ``//``,
-    backslash or control character, so it can never name another host.
-    """
-    candidate = str(value or "")
-    if not candidate.startswith("/") or len(candidate) > 2048:
-        return "/"
-    if "//" in candidate or "\\" in candidate or _CONTROL_CHARS.search(candidate):
-        return "/"
-    return candidate
-
-
-def log_safe(text: Any, limit: int = 200) -> str:
-    """Provider-supplied text made safe to log: control characters removed,
-    token-like runs redacted, truncated."""
-    cleaned = _CONTROL_CHARS.sub(" ", str(text or ""))
-    cleaned = _TOKENISH.sub("[redacted]", cleaned)
-    return cleaned[:limit]
 
 
 def new_state() -> str:
@@ -158,12 +143,7 @@ def claim_groups(claims: dict, name: str) -> list[str]:
     group; anything else is ignored)."""
     if not name:
         return []
-    value = claims.get(name)
-    if isinstance(value, str):
-        return [value] if value else []
-    if isinstance(value, list):
-        return [str(v) for v in value if isinstance(v, (str, int)) and str(v)]
-    return []
+    return group_values(claims.get(name))
 
 
 def groups_overage(claims: dict, name: str) -> bool:
@@ -179,12 +159,7 @@ def read_username(claims: dict, name: str) -> str:
     """The username claim, trimmed. Raises ``claims`` when it is missing,
     empty, longer than 150 characters or holds a control character, and
     when it is the email while ``email_verified`` is false."""
-    value = claims.get(name)
-    if not isinstance(value, str):
-        raise OidcError("claims", f"username claim '{name}' is missing")
-    username = value.strip()
-    if not username or len(username) > USERNAME_MAX_LENGTH or _CONTROL_CHARS.search(username):
-        raise OidcError("claims", f"username claim '{name}' is empty, too long or has control characters")
+    username = clean_username(claims.get(name), f"claim '{name}'", OidcError)
     if name == "email" and claims.get("email_verified") in (False, "false", "False"):
         raise OidcError("claims", "email is not verified at the provider")
     return username
@@ -201,18 +176,6 @@ class ProviderMetadata:
     jwks_uri: str
     userinfo_endpoint: str = ""
     algorithms: tuple[str, ...] = ALLOWED_ALGORITHMS
-
-
-@dataclass(frozen=True)
-class OidcIdentity:
-    """Who signed in. ``overage`` is set when the provider signalled group
-    overage and no groups arrived, so the groups are unknown."""
-
-    sub: str
-    username: str
-    display_name: str = ""
-    groups: list[str] = field(default_factory=list)
-    overage: bool = False
 
 
 @dataclass
@@ -250,15 +213,7 @@ class OidcClient:
     # ── HTTP ──
 
     def _http(self, ca_cert_file: str) -> httpx.AsyncClient:
-        if self._transport is not None:
-            return httpx.AsyncClient(transport=self._transport, timeout=HTTP_TIMEOUT_SECONDS, follow_redirects=False)
-        verify: ssl.SSLContext | bool = True
-        if ca_cert_file:
-            try:
-                verify = ssl.create_default_context(cafile=ca_cert_file)
-            except (OSError, ssl.SSLError) as exc:
-                raise OidcError("provider", "the CA certificate file could not be loaded") from exc
-        return httpx.AsyncClient(verify=verify, timeout=HTTP_TIMEOUT_SECONDS, follow_redirects=False)
+        return http_client(self._transport, ca_cert_file, OidcError)
 
     async def _send(self, what: str, code: str, ca_cert_file: str, method: str, url: str, **kwargs) -> dict:
         try:
@@ -534,7 +489,7 @@ class OidcClient:
 
         username = read_username(claims, username_claim)
         display = claims.get(display_claim) if display_claim else None
-        display_name = display.strip()[:200] if isinstance(display, str) else ""
+        display_name = clean_display_name(display)
         groups = claim_groups(claims, groups_claim)
         overage = not groups and groups_overage(claims, groups_claim)
         return OidcIdentity(

@@ -171,7 +171,21 @@ const ICON_MAP: Record<string, string> = {
   // A remote user of a SASE cloud (a Cato Client).
   user: '/static/img/topo/user.svg',
   server: '/static/img/topo/server.svg',
+  ups: '/static/img/topo/ups.svg',
   unknown: '/static/img/topo/unknown.svg',
+};
+
+/**
+ * The roles an inventory host can be given (the backend's
+ * `netcontrol.device_categories.DEVICE_CATEGORIES`); '' lets the map pick
+ * the icon from the device type.
+ */
+export const DEVICE_ROLES = ['', 'router', 'switch', 'firewall', 'wireless', 'wlc', 'phone', 'server', 'ups'] as const;
+
+// Device types whose role is known from the type alone (the backend's
+// DEVICE_TYPE_CATEGORIES): drawn with that role's icon until one is set.
+const DEVICE_TYPE_ROLES: Record<string, string> = {
+  apc_ups: 'ups',
 };
 
 const FIREWALL_DEVICE_TYPES = new Set([
@@ -359,7 +373,14 @@ export function nodeIconUrl(node: TopologyNode): string | undefined {
   }
   const cat = (node.device_category || '').toLowerCase();
   if (cat && ICON_MAP[cat]) return ICON_MAP[cat];
+  const typeRole = DEVICE_TYPE_ROLES[node.device_type ?? ''];
+  if (typeRole) return ICON_MAP[typeRole];
   if (node.device_type && FIREWALL_DEVICE_TYPES.has(node.device_type)) return ICON_MAP.firewall;
+  // An inventory host that is a device of an integration, with no role of
+  // its own (added as ICMP-only): the role the integration gives it, so it
+  // keeps the icon it had before it was a host.
+  const sourceRole = (node.source_category || '').toLowerCase();
+  if (sourceRole && ICON_MAP[sourceRole]) return ICON_MAP[sourceRole];
   if (node.source === 'meraki') return undefined;
   if (!node.in_inventory) return ICON_MAP.unknown;
   return undefined;

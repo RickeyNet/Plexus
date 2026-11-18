@@ -62,6 +62,7 @@ import { formatBackendDateTime } from '@/lib/datetime';
 
 import { DefineSubnetModal } from './DefineSubnetModal';
 import { DhcpServerModal } from './DhcpServerModal';
+import { AggregatesTab, NamespacesTab, RouteTargetsTab, VlanGroupsTab } from './IpamRecordsTabs';
 import { IpamSourceModal } from './IpamSourceModal';
 import { SubnetDrilldown } from './SubnetDrilldown';
 import { VlansTab } from './VlansTab';
@@ -111,11 +112,24 @@ const TABS = [
   { key: 'subnets', label: 'Subnets' },
   { key: 'vrfs', label: 'VRFs' },
   { key: 'vlans', label: 'VLANs' },
+  { key: 'vlan-groups', label: 'VLAN groups' },
+  { key: 'route-targets', label: 'Route targets' },
+  { key: 'aggregates', label: 'Aggregates' },
+  { key: 'namespaces', label: 'Namespaces' },
 ] as const;
 type IpamTab = (typeof TABS)[number]['key'];
 const TAB_KEYS: readonly IpamTab[] = TABS.map((t) => t.key);
 
-/** The IPAM page: subnets (the address space), and the VRF and VLAN records. */
+const RECORD_TABS: Record<Exclude<IpamTab, 'subnets'>, () => ReactNode> = {
+  vrfs: () => <VrfsTab />,
+  vlans: () => <VlansTab />,
+  'vlan-groups': () => <VlanGroupsTab />,
+  'route-targets': () => <RouteTargetsTab />,
+  aggregates: () => <AggregatesTab />,
+  namespaces: () => <NamespacesTab />,
+};
+
+/** The IPAM page: subnets (the address space), and the VRF, VLAN, VLAN group, route target, aggregate and namespace records. */
 export function Ipam() {
   const [tab, selectTab] = usePathTab<IpamTab>('/ipam', TAB_KEYS, 'subnets');
   const tabBar = <TabBar tabs={TABS} active={tab} onChange={selectTab} aria-label="IPAM sections" />;
@@ -124,7 +138,7 @@ export function Ipam() {
     <div>
       <PageHeader title="IP Address Management" />
       {tabBar}
-      {tab === 'vrfs' ? <VrfsTab /> : <VlansTab />}
+      {RECORD_TABS[tab]()}
     </div>
   );
 }

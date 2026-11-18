@@ -135,7 +135,7 @@ def test_prefix_write_needs_admin(admin):
         {"field_type": "select", "choices": []},
         {"field_type": "select", "choices": ["a", "a"]},
         {"field_type": "select", "choices": ["a", " "]},
-        {"object_types": ["circuit"]},
+        {"object_types": ["spaceship"]},
         {"object_types": []},
         {"field_type": "number", "default_value": "many"},
         {"field_type": "select", "choices": ["a"], "default_value": "b"},
@@ -179,7 +179,7 @@ def test_field_create_round_trip_and_duplicate(admin):
     )
     assert [f["key"] for f in admin.get(f"{FIELDS}?object_type=group").json()] == ["rack_units"]
     assert admin.get(f"{FIELDS}?object_type=prefix").json() == []
-    assert admin.get(f"{FIELDS}?object_type=circuit").status_code == 400
+    assert admin.get(f"{FIELDS}?object_type=spaceship").status_code == 400
 
 
 def test_key_and_type_are_fixed(admin):

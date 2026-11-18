@@ -29,9 +29,9 @@ VLANs, prefixes and IP addresses (these are admin-managed in Plexus), and
 dry run writes nothing and needs `sync.write` only. Scheduled runs act for
 the job: the change log shows them as `sync:<job name>`.
 
-Sync is not enrolled in object scope, so accounts limited to selected
-inventory groups do not see it (see
-[object-level permissions](object-permissions.md)).
+Accounts limited to selected inventory groups read jobs and runs (a run's
+entries only for their own devices) and cannot add, change, delete or run
+jobs (see [object-level permissions](object-permissions.md)).
 
 ## Connections
 

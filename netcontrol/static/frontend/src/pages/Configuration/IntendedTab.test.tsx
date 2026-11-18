@@ -47,7 +47,16 @@ vi.mock('@/api/intendedConfig', () => ({
   useUpdateIntendedContext: () => mutation,
   useDeleteIntendedContext: () => mutation,
 }));
+vi.mock('@/api/intendedRemediation', () => ({
+  useHostRemediation: () => query({ isPending: true }),
+  useCreateRemediationDeployments: () => mutation,
+  useRemediationIgnores: () => query({ data: [] }),
+  useCreateRemediationIgnore: () => mutation,
+  useUpdateRemediationIgnore: () => mutation,
+  useDeleteRemediationIgnore: () => mutation,
+}));
 vi.mock('@/api/compliance', () => ({
+  useCredentials: () => query({ data: [] }),
   useInventoryGroups: () =>
     query({
       data: [

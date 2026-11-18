@@ -29,18 +29,40 @@ export interface AuthStatus {
 export interface ObjectScopeStatus {
   restricted: boolean;
   write_group_ids: number[];
+  /** A restricted account with no writable grant or scope rule: every
+   * feature is read only for it. Missing on older servers. */
+  read_only?: boolean;
 }
+
+export interface SsoMethodStatus {
+  enabled: boolean;
+  label: string;
+  /** Lead with the SSO button and fold the password form away. */
+  primary: boolean;
+}
+
+export type SsoProtocol = 'oidc' | 'saml';
 
 export interface SsoStatus {
-  oidc?: {
-    enabled: boolean;
-    label: string;
-    /** Lead with the SSO button and fold the password form away. */
-    primary: boolean;
-  };
+  oidc?: SsoMethodStatus;
+  saml?: SsoMethodStatus;
 }
 
-/** Codes the OIDC callback puts in /login?sso_error=, each with a fixed
+export interface SsoMethod extends SsoMethodStatus {
+  protocol: SsoProtocol;
+}
+
+/** The single sign-on methods to offer, OIDC first then SAML. */
+export function enabledSsoMethods(sso: SsoStatus | undefined): SsoMethod[] {
+  const out: SsoMethod[] = [];
+  for (const protocol of ['oidc', 'saml'] as const) {
+    const method = sso?.[protocol];
+    if (method?.enabled) out.push({ ...method, protocol });
+  }
+  return out;
+}
+
+/** Codes the OIDC callback and SAML ACS put in /login?sso_error=, each with a fixed
  * sentence. Nothing the provider sends is ever shown. */
 export const SSO_ERROR_MESSAGES: Record<string, string> = {
   disabled: 'Single sign-on is not enabled. Sign in with a local account.',
@@ -59,18 +81,19 @@ export function ssoErrorMessage(search: string): string | null {
   return SSO_ERROR_MESSAGES[code] ?? SSO_ERROR_MESSAGES.provider;
 }
 
-/** Where the SSO button navigates: the OIDC login route, carrying the page
- * the user was on (the login screen renders at any path) so they come back
- * to it. /login itself is not worth returning to. */
-export function ssoLoginHref(pathname: string, search = ''): string {
+/** Where an SSO button navigates: the protocol's login route, carrying the
+ * page the user was on (the login screen renders at any path) so they come
+ * back to it. /login itself is not worth returning to. */
+export function ssoLoginHref(pathname: string, search = '', protocol: SsoProtocol = 'oidc'): string {
+  const base = `/api/auth/${protocol}/login`;
   const params = new URLSearchParams(search);
   params.delete('sso_error');
   const rest = params.toString();
   const next = `${pathname}${rest ? `?${rest}` : ''}`;
   if (!pathname.startsWith('/') || pathname === '/' || pathname === '/login') {
-    return '/api/auth/oidc/login';
+    return base;
   }
-  return `/api/auth/oidc/login?next=${encodeURIComponent(next)}`;
+  return `${base}?next=${encodeURIComponent(next)}`;
 }
 
 export interface LoginResponse {

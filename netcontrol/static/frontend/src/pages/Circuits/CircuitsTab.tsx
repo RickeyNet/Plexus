@@ -17,6 +17,7 @@ import { EmptyState } from '@/components/EmptyState';
 import { ExportTemplatesMenu } from '@/components/ExportTemplatesMenu';
 import { LoadingState } from '@/components/LoadingState';
 import { QueryError } from '@/components/QueryError';
+import { ObjectDataPanel } from '@/components/ObjectDataPanel';
 import {
   CIRCUIT_STATUSES,
   type CircuitFilter,
@@ -296,6 +297,7 @@ export function CircuitDetailPanel({ id }: { id: number | null }) {
         <UtilisationTable rows={utilisation} />
       </DetailSection>
       <ChangelogPanel objectType="circuit" objectId={c.id} pageSize={10} />
+      <ObjectDataPanel objectType="circuit" objectId={c.id} />
     </div>
   );
 }

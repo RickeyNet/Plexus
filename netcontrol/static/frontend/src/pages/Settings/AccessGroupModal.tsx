@@ -8,11 +8,21 @@ import { groupLabel, useInventoryGroupsFull } from '@/api/inventory';
 import {
   AccessGroup,
   type ObjectScope,
+  type ScopeRule,
+  useAccessGroupScopeRules,
   useCreateAccessGroup,
+  useSaveAccessGroupScopeRules,
   useUpdateAccessGroup,
 } from '@/api/settings';
 
-import { choicesFromGrants, type GrantChoice, SCOPED_ACCOUNT_PAGES, scopePayload } from './accessGroupScope';
+import {
+  choicesFromGrants,
+  type GrantChoice,
+  normaliseRules,
+  SCOPED_ACCOUNT_NOTE,
+  scopePayload,
+} from './accessGroupScope';
+import { type DraftRule, ScopeRulesEditor } from './ScopeRulesEditor';
 
 const featureLabel = (feature: string): string =>
   feature.charAt(0).toUpperCase() + feature.slice(1);
@@ -59,9 +69,14 @@ export function AccessGroupModal(props: CreateProps | EditProps) {
     choicesFromGrants(isEdit ? props.group.inventory_scopes : []),
   );
   const inventoryGroups = useInventoryGroupsFull(false);
+  // Scope rules: the saved ones until the admin edits them (null = untouched).
+  const savedRules = useAccessGroupScopeRules(isEdit && objectScope === 'groups' ? props.group.id : null);
+  const [draftRules, setDraftRules] = useState<DraftRule[] | null>(null);
+  const shownRules: DraftRule[] = draftRules ?? savedRules.data ?? [];
+  const saveRules = useSaveAccessGroupScopeRules();
   const [error, setError] = useState<string | null>(null);
 
-  const pending = isEdit ? update.isPending : create.isPending;
+  const pending = (isEdit ? update.isPending : create.isPending) || saveRules.isPending;
   const submitDisabled = name.trim().length < 2;
   const featureSet = new Set(featureKeys);
   const fid = useId();
@@ -135,10 +150,17 @@ export function AccessGroupModal(props: CreateProps | EditProps) {
                 feature_keys: featureKeys,
                 ...scopePayload(objectScope, choices),
               };
-              const opts = {
-                onSuccess: () => props.onClose(),
-                onError: (e: unknown) => setError((e as Error).message),
+              const onError = (e: unknown) => setError((e as Error).message);
+              // Rules are saved after the group (they need its id), only when edited.
+              const afterSave = (group: AccessGroup) => {
+                if (objectScope !== 'groups' || draftRules === null) {
+                  props.onClose();
+                  return;
+                }
+                const rules: ScopeRule[] = normaliseRules(draftRules.map((r) => ({ ...r, value_id: r.value_id ?? undefined })));
+                saveRules.mutate({ groupId: group.id, rules }, { onSuccess: () => props.onClose(), onError });
               };
+              const opts = { onSuccess: afterSave, onError };
               if (isEdit) {
                 update.mutate({ id: props.group.id, data: payload }, opts);
               } else {
@@ -260,9 +282,7 @@ export function AccessGroupModal(props: CreateProps | EditProps) {
           <>
             <div className="form-help" style={{ margin: '0.4rem 0' }}>
               Members see only these inventory groups and their sub-groups. A member of any
-              access group with All devices sees everything. Accounts limited this way can use
-              these pages only: {SCOPED_ACCOUNT_PAGES.join(', ')}. Other pages and AI access are
-              closed to them.
+              access group with All devices sees everything. {SCOPED_ACCOUNT_NOTE}
             </div>
             {inventoryGroups.isLoading && <div className="form-help">Loading inventory groups...</div>}
             {inventoryGroups.data && inventoryGroups.data.length === 0 && (
@@ -303,6 +323,13 @@ export function AccessGroupModal(props: CreateProps | EditProps) {
                 </div>
               ))}
             </div>
+            <span className="form-label" style={{ marginTop: '0.6rem' }}>
+              Scope rules
+            </span>
+            <div className="form-help" style={{ margin: '0.2rem 0 0.4rem' }}>
+              Also grant the records of a tenant or site, for one record type or every type.
+            </div>
+            <ScopeRulesEditor rules={shownRules} onChange={setDraftRules} />
           </>
         )}
       </div>

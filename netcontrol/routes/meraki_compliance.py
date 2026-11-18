@@ -18,6 +18,11 @@ inventory host. This module provides:
 
 Mounted under the ``compliance`` feature next to the host compliance routes.
 The scheduled loop in ``compliance.py`` calls :func:`run_due_assignments`.
+
+Object scope: a Meraki organization is no inventory host or group, so an
+account limited to selected inventory groups sees none of these
+organizations, assignments, scans or results (empty lists, unknown ids) and
+cannot create, change or run them (403).
 """
 
 from __future__ import annotations
@@ -47,6 +52,7 @@ from netcontrol.integrations.meraki.compliance import (
     rule_template,
     summarise_results,
 )
+from netcontrol.object_scope import refuse_scoped, request_scope, scope_exempt, scoped
 from netcontrol.routes import background_jobs
 from netcontrol.routes.shared import _audit, _corr_id, _session_user, supervise_task
 from netcontrol.telemetry import configure_logging, increment_metric, redact_value
@@ -114,6 +120,12 @@ def _is_meraki_org(org: dict) -> bool:
 
 def _is_sample_org(org: dict) -> bool:
     return str(org.get("org_id") or "") == "sample" and not org.get("has_api_key")
+
+
+async def _hidden(request: Request) -> bool:
+    """True for a scoped caller: Meraki organizations are outside every
+    inventory group, so their compliance data is hidden."""
+    return (await request_scope(request)).restricted
 
 
 def _clamp_interval(seconds: int) -> int:
@@ -348,6 +360,7 @@ async def run_due_assignments() -> dict[str, int]:
 
 
 @router.get("/api/compliance/meraki/checks")
+@scope_exempt("static Meraki check catalogue")
 async def list_meraki_checks_api():
     """The Meraki check catalog, with the rule JSON that selects each check."""
     checks = catalog()
@@ -357,9 +370,12 @@ async def list_meraki_checks_api():
 
 
 @router.get("/api/compliance/meraki/orgs")
-async def list_meraki_compliance_orgs_api():
+@scoped("hidden")
+async def list_meraki_compliance_orgs_api(request: Request):
     """Meraki organizations a profile can be scanned against (no credentials)."""
-    orgs = []
+    orgs: list[dict] = []
+    if await _hidden(request):
+        return orgs
     for org in await db.list_meraki_orgs():
         if not _is_meraki_org(org):
             continue
@@ -381,10 +397,14 @@ async def list_meraki_compliance_orgs_api():
 
 
 @router.get("/api/compliance/meraki/assignments")
+@scoped("hidden")
 async def list_meraki_assignments_api(
+    request: Request,
     profile_id: int | None = Query(default=None),
     org_ref: int | None = Query(default=None),
 ):
+    if await _hidden(request):
+        return []
     items = await db.list_meraki_compliance_assignments(profile_id=profile_id, org_ref=org_ref)
     for item in items:
         item["scanning"] = item["org_ref"] in _running_scans
@@ -392,7 +412,9 @@ async def list_meraki_assignments_api(
 
 
 @router.post("/api/compliance/meraki/assignments", status_code=201)
+@scoped("refused")
 async def create_meraki_assignment_api(body: MerakiAssignmentCreate, request: Request):
+    await refuse_scoped(request)
     profile = await _get_profile_or_404(body.profile_id)
     org = await _get_org_or_404(body.org_ref)
     if not meraki_rules(_profile_rules(profile)):
@@ -417,7 +439,9 @@ async def create_meraki_assignment_api(body: MerakiAssignmentCreate, request: Re
 
 
 @router.put("/api/compliance/meraki/assignments/{assignment_id}")
+@scoped("refused")
 async def update_meraki_assignment_api(assignment_id: int, body: MerakiAssignmentUpdate, request: Request):
+    await refuse_scoped(request)
     assignment = await db.get_meraki_compliance_assignment(assignment_id)
     if not assignment:
         raise HTTPException(status_code=404, detail="Assignment not found")
@@ -438,7 +462,9 @@ async def update_meraki_assignment_api(assignment_id: int, body: MerakiAssignmen
 
 
 @router.delete("/api/compliance/meraki/assignments/{assignment_id}")
+@scoped("refused")
 async def delete_meraki_assignment_api(assignment_id: int, request: Request):
+    await refuse_scoped(request)
     assignment = await db.get_meraki_compliance_assignment(assignment_id)
     if not assignment:
         raise HTTPException(status_code=404, detail="Assignment not found")
@@ -454,8 +480,10 @@ async def delete_meraki_assignment_api(assignment_id: int, request: Request):
 
 
 @router.post("/api/compliance/meraki/assignments/{assignment_id}/scan-now", status_code=202)
+@scoped("refused")
 async def scan_meraki_assignment_now_api(assignment_id: int, request: Request):
     """Start a scan of one assignment. Poll ``/api/compliance/meraki/scans/{job_id}``."""
+    await refuse_scoped(request)
     assignment = await db.get_meraki_compliance_assignment(assignment_id)
     if not assignment:
         raise HTTPException(status_code=404, detail="Assignment not found")
@@ -468,17 +496,20 @@ async def scan_meraki_assignment_now_api(assignment_id: int, request: Request):
 
 
 @router.post("/api/compliance/meraki/scan", status_code=202)
+@scoped("refused")
 async def run_meraki_scan_api(body: MerakiScanRequest, request: Request):
     """Start a scan of an organization against a profile. Poll ``/api/compliance/meraki/scans/{job_id}``."""
+    await refuse_scoped(request)
     profile = await _get_profile_or_404(body.profile_id)
     org = await _get_org_or_404(body.org_ref)
     return _start_scan(org, profile, None, _session_user(request))
 
 
 @router.get("/api/compliance/meraki/scans/{job_id}")
-async def get_meraki_scan_job_api(job_id: str):
+@scoped("hidden")
+async def get_meraki_scan_job_api(job_id: str, request: Request):
     job = background_jobs.get_job(job_id, kind=_JOB_KIND)
-    if job is None:
+    if job is None or await _hidden(request):
         raise HTTPException(status_code=404, detail="Scan job not found (it may have expired)")
     return job
 
@@ -487,7 +518,9 @@ async def get_meraki_scan_job_api(job_id: str):
 
 
 @router.get("/api/compliance/meraki/results")
+@scoped("hidden")
 async def list_meraki_results_api(
+    request: Request,
     org_ref: int | None = Query(default=None),
     profile_id: int | None = Query(default=None),
     assignment_id: int | None = Query(default=None),
@@ -496,6 +529,8 @@ async def list_meraki_results_api(
     target_kind: str | None = Query(default=None, max_length=20),
     limit: int = Query(default=200, ge=1, le=2000),
 ):
+    if await _hidden(request):
+        return []
     return await db.list_meraki_compliance_results(
         org_ref=org_ref,
         profile_id=profile_id,
@@ -508,9 +543,10 @@ async def list_meraki_results_api(
 
 
 @router.get("/api/compliance/meraki/results/{result_id}")
-async def get_meraki_result_api(result_id: int):
+@scoped("hidden")
+async def get_meraki_result_api(result_id: int, request: Request):
     result = await db.get_meraki_compliance_result(result_id)
-    if not result:
+    if not result or await _hidden(request):
         raise HTTPException(status_code=404, detail="Scan result not found")
     try:
         result["findings"] = json.loads(result.get("findings") or "[]")
@@ -520,7 +556,9 @@ async def get_meraki_result_api(result_id: int):
 
 
 @router.delete("/api/compliance/meraki/results/{result_id}")
+@scoped("refused")
 async def delete_meraki_result_api(result_id: int, request: Request):
+    await refuse_scoped(request)
     result = await db.get_meraki_compliance_result(result_id)
     if not result:
         raise HTTPException(status_code=404, detail="Scan result not found")
@@ -536,16 +574,30 @@ async def delete_meraki_result_api(result_id: int, request: Request):
 
 
 @router.get("/api/compliance/meraki/status")
+@scoped("hidden")
 async def get_meraki_status_api(
+    request: Request,
     profile_id: int | None = Query(default=None),
     org_ref: int | None = Query(default=None),
 ):
     """Latest status per (target, profile)."""
+    if await _hidden(request):
+        return []
     return await db.get_meraki_compliance_status(profile_id=profile_id, org_ref=org_ref)
 
 
 @router.get("/api/compliance/meraki/summary")
-async def get_meraki_summary_api():
+@scoped("hidden")
+async def get_meraki_summary_api(request: Request):
+    if await _hidden(request):
+        return {
+            "active_assignments": 0,
+            "targets_scanned": 0,
+            "targets_non_compliant": 0,
+            "targets_error": 0,
+            "last_scan_at": None,
+            "scans_running": 0,
+        }
     summary = await db.get_meraki_compliance_summary()
     summary["scans_running"] = len(_running_scans)
     return summary

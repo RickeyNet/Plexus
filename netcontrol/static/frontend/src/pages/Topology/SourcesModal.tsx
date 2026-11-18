@@ -40,7 +40,7 @@ import { LoadingState } from "@/components/LoadingState";
 import { Modal } from "@/components/Modal";
 import { QueryError } from "@/components/QueryError";
 import { formatBackendDateTime } from "@/lib/datetime";
-import { canUseFeature } from "@/lib/tabGating";
+import { canUseFeature, canWriteFeature } from "@/lib/tabGating";
 import { usePendingKeys } from "@/lib/usePendingKeys";
 
 import {
@@ -136,8 +136,7 @@ export function SourcesModal({
   const { alert, confirm } = useDialogs();
   const { data: auth } = useAuthStatus();
   const isAdmin = auth?.role === "admin";
-  const canWrite =
-    isAdmin || (auth?.feature_access ?? []).includes("topology.write");
+  const canWrite = canWriteFeature("topology", auth);
 
   const sources = useTopologySources();
   const orgs = useMerakiOrgs();

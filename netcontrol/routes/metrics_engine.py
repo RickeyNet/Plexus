@@ -6,6 +6,11 @@ metrics_engine.py -- Prometheus-style metrics infrastructure:
   - Flexible metric_samples (Prometheus data model)
   - Structured metrics query API
   - SNMP trap / syslog UDP receiver
+
+Object scope: metric series, interface series and trap/syslog events follow
+their host (a scoped caller's "all hosts" is the hosts it may read; an event
+from an unknown source is visible to unrestricted callers only); the metric
+names and the vendor OID registry hold no host data.
 """
 
 from __future__ import annotations
@@ -26,6 +31,16 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 import netcontrol.routes.state as state
 from netcontrol.integrations.apc.snmp import UPS_METRICS, ups_metric_samples
+from netcontrol.integrations.apc.traps import dispatch_apc_trap, parse_apc_trap
+from netcontrol.object_scope import (
+    HOST_NOT_FOUND,
+    group_filter,
+    readable_host_ids,
+    require_object_host,
+    scope_exempt,
+    scoped,
+)
+from netcontrol.routes.snmp import decode_snmp_trap
 from netcontrol.telemetry import configure_logging, redact_value
 
 router = APIRouter()
@@ -867,6 +882,15 @@ class _TrapSyslogProtocol(asyncio.DatagramProtocol):
         # parts. Only the stored prefix is hexed (raw_data is capped at 2000
         # chars = 1000 bytes anyway).
         raw_hex = data[:1000].hex()
+        # An APC UPS trap (PowerNet-MIB, v1/v2c) is decoded: stored with its
+        # name and severity, and acted on when it comes from a UPS host.
+        apc_trap = parse_apc_trap(decode_snmp_trap(data))
+        if apc_trap is not None:
+            _queue_trap_syslog_event(
+                source_ip, "trap", "", apc_trap.severity, apc_trap.trap_oid, apc_trap.message, raw_hex
+            )
+            dispatch_apc_trap(source_ip, apc_trap)
+            return
         message = f"SNMP trap from {source_ip} ({len(data)} bytes)"
         oid = ""
         # Last printable run that looks like an OID wins (matches the old scan)
@@ -1048,8 +1072,24 @@ def stop_receivers():
 # ── Metrics Query API ────────────────────────────────────────────────────────
 
 
+async def _confine_hosts(request: Request, host_ids: list[int] | None) -> list[int] | None:
+    """The host filter of a metrics query for the caller: unchanged for an
+    unrestricted caller; for a scoped one, "all hosts" (``None`` or empty)
+    becomes the hosts it may read and an explicit list keeps only those
+    (``[-1]``, no host, when nothing is left: the readers treat an empty
+    list as all)."""
+    allowed = await readable_host_ids(request)
+    if allowed is None:
+        return host_ids
+    if not host_ids:
+        return sorted(allowed) or [-1]
+    return [h for h in host_ids if h in allowed] or [-1]
+
+
 @router.get("/api/metrics/query")
+@scoped("list")
 async def metrics_query(
+    request: Request,
     metric: str = Query(..., description="Metric name, e.g. cpu_percent"),
     host: str = Query(default="*", description="Host ID, comma-separated IDs, or * for all"),
     range: str = Query(default="6h", description="Time range: 1h, 6h, 24h, 7d, 30d"),
@@ -1073,6 +1113,7 @@ async def metrics_query(
         # An empty/nonexistent group must scope to no hosts, not silently fall
         # through to the whole fleet (downstream treats an empty list as "all").
         host_ids = [h["id"] for h in group_hosts] or [-1]
+    host_ids = await _confine_hosts(request, host_ids)
 
     # Parse time range
     now = datetime.now(UTC)
@@ -1137,7 +1178,9 @@ async def metrics_query(
 
 
 @router.get("/api/metrics/capacity-planning")
+@scoped("list")
 async def capacity_planning(
+    request: Request,
     metric: str = Query(..., description="Metric name, e.g. cpu_percent"),
     host: str = Query(default="*", description="Host ID, comma-separated IDs, or * for all"),
     time_range: str = Query(default="90d", alias="range", description="Time range: 30d, 90d, 365d"),
@@ -1159,6 +1202,7 @@ async def capacity_planning(
         # An empty/nonexistent group must scope to no hosts, not silently fall
         # through to the whole fleet (downstream treats an empty list as "all").
         host_ids = [h["id"] for h in group_hosts] or [-1]
+    host_ids = await _confine_hosts(request, host_ids)
 
     # Parse time range
     now = datetime.now(UTC)
@@ -1300,6 +1344,7 @@ def _linear_regression(points: list[tuple[float, float]]) -> tuple[float, float]
 
 
 @router.get("/api/metrics/names")
+@scope_exempt("static list of metric names")
 async def metrics_names():
     """List available metric names."""
     return {"metrics": _DOWNSAMPLE_METRICS}
@@ -1309,12 +1354,15 @@ async def metrics_names():
 
 
 @router.get("/api/metrics/interfaces/{host_id}")
+@scoped("host")
 async def interface_timeseries(
+    request: Request,
     host_id: int,
     if_index: int | None = Query(default=None),
     range: str = Query(default="6h"),
 ):
     """Get per-interface utilization time-series for a host."""
+    await require_object_host(request, host_id, not_found=HOST_NOT_FOUND)
     now = datetime.now(UTC)
     range_map = {
         "1h": timedelta(hours=1),
@@ -1338,6 +1386,7 @@ async def interface_timeseries(
 
 
 @router.get("/api/metrics/vendor-oids")
+@scope_exempt("fleet-wide vendor OID registry; holds no host data")
 async def vendor_oids_list():
     """List all vendor OID registry entries (built-in + custom)."""
     custom = await db.get_vendor_oid_entries()
@@ -1389,13 +1438,15 @@ async def vendor_oids_delete(entry_id: int):
 
 
 @router.get("/api/metrics/events")
+@scoped("list")
 async def trap_syslog_events(
+    request: Request,
     event_type: str | None = Query(default=None),
     host_id: int | None = Query(default=None),
     severity: str | None = Query(default=None),
     limit: int = Query(default=200, ge=1, le=5000),
 ):
-    return await db.get_trap_syslog_events(event_type, host_id, severity, limit)
+    return await db.get_trap_syslog_events(event_type, host_id, severity, limit, **await group_filter(request))
 
 
 # ── Admin: Receiver control ─────────────────────────────────────────────────

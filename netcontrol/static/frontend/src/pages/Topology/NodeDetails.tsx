@@ -12,6 +12,7 @@ import { TabBar } from '@/components/TabBar';
 import {
   abbreviateInterface,
   DETAILS_PANEL_MIN_WIDTH,
+  DEVICE_ROLES,
   draggedPanelWidth,
   edgeProtocolLabel,
   formatBps,
@@ -32,6 +33,7 @@ import {
   HostVlansTab,
   SubHeading,
 } from './HostDataTabs';
+import { canAddToInventory } from './inventoryAdd';
 import { MerakiDetails } from './MerakiDetails';
 import { isOpnsenseDevice } from './opnsenseRules';
 import { OpnsenseRulesTab } from './OpnsenseRulesTab';
@@ -441,7 +443,7 @@ function OverviewTab(props: {
             onChange={(e) => handleCategoryChange(e.target.value)}
             disabled={updateCategory.isPending}
           >
-            {['', 'router', 'switch', 'firewall', 'wireless', 'wlc', 'phone', 'server'].map((c) => (
+            {DEVICE_ROLES.map((c) => (
               <option key={c} value={c}>{c || '(auto)'}</option>
             ))}
           </select>
@@ -576,7 +578,7 @@ function OverviewTab(props: {
         </>
       )}
 
-      {!node.in_inventory && node.ip && !['wan', 'vpn_peer', 'vpn_server', 'cloud', 'users', 'user', 'vpc'].includes(node.meraki?.kind ?? '') && (
+      {canAddToInventory(node) && (
         <button
           type="button"
           className="btn btn-primary btn-sm"

@@ -1,5 +1,9 @@
 """
 dashboards.py -- User-defined dashboards with configurable panels
+
+Object scope: a dashboard is its owner's (panels hold metric queries, run
+through the scope-filtered metrics API); the bandwidth and annotation data
+endpoints filter by the caller's hosts.
 """
 
 from __future__ import annotations
@@ -10,6 +14,14 @@ import routes.database as db
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
+from netcontrol.object_scope import (
+    HOST_NOT_FOUND,
+    group_filter,
+    request_scope,
+    require_object_host,
+    scope_exempt,
+    scoped,
+)
 from netcontrol.routes.shared import _get_session, require_owner_or_admin
 from netcontrol.telemetry import configure_logging
 
@@ -65,6 +77,7 @@ async def _is_admin_session(session: dict | None) -> bool:
 
 
 @router.get("/api/dashboards")
+@scope_exempt("user-owned dashboard, owner-scoped; holds no host data")
 async def list_dashboards_api(request: Request):
     session = _get_session(request)
     # Non-admin users see only their own dashboards; admins and API-token
@@ -77,6 +90,7 @@ async def list_dashboards_api(request: Request):
 
 
 @router.post("/api/dashboards", status_code=201)
+@scope_exempt("user-owned dashboard, owner-scoped; holds no host data")
 async def create_dashboard_api(payload: DashboardCreate, request: Request):
     user = getattr(request.state, "user", None) or {}
     owner = user.get("username", "") if isinstance(user, dict) else ""
@@ -92,6 +106,7 @@ async def create_dashboard_api(payload: DashboardCreate, request: Request):
 
 
 @router.get("/api/dashboards/{dashboard_id}")
+@scope_exempt("user-owned dashboard, owner-scoped; holds no host data")
 async def get_dashboard_api(dashboard_id: int, request: Request):
     dashboard = await db.get_dashboard(dashboard_id)
     if not dashboard:
@@ -101,6 +116,7 @@ async def get_dashboard_api(dashboard_id: int, request: Request):
 
 
 @router.put("/api/dashboards/{dashboard_id}")
+@scope_exempt("user-owned dashboard, owner-scoped; holds no host data")
 async def update_dashboard_api(dashboard_id: int, payload: DashboardUpdate, request: Request):
     existing = await db.get_dashboard(dashboard_id)
     if not existing:
@@ -117,6 +133,7 @@ async def update_dashboard_api(dashboard_id: int, payload: DashboardUpdate, requ
 
 
 @router.delete("/api/dashboards/{dashboard_id}")
+@scope_exempt("user-owned dashboard, owner-scoped; holds no host data")
 async def delete_dashboard_api(dashboard_id: int, request: Request):
     existing = await db.get_dashboard(dashboard_id)
     if not existing:
@@ -132,6 +149,7 @@ async def delete_dashboard_api(dashboard_id: int, request: Request):
 
 
 @router.post("/api/dashboards/{dashboard_id}/panels", status_code=201)
+@scope_exempt("user-owned dashboard, owner-scoped; holds no host data")
 async def create_panel_api(dashboard_id: int, payload: PanelCreate, request: Request):
     existing = await db.get_dashboard(dashboard_id)
     if not existing:
@@ -152,12 +170,14 @@ async def create_panel_api(dashboard_id: int, payload: PanelCreate, request: Req
 
 
 @router.put("/api/dashboards/{dashboard_id}/panels/{panel_id}")
+@scope_exempt("user-owned dashboard, owner-scoped; holds no host data")
 async def update_panel_api(dashboard_id: int, panel_id: int, payload: PanelUpdate, request: Request):
     existing = await db.get_dashboard(dashboard_id)
     if not existing:
         raise HTTPException(status_code=404, detail="Dashboard not found")
     await require_owner_or_admin(request, existing.get("owner"))
     updated = await db.update_dashboard_panel(
+        dashboard_id,
         panel_id,
         title=payload.title,
         chart_type=payload.chart_type,
@@ -174,12 +194,13 @@ async def update_panel_api(dashboard_id: int, panel_id: int, payload: PanelUpdat
 
 
 @router.delete("/api/dashboards/{dashboard_id}/panels/{panel_id}")
+@scope_exempt("user-owned dashboard, owner-scoped; holds no host data")
 async def delete_panel_api(dashboard_id: int, panel_id: int, request: Request):
     existing = await db.get_dashboard(dashboard_id)
     if not existing:
         raise HTTPException(status_code=404, detail="Dashboard not found")
     await require_owner_or_admin(request, existing.get("owner"))
-    deleted = await db.delete_dashboard_panel(panel_id)
+    deleted = await db.delete_dashboard_panel(dashboard_id, panel_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Panel not found")
     return {"status": "deleted"}
@@ -196,7 +217,9 @@ _BW_RANGE_MAP = {
 
 
 @router.get("/api/dashboard/top-interfaces")
+@scoped("list")
 async def dashboard_top_interfaces_api(
+    request: Request,
     range: str = Query(default="6h"),
     limit: int = Query(default=5, ge=1, le=20),
 ):
@@ -216,7 +239,7 @@ async def dashboard_top_interfaces_api(
     start_dt = datetime.now(UTC) - range_to_delta.get(range, timedelta(hours=6))
     start_str = start_dt.strftime("%Y-%m-%d %H:%M:%S")
 
-    tops = await db.get_top_interfaces_by_bandwidth(start=start_str, limit=limit)
+    tops = await db.get_top_interfaces_by_bandwidth(start=start_str, limit=limit, **await group_filter(request))
 
     # Fetch every top interface's series in ONE windowed query instead of the
     # old N+1 (one query_interface_ts per interface). Results come back grouped
@@ -253,12 +276,21 @@ async def dashboard_top_interfaces_api(
 
 
 @router.get("/api/annotations")
+@scoped("host")
 async def get_annotations_api(
+    request: Request,
     host_id: int | None = Query(default=None),
     start: str | None = Query(default=None),
     end: str | None = Query(default=None),
     categories: str = Query(default="deployment,config,alert"),
 ):
+    """Deployment, config and alert events from the audit log (of one host
+    with ``host_id``). A caller limited to selected inventory groups gets the
+    events of one host it may read only: the fleet-wide feed is empty."""
+    if (await request_scope(request)).restricted:
+        if host_id is None:
+            return {"annotations": []}
+        await require_object_host(request, host_id, not_found=HOST_NOT_FOUND)
     cat_list = [c.strip() for c in categories.split(",") if c.strip()]
     annotations = await db.get_annotations_in_range(
         host_id=host_id,

@@ -3,6 +3,7 @@ import { FormEvent, useId, useState } from 'react';
 import { Callout } from '@/components/Callout';
 import { FieldError } from '@/components/FieldError';
 import { Modal } from '@/components/Modal';
+import { RecordKindSelect } from '@/components/RecordKindSelect';
 import { TenantSelect } from '@/components/TenantSelect';
 import { useCreateIpamPrefix } from '@/api/ipam';
 import { serverFieldErrors } from '@/lib/serverFieldErrors';
@@ -18,6 +19,7 @@ export function DefineSubnetModal({ onClose }: Props) {
   const [description, setDescription] = useState('');
   const [vrf, setVrf] = useState('');
   const [tenantId, setTenantId] = useState<number | null>(null);
+  const [namespaceId, setNamespaceId] = useState<number | null>(null);
   const [subnetError, setSubnetError] = useState<string | null>(null);
   // Messages the server gave for the description and VRF (data validation rules).
   const [serverErrors, setServerErrors] = useState<Record<string, string>>({});
@@ -36,6 +38,7 @@ export function DefineSubnetModal({ onClose }: Props) {
         description: description.trim(),
         vrf: vrf.trim(),
         tenant_id: tenantId,
+        namespace_id: namespaceId,
       });
       onClose();
     } catch (err) {
@@ -125,6 +128,19 @@ export function DefineSubnetModal({ onClose }: Props) {
           onChange={(v) => {
             setTenantId(v);
             setServerErrors((prev) => ({ ...prev, tenant_id: '' }));
+          }}
+        />
+        <RecordKindSelect
+          id={`${formId}-namespace`}
+          kind="namespace"
+          label="Namespace"
+          noneLabel="The VRF's namespace (Global for none)"
+          value={namespaceId}
+          help="A subnet is unique per namespace and VRF; the same one may exist in another namespace."
+          error={serverErrors.namespace_id}
+          onChange={(v) => {
+            setNamespaceId(v);
+            setServerErrors((prev) => ({ ...prev, namespace_id: '' }));
           }}
         />
       </form>

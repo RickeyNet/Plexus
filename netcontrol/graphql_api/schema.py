@@ -1,4 +1,6 @@
-"""The read-only GraphQL schema: inventory and IPAM objects and their relations.
+"""The read-only GraphQL schema: inventory and IPAM objects and their relations,
+and the root ``Query`` (with ``models.ModelQuery`` merged in for the other
+object models; see ``netcontrol.graphql_api.models``).
 
 Every type is an allow-list of columns: credentials, encrypted fields, SNMP
 communities and profiles, API keys, cloud instance ids, configuration text
@@ -24,62 +26,21 @@ from typing import Any
 import routes.database as db
 import strawberry
 from strawberry.extensions import MaskErrors
+from strawberry.tools import merge_types
 from strawberry.types import Info
 
 from netcontrol.dynamic_groups import resolve_hosts
-from netcontrol.graphql_api.context import GraphQLClientError, GraphQLContext, network_of
-
-DEFAULT_LIMIT = 100
-
-
-def _ctx(info: Info) -> GraphQLContext:
-    return info.context
-
-
-def _text(row: dict, key: str) -> str:
-    value = row.get(key)
-    return "" if value is None else str(value)
-
-
-def _opt_int(row: dict, key: str) -> int | None:
-    value = row.get(key)
-    return int(value) if value is not None and str(value).strip().lstrip("-").isdigit() else None
-
-
-# ── Shared ───────────────────────────────────────────────────────────────────
-
-
-@strawberry.type(description="A tag on a host, inventory group or prefix.")
-class Tag:
-    id: int
-    name: str
-    color: str
-
-
-@strawberry.type(description="A custom field value, as its canonical text.")
-class CustomFieldValue:
-    key: str
-    value: str
-
-
-async def _custom(info: Info, object_type: str, key: str) -> dict:
-    return await _ctx(info).custom_data[object_type].load(key)
-
-
-def _tags(data: dict) -> list[Tag]:
-    return [Tag(id=int(t["id"]), name=t["name"], color=t["color"]) for t in data["tags"]]
-
-
-def _fields(data: dict) -> list[CustomFieldValue]:
-    return [CustomFieldValue(key=k, value=v) for k, v in data["fields"].items()]
-
+from netcontrol.graphql_api import models
+from netcontrol.graphql_api.common import DEFAULT_LIMIT, CustomData, _ctx, _opt_int, _text
+from netcontrol.graphql_api.context import GraphQLClientError, network_of
 
 # ── VRF and VLAN records ─────────────────────────────────────────────────────
 
 
 @strawberry.type(name="VRF", description="A VRF record (Settings > IPAM > VRFs).")
-class VRF:
+class VRF(CustomData):
     row: strawberry.Private[dict]
+    custom_type = "vrf"
 
     @strawberry.field
     def id(self) -> int:
@@ -101,6 +62,14 @@ class VRF:
     def origin(self) -> str:
         return _text(self.row, "origin")
 
+    @strawberry.field(description="The route targets this VRF imports and exports.")
+    async def route_targets(self, info: Info) -> models.VrfRouteTargets:
+        return await models.vrf_route_targets(info, int(self.row["id"]))
+
+    @strawberry.field
+    async def namespace(self, info: Info) -> models.Namespace | None:
+        return await models.namespace_of(info, self.row.get("namespace_id"))
+
     @strawberry.field(description="The IPAM prefixes of this VRF.")
     async def prefixes(self, info: Info, limit: int | None = None, offset: int = 0) -> list[Prefix]:
         ctx = _ctx(info)
@@ -109,8 +78,9 @@ class VRF:
 
 
 @strawberry.type(name="VLAN", description="A VLAN record of a site or of no site.")
-class VLAN:
+class VLAN(CustomData):
     row: strawberry.Private[dict]
+    custom_type = "vlan"
 
     @strawberry.field
     def id(self) -> int:
@@ -140,6 +110,11 @@ class VLAN:
     def site_name(self) -> str | None:
         site = self.row.get("site")
         return str(site["name"]) if site else None
+
+    @strawberry.field
+    async def vlan_group(self, info: Info) -> models.VlanGroup | None:
+        row = await models._row(info, "ipam", "vlan_group", self.row.get("vlan_group_id"))
+        return models.make(models.VlanGroup, row) if row else None
 
     @strawberry.field(description="The IPAM prefixes whose VLAN resolves to this record.")
     async def prefixes(self, info: Info, limit: int | None = None, offset: int = 0) -> list[Prefix]:
@@ -216,8 +191,13 @@ class IPAddress:
 
 
 @strawberry.type(description="An IPAM prefix (local or synced from an IPAM source).")
-class Prefix:
+class Prefix(CustomData):
     row: strawberry.Private[dict]
+    custom_type = "prefix"
+
+    def custom_row(self) -> dict:
+        """A prefix's custom data is keyed by ``subnet|vrf``."""
+        return {**self.row, "id": _prefix_key(self.row)}
 
     @strawberry.field
     def id(self) -> int:
@@ -271,6 +251,14 @@ class Prefix:
     async def vlan(self, info: Info) -> VLAN | None:
         return await _vlan_by_id(info, (await _ctx(info).prefix_vlan_ids()).get(int(self.row["id"])))
 
+    @strawberry.field
+    async def namespace(self, info: Info) -> models.Namespace | None:
+        return await models.namespace_of(info, self.row.get("namespace_id"))
+
+    @strawberry.field(description="The most specific aggregate that holds this prefix.")
+    async def aggregate(self, info: Info) -> models.Aggregate | None:
+        return await models.aggregate_of(info, str(self.row["_net"]))
+
     @strawberry.field(description="The most specific other prefix of the same VRF that contains this one.")
     async def parent(self, info: Info) -> Prefix | None:
         if self.row["_parent"] is None:
@@ -289,14 +277,6 @@ class Prefix:
         ctx = _ctx(info)
         rows = await ctx.allocations.load((int(self.row["source_id"]), str(self.row["subnet"])))
         return [IPAddress(row=r) for r in ctx.page(rows, limit, offset, bounded=False)]
-
-    @strawberry.field
-    async def tags(self, info: Info) -> list[Tag]:
-        return _tags(await _custom(info, "prefix", _prefix_key(self.row)))
-
-    @strawberry.field
-    async def custom_fields(self, info: Info) -> list[CustomFieldValue]:
-        return _fields(await _custom(info, "prefix", _prefix_key(self.row)))
 
 
 def _prefix_key(row: dict) -> str:
@@ -456,8 +436,9 @@ class ConfigBackup:
 
 
 @strawberry.type(description="A device in inventory.")
-class Host:
+class Host(CustomData):
     row: strawberry.Private[dict]
+    custom_type = "host"
 
     @strawberry.field
     def id(self) -> int:
@@ -549,18 +530,107 @@ class Host:
         row = (await ctx.latest_backups()).get(int(self.row["id"]))
         return ConfigBackup(row=row) if row else None
 
-    @strawberry.field
-    async def tags(self, info: Info) -> list[Tag]:
-        return _tags(await _custom(info, "host", str(self.row["id"])))
+    # Device model, location, DCIM, circuits, virtualization, routing and
+    # lifecycle (types in netcontrol.graphql_api.models).
+
+    @strawberry.field(description="The device type record (manufacturer and model).")
+    async def hardware(self, info: Info) -> models.DeviceType | None:
+        row = await models._row(info, None, "device_type", self.row.get("device_type_id"))
+        return models.make(models.DeviceType, row) if row else None
 
     @strawberry.field
-    async def custom_fields(self, info: Info) -> list[CustomFieldValue]:
-        return _fields(await _custom(info, "host", str(self.row["id"])))
+    async def role(self, info: Info) -> models.DeviceRole | None:
+        row = await models._row(info, None, "device_role", self.row.get("role_id"))
+        return models.make(models.DeviceRole, row) if row else None
+
+    @strawberry.field
+    async def lifecycle_status(self, info: Info) -> models.LifecycleStatus | None:
+        row = await models._row(info, None, "lifecycle_status", self.row.get("lifecycle_status_id"))
+        return models.make(models.LifecycleStatus, row) if row else None
+
+    @strawberry.field
+    async def site(self, info: Info) -> models.Site | None:
+        row = await models._row(info, models.ORGANIZATION, "site", self.row.get("site_id"))
+        return models.make(models.Site, row) if row else None
+
+    @strawberry.field
+    async def tenant(self, info: Info) -> models.Tenant | None:
+        row = await models._row(info, models.ORGANIZATION, "tenant", self.row.get("tenant_id"))
+        return models.make(models.Tenant, row) if row else None
+
+    @strawberry.field
+    async def rack(self, info: Info) -> models.Rack | None:
+        row = await models._row(info, models.DCIM, "rack", self.row.get("rack_id"))
+        return models.make(models.Rack, row) if row else None
+
+    @strawberry.field(description="The lowest rack unit the device occupies (null: not mounted).")
+    def rack_position(self) -> int | None:
+        return _opt_int(self.row, "rack_position")
+
+    @strawberry.field(description="front or rear ('' when not mounted).")
+    def rack_face(self) -> str:
+        return _text(self.row, "rack_face")
+
+    @strawberry.field
+    async def front_ports(self, info: Info) -> list[models.FrontPort] | None:
+        return [
+            models.make(models.FrontPort, r) for r in await models._host_records(info, "front_port", self.row["id"])
+        ]
+
+    @strawberry.field
+    async def rear_ports(self, info: Info) -> list[models.RearPort] | None:
+        return [models.make(models.RearPort, r) for r in await models._host_records(info, "rear_port", self.row["id"])]
+
+    @strawberry.field
+    async def modules(self, info: Info) -> list[models.Module] | None:
+        return [models.make(models.Module, r) for r in await models._host_records(info, "module", self.row["id"])]
+
+    @strawberry.field
+    async def power_ports(self, info: Info) -> list[models.PowerPort] | None:
+        return [
+            models.make(models.PowerPort, r) for r in await models._host_records(info, "power_port", self.row["id"])
+        ]
+
+    @strawberry.field
+    async def power_outlets(self, info: Info) -> list[models.PowerOutlet] | None:
+        rows = await models._host_records(info, "power_outlet", self.row["id"])
+        return [models.make(models.PowerOutlet, r) for r in rows]
+
+    @strawberry.field(description="The cables with an end on this host.")
+    async def cables(self, info: Info) -> list[models.Cable] | None:
+        return await models.host_cables(info, int(self.row["id"]))
+
+    @strawberry.field(description="The circuit terminations on this host.")
+    async def circuit_terminations(self, info: Info) -> list[models.CircuitTermination] | None:
+        return await models.host_terminations(info, int(self.row["id"]))
+
+    @strawberry.field(description="The clusters this host is a hypervisor of.")
+    async def clusters(self, info: Info) -> list[models.Cluster] | None:
+        return await models.host_clusters(info, int(self.row["id"]))
+
+    @strawberry.field
+    async def routing_instances(self, info: Info) -> list[models.RoutingInstance] | None:
+        rows = await models._rows(info, models.ROUTING, "routing_instance", "host_id", self.row["id"])
+        return [models.make(models.RoutingInstance, r) for r in rows]
+
+    @strawberry.field
+    async def bgp_peerings(self, info: Info) -> list[models.BgpPeering] | None:
+        rows = await models._rows(info, models.ROUTING, "bgp_peering", "host_id", self.row["id"])
+        return [models.make(models.BgpPeering, r) for r in rows]
+
+    @strawberry.field(description="The end-of-life notices that apply to this host.")
+    async def hardware_notices(self, info: Info) -> list[models.HardwareNotice] | None:
+        return await models.host_notices(info, int(self.row["id"]))
+
+    @strawberry.field(description="The support contracts covering this host.")
+    async def support_contracts(self, info: Info) -> list[models.SupportContract] | None:
+        return await models.host_contracts(info, int(self.row["id"]))
 
 
 @strawberry.type(description="An inventory group.")
-class Group:
+class Group(CustomData):
     row: strawberry.Private[dict]
+    custom_type = "group"
 
     @strawberry.field
     def id(self) -> int:
@@ -603,14 +673,6 @@ class Group:
         if name:
             rows = [h for h in rows if name.lower() in _text(h, "hostname").lower()]
         return [Host(row=r) for r in ctx.page(rows, limit, offset, bounded=False)]
-
-    @strawberry.field
-    async def tags(self, info: Info) -> list[Tag]:
-        return _tags(await _custom(info, "group", str(self.row["id"])))
-
-    @strawberry.field
-    async def custom_fields(self, info: Info) -> list[CustomFieldValue]:
-        return _fields(await _custom(info, "group", str(self.row["id"])))
 
 
 # ── Filters ──────────────────────────────────────────────────────────────────
@@ -680,7 +742,7 @@ class DynamicGroup:
 
 
 @strawberry.type
-class Query:
+class InventoryQuery:
     @strawberry.field(description="Dynamic groups (saved host filters), by name.")
     async def dynamic_groups(
         self, info: Info, name: str | None = None, limit: int = DEFAULT_LIMIT, offset: int = 0
@@ -856,6 +918,8 @@ def _should_mask(error: Any) -> bool:
     original = getattr(error, "original_error", None)
     return original is not None and not isinstance(original, GraphQLClientError)
 
+
+Query = merge_types("Query", (InventoryQuery, models.ModelQuery, models.IpamModelQuery))
 
 schema = strawberry.Schema(
     query=Query,

@@ -4,11 +4,17 @@ ports and outlets, cables, cable traces and rack power.
 
 ``router`` is registered in ``app.py`` behind ``require_auth`` and
 ``require_feature_method("dcim")``: read with ``dcim``, change with
-``dcim.write``. DCIM is not enrolled in object scope (see
-``netcontrol.object_scope``), so accounts limited to selected inventory
-groups never reach it. Placing a device also works through the host edit
-(``PUT /api/hosts/{id}`` with ``rack_id``/``rack_position``/``rack_face``),
-which shares ``check_host_placement`` with this router.
+``dcim.write``. Object scope (``netcontrol.object_scope``): rack roles are
+shared; racks, reservations, power panels and feeds follow their tenant and
+site, cables their tenant and the hosts and sites of their ends, and ports,
+modules, outlets and placements their host. A scoped caller's rack
+elevation shows other devices as anonymous occupied units, a trace stops
+(``status`` ``restricted``) before an endpoint they may not see, and a
+reference to a record they may not see answers like an unknown id.
+
+Placing a device also works through the host edit (``PUT
+/api/hosts/{id}`` with ``rack_id``/``rack_position``/``rack_face``), which
+shares ``check_host_placement`` with this router.
 
 Every write is audited (category ``dcim``) and recorded in the change log
 by the storage layer. Errors: 404 unknown record, 409 a taken name or an
@@ -26,10 +32,11 @@ import routes.database as db
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field, create_model
 
-from netcontrol.custom_fields import TEXT_MAX, TagColor
+from netcontrol.custom_fields import OBJECT_TYPE_SPECS, TEXT_MAX, TagColor
 from netcontrol.dcim import (
     CABLE_STATUSES,
     CABLE_TYPES,
+    CONSOLE_PORT_TYPES,
     ENDPOINT_TYPES,
     FACES,
     FEED_LEGS,
@@ -44,6 +51,7 @@ from netcontrol.dcim import (
     RACK_WIDTHS,
     CableStatus,
     CableType,
+    ConsolePortType,
     EndpointType,
     Face,
     FeedLeg,
@@ -58,6 +66,18 @@ from netcontrol.dcim import (
     RackWidth,
     pairing_error,
 )
+from netcontrol.object_scope import (
+    can_access,
+    filter_rows,
+    readable_host_ids,
+    request_scope,
+    require_host,
+    require_new_row,
+    require_row,
+    scope_exempt,
+    scoped,
+)
+from netcontrol.routes.custom_fields import custom_list, with_custom_data
 from netcontrol.routes.shared import _audit, _corr_id, _session_user
 
 router = APIRouter()
@@ -169,6 +189,13 @@ class PowerOutletCreate(BaseModel):
     name: str = _Name
     power_port_id: int | None = None
     feed_leg: FeedLeg = ""
+    description: str = _Text
+
+
+class ConsolePortCreate(BaseModel):
+    host_id: int
+    name: str = _Name
+    type: ConsolePortType = "rj-45"
     description: str = _Text
 
 
@@ -295,6 +322,245 @@ def _validate_power_port(values: dict, current: dict | None = None) -> None:
         raise _invalid("The allocated draw cannot exceed the maximum draw.", {"allocated_draw": "Above the maximum."})
 
 
+# ── Object scope ─────────────────────────────────────────────────────────────
+
+# The scope model of each record kind (``netcontrol.object_scope``); a kind
+# with a ``host_id`` follows its host.
+_SCOPE_MODELS: dict[str, str] = {
+    "rack_role": "rack_role",
+    "rack": "rack",
+    "rack_reservation": "rack_reservation",
+    "power_panel": "power_panel",
+    "power_feed": "power_feed",
+}
+# Reference fields whose record a scoped caller must be able to read.
+_SCOPED_REFS: dict[str, tuple[str, str]] = {
+    "rack_id": ("rack", "rack"),
+    "power_panel_id": ("power_panel", "power_panel"),
+    "rear_port_id": ("rear_port", "host_record"),
+    "power_port_id": ("power_port", "host_record"),
+}
+
+
+def _scope_model(kind: str) -> str:
+    return _SCOPE_MODELS.get(kind, "host_record")
+
+
+async def _check_ref_scope(request: Request, values: dict) -> None:
+    """For a scoped caller: 422 (as for an unknown id) when ``values``
+    names a rack, panel, rear port or power port they may not read."""
+    if (await request_scope(request)).unrestricted:
+        return
+    errors: dict[str, str] = {}
+    for key, (kind, model) in _SCOPED_REFS.items():
+        value = values.get(key)
+        if value is None:
+            continue
+        if not await can_access(request, model, await db.get_dcim_record(kind, int(value))):
+            errors[key] = f"No record with id {value}."
+    if errors:
+        raise _invalid("Unknown id: " + ", ".join(sorted(errors)) + ".", errors)
+
+
+async def _scope_keys_of(kind: str, values: dict) -> dict:
+    """The scope key fields of a ``kind`` record holding ``values`` (a
+    reservation takes its rack's site, a feed its panel's)."""
+    if kind == "rack_reservation":
+        rack = await db.get_dcim_record("rack", int(values["rack_id"])) if values.get("rack_id") else None
+        return {"tenant_id": values.get("tenant_id"), "site_id": (rack or {}).get("site_id")}
+    if kind == "power_feed":
+        panel_id = values.get("power_panel_id")
+        panel = await db.get_dcim_record("power_panel", int(panel_id)) if panel_id else None
+        return {"site_id": (panel or {}).get("site_id")}
+    if kind == "rack":
+        return {"tenant_id": values.get("tenant_id"), "site_id": values.get("site_id")}
+    if kind == "power_panel":
+        return {"site_id": values.get("site_id")}
+    if kind == "rack_role":
+        return {}
+    return {"host_id": values.get("host_id")}
+
+
+async def _scope_any_of(request: Request, model: str) -> dict[str, frozenset[int]]:
+    """``list_dcim_records(any_of=...)`` for a scoped caller: the readable
+    ids of each key of ``model`` as its ``<key>_id`` filter."""
+    allowed = await (await request_scope(request)).keys(model)
+    return {f"{attr}_id": ids for attr, ids in allowed.items()}
+
+
+async def _scoped_rack_roles(request: Request, roles: list[dict]) -> list[dict]:
+    """For a scoped caller: each role's ``rack_count`` over the racks they may read."""
+    racks = await db.list_dcim_records("rack", any_of=await _scope_any_of(request, "rack"))
+    counts: dict[int, int] = {}
+    for rack in racks:
+        if rack.get("role_id") is not None:
+            counts[int(rack["role_id"])] = counts.get(int(rack["role_id"]), 0) + 1
+    for role in roles:
+        role["rack_count"] = counts.get(int(role["id"]), 0)
+    return roles
+
+
+class _EndpointScope:
+    """Which cable endpoints a scoped caller may see (``None`` scope: all),
+    with the site of feed and circuit termination ends, cached per request."""
+
+    def __init__(self, request: Request, hosts: frozenset[int] | None) -> None:
+        self.request = request
+        self.hosts = hosts
+        self._visible: dict[tuple, bool] = {}
+        self._sites: dict[tuple, int | None] = {}
+
+    async def site_of(self, endpoint: dict) -> int | None:
+        kind, rid = endpoint.get("type"), endpoint.get("id")
+        if rid is None or kind not in ("power_feed", "circuit_termination"):
+            return None
+        key = (kind, int(rid))
+        if key not in self._sites:
+            if kind == "power_feed":
+                row = await db.get_dcim_record("power_feed", int(rid))
+            else:
+                row = await db.get_circuit_termination(int(rid))
+            site = (row or {}).get("site_id")
+            self._sites[key] = int(site) if site is not None else None
+        return self._sites[key]
+
+    async def visible(self, endpoint: dict | None) -> bool:
+        if self.hosts is None:
+            return True
+        if not endpoint:
+            return False
+        if endpoint.get("host_id") is not None:
+            return int(endpoint["host_id"]) in self.hosts
+        kind, rid = endpoint.get("type"), endpoint.get("id")
+        if rid is None:
+            return False
+        key = (kind, int(rid))
+        if key not in self._visible:
+            if kind == "power_feed":
+                row = await db.get_dcim_record("power_feed", int(rid))
+                ok = await can_access(self.request, "power_feed", row)
+            elif kind == "circuit_termination":
+                row = await db.get_circuit_termination(int(rid))
+                if row is not None and "circuit_tenant_id" not in row:
+                    circuit = await db.get_circuit(int(row["circuit_id"])) if row.get("circuit_id") else None
+                    row = {**row, "circuit_tenant_id": (circuit or {}).get("tenant_id")}
+                ok = await can_access(self.request, "circuit_termination", row)
+            else:
+                ok = False
+            self._visible[key] = ok
+        return self._visible[key]
+
+    async def cable_keys(self, cable: dict) -> dict:
+        """``cable`` with ``scope_host_ids`` and ``scope_site_ids`` from its ends."""
+        hosts, sites = [], []
+        for side in ("a", "b"):
+            end = cable.get(side) or {
+                "type": cable.get(f"{side}_type"),
+                "id": cable.get(f"{side}_id"),
+                "host_id": cable.get(f"{side}_host_id"),
+            }
+            if end.get("host_id") is not None:
+                hosts.append(int(end["host_id"]))
+            site = await self.site_of(end)
+            if site is not None:
+                sites.append(site)
+        return {**cable, "scope_host_ids": hosts, "scope_site_ids": sites}
+
+
+async def _endpoint_scope(request: Request) -> _EndpointScope:
+    return _EndpointScope(request, await readable_host_ids(request))
+
+
+def _strip_cable_keys(cable: dict) -> dict:
+    cable.pop("scope_host_ids", None)
+    cable.pop("scope_site_ids", None)
+    return cable
+
+
+async def _visible_cables(request: Request, cables: list[dict]) -> list[dict]:
+    """The cables a scoped caller may read (all for an unrestricted caller)."""
+    scope = await _endpoint_scope(request)
+    if scope.hosts is None:
+        return cables
+    keyed = [await scope.cable_keys(c) for c in cables]
+    return [_strip_cable_keys(c) for c in await filter_rows("cable", keyed, request)]
+
+
+async def _require_cable(request: Request, cable: dict | None, *, write: bool = False) -> dict:
+    """The cable; 404 when unknown or outside the caller's read scope, 403
+    on ``write`` when not writable."""
+    if cable is None or (await request_scope(request)).unrestricted:
+        return _found(cable, "Cable")
+    keyed = await (await _endpoint_scope(request)).cable_keys(cable)
+    await require_row(request, "cable", keyed, write=write, not_found="Cable not found")
+    return cable
+
+
+async def _check_new_cable(request: Request, values: dict, current: dict | None) -> None:
+    """For a scoped caller: 422 (as for an unknown record) when a new end of
+    the cable is one they may not see; 403 unless they may change a cable
+    with the resulting tenant and ends."""
+    scope = await _endpoint_scope(request)
+    if scope.hosts is None:
+        return
+    for side in ("a", "b"):
+        if side in values and not await scope.visible(values[side]):
+            raise _invalid(f"Unknown endpoint on side {side.upper()}.", {side: "Unknown endpoint."})
+    merged = {**(current or {}), **values}
+    if "tenant_id" not in values and current is not None:
+        merged["tenant_id"] = current.get("tenant_id")
+    keyed = await scope.cable_keys({"a": merged.get("a") or {}, "b": merged.get("b") or {}})
+    await require_new_row(request, "cable", {**keyed, "tenant_id": merged.get("tenant_id")})
+
+
+def _hide_device(block: dict) -> None:
+    block["host_id"] = None
+    block["name"] = ""
+
+
+async def _scoped_elevation(request: Request, drawing: dict) -> dict:
+    """For a scoped caller: devices they may not read become anonymous
+    occupied units (no ``host_id`` or name), unmounted ones are left out,
+    and reservations they may not read lose their user and description."""
+    hosts = await readable_host_ids(request)
+    if hosts is None:
+        return drawing
+    rack = drawing.get("rack") or {}
+    records = await db.list_dcim_records("rack_reservation", {"rack_id": rack.get("id")})
+    readable = {int(r["id"]) for r in await filter_rows("rack_reservation", records, request)}
+    for blocks in (drawing.get("faces") or {}).values():
+        for block in blocks:
+            if block.get("kind") == "device" and (block.get("host_id") is None or int(block["host_id"]) not in hosts):
+                _hide_device(block)
+            elif block.get("kind") == "reservation" and int(block.get("reservation_id") or 0) not in readable:
+                block.update({"reservation_id": None, "description": "", "user": ""})
+    drawing["unmounted"] = [
+        d for d in drawing.get("unmounted") or [] if d.get("host_id") is not None and int(d["host_id"]) in hosts
+    ]
+    drawing["reservations"] = [r for r in drawing.get("reservations") or [] if int(r.get("id") or 0) in readable]
+    return drawing
+
+
+async def _scoped_trace(request: Request, result: dict) -> dict:
+    """For a scoped caller: the trace up to (not including) the first hop
+    that touches an endpoint they may not see; it then ends ``restricted``
+    with no destination."""
+    scope = await _endpoint_scope(request)
+    if scope.hosts is None:
+        return result
+    for index, step in enumerate(result.get("steps") or []):
+        if not (await scope.visible(step.get("near")) and await scope.visible(step.get("far"))):
+            result["steps"] = result["steps"][:index]
+            result.update({"status": "restricted", "is_loop": False, "destination": None})
+            result.pop("power_panel", None)
+            break
+    else:
+        if result.get("destination") is not None and not await scope.visible(result["destination"]):
+            result.update({"status": "restricted", "destination": None})
+            result.pop("power_panel", None)
+    return result
+
+
 # ── Resources ────────────────────────────────────────────────────────────────
 
 
@@ -377,6 +643,14 @@ _RESOURCES: tuple[_Resource, ...] = (
         fixed=("host_id",),
         filters=("host_id", "power_port_id"),
     ),
+    _Resource(
+        "console_port",
+        "console-ports",
+        "Console port",
+        ConsolePortCreate,
+        fixed=("host_id",),
+        filters=("host_id", "type"),
+    ),
 )
 
 _INT_FILTERS = frozenset(
@@ -422,24 +696,51 @@ def _register(res: _Resource) -> None:
     nullable = _nullable(res.create)
     base = f"{PREFIX}/{res.path}"
 
+    model = _scope_model(res.kind)
+    not_found = f"{res.label} not found"
+    key_fields = ("tenant_id", "site_id", "rack_id", "power_panel_id", "host_id")
+
+    @scoped("list")
     async def list_records(request: Request, q: str = Query("", max_length=200)) -> list[dict]:
-        return await db.list_dcim_records(res.kind, _filters_of(request, res.filters), q.strip())
+        filters = _filters_of(request, res.filters)
+        if (await request_scope(request)).unrestricted:
+            rows = await db.list_dcim_records(res.kind, filters, q.strip())
+        elif model == "host_record":
+            rows = await db.list_dcim_records(res.kind, filters, q.strip(), host_ids=await readable_host_ids(request))
+        elif model == "rack_role":
+            rows = await _scoped_rack_roles(request, await db.list_dcim_records(res.kind, filters, q.strip()))
+        else:
+            rows = await db.list_dcim_records(res.kind, filters, q.strip(), any_of=await _scope_any_of(request, model))
+        return await custom_list(res.kind, rows, request) if res.kind in OBJECT_TYPE_SPECS else rows
 
-    async def get_record(record_id: int) -> dict:
-        return _found(await db.get_dcim_record(res.kind, record_id), res.label)
+    async def _record(request: Request, record_id: int, *, write: bool = False) -> dict:
+        record = _found(await db.get_dcim_record(res.kind, record_id), res.label)
+        if (await request_scope(request)).unrestricted:
+            return record
+        return await require_row(request, model, record, write=write, not_found=not_found)
 
+    @scoped(model)
+    async def get_record(record_id: int, request: Request) -> dict:
+        record = await _record(request, record_id)
+        return await with_custom_data(res.kind, record) if res.kind in OBJECT_TYPE_SPECS else record
+
+    @scoped("create")
     async def create_record(body: create_model_, request: Request) -> dict:  # type: ignore[valid-type]
         values = body.model_dump()  # type: ignore[attr-defined]
         _clean_names(values, res.names)
         if res.kind == "power_port":
             _validate_power_port(values)
         await _check_refs(values)
+        if (await request_scope(request)).restricted:
+            await _check_ref_scope(request, values)
+            await require_new_row(request, model, await _scope_keys_of(res.kind, values))
         record = await _write(db.create_dcim_record(res.kind, values, _session_user(request)))
         await _audit_write(request, f"{res.kind}.create", _summary(res, record))
         return record
 
+    @scoped(model)
     async def update_record(record_id: int, body: update_model, request: Request) -> dict:  # type: ignore[valid-type]
-        current = _found(await db.get_dcim_record(res.kind, record_id), res.label)
+        current = await _record(request, record_id, write=True)
         values = body.model_dump(exclude_unset=True)  # type: ignore[attr-defined]
         nulls = [k for k, v in values.items() if v is None and k not in nullable]
         if nulls:
@@ -448,14 +749,19 @@ def _register(res: _Resource) -> None:
         if res.kind == "power_port":
             _validate_power_port(values, current)
         await _check_refs(values)
+        if (await request_scope(request)).restricted:
+            await _check_ref_scope(request, values)
+            if any(k in values and values[k] != current.get(k) for k in key_fields):
+                await require_new_row(request, model, await _scope_keys_of(res.kind, {**current, **values}))
         record = _found(
             await _write(db.update_dcim_record(res.kind, record_id, values, _session_user(request))), res.label
         )
         await _audit_write(request, f"{res.kind}.update", _summary(res, record))
         return record
 
+    @scoped(model)
     async def delete_record(record_id: int, request: Request) -> dict:
-        current = _found(await db.get_dcim_record(res.kind, record_id), res.label)
+        current = await _record(request, record_id, write=True)
         usage = await db.count_dcim_usage(res.kind, record_id)
         if usage:
             what = ", ".join(f"{n} {label}" for label, n in usage.items())
@@ -475,6 +781,7 @@ def _register(res: _Resource) -> None:
 
 
 @router.get(f"{PREFIX}/choices")
+@scope_exempt("static choice lists")
 async def dcim_choices() -> dict:
     """The fixed choice sets of every DCIM field, for forms and filters."""
     return {
@@ -492,11 +799,14 @@ async def dcim_choices() -> dict:
         "cable_types": list(CABLE_TYPES),
         "length_units": list(LENGTH_UNITS),
         "endpoint_types": list(ENDPOINT_TYPES),
+        "console_port_types": list(CONSOLE_PORT_TYPES),
     }
 
 
 @router.get(f"{PREFIX}/trace")
+@scoped("trace")
 async def trace_endpoint(
+    request: Request,
     type: EndpointType = Query(...),  # noqa: A002 - the API's parameter name
     id: int | None = Query(None),  # noqa: A002
     host_id: int | None = Query(None),
@@ -506,35 +816,52 @@ async def trace_endpoint(
     power, outlets up to their PDU inlet) to the far end; see
     ``netcontrol.dcim.trace`` for the result."""
     endpoint = await db.resolve_cable_endpoint({"type": type, "id": id, "host_id": host_id, "name": name.strip()})
-    if endpoint is None:
+    if endpoint is None or not await (await _endpoint_scope(request)).visible(endpoint):
         raise HTTPException(status_code=404, detail="Endpoint not found")
-    return await db.trace_cable_endpoint(endpoint)
+    return await _scoped_trace(request, await db.trace_cable_endpoint(endpoint))
 
 
 @router.get(f"{PREFIX}/racks/{{rack_id}}/elevation")
-async def rack_elevation(rack_id: int) -> dict:
+@scoped("rack")
+async def rack_elevation(rack_id: int, request: Request) -> dict:
     """Each face of the rack unit by unit: devices, reservations and empty
     units, top first."""
-    return _found(await db.get_rack_elevation(rack_id), "Rack")
+    drawing = _found(await db.get_rack_elevation(rack_id), "Rack")
+    if (await request_scope(request)).unrestricted:
+        return drawing
+    await require_row(request, "rack", drawing.get("rack"), not_found="Rack not found")
+    return await _scoped_elevation(request, drawing)
 
 
 @router.get(f"{PREFIX}/racks/{{rack_id}}/power")
-async def rack_power(rack_id: int) -> dict:
+@scoped("rack")
+async def rack_power(rack_id: int, request: Request) -> dict:
     """The rack's feeds (available watts) against the draw of the devices
-    in it."""
-    _found(await db.get_dcim_record("rack", rack_id), "Rack")
-    return await db.get_rack_power(rack_id)
+    in it. A scoped caller gets the rack's totals but only the ports of
+    devices they may read."""
+    rack = _found(await db.get_dcim_record("rack", rack_id), "Rack")
+    hosts = await readable_host_ids(request)
+    if hosts is None:
+        return await db.get_rack_power(rack_id)
+    await require_row(request, "rack", rack, not_found="Rack not found")
+    power = await db.get_rack_power(rack_id)
+    power["ports"] = [p for p in power.get("ports") or [] if int(p.get("host_id") or 0) in hosts]
+    return power
 
 
 @router.get(f"{PREFIX}/hosts/{{host_id}}")
-async def host_dcim(host_id: int) -> dict:
+@scoped("host")
+async def host_dcim(host_id: int, request: Request) -> dict:
     """A device's rack placement, cables and DCIM record counts."""
+    await require_host(request, host_id)
     return _found(await db.get_host_dcim_summary(host_id), "Host")
 
 
 @router.get(f"{PREFIX}/hosts/{{host_id}}/interfaces")
-async def host_interfaces(host_id: int) -> dict:
+@scoped("host")
+async def host_interfaces(host_id: int, request: Request) -> dict:
     """The interface names known for a device (for cable endpoint pickers)."""
+    await require_host(request, host_id)
     _found(await db.get_host_placement(host_id), "Host")
     return {"interfaces": await db.list_host_interface_names(host_id)}
 
@@ -565,10 +892,13 @@ async def apply_host_placement(host_id: int, values: dict) -> bool:
 
 
 @router.put(f"{PREFIX}/hosts/{{host_id}}/placement")
+@scoped("host")
 async def place_host(host_id: int, body: PlacementBody, request: Request) -> dict:
     """Mount a device in a rack, move it or take it out (``rack_id`` null)."""
+    await require_host(request, host_id, write=True)
     _found(await db.get_host_placement(host_id), "Host")
     values = body.model_dump(exclude_unset=True)
+    await _check_ref_scope(request, {"rack_id": values.get("rack_id")})
     await check_host_placement(host_id, values)
     await apply_host_placement(host_id, values)
     placement = _found(await db.get_host_placement(host_id), "Host")
@@ -637,7 +967,9 @@ def _cable_summary(cable: dict) -> str:
 
 
 @router.get(f"{PREFIX}/cables")
+@scoped("list")
 async def list_cables(
+    request: Request,
     host_id: int | None = Query(None),
     type: str | None = Query(None, max_length=40),  # noqa: A002 - the API's parameter name
     status: str | None = Query(None, max_length=40),
@@ -652,17 +984,25 @@ async def list_cables(
         "tenant_id": tenant_id,
         "endpoint_type": endpoint_type,
     }
-    return await db.list_cables(filters, q.strip())
+    host_ids = await readable_host_ids(request)
+    if host_ids is None:
+        cables = await db.list_cables(filters, q.strip())
+    else:
+        cables = await _visible_cables(request, await db.list_cables(filters, q.strip(), host_ids=host_ids))
+    return await custom_list("cable", cables, request)
 
 
 @router.get(f"{PREFIX}/cables/{{cable_id}}")
-async def get_cable(cable_id: int) -> dict:
-    return _found(await db.get_cable(cable_id), "Cable")
+@scoped("cable")
+async def get_cable(cable_id: int, request: Request) -> dict:
+    return await with_custom_data("cable", await _require_cable(request, await db.get_cable(cable_id)))
 
 
 @router.post(f"{PREFIX}/cables", status_code=201)
+@scoped("create")
 async def create_cable(body: CableCreate, request: Request) -> dict:
     values = await _cable_values(body, None)
+    await _check_new_cable(request, values, None)
     cable_id = await _write(db.create_cable(values, _session_user(request)))
     cable = _found(await db.get_cable(cable_id), "Cable")
     await _audit_write(request, "cable.create", _cable_summary(cable))
@@ -670,9 +1010,12 @@ async def create_cable(body: CableCreate, request: Request) -> dict:
 
 
 @router.put(f"{PREFIX}/cables/{{cable_id}}")
+@scoped("cable")
 async def update_cable(cable_id: int, body: CableUpdate, request: Request) -> dict:  # type: ignore[valid-type]
-    current = _found(await db.get_cable(cable_id), "Cable")
+    current = await _require_cable(request, await db.get_cable(cable_id), write=True)
     values = await _cable_values(body, current)
+    if values:
+        await _check_new_cable(request, values, current)
     if values:
         await _write(db.update_cable(cable_id, values, _session_user(request)))
     cable = _found(await db.get_cable(cable_id), "Cable")
@@ -681,8 +1024,9 @@ async def update_cable(cable_id: int, body: CableUpdate, request: Request) -> di
 
 
 @router.delete(f"{PREFIX}/cables/{{cable_id}}")
+@scoped("cable")
 async def delete_cable(cable_id: int, request: Request) -> dict:
-    current = _found(await db.get_cable(cable_id), "Cable")
+    current = await _require_cable(request, await db.get_cable(cable_id), write=True)
     await db.delete_cable(cable_id)
     await _audit_write(request, "cable.delete", _cable_summary(current))
     return {"ok": True}

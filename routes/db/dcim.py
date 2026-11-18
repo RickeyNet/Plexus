@@ -18,7 +18,7 @@ Timestamps are UTC ``YYYY-MM-DD HH:MM:SS`` text.
 from __future__ import annotations
 
 import json
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -32,6 +32,7 @@ from routes.db.custom_fields import _marks, _now
 __all__ = [
     "DCIM_KINDS",
     "DcimRuleError",
+    "RecordKind",
     "count_dcim_usage",
     "count_site_dcim_records",
     "create_dcim_record",
@@ -42,6 +43,7 @@ __all__ = [
     "host_placement_error",
     "list_dcim_records",
     "missing_dcim_refs",
+    "register_record_kind",
     "set_host_placement",
     "update_dcim_record",
 ]
@@ -212,6 +214,16 @@ _KINDS: dict[str, _Kind] = {
         search=("x.name", "x.description", "h.hostname"),
         unique_message="The device already has a power port named '{name}'.",
     ),
+    "console_port": _Kind(
+        table="console_ports",
+        alias="x",
+        label="console port",
+        select="""SELECT x.*, h.hostname AS host_name FROM console_ports x JOIN hosts h ON h.id = x.host_id""",
+        order="lower(h.hostname), lower(x.name), x.id",
+        filters={"host_id": "x.host_id = ?", "type": "x.type = ?"},
+        search=("x.name", "x.description", "h.hostname"),
+        unique_message="The device already has a console port named '{name}'.",
+    ),
     "power_outlet": _Kind(
         table="power_outlets",
         alias="x",
@@ -258,11 +270,21 @@ async def _select(sql: str, params: tuple = ()) -> list[dict]:
 
 
 async def list_dcim_records(
-    kind: str, filters: dict[str, Any] | None = None, q: str = "", limit: int = LIST_MAX
+    kind: str,
+    filters: dict[str, Any] | None = None,
+    q: str = "",
+    limit: int = LIST_MAX,
+    host_ids: Iterable[int] | None = None,
+    any_of: Mapping[str, Iterable[int]] | None = None,
 ) -> list[dict]:
     """Records of ``kind`` matching every filter (keys of the kind's filter
     set; ``None`` values ignored) and the text ``q`` (any search column,
-    ignoring case)."""
+    ignoring case). ``host_ids`` (kinds with a ``host_id`` filter) keeps
+    the records of those hosts, every one of them (no ``limit``).
+    ``any_of`` (object scope) keeps the records whose value of any of these
+    filter keys (``tenant_id``, ``site_id`` ...; keys the kind cannot
+    filter on are ignored) is one of its ids, every one of them (no
+    ``limit``); none when no key applies."""
     spec = _KINDS[kind]
     clauses: list[str] = []
     params: list[Any] = []
@@ -274,11 +296,32 @@ async def list_dcim_records(
     if q and spec.search:
         clauses.append("(" + " OR ".join(f"lower({c}) LIKE ?" for c in spec.search) + ")")
         params.extend([f"%{q.lower()}%"] * len(spec.search))
+    if host_ids is not None:
+        if "host_id" not in spec.filters:
+            raise ValueError(f"{kind} records have no host")
+        ids = sorted({int(h) for h in host_ids})
+        if not ids:
+            return []
+        clauses.append(f"{spec.alias}.host_id IN ({_marks(ids)})")
+        params.extend(ids)
+    if any_of is not None:
+        parts: list[str] = []
+        for key, values in any_of.items():
+            expr = spec.filters.get(key, "")
+            id_list = sorted({int(v) for v in values})
+            if not id_list or not expr.endswith(" = ?"):
+                continue
+            parts.append(f"{expr.removesuffix(' = ?')} IN ({_marks(id_list)})")
+            params.extend(id_list)
+        if not parts:
+            return []
+        clauses.append("(" + " OR ".join(parts) + ")")
     where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
-    rows = await _select(
-        f"{spec.select}{where} ORDER BY {spec.order} LIMIT ?",  # nosec B608 - fixed clauses, placeholders only
-        (*params, max(1, min(int(limit), LIST_MAX))),
-    )
+    sql = f"{spec.select}{where} ORDER BY {spec.order}"
+    if host_ids is None and any_of is None:
+        sql += " LIMIT ?"
+        params.append(max(1, min(int(limit), LIST_MAX)))
+    rows = await _select(sql, tuple(params))  # nosec B608 - fixed clauses, placeholders only
     return [_shape(spec, r) for r in rows]
 
 
@@ -546,6 +589,36 @@ _CHECKS: dict[str, Check] = {
     "power_panel": _check_power_panel,
     "power_outlet": _check_power_outlet,
 }
+
+# The record shape other modules keep their tables in this store with.
+RecordKind = _Kind
+
+
+def register_record_kind(
+    kind: str,
+    spec: RecordKind,
+    check: Check | None = None,
+    *,
+    tracked: bool = True,
+    usage: tuple[tuple[str, str, bool], ...] = (),
+) -> None:
+    """Keep another module's table in this generic store: list, get, create,
+    update and delete with the same contracts (``ValueError`` for a taken
+    name, ``DcimRuleError`` from ``check``, run inside the write's
+    transaction). A ``tracked`` kind emits object-change events under its
+    name; ``usage`` is what ``count_dcim_usage`` counts before a delete
+    (``(label, SQL with one ?, False)``). Registering a kind again replaces
+    it."""
+    _KINDS[kind] = spec
+    _WRITERS[kind] = _tracked(kind) if tracked else (_plain_create, _plain_update, _delete)
+    if check is None:
+        _CHECKS.pop(kind, None)
+    else:
+        _CHECKS[kind] = check
+    if usage:
+        _USAGE[kind] = usage
+    else:
+        _USAGE.pop(kind, None)
 
 
 # ── Public CRUD ──────────────────────────────────────────────────────────────

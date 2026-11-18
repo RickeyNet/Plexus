@@ -17,6 +17,11 @@ How a Panorama maps onto the map:
   - a firewall with a GlobalProtect gateway gets its address pools as
     subnets and one "GlobalProtect users" node with the connected users
     listed behind it (one node per user would bury the map)
+  - every GlobalProtect user the firewalls know of, connected now or logged
+    out (``previous-user``), is the snapshot's remote user directory
+    (``netcontrol.integrations.remote_users``), held by the Panorama node;
+    a user who logged out is only listed there, never an address pool, a
+    subnet or a path trace end
   - IPsec tunnels between two managed firewalls are VPN tunnels between
     them (the active member for an HA pair); a tunnel to a peer Panorama
     does not manage is an IPsec link to a node shared by every tunnel to
@@ -44,7 +49,7 @@ it.
 from __future__ import annotations
 
 import ipaddress
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from netcontrol.integrations.meraki.forwarding import is_public_address
@@ -74,6 +79,12 @@ from netcontrol.integrations.panorama.collector import (
     stack_templates,
 )
 from netcontrol.integrations.pathtrace import apps as trace_apps
+from netcontrol.integrations.remote_users import (
+    DIRECTORY_KEY,
+    directory_entry,
+    parse_time as _parse_iso_time,
+    user_key,
+)
 
 PANORAMA_SITE_ID = "__panorama__"
 PANORAMA_NODE_ID = "panorama"
@@ -475,6 +486,12 @@ class _Builder:
         self.connected_count = 0
         self.user_count = 0
         self.users_collected = False
+        # The remote user directory: the users connected now and those who
+        # logged out, of every firewall with a "GlobalProtect users" node.
+        self.users_nodes: list[str] = []
+        self.directory_sessions: list[dict] = []
+        self.directory_previous: list[dict] = []
+        self.directory_collected = False
 
         # Filled while drawing.
         self.config: dict[str, dict[str, Any]] = {}
@@ -1159,12 +1176,45 @@ class _Builder:
                 add(gateway, "", tunnel_if, {})
         return found
 
+    def _state_entries(self, serial: str, key: str) -> list[dict] | None:
+        state = self.state_of(serial)
+        if key not in state:
+            return None
+        return entries(state.get(key))
+
     def gp_users(self, serial: str) -> list[dict] | None:
         """The connected GlobalProtect users, ``None`` when not read."""
-        state = self.state_of(serial)
-        if "gp_users" not in state:
+        return self._state_entries(serial, "gp_users")
+
+    def gp_previous_users(self, serial: str) -> list[dict] | None:
+        """The GlobalProtect users who connected earlier and logged out,
+        ``None`` when not read."""
+        return self._state_entries(serial, "gp_previous_users")
+
+    def user_directory(self) -> dict[str, Any] | None:
+        """Every GlobalProtect user of the map: those connected now, then
+        those who logged out and are connected to no firewall (the latest
+        logout of each). Held by the Panorama node, which every snapshot
+        draws and which spans every firewall (a users node of its own per
+        firewall would move the list when an HA pair fails over).
+        ``None`` when no users were read."""
+        if not self.directory_collected or not self.users_nodes:
             return None
-        return entries(state.get("gp_users"))
+        # One entry per user: a user on two gateways (or the two members of
+        # an HA pair) is listed once, by the first session seen.
+        sessions: dict[str, dict] = {}
+        for entry in self.directory_sessions:
+            sessions.setdefault(user_key(entry), entry)
+        latest: dict[str, dict] = {}
+        for entry in self.directory_previous:
+            key = user_key(entry)
+            if key in sessions:
+                continue
+            have = latest.get(key)
+            if have is None or entry["last_seen"] > have["last_seen"]:
+                latest[key] = entry
+        users = [*sessions.values(), *latest.values()]
+        return {"node_id": PANORAMA_NODE_ID, "users": users}
 
     # ── Rules ──────────────────────────────────────────────────────────────
 
@@ -1399,7 +1449,10 @@ class _Builder:
                 box_nodes.append(node)
                 box_nodes += self._wan_stubs(node, serial)
                 gateways = self.gp_gateways(serial)
-                if gateways and self.options.get("include_global_protect", True):
+                # A firewall reporting users whose gateway configuration was
+                # not read still gets the node: the users are listed there.
+                has_users = bool(self.gp_users(serial) or self.gp_previous_users(serial))
+                if (gateways or has_users) and self.options.get("include_global_protect", True):
                     box_nodes.append(self._users_node(node, serial, gateways))
                 for gateway in gateways:
                     for pool in gateway["pools"]:
@@ -1795,6 +1848,7 @@ class _Builder:
         self.users_collected = self.users_collected or collected
         count = len(users or [])
         self.user_count += count
+        previous = self.gp_previous_users(serial)
         label = f"GlobalProtect users ({count})" if collected else "GlobalProtect users"
         node_users = self._node(
             f"u:{serial}",
@@ -1804,6 +1858,16 @@ class _Builder:
             "online" if count else "unknown",
             model="GlobalProtect",
         )
+        reference = _parse_iso_time(self.raw.get("timestamp")) or datetime.now(UTC)
+        sessions = [e for e in (_gp_directory_entry(u, connected=True, reference=reference) for u in users or []) if e]
+        logged_out = [
+            e for e in (_gp_directory_entry(u, connected=False, reference=reference) for u in previous or []) if e
+        ]
+        self.users_nodes.append(node_users["id"])
+        self.directory_collected = self.directory_collected or collected or previous is not None
+        self.directory_sessions += sessions
+        self.directory_previous += logged_out
+        logged_out_now = {user_key(e) for e in logged_out} - {user_key(e) for e in sessions}
         _add(
             node_users["sections"],
             kv_section(
@@ -1812,6 +1876,7 @@ class _Builder:
                     ("Gateway", node["label"]),
                     ("GlobalProtect gateways", ", ".join(g["name"] for g in gateways)),
                     ("Connected now", count if collected else "not collected"),
+                    ("Logged out", len(logged_out_now) if previous is not None else "not collected"),
                     (
                         "Source",
                         "Users connected to this firewall's GlobalProtect gateways when the collection ran"
@@ -2345,6 +2410,7 @@ def build_snapshot(raw: dict, inventory: InventoryIndex | None = None) -> dict[s
         )
     _layout(sites, builder.nodes, builder.edges)
 
+    directory = builder.user_directory()
     nodes = list(builder.nodes.values())
     for node in nodes:
         node.pop("parent", None)
@@ -2382,6 +2448,7 @@ def build_snapshot(raw: dict, inventory: InventoryIndex | None = None) -> dict[s
             "wan_uplinks": edge_counts.get("uplink", 0),
             "vlans": builder.connected_count + builder.pool_count,
             "remote_users": builder.user_count,
+            "registered_users": len(directory["users"]) if directory else 0,
             "ha_pairs": len(builder._pairs()),
             "device_groups": len(builder.parents),
             "security_rules": sum(
@@ -2401,7 +2468,54 @@ def build_snapshot(raw: dict, inventory: InventoryIndex | None = None) -> dict[s
         "sites": sites,
         "nodes": nodes,
         "edges": builder.edges,
+        **({DIRECTORY_KEY: directory} if directory is not None else {}),
     }
+
+
+def _gp_time(user: dict, field: str, reference: datetime) -> str:
+    """A GlobalProtect login or logout time as ISO 8601: the epoch
+    ``<field>-utc`` when given, else the firewall's ``Mon.DD HH:MM:SS`` text
+    (it has no year: the latest such time not after the collection, read as
+    UTC). Empty when neither reads."""
+    epoch = _text(user.get(f"{field}-utc"))
+    if epoch.isdigit():
+        return datetime.fromtimestamp(int(epoch), UTC).isoformat(timespec="seconds")
+    text = _text(user.get(field))
+    if not text:
+        return ""
+    for year in (reference.year, reference.year - 1):
+        for fmt in ("%Y %b.%d %H:%M:%S", "%Y %b %d %H:%M:%S"):
+            try:
+                parsed = datetime.strptime(f"{year} {text}", fmt).replace(tzinfo=UTC)
+            except ValueError:
+                continue
+            if parsed <= reference + timedelta(days=1):
+                return parsed.isoformat(timespec="seconds")
+    try:
+        return datetime.strptime(text, "%Y/%m/%d %H:%M:%S").replace(tzinfo=UTC).isoformat(timespec="seconds")
+    except ValueError:
+        return ""
+
+
+def _gp_directory_entry(user: dict, *, connected: bool, reference: datetime) -> dict | None:
+    """One GlobalProtect user, connected (``current-user``) or logged out
+    (``previous-user``), as a remote user directory entry: named
+    ``domain\\user`` (a user name that is an email is the email too), the
+    tunnel address only while connected, a logged-out user last seen at the
+    logout."""
+    username = _text(user.get("username")) or _text(user.get("primary-username"))
+    domain = _text(user.get("domain"))
+    qualified = "\\" in username or "@" in username
+    return directory_entry(
+        name=f"{domain}\\{username}" if username and domain and not qualified else username,
+        email=username if "@" in username else "",
+        connected=connected,
+        source="session" if connected else "registry",
+        address=_text(user.get("virtual-ip")) if connected else "",
+        public_ip=_text(user.get("public-ip")),
+        device=_text(user.get("computer")),
+        last_seen="" if connected else _gp_time(user, "logout-time", reference),
+    )
 
 
 def _users_links(builder: _Builder) -> int:

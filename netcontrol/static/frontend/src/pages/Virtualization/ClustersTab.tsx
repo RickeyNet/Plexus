@@ -15,6 +15,7 @@ import { DeleteButton } from '@/components/DeleteButton';
 import { EmptyState } from '@/components/EmptyState';
 import { LoadingState } from '@/components/LoadingState';
 import { QueryError } from '@/components/QueryError';
+import { ObjectDataPanel } from '@/components/ObjectDataPanel';
 import { clickableProps } from '@/lib/clickable';
 import { usePendingKeys } from '@/lib/usePendingKeys';
 import { DETAIL_STACK_STYLE } from '@/lib/wideDetail';
@@ -256,6 +257,7 @@ function ClusterDetailPanel({ id }: { id: number | null }) {
         <AddClusterHostModal clusterId={c.id} memberIds={c.hosts.map((h) => h.id)} onClose={() => setAddingHost(false)} />
       )}
       {addingVm && <VmModal vm={null} defaultClusterId={c.id} onClose={() => setAddingVm(false)} />}
+      <ObjectDataPanel objectType="cluster" objectId={c.id} />
     </div>
   );
 }

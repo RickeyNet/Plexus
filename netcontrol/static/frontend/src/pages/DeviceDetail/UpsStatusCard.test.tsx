@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { VendorStatus } from '@/api/deviceDetail';
 
-import { formatRuntime, upsBatteryTone, upsOutputTone } from './ups';
+import { formatPower, formatRuntime, unit, upsBatteryTone, upsOutputTone } from './ups';
 import { UpsStatusCard } from './UpsStatusCard';
 
 // Invented values in the shape GET /api/monitoring/hosts/{id}/vendor-status returns.
@@ -41,6 +41,31 @@ describe('UpsStatusCard', () => {
     expect(html).toContain('Smart-UPS 1500');
     expect(html).toContain('UPS 09.3 (ID18)');
     expect(html).toContain('AP9631, firmware 6.8.2');
+    // Readings the UPS did not report show as N/A; no probe, no probe row.
+    expect(html).toContain('Battery temperature');
+    expect(html).not.toContain('Probe temperature');
+  });
+
+  it('shows the input, output, transfer cause and temperatures', () => {
+    const vendor: VendorStatus = {
+      ...ON_BATTERY,
+      status: {
+        ...ON_BATTERY.status,
+        input_voltage_v: 0,
+        input_frequency_hz: null,
+        output_voltage_v: 229.8,
+        last_transfer_cause: 4,
+        last_transfer_cause_label: 'Blackout',
+        battery_temperature_c: 31.5,
+        probe_temperature_c: 22,
+      },
+    };
+    const html = renderToStaticMarkup(<UpsStatusCard vendor={vendor} />);
+    expect(html).toContain('0 V');
+    expect(html).toContain('229.8 V');
+    expect(html).toContain('Blackout');
+    expect(html).toContain('31.5 °C');
+    expect(html).toContain('22 °C');
   });
 
   it('renders nothing before the first poll or for another kind', () => {
@@ -72,5 +97,13 @@ describe('UPS state tones', () => {
     expect(formatRuntime(null)).toBe('N/A');
     expect(formatRuntime(23.4)).toBe('23 min');
     expect(formatRuntime(65)).toBe('1 h 05 min');
+  });
+
+  it('formats readings with their unit', () => {
+    expect(unit(null, 'V')).toBe('N/A');
+    expect(unit(0, 'V')).toBe('0 V');
+    expect(formatPower(231.2, 49.9)).toBe('231.2 V, 49.9 Hz');
+    expect(formatPower(null, 60)).toBe('60 Hz');
+    expect(formatPower(undefined, null)).toBe('N/A');
   });
 });

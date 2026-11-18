@@ -8,11 +8,12 @@ Covers the pipeline with no network access:
                      admin user that needs MFA
   * collector      - option defaults, best-effort sections with their
                      errors, the pre-6.3 status and pre-session-list
-                     fallbacks, the per-user details cap, the site filter,
-                     secret scrubbing
+                     fallbacks, the on-boarded devices, the per-user details
+                     cap, the site filter, secret scrubbing
   * normalize      - counts, node ids, kinds and models, boxes, tunnels and
                      management links, section titles, status mapping, the
-                     subnet index
+                     subnet index, the user directory (registered users who
+                     are not connected)
   * merge / export - the provider on merged nodes, node details
   * forwarding     - the Entitlements rule set of each Gateway, SNAT, the
                      users' routes and the split tunnel
@@ -24,6 +25,7 @@ from __future__ import annotations
 
 import copy
 import json
+from datetime import UTC, datetime
 from urllib.parse import unquote
 
 import httpx
@@ -62,6 +64,8 @@ from netcontrol.integrations.appgate.sample import (
     GW_LAB_1,
     HQ_SITE,
     LAB_SITE,
+    LEE_DEVICE,
+    MARTA_DEVICE,
     PORTAL_1,
     PRIYA_DEVICE,
     SAM_DEVICE,
@@ -71,6 +75,7 @@ from netcontrol.integrations.appgate.sample import (
 from netcontrol.integrations.meraki.subnets import subnet_index
 from netcontrol.integrations.meraki.unified import graph_to_snapshot, merge_meraki_into_graph, node_details
 from netcontrol.integrations.pathtrace.engine import STATEFUL_REPLY, Tracer
+from netcontrol.integrations.remote_users import DIRECTORY_KEY, SECTION_TITLE, apply_user_directory
 from netcontrol.integrations.software.versions import snapshot_devices
 
 BASE = "https://appgate.example.com:8443"
@@ -135,10 +140,7 @@ class _FakeController:
             "/identity-providers": providers,
             "/ip-pools": raw["ip_pools"],
             "/stats/active-sessions/dn": raw["sessions"],
-            "/on-boarded-devices": [
-                {**s, "onBoardedAt": "2026-09-01T10:00:00Z", "lastSeenAt": "2026-10-01T08:00:00Z"}
-                for s in raw["sessions"]
-            ],
+            "/on-boarded-devices": raw["onboarded_devices"],
         }
 
     def handler(self, request: httpx.Request) -> httpx.Response:
@@ -418,6 +420,7 @@ async def test_collect_appgate_reads_every_part_and_reports_progress():
     }
     assert raw["sessions_source"] == "active-sessions" and raw["sessions_skipped"] == 0 and raw["errors"] == []
     assert raw["license"]["users"] == 500 and fake.logouts == 1
+    assert len(raw["onboarded_devices"]) == 7
     order = list(dict.fromkeys(p["phase"] for p in phases))
     assert order == [
         "appgate version",
@@ -430,7 +433,7 @@ async def test_collect_appgate_reads_every_part_and_reports_progress():
         "collected",
     ]
     last = phases[-1]
-    assert last["calls_done"] == last["calls_total"] == 6 + 2 + 2 + 4 + 1 + 4
+    assert last["calls_done"] == last["calls_total"] == 6 + 2 + 2 + 4 + 2 + 4
 
 
 @pytest.mark.asyncio
@@ -490,7 +493,10 @@ async def test_collect_appgate_falls_back_to_the_old_status_and_device_lists():
     async with _client(fake) as client:
         raw = await collect_appgate(client, {"username": "plexus"})
     assert len(raw["appliance_status"]) == 8 and raw["errors"] == []
-    assert raw["sessions_source"] == "on-boarded-devices" and len(raw["sessions"]) == 4
+    assert raw["sessions_source"] == "on-boarded-devices" and len(raw["sessions"]) == 7
+    # The on-boarded devices are the user list itself: read once, not kept twice.
+    assert raw["onboarded_devices"] is None
+    assert sum(1 for r in fake.calls if r.url.path == "/admin/on-boarded-devices") == 1
     # A registered device is not connected: there are no session details to read.
     assert raw["session_details"] is None
     assert not any(r.url.path.startswith("/admin/session-info") for r in fake.calls)
@@ -498,7 +504,42 @@ async def test_collect_appgate_falls_back_to_the_old_status_and_device_lists():
     dana = _node(snapshot, _user(DANA_DEVICE))
     assert dana["status"] == "unknown" and _kv(dana, "Remote user")["Connection"] == "Registered, connection unknown"
     box = next(s for s in snapshot["sites"] if s["id"] == USERS_SITE_ID)
-    assert _kv(box, "Remote users")["Registered devices (connection unknown)"] == "4"
+    assert _kv(box, "Remote users")["Registered devices (connection unknown)"] == "7"
+    assert _kv(box, "Remote users")["Registered users"] == "6" and snapshot["summary"]["registered_users"] == 6
+    # The directory lists each registered user once, none of them as connected.
+    users = snapshot[DIRECTORY_KEY]["users"]
+    assert len(users) == 6 and {(u["status"], u["source"]) for u in users} == {("disconnected", "registry")}
+    assert not any(u["address"] for u in users)
+    dana_entry = next(u for u in users if u["name"] == "dana.reyes")
+    assert dana_entry["device"] == "DANA-LT14" and dana_entry["last_seen"] == "2026-10-01T09:29:00Z"
+
+
+@pytest.mark.asyncio
+async def test_collect_appgate_reads_the_onboarded_devices_best_effort():
+    fake = _FakeController()
+    fake.fail = {"/on-boarded-devices": 403}
+    async with _client(fake, max_retries=0) as client:
+        raw = await collect_appgate(client, {"username": "plexus"})
+    assert raw["onboarded_devices"] is None and len(raw["sessions"]) == 4
+    assert [(e["scope"], e["path"], e["status"]) for e in raw["errors"]] == [("users", "/on-boarded-devices", 403)]
+    snapshot = build_snapshot(raw)
+    assert snapshot["collection"]["errors"] == raw["errors"]
+    # The connected users still make the directory and the map.
+    users = snapshot[DIRECTORY_KEY]["users"]
+    assert [u["status"] for u in users] == ["connected"] * 4
+    assert snapshot["summary"]["remote_users"] == 4 and snapshot["summary"]["registered_users"] == 0
+    # Not "0": the registry was not read, so the count is unknown.
+    assert "Registered users" not in _kv(_node(snapshot, COLLECTIVE_NODE_ID), "Appgate Collective")
+
+
+@pytest.mark.asyncio
+async def test_collect_appgate_without_users_reads_no_user_list():
+    fake = _FakeController()
+    async with _client(fake) as client:
+        raw = await collect_appgate(client, {"username": "plexus", "include_users": False})
+    assert raw["sessions"] is None and raw["onboarded_devices"] is None
+    assert not any("on-boarded" in r.url.path or "active-sessions" in r.url.path for r in fake.calls)
+    assert DIRECTORY_KEY not in build_snapshot(raw)
 
 
 @pytest.mark.asyncio
@@ -554,6 +595,7 @@ def test_snapshot_summary_counts_every_part(snapshot):
     assert snapshot["provider"] == "appgate" and snapshot["org"]["name"] == "Acme Appgate"
     assert summary["sites"] == 3 and summary["devices"] == 8 and summary["devices_by_kind"] == {"appliance": 8}
     assert summary["remote_users"] == 4 and summary["vpn_tunnels"] == 5 and summary["gateways"] == 4
+    assert summary["registered_users"] == 6
     assert summary["vlans"] == 6 and summary["devices_by_status"] == {"online": 6, "alerting": 1, "offline": 1}
     assert snapshot["collection"]["sources"] == ["Appgate SDP API"]
 
@@ -762,6 +804,60 @@ def test_user_details(snapshot):
     assert results["HQ admin SSH"]["Access"] == "No" and results["HQ admin SSH"]["Conditions"] == "Admin group: not met"
     assert results["AWS app tier"]["Site"] == "AWS us-east-1"
     assert _table(dana, "Firewall rules")[0]["Gateway"] == "appgate-gw-hq-1"
+
+
+def test_directory_lists_connected_and_registered_users(snapshot):
+    directory = snapshot[DIRECTORY_KEY]
+    assert directory["node_id"] == COLLECTIVE_NODE_ID
+    assert any(n["id"] == COLLECTIVE_NODE_ID for n in snapshot["nodes"])
+    users = {u["name"]: u for u in directory["users"]}
+    assert set(users) == {
+        "dana.reyes",
+        "sam.okafor",
+        "priya.nair",
+        "svc-scanner",
+        "lee.moreau@example.com",
+        "marta.lind",
+    }
+    # Connected users carry their tunnel address; Dana's older device does not
+    # make a second, disconnected entry.
+    dana = users["dana.reyes"]
+    assert (dana["status"], dana["source"], dana["address"]) == ("connected", "session", "10.253.0.11")
+    assert dana["public_ip"] == "198.51.100.161" and dana["device"] == "DANA-LT14"
+    lee = users["lee.moreau@example.com"]
+    assert (lee["status"], lee["source"], lee["address"]) == ("disconnected", "registry", "")
+    assert lee["email"] == "lee.moreau@example.com" and lee["user_id"] == "Okta SAML/lee.moreau@example.com"
+    assert lee["device"] == "LEE-LT07" and lee["last_seen"] == "2026-09-28T17:12:00Z"
+    assert users["marta.lind"]["last_seen"] == "2026-09-15T11:05:00Z"
+    collective = _kv(_node(snapshot, COLLECTIVE_NODE_ID), "Appgate Collective")
+    assert collective["Connected users"] == "4" and collective["Registered users"] == "6"
+    box = next(s for s in snapshot["sites"] if s["id"] == USERS_SITE_ID)
+    assert _kv(box, "Remote users")["Registered users"] == "6"
+
+
+def test_registered_users_get_no_node_subnet_or_tunnel(snapshot):
+    ids = {n["id"] for n in snapshot["nodes"]}
+    assert _user(LEE_DEVICE) not in ids and _user(MARTA_DEVICE) not in ids
+    assert sorted(n["label"] for n in snapshot["nodes"] if n["kind"] == "user") == [
+        "dana.reyes",
+        "priya.nair",
+        "sam.okafor",
+        "svc-scanner",
+    ]
+    assert not any(LEE_DEVICE in e["a"] or MARTA_DEVICE in e["a"] for e in snapshot["edges"])
+    owners = {e["node_id"] for e in subnet_index(snapshot)}
+    assert not any(LEE_DEVICE in o or MARTA_DEVICE in o for o in owners)
+    connected = _table(_node(snapshot, _a(GW_HQ_1)), "Connected users")
+    assert {r["User"] for r in connected} == {"dana.reyes", "sam.okafor"}
+
+
+def test_directory_is_written_onto_the_collective_on_store():
+    snapshot = build_snapshot(build_sample_raw())
+    assert apply_user_directory(snapshot, None, now=datetime(2026, 10, 1, 9, 30, tzinfo=UTC)) == 6
+    rows = _table(_node(snapshot, COLLECTIVE_NODE_ID), SECTION_TITLE)
+    marta = next(r for r in rows if r["User"] == "marta.lind")
+    assert marta["Status"] == "disconnected" and marta["Known from"] == "The source's user list"
+    assert next(r for r in rows if r["User"] == "dana.reyes")["Status"] == "connected"
 
 
 def test_users_sharing_a_name_are_told_apart_by_hostname():
@@ -1107,7 +1203,10 @@ def test_api_appgate_crud_keeps_the_password_write_only(api):
     bad["base_url"] = "https://appgate.example.com/ui"
     assert api.post("/api/sources", json=bad).status_code == 400
     unknown = api.post("/api/sources", json={"name": "X", "provider": "zscaler"})
-    assert unknown.status_code == 400 and "Provider must be meraki, cato, fmc, panorama, appgate or opnsense" in unknown.text
+    assert (
+        unknown.status_code == 400
+        and "Provider must be meraki, cato, fmc, panorama, appgate or opnsense" in unknown.text
+    )
 
     updated = api.put(f"/api/sources/{org['id']}", json={"options": {"username": "ro"}})
     assert updated.json()["org"]["options"]["username"] == "ro" and updated.json()["org"]["has_api_key"] is True
@@ -1135,6 +1234,9 @@ def test_api_appgate_sample_is_merged_into_the_topology(api):
     assert servers["provider"] == "appgate" and servers["kind"] == "range" and servers["node_id"] == _a(GW_HQ_1)
     hits = api.get("/api/topology/search/deep?q=dana.reyes").json()["results"]
     assert (org_ref, _user(DANA_DEVICE)) in [(h["org_ref"], h["node_id"]) for h in hits]
+    # A registered user who is not connected is found on the collective node.
+    hits = api.get("/api/topology/search/deep?q=marta.lind").json()["results"]
+    assert (org_ref, COLLECTIVE_NODE_ID) in [(h["org_ref"], h["node_id"]) for h in hits]
     source = next(s for s in api.get("/api/topology/sources").json()["sources"] if s["type"] == "appgate")
     assert source["demo"] and not source["can_collect"] and source["status"] == "success"
     export = api.get("/api/topology/export.html")

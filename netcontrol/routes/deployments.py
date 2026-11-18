@@ -3,6 +3,11 @@ deployments.py -- Deployment orchestration with rollback support.
 
 Includes deployment creation, execution with pre/post checkpoints,
 rollback via pre-deployment snapshots, and WebSocket streaming.
+
+Object scope: an account limited to selected inventory groups sees a
+deployment (lists, summary, detail, job output) when its inventory group and
+every target host are readable, and plans, executes, rolls back or deletes
+one only when its targets are writable (``_deployment_visible``).
 """
 
 from __future__ import annotations
@@ -20,9 +25,22 @@ from pydantic import BaseModel, Field
 from routes.crypto import decrypt
 
 import netcontrol.routes.state as state
+from netcontrol.approvals import ApprovalDecision, decision_audit_detail, require_different_approver
+from netcontrol.object_scope import (
+    READ_ONLY_DETAIL,
+    ObjectScope,
+    group_filter,
+    request_scope,
+    require_group,
+    require_host_ids,
+    scoped,
+    ws_scope,
+)
 from netcontrol.routes.config_drift import _analyze_drift_for_host
 from netcontrol.routes.device_config import get_device_config
+from netcontrol.routes.intended_config import RemediationTargets, remediation_for_hosts, resolve_remediation_targets
 from netcontrol.routes.maintenance_windows import evaluate_change_gate
+from netcontrol.routes.risk_analysis import require_risk_analysis
 from netcontrol.routes.shared import (
     _audit,
     _compute_config_diff,
@@ -89,10 +107,8 @@ class DeploymentRollback(BaseModel):
     deployment_id: int
 
 
-class DeploymentApprovalDecision(BaseModel):
+class DeploymentApprovalDecision(ApprovalDecision):
     """Approve or reject a pending deployment approval."""
-
-    comment: str = ""
 
 
 # Risk levels that auto-require human approval before execute.
@@ -792,6 +808,52 @@ async def _run_rollback_job(
 # ── Routes ────────────────────────────────────────────────────────────────────
 
 
+_DEPLOYMENT_NOT_FOUND = "Deployment not found"
+
+
+def _deployment_host_ids(dep: dict) -> list[int]:
+    """The deployment's stored target host ids (empty: its whole group)."""
+    try:
+        raw = json.loads(dep.get("host_ids") or "[]")
+    except json.JSONDecodeError, TypeError:
+        return []
+    return [int(h) for h in raw if h is not None] if isinstance(raw, list) else []
+
+
+async def _deployment_visible(scope: ObjectScope, dep: dict, *, write: bool = False) -> bool:
+    """Whether a caller with ``scope`` may see ``dep`` (``write``: run, roll
+    back or delete it): its inventory group and every target host must be
+    readable; to change it, its target hosts (its group, when it names no
+    hosts) must be writable. The SQL form of the read rule is
+    ``routes.db.topology.deployment_scope_condition``."""
+    if scope.unrestricted:
+        return True
+    if not scope.can_read_group(dep.get("group_id")):
+        return False
+    host_ids = set(_deployment_host_ids(dep))
+    reach = await scope.reach()
+    if not host_ids <= reach.read_hosts:
+        return False
+    if not write:
+        return True
+    return host_ids <= reach.write_hosts if host_ids else scope.can_write_group(dep.get("group_id"))
+
+
+async def _require_deployment(request: Request, deployment_id: int, *, write: bool = False) -> dict:
+    """The deployment; 404 when unknown or (scoped caller) not visible, 403
+    on ``write`` when its targets are not writable."""
+    dep = await db.get_deployment(deployment_id)
+    if not dep:
+        raise HTTPException(status_code=404, detail=_DEPLOYMENT_NOT_FOUND)
+    scope = await request_scope(request)
+    if scope.restricted:
+        if not await _deployment_visible(scope, dep):
+            raise HTTPException(status_code=404, detail=_DEPLOYMENT_NOT_FOUND)
+        if write and not await _deployment_visible(scope, dep, write=True):
+            raise HTTPException(status_code=403, detail=READ_ONLY_DETAIL)
+    return dep
+
+
 async def _resolve_deployment_credential(dep: dict, session: dict | None) -> dict:
     """Resolve and authorize the credential bound to a deployment.
 
@@ -818,10 +880,17 @@ async def _resolve_deployment_credential(dep: dict, session: dict | None) -> dic
 
 
 @router.post("/api/deployments")
+@scoped("create")
 async def create_deployment(body: DeploymentCreate, request: Request):
-    """Create a new deployment plan."""
+    """Create a new deployment plan (a scoped caller: the target hosts, or
+    the group when no hosts are named, must be writable)."""
     session = _get_session(request)
     user = session["user"] if session else ""
+    if (await request_scope(request)).restricted:
+        await require_group(request, body.group_id, write=not body.host_ids)
+        await require_host_ids(request, body.host_ids, write=True)
+        if body.risk_analysis_id:
+            await require_risk_analysis(request, body.risk_analysis_id)
 
     # Resolve commands from template if needed
     commands = list(body.proposed_commands)
@@ -839,16 +908,48 @@ async def create_deployment(body: DeploymentCreate, request: Request):
     # be an admin able to use) the credential they're attaching to this plan.
     await require_credential_access(body.credential_id, session=session, allow_service=True)
 
-    deployment_id = await db.create_deployment(
+    return await plan_deployment(
+        request,
         name=body.name,
         description=body.description,
         group_id=body.group_id,
         credential_id=body.credential_id,
         change_type=body.change_type,
-        proposed_commands="\n".join(commands),
+        commands=commands,
+        host_ids=body.host_ids,
+        user=user,
         template_id=body.template_id,
         risk_analysis_id=body.risk_analysis_id,
-        host_ids=json.dumps(body.host_ids),
+    )
+
+
+async def plan_deployment(
+    request: Request,
+    *,
+    name: str,
+    description: str,
+    group_id: int,
+    credential_id: int,
+    change_type: str,
+    commands: list[str],
+    host_ids: list[int],
+    user: str,
+    template_id: int | None = None,
+    risk_analysis_id: int | None = None,
+) -> dict:
+    """Store a deployment plan (status ``planning``), flag it for approval
+    when its group is a production group or its risk analysis is high or
+    critical, and audit it. The caller has checked the credential."""
+    deployment_id = await db.create_deployment(
+        name=name,
+        description=description,
+        group_id=group_id,
+        credential_id=credential_id,
+        change_type=change_type,
+        proposed_commands="\n".join(commands),
+        template_id=template_id,
+        risk_analysis_id=risk_analysis_id,
+        host_ids=json.dumps(host_ids),
         created_by=user,
     )
 
@@ -857,12 +958,12 @@ async def create_deployment(body: DeploymentCreate, request: Request):
     # to 'pending' so the UI surfaces the gate immediately.
     require = False
     reason_bits: list[str] = []
-    group = await db.get_group(body.group_id)
+    group = await db.get_group(group_id)
     if group and (group.get("environment") or "").lower() == "production":
         require = True
         reason_bits.append("production group")
-    if body.risk_analysis_id:
-        analysis = await db.get_risk_analysis(body.risk_analysis_id)
+    if risk_analysis_id:
+        analysis = await db.get_risk_analysis(risk_analysis_id)
         if analysis and (analysis.get("risk_level") or "").lower() in _AUTO_APPROVAL_RISK_LEVELS:
             require = True
             reason_bits.append(f"risk={analysis['risk_level']}")
@@ -879,7 +980,7 @@ async def create_deployment(body: DeploymentCreate, request: Request):
         "deployment.created",
         user=user,
         detail=(
-            f"id={deployment_id} name={body.name} group_id={body.group_id}"
+            f"id={deployment_id} name={name} group_id={group_id}"
             + (f" requires_approval=1 ({', '.join(reason_bits)})" if require else "")
         ),
         correlation_id=_corr_id(request),
@@ -892,25 +993,115 @@ async def create_deployment(body: DeploymentCreate, request: Request):
     }
 
 
+async def _require_feature_too(request: Request, feature_key: str) -> None:
+    """403 unless the caller (already past this router's ``deployments``
+    gate) also holds ``feature_key``. Admins and the API token always do."""
+    user = getattr(request.state, "auth_user", None)
+    if not isinstance(user, dict) or user.get("role") == "admin":
+        return  # the API token (no user record) or an admin
+    features = getattr(request.state, "auth_features", None)
+    if features is None and _get_user_features is not None:
+        features = await _get_user_features(user)
+    if feature_key not in (features or []):
+        raise HTTPException(status_code=403, detail=f"Access denied for feature '{feature_key}'")
+
+
+INTENDED_REMEDIATION_CHANGE_TYPE = "intended-remediation"
+
+
+class IntendedRemediationDeploymentCreate(RemediationTargets):
+    """Deployments from intended configuration remediation: one per host."""
+
+    credential_id: int
+    name: str = Field(default="", max_length=200)
+    description: str = Field(default="", max_length=2000)
+
+
+def _remediation_skip(row: dict, host: dict) -> str | None:
+    """Why a host gets no deployment, or ``None``."""
+    if row["state"] != "ok":
+        return row["reason"]
+    if not row["commands"]:
+        return "The device already matches its intended configuration."
+    if host.get("group_id") is None:
+        return "The host is in no inventory group; a deployment targets one."
+    if len(row["commands"]) > 10000 or any(len(c) > 4000 for c in row["commands"]):
+        return "The remediation is too large for one deployment."
+    return None
+
+
+@router.post("/api/deployments/intended-remediation")
+@scoped("hosts")
+async def create_intended_remediation_deployments(body: IntendedRemediationDeploymentCreate, request: Request):
+    """Plan one deployment per host from the remediation of its intended
+    configuration (``netcontrol.routes.intended_config.remediation_for_hosts``).
+    Needs Config Drift access too, and write on every host. The plans go
+    through the usual pre-check, approval, execute and rollback flow; hosts
+    with nothing to push, an unsupported driver or no comparison are
+    skipped with the reason."""
+    await _require_feature_too(request, "config-drift")
+    session = _get_session(request)
+    user = session["user"] if session else ""
+    hosts = await resolve_remediation_targets(request, body, write=True)
+    await require_credential_access(body.credential_id, session=session, allow_service=True)
+    rows = await remediation_for_hosts(hosts)
+    created: list[dict] = []
+    skipped: list[dict] = []
+    for host, row in zip(hosts, rows, strict=True):
+        ref = {"host_id": row["host_id"], "hostname": row["hostname"]}
+        reason = _remediation_skip(row, host)
+        if reason is not None:
+            skipped.append({**ref, "reason": reason})
+            continue
+        base = body.name.strip() or "Intended remediation"
+        plan = await plan_deployment(
+            request,
+            name=(f"{base}: {row['hostname']}" if len(hosts) > 1 or not body.name.strip() else base)[:200],
+            description=body.description
+            or (
+                f"Remediation of {row['hostname']} to its intended configuration "
+                f"(template {row['template_name']}, backup {row['backup']['id']}): "
+                f"{row['added']} added, {row['removed']} removed."
+            ),
+            group_id=int(host["group_id"]),
+            credential_id=body.credential_id,
+            change_type=INTENDED_REMEDIATION_CHANGE_TYPE,
+            commands=row["commands"],
+            host_ids=[row["host_id"]],
+            user=user,
+        )
+        created.append({**ref, **plan, "commands": len(row["commands"])})
+    await _audit(
+        "deployments",
+        "deployment.intended_remediation",
+        user=user,
+        detail=f"hosts={len(hosts)} created={len(created)} skipped={len(skipped)}",
+        correlation_id=_corr_id(request),
+    )
+    return {"deployments": created, "skipped": skipped}
+
+
 @router.get("/api/deployments")
+@scoped("list")
 async def list_deployments(
+    request: Request,
     status: str | None = Query(default=None),
     group_id: int | None = Query(default=None),
     limit: int = Query(default=100, ge=1, le=500),
 ):
-    return await db.get_deployments(status=status, group_id=group_id, limit=limit)
+    return await db.get_deployments(status=status, group_id=group_id, limit=limit, **await group_filter(request))
 
 
 @router.get("/api/deployments/summary")
-async def get_deployment_summary_endpoint():
-    return await db.get_deployment_summary()
+@scoped("list")
+async def get_deployment_summary_endpoint(request: Request):
+    return await db.get_deployment_summary(**await group_filter(request))
 
 
 @router.get("/api/deployments/{deployment_id}")
+@scoped("deployment")
 async def get_deployment_detail(deployment_id: int, request: Request):
-    dep = await db.get_deployment(deployment_id)
-    if not dep:
-        raise HTTPException(status_code=404, detail="Deployment not found")
+    dep = await _require_deployment(request, deployment_id)
     await require_owner_or_admin(request, dep.get("created_by"))
     checkpoints = await db.get_deployment_checkpoints(deployment_id)
     snapshots = await db.get_deployment_snapshots(deployment_id)
@@ -918,11 +1109,10 @@ async def get_deployment_detail(deployment_id: int, request: Request):
 
 
 @router.get("/api/deployments/{deployment_id}/correlation")
+@scoped("deployment")
 async def get_deployment_correlation(deployment_id: int, request: Request):
     """Return correlated events (drift, alerts, audit trail) around a deployment."""
-    dep = await db.get_deployment(deployment_id)
-    if not dep:
-        raise HTTPException(status_code=404, detail="Deployment not found")
+    dep = await _require_deployment(request, deployment_id)
     await require_owner_or_admin(request, dep.get("created_by"))
 
     started = dep.get("started_at") or dep.get("created_at")
@@ -964,11 +1154,10 @@ async def get_deployment_correlation(deployment_id: int, request: Request):
 
 
 @router.post("/api/deployments/{deployment_id}/execute")
+@scoped("deployment")
 async def execute_deployment(deployment_id: int, request: Request):
     """Execute a planned deployment with pre/post checkpoints."""
-    dep = await db.get_deployment(deployment_id)
-    if not dep:
-        raise HTTPException(status_code=404, detail="Deployment not found")
+    dep = await _require_deployment(request, deployment_id, write=True)
     if dep["status"] not in ("planning", "failed"):
         raise HTTPException(status_code=400, detail=f"Cannot execute deployment in '{dep['status']}' status")
 
@@ -1064,13 +1253,12 @@ async def execute_deployment(deployment_id: int, request: Request):
 
 
 @router.post("/api/deployments/{deployment_id}/request-approval")
+@scoped("deployment")
 async def request_deployment_approval(deployment_id: int, request: Request):
     """Flip an unflagged deployment into the approval workflow. Useful
     when ops decides post-hoc that a deployment needs four-eyes review
     even though no auto-rule fired."""
-    dep = await db.get_deployment(deployment_id)
-    if not dep:
-        raise HTTPException(status_code=404, detail="Deployment not found")
+    dep = await _require_deployment(request, deployment_id, write=True)
     if dep["status"] not in ("planning", "failed"):
         raise HTTPException(status_code=400, detail=f"Cannot request approval in '{dep['status']}' status")
     if dep.get("approval_status") == "pending":
@@ -1094,12 +1282,11 @@ async def request_deployment_approval(deployment_id: int, request: Request):
 
 
 @router.post("/api/deployments/{deployment_id}/approve")
+@scoped("deployment")
 async def approve_deployment(deployment_id: int, body: DeploymentApprovalDecision, request: Request):
     """Approve a deployment. The approver must be different from the
     deployment's creator (four-eyes)."""
-    dep = await db.get_deployment(deployment_id)
-    if not dep:
-        raise HTTPException(status_code=404, detail="Deployment not found")
+    dep = await _require_deployment(request, deployment_id)
     if not dep.get("requires_approval"):
         raise HTTPException(status_code=400, detail="Deployment does not require approval")
     if dep.get("approval_status") != "pending":
@@ -1113,8 +1300,7 @@ async def approve_deployment(deployment_id: int, body: DeploymentApprovalDecisio
     await require_owner_or_admin(request, None)
     session = _get_session(request)
     user = session["user"] if session else ""
-    if user and user == (dep.get("created_by") or ""):
-        raise HTTPException(status_code=403, detail="Approver must be different from creator (four-eyes)")
+    require_different_approver(user, dep.get("created_by"))
     await db.set_deployment_approval(
         deployment_id,
         approval_status="approved",
@@ -1125,20 +1311,19 @@ async def approve_deployment(deployment_id: int, body: DeploymentApprovalDecisio
         "deployments",
         "deployment.approved",
         user=user,
-        detail=f"id={deployment_id}" + (f" comment={body.comment[:80]}" if body.comment else ""),
+        detail=decision_audit_detail(f"id={deployment_id}", body.comment),
         correlation_id=_corr_id(request),
     )
     return {"ok": True, "approval_status": "approved"}
 
 
 @router.post("/api/deployments/{deployment_id}/reject")
+@scoped("deployment")
 async def reject_deployment(deployment_id: int, body: DeploymentApprovalDecision, request: Request):
     """Reject a deployment's approval request. The deployment stays in
     'planning' but cannot be executed until a fresh approval request is
     raised."""
-    dep = await db.get_deployment(deployment_id)
-    if not dep:
-        raise HTTPException(status_code=404, detail="Deployment not found")
+    dep = await _require_deployment(request, deployment_id)
     if not dep.get("requires_approval"):
         raise HTTPException(status_code=400, detail="Deployment does not require approval")
     if dep.get("approval_status") != "pending":
@@ -1159,18 +1344,17 @@ async def reject_deployment(deployment_id: int, body: DeploymentApprovalDecision
         "deployments",
         "deployment.approval_rejected",
         user=user,
-        detail=f"id={deployment_id}" + (f" comment={body.comment[:80]}" if body.comment else ""),
+        detail=decision_audit_detail(f"id={deployment_id}", body.comment),
         correlation_id=_corr_id(request),
     )
     return {"ok": True, "approval_status": "rejected"}
 
 
 @router.post("/api/deployments/{deployment_id}/rollback")
+@scoped("deployment")
 async def rollback_deployment(deployment_id: int, request: Request):
     """Roll back a deployment using pre-deployment snapshots."""
-    dep = await db.get_deployment(deployment_id)
-    if not dep:
-        raise HTTPException(status_code=404, detail="Deployment not found")
+    dep = await _require_deployment(request, deployment_id, write=True)
     if dep["status"] not in ("completed", "failed", "post-check"):
         raise HTTPException(status_code=400, detail=f"Cannot rollback deployment in '{dep['status']}' status")
 
@@ -1218,10 +1402,9 @@ async def rollback_deployment(deployment_id: int, request: Request):
 
 
 @router.delete("/api/deployments/{deployment_id}")
+@scoped("deployment")
 async def delete_deployment_endpoint(deployment_id: int, request: Request):
-    dep = await db.get_deployment(deployment_id)
-    if not dep:
-        raise HTTPException(status_code=404, detail="Deployment not found")
+    dep = await _require_deployment(request, deployment_id, write=True)
     if dep["status"] in ("executing", "pre-check", "post-check", "rolling-back"):
         raise HTTPException(status_code=400, detail="Cannot delete an active deployment")
     await require_owner_or_admin(request, dep.get("created_by"))
@@ -1238,10 +1421,16 @@ async def delete_deployment_endpoint(deployment_id: int, request: Request):
 
 
 @router.get("/api/deployments/job/{job_id}/status")
-async def get_deployment_job_status(job_id: str):
+@scoped("deployment")
+async def get_deployment_job_status(job_id: str, request: Request):
     job = _deployment_jobs.get(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Deployment job not found")
+    scope = await request_scope(request)
+    if scope.restricted:
+        dep = await db.get_deployment(job["deployment_id"]) if job.get("deployment_id") else None
+        if not dep or not await _deployment_visible(scope, dep):
+            raise HTTPException(status_code=404, detail="Deployment job not found")
     return {
         "job_id": job_id,
         "status": job["status"],
@@ -1252,6 +1441,7 @@ async def get_deployment_job_status(job_id: str):
 
 
 @ws_router.websocket("/ws/deployment/{job_id}")
+@scoped("deployment")
 async def ws_deployment(websocket: WebSocket, job_id: str):
     """WebSocket for streaming deployment/rollback job output."""
     token = websocket.cookies.get("session")
@@ -1279,6 +1469,10 @@ async def ws_deployment(websocket: WebSocket, job_id: str):
         deployment_id = (_deployment_jobs.get(job_id, {}) or {}).get("deployment_id")
         dep = await db.get_deployment(deployment_id) if deployment_id else None
         if not dep or dep.get("created_by") != session.get("user"):
+            await websocket.close(code=1008)
+            return
+        # Object scope: every target of the deployment must be readable.
+        if not await _deployment_visible(await ws_scope(session), dep):
             await websocket.close(code=1008)
             return
 

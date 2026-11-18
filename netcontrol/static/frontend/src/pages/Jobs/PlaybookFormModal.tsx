@@ -110,6 +110,8 @@ export function PlaybookFormModal({ mode, playbookId, onClose }: Props) {
   const [schemaErrors, setSchemaErrors] = useState<Record<string, string>>({});
   const [permissions, setPermissions] = useState<JobPermissions>(OPEN_PERMISSIONS);
   const [permissionsDirty, setPermissionsDirty] = useState(false);
+  const [approvalRequired, setApprovalRequired] = useState(false);
+  const [approvalDirty, setApprovalDirty] = useState(false);
 
   const editorExtensions = useMemo(
     () => [
@@ -129,10 +131,11 @@ export function PlaybookFormModal({ mode, playbookId, onClose }: Props) {
     setSchemaErrors({});
     setSchemaDirty(false);
     setPermissionsDirty(false);
+    setApprovalDirty(false);
     if (mode === 'create') {
       setType('python'); setName(''); setFilename(''); setDescription('');
       setTagsStr(''); setContent(PYTHON_DEFAULT); setContentDirty(false);
-      setSchemaRows([]); setPermissions(OPEN_PERMISSIONS);
+      setSchemaRows([]); setPermissions(OPEN_PERMISSIONS); setApprovalRequired(false);
     } else if (mode === 'edit' && detailQuery.data) {
       const pb = detailQuery.data;
       setType((pb.type as PlaybookType) ?? 'python');
@@ -144,6 +147,7 @@ export function PlaybookFormModal({ mode, playbookId, onClose }: Props) {
       setContentDirty(false);
       setSchemaRows((pb.input_schema ?? []).map(rowFromField));
       setPermissions(pb.permissions ?? OPEN_PERMISSIONS);
+      setApprovalRequired(Boolean(pb.approval_required));
     }
   }
 
@@ -185,6 +189,7 @@ export function PlaybookFormModal({ mode, playbookId, onClose }: Props) {
     // Send only what changed: an untouched code-declared schema stays in code.
     if (schemaDirty) data.input_schema = schemaRows.map(fieldFromRow);
     if (isAdmin && permissionsDirty) data.permissions = permissions;
+    if (isAdmin && approvalDirty) data.approval_required = approvalRequired;
     const onError = (err: unknown) => {
       if (err instanceof CustomDataError && Object.keys(err.fields).length > 0) {
         const rowErrs = Object.fromEntries(Object.entries(err.fields).filter(([k]) => /^\d+(\.|$)/.test(k)));
@@ -308,6 +313,22 @@ export function PlaybookFormModal({ mode, playbookId, onClose }: Props) {
             errors={schemaErrors}
             source={mode === 'edit' ? detailQuery.data?.input_schema_source : undefined}
           />
+          <div className="form-group">
+            <label className="form-check" htmlFor={`${formId}-approval`}>
+              <input
+                id={`${formId}-approval`}
+                type="checkbox"
+                checked={approvalRequired}
+                disabled={!isAdmin}
+                onChange={(e) => { setApprovalRequired(e.target.checked); setApprovalDirty(true); }}
+              />
+              Require approval before jobs run
+            </label>
+            <small className="text-muted">
+              Jobs from this task wait in the Approvals tab until a user with job approval rights, other than
+              the requester, approves them.{!isAdmin && ' Only an admin can change this.'}
+            </small>
+          </div>
           {isAdmin && (
             <JobPermissionsEditor
               value={permissions}

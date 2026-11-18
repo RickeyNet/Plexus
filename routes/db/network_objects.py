@@ -121,10 +121,12 @@ def _limited(rows: list[dict], limit: int) -> tuple[list[dict], bool]:
 
 _VRF_SELECT = """
     SELECT v.id, v.name, v.rd, v.description, v.origin, v.created_at, v.tenant_id, tn.name AS tenant_name,
+           v.namespace_id, ns.name AS namespace_name,
            COALESCE(hc.n, 0) AS host_count, COALESCE(dc.n, 0) AS device_count,
            COALESCE(pc.n, 0) + COALESCE(ic.n, 0) AS prefix_count, COALESCE(ac.n, 0) AS address_count
     FROM vrfs v
     LEFT JOIN tenants tn ON tn.id = v.tenant_id
+    LEFT JOIN ipam_namespaces ns ON ns.id = v.namespace_id
     LEFT JOIN (SELECT vrf_name, COUNT(*) AS n FROM hosts GROUP BY vrf_name) hc ON hc.vrf_name = v.name
     LEFT JOIN (SELECT vrf_name, COUNT(*) AS n FROM host_vrfs GROUP BY vrf_name) dc ON dc.vrf_name = v.name
     LEFT JOIN (SELECT vrf, COUNT(*) AS n FROM ipam_prefixes GROUP BY vrf) pc ON pc.vrf = v.name
@@ -140,10 +142,11 @@ def _tenant_of(row: dict) -> dict:
     return {"tenant_id": int(tenant) if tenant is not None else None, "tenant_name": row.get("tenant_name")}
 
 
-def _tenant_set(exprs: list[str], params: list, tenant_id: TenantArg) -> None:
-    """Add ``tenant_id = ?`` to an update unless the tenant is left alone."""
+def _tenant_set(exprs: list[str], params: list, tenant_id: TenantArg, column: str = "tenant_id") -> None:
+    """Add ``column = ?`` (the tenant, or another nullable reference) to an
+    update unless the value is left alone (``TENANT_UNCHANGED``)."""
     if not isinstance(tenant_id, _Unchanged):
-        exprs.append("tenant_id = ?")
+        exprs.append(f"{column} = ?")
         params.append(tenant_id)
 
 
@@ -156,6 +159,8 @@ def _vrf(row: dict) -> dict:
         "origin": row["origin"],
         "created_at": row["created_at"] or "",
         **_tenant_of(row),
+        "namespace_id": int(row["namespace_id"]),
+        "namespace_name": row.get("namespace_name") or "",
         "host_count": int(row["host_count"]),
         "device_count": int(row["device_count"]),
         "prefix_count": int(row["prefix_count"]),
@@ -163,19 +168,95 @@ def _vrf(row: dict) -> dict:
     }
 
 
-async def list_vrfs() -> list[dict]:
-    """Every VRF by name, with its counts (see ``docs/vrfs-and-vlans.md``)."""
-    return [_vrf(r) for r in await _select(_VRF_SELECT + " ORDER BY lower(v.name), v.name, v.id")]
+def _host_ids_condition(column: str, host_ids: Iterable[int] | None) -> tuple[str, tuple[int, ...]]:
+    """``column IN (host_ids)`` (``("", ())`` for ``None``; an empty set
+    matches nothing). ``column`` is a fixed identifier."""
+    if host_ids is None:
+        return "", ()
+    ids = tuple(sorted({int(h) for h in host_ids}))
+    if not ids:
+        return "1 = 0", ()
+    return f"{column} IN ({_marks(ids)})", ids
 
 
-async def get_vrf(vrf_id: int) -> dict | None:
+async def _scoped_vrf_counts(
+    vrfs: list[dict], host_ids: Iterable[int] | None, prefix_scope: tuple[str, tuple] | None
+) -> list[dict]:
+    """``vrfs`` with their counts limited to the hosts ``host_ids`` and the
+    prefixes the SQL condition ``prefix_scope`` (alias ``p``) keeps (object
+    scope); unchanged when both are ``None``."""
+    if (host_ids is None and prefix_scope is None) or not vrfs:
+        return vrfs
+    h_sql, h_params = _host_ids_condition("h.id", host_ids)
+    hv_sql, _ = _host_ids_condition("hv.host_id", host_ids)
+    a_sql, _ = _host_ids_condition("a.host_id", host_ids)
+    p_sql, p_params = prefix_scope or ("", ())
+
+    def where(sql: str) -> str:
+        return f" WHERE {sql}" if sql else ""
+
+    async def counts(sql: str, params: tuple) -> dict[str, int]:
+        return {str(r["k"] or ""): int(r["n"]) for r in await _select(sql, params)}
+
+    hosts = await counts(
+        f"SELECT h.vrf_name AS k, COUNT(*) AS n FROM hosts h{where(h_sql)} GROUP BY h.vrf_name",  # nosec B608
+        h_params,
+    )
+    devices = await counts(
+        f"SELECT hv.vrf_name AS k, COUNT(*) AS n FROM host_vrfs hv{where(hv_sql)} GROUP BY hv.vrf_name",  # nosec B608
+        h_params,
+    )
+    prefixes = await counts(
+        f"SELECT p.vrf AS k, COUNT(*) AS n FROM ipam_prefixes p{where(p_sql)} GROUP BY p.vrf",  # nosec B608
+        tuple(p_params),
+    )
+    networks = await counts(
+        "SELECT a.vrf_name AS k, COUNT(DISTINCT a.network) AS n FROM interface_addresses a "
+        "WHERE NOT EXISTS (SELECT 1 FROM ipam_prefixes p WHERE p.vrf = a.vrf_name AND p.subnet = a.network)"
+        + (f" AND {a_sql}" if a_sql else "")
+        + " GROUP BY a.vrf_name",  # nosec B608 - placeholders only
+        h_params,
+    )
+    addresses = await counts(
+        f"SELECT a.vrf_name AS k, COUNT(*) AS n FROM interface_addresses a{where(a_sql)} GROUP BY a.vrf_name",  # nosec B608
+        h_params,
+    )
+    for vrf in vrfs:
+        name = vrf["name"]
+        vrf["host_count"] = hosts.get(name, 0)
+        vrf["device_count"] = devices.get(name, 0)
+        vrf["prefix_count"] = prefixes.get(name, 0) + networks.get(name, 0)
+        vrf["address_count"] = addresses.get(name, 0)
+    return vrfs
+
+
+async def list_vrfs(
+    *, host_ids: Iterable[int] | None = None, prefix_scope: tuple[str, tuple] | None = None
+) -> list[dict]:
+    """Every VRF by name, with its counts (see ``docs/vrfs-and-vlans.md``).
+    ``host_ids`` / ``prefix_scope`` (object scope; ``None``: all) count
+    only those hosts and the prefixes that SQL condition (alias ``p``)
+    keeps."""
+    rows = [_vrf(r) for r in await _select(_VRF_SELECT + " ORDER BY lower(v.name), v.name, v.id")]
+    return await _scoped_vrf_counts(rows, host_ids, prefix_scope)
+
+
+async def get_vrf(
+    vrf_id: int, *, host_ids: Iterable[int] | None = None, prefix_scope: tuple[str, tuple] | None = None
+) -> dict | None:
     rows = await _select(_VRF_SELECT + " WHERE v.id = ?", (int(vrf_id),))
-    return _vrf(rows[0]) if rows else None
+    return (await _scoped_vrf_counts([_vrf(rows[0])], host_ids, prefix_scope))[0] if rows else None
 
 
 @tracks_changes("vrf", "create")
 async def create_vrf(
-    *, name: str, rd: str = "", description: str = "", origin: str = "manual", tenant_id: int | None = None
+    *,
+    name: str,
+    rd: str = "",
+    description: str = "",
+    origin: str = "manual",
+    tenant_id: int | None = None,
+    namespace_id: int = 1,
 ) -> dict:
     """Raises ``ValueError`` when a VRF has the name, ignoring case."""
     taken = ValueError(f"A VRF named '{name}' already exists.")
@@ -185,9 +266,9 @@ async def create_vrf(
         if await cursor.fetchone() is not None:
             raise taken
         cursor = await db.execute(
-            "INSERT INTO vrfs (name, rd, description, origin, created_at, tenant_id) "
-            "VALUES (?, ?, ?, ?, ?, ?) RETURNING id",
-            (name, rd, description, origin, _now(), tenant_id),
+            "INSERT INTO vrfs (name, rd, description, origin, created_at, tenant_id, namespace_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id",
+            (name, rd, description, origin, _now(), tenant_id, int(namespace_id)),
         )
         new_id = int(cursor.lastrowid)
         await db.commit()
@@ -203,12 +284,21 @@ async def create_vrf(
 
 @tracks_changes("vrf", "update", id_arg="vrf_id")
 async def update_vrf(
-    vrf_id: int, *, rd: str, description: str, tenant_id: TenantArg = TENANT_UNCHANGED
+    vrf_id: int,
+    *,
+    rd: str,
+    description: str,
+    tenant_id: TenantArg = TENANT_UNCHANGED,
+    namespace_id: int | None = None,
 ) -> dict | None:
-    """Change the route distinguisher, description and (when given) tenant;
-    the name never changes. ``None`` when the VRF does not exist."""
+    """Change the route distinguisher, description and (when given) tenant
+    and namespace; the name never changes. ``None`` when the VRF does not
+    exist."""
     exprs, values = ["rd = ?", "description = ?"], [rd, description]
     _tenant_set(exprs, values, tenant_id)
+    if namespace_id is not None:
+        exprs.append("namespace_id = ?")
+        values.append(int(namespace_id))
     sql, params = _safe_dynamic_update("vrfs", exprs, values, "id = ?", int(vrf_id))
     db = await _dbcore.get_db()
     try:
@@ -251,32 +341,53 @@ async def delete_vrf(vrf_id: int) -> bool:
         await db.close()
 
 
-async def get_vrf_detail(vrf_id: int, limit: int = 2000) -> dict | None:
+async def get_vrf_detail(
+    vrf_id: int,
+    limit: int = 2000,
+    *,
+    host_ids: Iterable[int] | None = None,
+    prefix_scope: tuple[str, tuple] | None = None,
+) -> dict | None:
     """The VRF with its ``devices``, ``interfaces`` (at most ``limit``,
     ``truncated`` when more exist) and ``prefixes`` (``source``: the IPAM
     source's provider, or ``interface`` for a network only an interface
-    address names)."""
-    vrf = await get_vrf(vrf_id)
+    address names). ``host_ids`` / ``prefix_scope`` (object scope;
+    ``None``: all) keep only those hosts' rows and the prefixes that SQL
+    condition (alias ``p``) keeps."""
+    vrf = await get_vrf(vrf_id, host_ids=host_ids, prefix_scope=prefix_scope)
     if vrf is None:
         return None
     name = vrf["name"]
+    ids = None if host_ids is None else sorted({int(h) for h in host_ids})
+    hv_sql, hv_params = _host_ids_condition("hv.host_id", ids)
+    a_sql, a_params = _host_ids_condition("a.host_id", ids)
+    p_sql, p_params = prefix_scope or ("", ())
     devices = await _select(
         """SELECT hv.host_id, h.hostname, hv.interface_count FROM host_vrfs hv JOIN hosts h ON h.id = hv.host_id
-           WHERE hv.vrf_name = ? ORDER BY lower(h.hostname), hv.host_id""",
-        (name,),
+           WHERE hv.vrf_name = ?"""
+        + (f" AND {hv_sql}" if hv_sql else "")
+        + " ORDER BY lower(h.hostname), hv.host_id",  # nosec B608 - placeholders only
+        (name, *hv_params),
     )
-    rows = await _select(_ADDRESS_SELECT + " WHERE a.vrf_name = ?" + _ADDRESS_ORDER + " LIMIT ?", (name, limit + 1))
+    rows = await _select(
+        _ADDRESS_SELECT + " WHERE a.vrf_name = ?" + (f" AND {a_sql}" if a_sql else "") + _ADDRESS_ORDER + " LIMIT ?",
+        (name, *a_params, limit + 1),
+    )
     interfaces, truncated = _limited([_address(r) for r in rows], limit)
     prefixes = await _select(
         """SELECT subnet, source FROM (
                SELECT p.subnet, s.provider AS source FROM ipam_prefixes p JOIN ipam_sources s ON s.id = p.source_id
-               WHERE p.vrf = ?
+               WHERE p.vrf = ?"""
+        + (f" AND {p_sql}" if p_sql else "")
+        + """
                UNION
                SELECT DISTINCT a.network AS subnet, 'interface' AS source FROM interface_addresses a
-               WHERE a.vrf_name = ?
+               WHERE a.vrf_name = ?"""
+        + (f" AND {a_sql}" if a_sql else "")
+        + """
                  AND NOT EXISTS (SELECT 1 FROM ipam_prefixes p WHERE p.vrf = a.vrf_name AND p.subnet = a.network)
-           ) found ORDER BY subnet, source""",
-        (name, name),
+           ) found ORDER BY subnet, source""",  # nosec B608 - scope conditions, placeholders only
+        (name, *p_params, name, *a_params),
     )
     return {
         **vrf,
@@ -335,28 +446,31 @@ async def ensure_vrfs(names: Iterable[str], origin: str = "discovered") -> int:
 
 _VLAN_SELECT = """
     SELECT v.id, v.vid, v.name, v.site_id, s.name AS site_name, v.description, v.origin, v.created_at,
-           v.tenant_id, tn.name AS tenant_name
+           v.tenant_id, tn.name AS tenant_name, v.vlan_group_id, g.name AS vlan_group_name
     FROM vlans v LEFT JOIN geo_sites s ON s.id = v.site_id LEFT JOIN tenants tn ON tn.id = v.tenant_id
+    LEFT JOIN vlan_groups g ON g.id = v.vlan_group_id
 """
 _VLAN_ORDER = " ORDER BY lower(s.name) ASC NULLS FIRST, v.site_id NULLS FIRST, v.vid, v.id"
 
 
-async def _vlan_counts(record_ids: list[int]) -> dict[int, dict]:
+async def _vlan_counts(record_ids: list[int], host_ids: Iterable[int] | None = None) -> dict[int, dict]:
     """``record id -> {device_count, interface_count, prefix_count,
-    name_mismatch}`` for the given VLAN records."""
+    name_mismatch}`` for the given VLAN records; ``host_ids`` (object
+    scope; ``None``: all) counts only those hosts."""
     counts = {
         rid: {"device_count": 0, "interface_count": 0, "prefix_count": 0, "name_mismatch": False} for rid in record_ids
     }
     if not record_ids:
         return counts
     wanted = set(record_ids)
+    allowed = None if host_ids is None else {int(h) for h in host_ids}
     resolved = [
         r
         for r in await _select(
             f"SELECT r.host_id, r.vid, r.name, r.record_id, v.name AS record_name FROM ({_RESOLVED}) r "
             "JOIN vlans v ON v.id = r.record_id"  # nosec B608 - fixed clauses
         )
-        if int(r["record_id"]) in wanted
+        if int(r["record_id"]) in wanted and (allowed is None or int(r["host_id"]) in allowed)
     ]
     host_vids: dict[int, set[int]] = {}
     for r in resolved:
@@ -382,6 +496,18 @@ async def _vlan_counts(record_ids: list[int]) -> dict[int, dict]:
                 carried[(host, vid)] = carried.get((host, vid), 0) + 1
     for r in resolved:
         counts[int(r["record_id"])]["interface_count"] += carried.get((int(r["host_id"]), int(r["vid"])), 0)
+    if allowed is not None:
+        found: dict[int, set[str]] = {}
+        for row in await _select(
+            f"""SELECT DISTINCT r.record_id, r.host_id, a.network FROM ({_RESOLVED}) r
+                JOIN interface_addresses a ON a.host_id = r.host_id AND a.svi_vid = r.vid
+                WHERE r.record_id IS NOT NULL"""  # nosec B608 - fixed clauses
+        ):
+            if int(row["record_id"]) in wanted and int(row["host_id"]) in allowed:
+                found.setdefault(int(row["record_id"]), set()).add(str(row["network"]))
+        for rid, nets in found.items():
+            counts[rid]["prefix_count"] = len(nets)
+        return counts
     networks = await _select(
         f"""SELECT r.record_id, COUNT(DISTINCT a.network) AS n FROM ({_RESOLVED}) r
             JOIN interface_addresses a ON a.host_id = r.host_id AND a.svi_vid = r.vid
@@ -402,12 +528,15 @@ def _mismatch(device_name: object, record_name: object) -> bool:
 
 def _vlan(row: dict, counts: dict) -> dict:
     site_id = row["site_id"]
+    group_id = row.get("vlan_group_id")
     return {
         "id": int(row["id"]),
         "vid": int(row["vid"]),
         "name": row["name"] or "",
         "site_id": int(site_id) if site_id is not None else None,
         "site": {"id": int(site_id), "name": row["site_name"]} if site_id is not None else None,
+        "vlan_group_id": int(group_id) if group_id is not None else None,
+        "vlan_group": {"id": int(group_id), "name": row["vlan_group_name"]} if group_id is not None else None,
         "description": row["description"] or "",
         "origin": row["origin"],
         "created_at": row["created_at"] or "",
@@ -416,9 +545,18 @@ def _vlan(row: dict, counts: dict) -> dict:
     }
 
 
-async def list_vlans(*, site_id: int | None = None, no_site: bool = False, vid: int | None = None) -> list[dict]:
+async def list_vlans(
+    *,
+    site_id: int | None = None,
+    no_site: bool = False,
+    vid: int | None = None,
+    vlan_group_id: int | None = None,
+    host_ids: Iterable[int] | None = None,
+) -> list[dict]:
     """VLAN records by site name (no site first) then VLAN id; ``site_id``
-    keeps one site's, ``no_site`` those of no site, ``vid`` one VLAN id."""
+    keeps one site's, ``no_site`` those of no site, ``vid`` one VLAN id,
+    ``vlan_group_id`` one VLAN group's. ``host_ids`` (object scope;
+    ``None``: all) counts only those hosts."""
     clauses: list[str] = []
     params: list[int] = []
     if no_site:
@@ -429,21 +567,26 @@ async def list_vlans(*, site_id: int | None = None, no_site: bool = False, vid: 
     if vid is not None:
         clauses.append("v.vid = ?")
         params.append(int(vid))
+    if vlan_group_id is not None:
+        clauses.append("v.vlan_group_id = ?")
+        params.append(int(vlan_group_id))
     where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
     rows = await _select(_VLAN_SELECT + where + _VLAN_ORDER, tuple(params))
-    counts = await _vlan_counts([int(r["id"]) for r in rows])
+    counts = await _vlan_counts([int(r["id"]) for r in rows], host_ids)
     return [_vlan(r, counts[int(r["id"])]) for r in rows]
 
 
-async def get_vlan(vlan_id: int) -> dict | None:
+async def get_vlan(vlan_id: int, *, host_ids: Iterable[int] | None = None) -> dict | None:
     rows = await _select(_VLAN_SELECT + " WHERE v.id = ?", (int(vlan_id),))
     if not rows:
         return None
-    counts = await _vlan_counts([int(rows[0]["id"])])
+    counts = await _vlan_counts([int(rows[0]["id"])], host_ids)
     return _vlan(rows[0], counts[int(rows[0]["id"])])
 
 
-def _vlan_taken(vid: int) -> ValueError:
+def _vlan_taken(vid: int, exc: Exception | None = None) -> ValueError:
+    if exc is not None and "idx_vlans_group_vid" in str(exc):
+        return ValueError(f"VLAN {vid} already exists in this VLAN group.")
     return ValueError(f"VLAN {vid} already exists at this site.")
 
 
@@ -456,22 +599,24 @@ async def create_vlan(
     description: str = "",
     origin: str = "manual",
     tenant_id: int | None = None,
+    vlan_group_id: int | None = None,
 ) -> dict:
-    """Raises ``ValueError`` when the site (or no site) has the VLAN id. The
-    caller checks that the site exists."""
+    """Raises ``ValueError`` when the site (or no site), or the VLAN group,
+    has the VLAN id. The caller checks that the site and group exist and
+    that the VLAN fits the group (``vlan_group_problem``)."""
     db = await _dbcore.get_db()
     try:
         cursor = await db.execute(
-            """INSERT INTO vlans (vid, name, site_id, description, origin, created_at, tenant_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id""",
-            (int(vid), name, site_id, description, origin, _now(), tenant_id),
+            """INSERT INTO vlans (vid, name, site_id, description, origin, created_at, tenant_id, vlan_group_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id""",
+            (int(vid), name, site_id, description, origin, _now(), tenant_id, vlan_group_id),
         )
         new_id = int(cursor.lastrowid)
         await db.commit()
     except Exception as exc:
         await db.rollback()
         if _is_unique_violation(exc):
-            raise _vlan_taken(vid) from exc
+            raise _vlan_taken(vid, exc) from exc
         raise
     finally:
         await db.close()
@@ -480,13 +625,20 @@ async def create_vlan(
 
 @tracks_changes("vlan", "update", id_arg="vlan_id")
 async def update_vlan(
-    vlan_id: int, *, name: str, site_id: int | None, description: str, tenant_id: TenantArg = TENANT_UNCHANGED
+    vlan_id: int,
+    *,
+    name: str,
+    site_id: int | None,
+    description: str,
+    tenant_id: TenantArg = TENANT_UNCHANGED,
+    vlan_group_id: TenantArg = TENANT_UNCHANGED,
 ) -> dict | None:
-    """Change the name, site, description and (when given) tenant (the VLAN
-    id never changes). ``None`` when it does not exist; ``ValueError`` when
-    the new site has the VLAN id already."""
+    """Change the name, site, description and (when given) tenant and VLAN
+    group (the VLAN id never changes). ``None`` when it does not exist;
+    ``ValueError`` when the new site or group has the VLAN id already."""
     exprs, values = ["name = ?", "site_id = ?", "description = ?"], [name, site_id, description]
     _tenant_set(exprs, values, tenant_id)
+    _tenant_set(exprs, values, vlan_group_id, "vlan_group_id")
     sql, params = _safe_dynamic_update("vlans", exprs, values, "id = ?", int(vlan_id))
     db = await _dbcore.get_db()
     try:
@@ -497,7 +649,7 @@ async def update_vlan(
         await db.rollback()
         if _is_unique_violation(exc):
             current = await _select("SELECT vid FROM vlans WHERE id = ?", (int(vlan_id),))
-            raise _vlan_taken(int(current[0]["vid"]) if current else 0) from exc
+            raise _vlan_taken(int(current[0]["vid"]) if current else 0, exc) from exc
         raise
     finally:
         await db.close()
@@ -542,18 +694,24 @@ async def list_vlan_ports(vid: int, host_ids: Iterable[int] | None = None) -> li
     return by_mode["access"] + by_mode["trunk"]
 
 
-async def get_vlan_detail(vlan_id: int, limit: int = 2000) -> dict | None:
+async def get_vlan_detail(vlan_id: int, limit: int = 2000, *, host_ids: Iterable[int] | None = None) -> dict | None:
     """The VLAN with the ``devices`` that resolve to it (their own name for
     it), their ``interfaces`` in it (at most ``limit``, ``truncated`` when
-    more exist) and the ``prefixes`` of their VLAN interfaces."""
-    vlan = await get_vlan(vlan_id)
+    more exist) and the ``prefixes`` of their VLAN interfaces. ``host_ids``
+    (object scope; ``None``: all) keeps only those devices."""
+    vlan = await get_vlan(vlan_id, host_ids=host_ids)
     if vlan is None:
         return None
-    devices = await _select(
-        f"SELECT r.host_id, r.hostname, r.name, r.state FROM ({_RESOLVED}) r WHERE r.record_id = ? "
-        "ORDER BY lower(r.hostname), r.host_id",  # nosec B608 - fixed clauses, placeholders only
-        (int(vlan_id),),
-    )
+    allowed = None if host_ids is None else {int(h) for h in host_ids}
+    devices = [
+        d
+        for d in await _select(
+            f"SELECT r.host_id, r.hostname, r.name, r.state FROM ({_RESOLVED}) r WHERE r.record_id = ? "
+            "ORDER BY lower(r.hostname), r.host_id",  # nosec B608 - fixed clauses, placeholders only
+            (int(vlan_id),),
+        )
+        if allowed is None or int(d["host_id"]) in allowed
+    ]
     host_ids = [int(d["host_id"]) for d in devices]
     ports = await list_vlan_ports(vlan["vid"], host_ids) if host_ids else []
     ports.sort(key=lambda p: (str(p["hostname"] or "").lower(), int(p["host_id"]), str(p["interface"] or "")))
@@ -755,9 +913,12 @@ async def get_interface_addresses_for_host(host_id: int) -> dict:
     }
 
 
-async def find_interface_addresses(address: str, vrf: str | None = None) -> list[dict]:
+async def find_interface_addresses(
+    address: str, vrf: str | None = None, *, host_ids: Iterable[int] | None = None
+) -> list[dict]:
     """The interface addresses equal to ``address`` (any spelling of it),
-    only those of VRF ``vrf`` when it is given. ``[]`` when ``address`` is
+    only those of VRF ``vrf`` when it is given and of the hosts ``host_ids``
+    (object scope) when that is not ``None``. ``[]`` when ``address`` is
     not an IP address."""
     try:
         canonical = str(ipaddress.ip_address(str(address).strip()))
@@ -767,14 +928,21 @@ async def find_interface_addresses(address: str, vrf: str | None = None) -> list
     if vrf is not None:
         where += " AND a.vrf_name = ?"
         params.append(vrf)
+    host_sql, host_params = _host_ids_condition("a.host_id", host_ids)
+    if host_sql:
+        where += f" AND {host_sql}"
+        params.extend(host_params)
     rows = await _select(_ADDRESS_SELECT + where + _ADDRESS_ORDER, tuple(params))
     return [_address(r) for r in rows]
 
 
-async def find_interface_addresses_in_subnet(subnet: str, vrf: str | None = None, limit: int = 1024) -> list[dict]:
+async def find_interface_addresses_in_subnet(
+    subnet: str, vrf: str | None = None, limit: int = 1024, *, host_ids: Iterable[int] | None = None
+) -> list[dict]:
     """The interface addresses inside ``subnet`` (at most ``limit``), only
-    those of VRF ``vrf`` when it is given. ``[]`` when ``subnet`` is not a
-    network."""
+    those of VRF ``vrf`` when it is given and of the hosts ``host_ids``
+    (object scope) when that is not ``None``. ``[]`` when ``subnet`` is not
+    a network."""
     try:
         network = str(ipaddress.ip_network(str(subnet).strip(), strict=False))
     except ValueError:
@@ -783,6 +951,10 @@ async def find_interface_addresses_in_subnet(subnet: str, vrf: str | None = None
     if vrf is not None:
         where += " AND a.vrf_name = ?"
         params.append(vrf)
+    host_sql, host_params = _host_ids_condition("a.host_id", host_ids)
+    if host_sql:
+        where += f" AND {host_sql}"
+        params.extend(host_params)
     rows = await _select(_ADDRESS_SELECT + where + _ADDRESS_ORDER + " LIMIT ?", (*params, int(limit)))
     return [_address(r) for r in rows]
 

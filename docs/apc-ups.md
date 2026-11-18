@@ -26,9 +26,14 @@ not this type: add it as an **ICMP-only** host if it has an address.
 
 1. On the card's web page, enable SNMP access:
    - **SNMPv3** (recommended): *Configuration > Network > SNMPv3 > Access*,
-     enable it; under *User Profiles* set a user with SHA authentication and
-     AES privacy; under *Access Control* allow the Plexus server's address
-     for that user.
+     enable it. The card has a fixed set of user profiles (four) that cannot
+     be added or deleted: pick one that is not in use (its *Access Control*
+     entry is disabled or has no NMS address; changing a used profile cuts
+     off whatever polls with it), click its name under *User Profiles* and
+     set a user name, SHA (or SHA-256) authentication and AES (or AES-256)
+     privacy with their passphrases. Then click the matching entry under
+     *Access Control*, enable it, select that user and enter the Plexus
+     server's address as the NMS host.
    - **SNMPv1** (read-only community): *Configuration > Network > SNMPv1 >
      Access*, enable it; under *Access Control* set a community with
      *Read* access and the Plexus server's address as the NMS IP. Recent card
@@ -40,9 +45,15 @@ not this type: add it as an **ICMP-only** host if it has an address.
    version and credentials. Discovery recognises the card from its system
    description ("APC Web/SNMP Management Card ... AN1:apc_hw05_sumx_...")
    and suggests the type; a card whose application module is a PDU, transfer
-   switch or cooling module is not taken for a UPS.
-3. Turn on monitoring (Monitoring > Settings) if it is not on. The first poll
-   fills in the UPS's model and serial on the host.
+   switch or cooling module is not taken for a UPS. It then reads the UPS's
+   model and serial (`upsBasicIdentModel`, `upsAdvIdentSerialNumber`) in a
+   second GET, since the card has no ENTITY-MIB chassis row. Without SNMP, discovery
+   with an SSH credential (the card's login) also recognises it: the card
+   answers `show version` with `E101: Command Not Found`, so Plexus asks
+   `upsabout` and adds the UPS with its model and serial. Monitoring still
+   needs the SNMP profile.
+3. Turn on monitoring (Monitoring > Settings) if it is not on. Each poll
+   keeps the UPS's model and serial on the host up to date.
 
 ## What Plexus collects
 
@@ -59,7 +70,18 @@ Each monitoring poll (ICMP + SNMP) reads:
 | Battery needs replacing | `upsAdvBatteryReplaceIndicator` | `1.3.6.1.4.1.318.1.1.1.2.2.4.0` |
 | Output status | `upsBasicOutputStatus` (on line, on battery, bypass, off...) | `1.3.6.1.4.1.318.1.1.1.4.1.1.0` |
 | Output load % | `upsAdvOutputLoad` | `1.3.6.1.4.1.318.1.1.1.4.2.3.0` |
+| Input voltage (V) | `upsHighPrecInputLineVoltage` (tenths of a volt), else `upsAdvInputLineVoltage` (volts) | `1.3.6.1.4.1.318.1.1.1.3.3.1.0`, `1.3.6.1.4.1.318.1.1.1.3.2.1.0` |
+| Input frequency (Hz) | `upsHighPrecInputFrequency` (tenths of a hertz), else `upsAdvInputFrequency` (hertz) | `1.3.6.1.4.1.318.1.1.1.3.3.4.0`, `1.3.6.1.4.1.318.1.1.1.3.2.4.0` |
+| Last transfer cause | `upsAdvInputLineFailCause` (no transfer, high line voltage, brownout, blackout, small / deep momentary sag, small / large momentary spike, self-test, rate of voltage change) | `1.3.6.1.4.1.318.1.1.1.3.2.5.0` |
+| Output voltage (V) | `upsHighPrecOutputVoltage` (tenths of a volt), else `upsAdvOutputVoltage` (volts) | `1.3.6.1.4.1.318.1.1.1.4.3.1.0`, `1.3.6.1.4.1.318.1.1.1.4.2.1.0` |
+| Battery temperature (°C) | `upsHighPrecExtdBatteryTemperature` (tenths, may be negative), else `upsHighPrecBatteryTemperature` (tenths), else `upsAdvBatteryTemperature` (degrees) | `1.3.6.1.4.1.318.1.1.1.2.3.13.0`, `1.3.6.1.4.1.318.1.1.1.2.3.2.0`, `1.3.6.1.4.1.318.1.1.1.2.2.2.0` |
+| Probe temperature (°C) | `uioSensorStatusTemperatureDegC`: the first probe with a valid reading on the card's universal I/O ports (AP9335T / AP9335TH) | `1.3.6.1.4.1.318.1.1.25.1.2.1.6` (table) |
 | Card model, card firmware (AOS), application module and firmware, card serial | the card's `sysDescr` (`MN`, `PF`, `AN1`, `AF1`, `SN`) | `1.3.6.1.2.1.1.1.0` |
+
+A reading the UPS does not answer (no such object on an older model, or the
+"not present" value: 255 for the two older temperature objects, -1 for a
+probe) is empty, never 0. A real 0 is kept: the input reads 0 V during a
+blackout.
 
 Plus, as for every SNMP host: uptime (`sysUpTime`), the card's network
 interface (IF-MIB), and ICMP latency and loss. A UPS has no CPU or memory to
@@ -68,38 +90,137 @@ read, so those stay empty and their built-in alerts never fire.
 Where it goes:
 
 - **Device page** (Monitoring > a device): a *UPS* card with the output and
-  battery state, capacity, runtime, load, and the UPS and card identity and
-  firmware; the *Overview* charts show battery capacity, output load and
-  runtime instead of CPU and memory.
+  battery state, capacity, runtime, load, input voltage and frequency,
+  output voltage, last transfer cause, battery (and probe) temperature, and
+  the UPS and card identity and firmware; the *Overview* charts show battery
+  capacity, output load, runtime, input / output voltage, input frequency
+  and temperature instead of CPU and memory.
 - **History**: battery capacity (`ups_battery_capacity_pct`), runtime
-  (`ups_runtime_minutes`), output load (`ups_output_load_pct`) and the
-  output and battery state codes (`ups_output_status`, `ups_battery_status`)
-  are metric samples, rolled up hourly and daily like CPU and memory, so they
+  (`ups_runtime_minutes`), output load (`ups_output_load_pct`), input and
+  output voltage (`ups_input_voltage_v`, `ups_output_voltage_v`), input
+  frequency (`ups_input_frequency_hz`), battery and probe temperature
+  (`ups_battery_temperature_c`, `ups_probe_temperature_c`) and the output
+  and battery state codes (`ups_output_status`, `ups_battery_status`) are
+  metric samples, rolled up hourly and daily like CPU and memory, so they
   outlive the raw-poll retention. The newest state is kept per host
   (`GET /api/monitoring/hosts/{host_id}/vendor-status`).
 - **Host fields**: the UPS model and serial, and the card firmware as the
   host's software version (the version that security advisories name).
+- **Role**: an `apc_ups` host is in the `ups` device category with the UPS
+  role, so the Topology map draws it with the UPS (battery) icon and the
+  Ansible inventory can filter on `device_category=ups`. A CDP / LLDP
+  neighbor whose platform is a UPS card is drawn the same way. A role set by
+  hand is kept.
 - **Availability and SLA**: the host is up while it answers the poll,
   through the same pipeline as every inventory host (transitions, uptime %,
   latency, loss, SLA targets evaluated on the server).
 
 ## Alerts
 
-Raised on the server by the monitoring poll into the monitoring alerts and
-the notification channels, once per condition (deduplicated like the other
-built-in checks) and resolved automatically when the UPS stops reporting it:
+Raised on the server by the monitoring poll (and by the UPS's SNMP traps,
+below) into the monitoring alerts and the notification channels, once per
+condition (deduplicated like the other built-in checks) and resolved
+automatically when the UPS stops reporting it:
 
 | Alert metric | Raised when | Severity |
 |---|---|---|
 | `ups_on_battery` | Output status *on battery* | Warning; critical when the battery is also low |
 | `ups_battery` | Battery status low, fault or no battery present; or the replace indicator is set | Critical for low / fault / no battery, warning for replace only |
 | `ups_output` | Output status off, timed sleeping or sleeping until power returns; or on bypass (software, switched, hardware failure, emergency static) | Critical when off or on hardware-failure / emergency bypass, warning on software or switched bypass |
+| `ups_overload` | Output load 100 % or more of the UPS's rating | Critical |
+| `ups_battery_temperature` | Battery temperature 40 °C or more | Warning from 40 °C, critical from 50 °C |
+| `ups_communication` | Trap only: the card lost communication with the UPS (`communicationLost`, `onbatterycommunicationLost`) | Critical; resolved by `communicationEstablished` or by a poll that reads a known output state |
+
+The temperature thresholds are one constant, `BATTERY_TEMPERATURE_C` in
+`netcontrol/integrations/apc/snmp.py`: lead-acid batteries are rated at
+20-25 °C and lose about half their life for every 8-10 °C above that, so
+40 °C is already a sustained problem and 50 °C an urgent one.
 
 A self-test (*on battery test*) does not alert. Each can be suppressed per
-host or group (Monitoring > Suppressions). Alert rules can also use
-`ups_battery_capacity_pct`, `ups_runtime_minutes` and
-`ups_output_load_pct` as metrics, for example *runtime below 10 minutes* or
-*load above 80 %*.
+host or group (Monitoring > Suppressions). Input voltage and frequency have
+no built-in alert, since the right band depends on the mains (230 V / 50 Hz
+or 120 V / 60 Hz) and on the UPS's own transfer points: use alert rules.
+Alert rules can use `ups_battery_capacity_pct`, `ups_runtime_minutes`,
+`ups_output_load_pct`, `ups_input_voltage_v`, `ups_input_frequency_hz`,
+`ups_output_voltage_v`, `ups_battery_temperature_c` and
+`ups_probe_temperature_c` as metrics, for example *runtime below 10
+minutes*, *load above 80 %*, *input voltage below 207 V* or *probe
+temperature above 30 °C*.
+
+## SNMP traps
+
+The card sends a trap the moment the UPS changes state. Plexus's SNMP trap
+receiver stores every trap (Monitoring > Events) and, for a PowerNet-MIB
+trap (enterprise `1.3.6.1.4.1.318`, SNMPv1 or SNMPv2c) from a UPS in the
+inventory, acts on it at once:
+
+1. **Match**: the trap's source address is looked up among the inventory
+   hosts' addresses and recorded interface addresses; when it is not found
+   (the trap passed through NAT), an SNMPv1 trap's agent address is tried.
+   Only an `apc_ups` host is acted on. A trap from anything else is stored
+   as before and nothing more.
+2. **Alert**: the trap raises or resolves the built-in alert it names, under
+   the same alert key the poll uses, so a trap and a poll never make two
+   alerts for one condition and each resolves the other's. A suppression
+   for the host, its group or the metric applies to traps too.
+3. **Re-poll**: the host is polled a few seconds later (the full monitoring
+   poll of that one host), so its state on the device page, its charts and
+   every alert catch up. A burst of traps is one re-poll. The poll stays
+   authoritative: it re-raises what the UPS still reports and resolves what
+   it no longer does.
+
+Nothing is acted on while monitoring is off (Monitoring > Settings).
+
+| Trap (number) | Effect |
+|---|---|
+| `upsOnBattery` (5) | Raises `ups_on_battery` (warning) |
+| `powerRestored` (9) | Resolves `ups_on_battery` |
+| `lowBattery` (7) | Raises `ups_battery` (critical) |
+| `returnFromLowBattery` (11) | Resolves `ups_battery` |
+| `upsBatteryNeedsReplacement` (17) | Raises `ups_battery` (warning) |
+| `upsBatteryReplaced` (36) | Resolves `ups_battery` |
+| `noBatteries` (80) / `noBatteriesCleared` (81) | Raises (critical) / resolves `ups_battery` |
+| `upsOverload` (2) / `upsOverloadCleared` (33) | Raises (critical) / resolves `ups_overload` |
+| `upsTurnedOff` (12), `upsSleeping` (13) | Raises `ups_output` (critical) |
+| `hardwareFailureBypass` (20) | Raises `ups_output` (critical) |
+| `softwareBypass` (21), `switchedBypass` (22) | Raises `ups_output` (warning) |
+| `returnFromBypass` (23), `upsTurnedOn` (30), `upsWokeUp` (14) | Resolves `ups_output` |
+| `communicationLost` (1), `onbatterycommunicationLost` (733) | Raises `ups_communication` (critical) |
+| `communicationEstablished` (8) | Resolves `ups_communication` |
+| `batteryOverTemperature` (53) / `...Cleared` (54), `upsInternalOverTemperature` (353) / `...Cleared` (354), `upsDiagnosticsFailed` (3), `upsDiagnosticsPassed` (10), `upsDischarged` (4), `dischargeCleared` (38), `upsRebootStarted` (15), and any other APC trap | Re-poll only (the battery temperature alert is evaluated by the poll against Plexus's thresholds, not the card's) |
+
+The numbers are the TRAP-TYPE values of PowerNet-MIB; an SNMPv2c card sends
+trap `1.3.6.1.4.1.318.0.<number>`. A decoded APC trap is stored with its
+name, the card's text (`mtrapargsString`) and its MIB severity.
+
+### Pointing the card at Plexus
+
+1. **Start the receiver.** It is not started with Plexus: an admin starts it
+   with `POST /api/admin/metrics/receivers/start` (body
+   `{"trap_port": 10162}` to choose the port; 10162 by default, since 162
+   needs root). It listens on UDP on every interface until Plexus restarts.
+   Open that UDP port from the card's network to the Plexus server (and
+   publish it from the container when Plexus runs in Docker).
+2. **Add Plexus as a trap receiver on the card**: *Configuration >
+   Network > SNMPv1 > Trap Receivers* (NMC2: *Administration > Network >
+   SNMPv1 > trap receivers*), *Add Trap Receiver*: the Plexus server's
+   address as the NMS IP / host name, **SNMPv1** or **SNMPv2c** as the
+   trap type, a community name, and the port (10162) where the card
+   offers one. Plexus does not check the trap community today: use one
+   that is not your read community.
+3. **Enable the UPS events** for that receiver: *Configuration >
+   Notification > Event Actions* (*by Event* or *by Group*), and make sure
+   the trap action is on for at least *UPS: On battery*, *Power restored*,
+   *Low battery*, *Battery needs replacing*, *Overload*, *Bypass*, *UPS
+   turned off / on* and *Communication lost / established*. They are on by
+   default for a new receiver.
+4. Start a UPS self-test from the card's UPS control page: the card sends
+   `upsDiagnosticsPassed` (10), which should appear in Monitoring > Events
+   as *APC upsDiagnosticsPassed* with the UPS as its host.
+
+SNMPv3 traps are received and stored, but not decoded or acted on (Plexus
+has no trap user keys): use an SNMPv1 or SNMPv2c trap receiver for the
+immediate alerts, even when the poll uses SNMPv3.
 
 ## Software versions and advisories
 
@@ -123,13 +244,16 @@ see [upgrade-tool-guide.md](upgrade-tool-guide.md).
 
 ## Limits
 
-- No SNMP traps: a power event is seen at the next poll (the monitoring
-  interval, 300 s by default; shorten it in Monitoring > Settings if UPS
-  alerts must be faster), not when the card sends it.
+- Without the trap receiver (or with SNMPv3 traps), a power event is seen
+  at the next poll (the monitoring interval, 300 s by default), not when
+  the card sends it.
+- The trap community is not checked: a forged trap can raise an alert, which
+  the re-poll a few seconds later resolves when the UPS does not report it.
 - Only the first UPS of the card is read; a parallel or three-phase
   Symmetra / Galaxy system's per-module and per-phase tables are not.
-- Input voltage and frequency, temperatures, outlet groups and
-  environmental probes are not collected.
+- Outlet groups, probe humidity and the probes of an external environmental
+  monitor are not collected; with several temperature probes, only the
+  first valid one is.
 - `upsAdvIdentSerialNumber` is the serial of the UPS's microprocessor; on
   older UPSs it differs from the label on the rear.
 - A UPS with no card (USB or serial only) cannot be monitored over the

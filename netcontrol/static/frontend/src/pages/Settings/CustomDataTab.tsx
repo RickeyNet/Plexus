@@ -18,6 +18,7 @@ import { TagChips } from '@/components/TagChips';
 import { countObjects, FIELD_TYPE_LABELS, OBJECT_TYPE_LABELS, OBJECT_TYPES } from '@/lib/customData';
 import { usePendingKeys } from '@/lib/usePendingKeys';
 
+import { ComputedFieldsSection, RelationshipsSection } from './ComputedRelationshipSections';
 import { CustomFieldModal } from './CustomFieldModal';
 import { SectionCard } from './SectionCard';
 import { TagModal } from './TagModal';
@@ -141,6 +142,9 @@ function FieldsSection() {
   );
 }
 
+/** Always listed in a tag's usage; other types only when they carry the tag. */
+const BASE_TYPES: readonly string[] = ['host', 'group', 'prefix'];
+
 function usageTotal(tag: TagWithUsage): number {
   return OBJECT_TYPES.reduce((sum, t) => sum + (tag.usage?.[t] ?? 0), 0);
 }
@@ -206,7 +210,9 @@ function TagsSection() {
           </thead>
           <tbody>
             {rows.map((tag) => {
-              const split = OBJECT_TYPES.map((t) => countObjects(tag.usage?.[t] ?? 0, t)).join(', ');
+              const split = OBJECT_TYPES.filter((t) => BASE_TYPES.includes(t) || (tag.usage?.[t] ?? 0) > 0)
+                .map((t) => countObjects(tag.usage?.[t] ?? 0, t))
+                .join(', ');
               return (
                 <tr key={tag.id}>
                   <td>
@@ -248,7 +254,7 @@ function TagsSection() {
   );
 }
 
-/** Settings tab where admins define custom fields and manage tags. */
+/** Settings tab where admins define custom fields, computed fields and relationships, and manage tags. */
 export function CustomDataTab() {
   return (
     <div className="stack">
@@ -257,6 +263,12 @@ export function CustomDataTab() {
       </SectionCard>
       <SectionCard title="Tags">
         <TagsSection />
+      </SectionCard>
+      <SectionCard title="Computed fields">
+        <ComputedFieldsSection />
+      </SectionCard>
+      <SectionCard title="Relationships">
+        <RelationshipsSection />
       </SectionCard>
     </div>
   );

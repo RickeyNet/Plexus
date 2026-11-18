@@ -43,6 +43,13 @@ Registered under the ``topology`` feature: reads need ``topology``, builds
 and deletes need ``topology.write``, organization (credential) management
 needs admin.
 
+Object scope: the organizations, accounts and snapshots are no inventory
+hosts, so a caller limited to selected inventory groups does not see them
+(lists are empty, an id answers 404, builds and demo data are refused). Its
+map, path traces, reachability sweeps, summaries, searches and exports cover
+the hosts of its inventory groups and the neighbors they report
+(``netcontrol.routes.topology.LinkScope``).
+
 The routes live under ``/api/sources`` (``/api/sources/{id}/validate``,
 ``/api/sources/snapshots``...), since an entry can be any of the providers
 above; nothing here is named after Meraki.
@@ -195,7 +202,14 @@ from netcontrol.integrations.pathtrace.offline import (
     inputs as offline_inputs,
     trace as offline_trace,
 )
-from netcontrol.object_scope import request_scope
+from netcontrol.integrations.remote_users import apply_user_directory
+from netcontrol.object_scope import (
+    ObjectScope,
+    group_filter,
+    refuse_scoped,
+    request_scope,
+    scoped,
+)
 from netcontrol.routes import background_jobs, state
 from netcontrol.routes.cloud_collectors import skipped_note
 from netcontrol.routes.cloud_visibility import discovery_progress
@@ -918,8 +932,10 @@ def _api_error_message(exc: MerakiApiError) -> str:
 
 
 @router.get("/api/sources")
-async def list_meraki_orgs_api():
-    orgs = await db.list_meraki_orgs()
+@scoped("list")
+async def list_meraki_orgs_api(request: Request):
+    # Organizations and accounts are no inventory hosts: a scoped caller sees none.
+    orgs = await db.list_meraki_orgs() if (await request_scope(request)).unrestricted else []
     return {
         "orgs": [_serialize_org(o) for o in orgs],
         "default_options": dict(DEFAULT_OPTIONS),
@@ -932,6 +948,7 @@ async def list_meraki_orgs_api():
 
 
 @router.post("/api/sources", status_code=201, dependencies=[Depends(_require_admin_dep)])
+@scoped("admin")
 async def create_meraki_org_api(body: MerakiOrgCreate, request: Request):
     user = _session_user(request)
     provider = _provider_key(body.provider) or PROVIDER_MERAKI
@@ -975,12 +992,14 @@ def _schedule_payload() -> dict[str, Any]:
 
 # Registered before ``/api/sources/{org_ref}``, which would otherwise match.
 @router.get("/api/sources/schedule", dependencies=[Depends(_require_admin_dep)])
+@scoped("admin")
 async def get_source_schedule_api():
     """The schedule of source collection: on or off, and the default interval."""
     return _schedule_payload()
 
 
 @router.put("/api/sources/schedule", dependencies=[Depends(_require_admin_dep)])
+@scoped("admin")
 async def update_source_schedule_api(body: SourceScheduleUpdate, request: Request):
     current = dict(state.SOURCE_COLLECTION_SYNC_CONFIG)
     if body.enabled is not None:
@@ -1001,6 +1020,7 @@ async def update_source_schedule_api(body: SourceScheduleUpdate, request: Reques
 
 
 @router.put("/api/sources/{org_ref}", dependencies=[Depends(_require_admin_dep)])
+@scoped("admin")
 async def update_meraki_org_api(org_ref: int, body: MerakiOrgUpdate, request: Request):
     provider = _provider_of(await _get_org_or_404(org_ref))
     updates: dict[str, Any] = {}
@@ -1033,6 +1053,7 @@ async def update_meraki_org_api(org_ref: int, body: MerakiOrgUpdate, request: Re
 
 
 @router.delete("/api/sources/{org_ref}", dependencies=[Depends(_require_admin_dep)])
+@scoped("admin")
 async def delete_meraki_org_api(org_ref: int, request: Request):
     org = await _get_org_or_404(org_ref)
     if org_ref in _running_builds:
@@ -1050,6 +1071,7 @@ async def delete_meraki_org_api(org_ref: int, request: Request):
 
 
 @router.post("/api/sources/{org_ref}/validate", dependencies=[Depends(_require_admin_dep)])
+@scoped("admin")
 async def validate_meraki_org_api(org_ref: int):
     """Check the stored credentials of a source: the organizations a Meraki
     key can see, or a sign-in to a Cato, FMC, Panorama, Appgate or OPNsense entry."""
@@ -1330,6 +1352,10 @@ async def _resolve_org_id(client: MerakiClient, org: dict) -> str:
 
 async def _store_snapshot(org: dict, snapshot: dict, *, user: str, started: float) -> dict:
     duration = round(time.monotonic() - started, 1)
+    # Every remote user the source knows, connected now or not: the users
+    # earlier collections saw are carried forward (``remote_users``).
+    previous = await latest_snapshot_of(org["id"])
+    apply_user_directory(snapshot, previous[1] if previous else None, now=datetime.now(UTC))
     snapshot_id = await db.create_meraki_snapshot(org["id"], snapshot, built_by=user, duration_seconds=duration)
     await db.prune_meraki_snapshots(org["id"], _SNAPSHOTS_KEPT_PER_ORG)
     warnings = len((snapshot.get("collection") or {}).get("errors") or [])
@@ -1470,8 +1496,10 @@ async def _run_build(job_id: str, org: dict, user: str) -> None:
 
 
 @router.post("/api/sources/{org_ref}/build", status_code=202)
+@scoped("refused")
 async def build_meraki_topology_api(org_ref: int, request: Request):
     """Start a collection of the source. Poll ``/api/sources/builds/{job_id}`` for progress."""
+    await refuse_scoped(request)
     org = await _get_org_or_404(org_ref)
     if not org.get("has_api_key"):
         raise HTTPException(status_code=400, detail="No API key is stored for this organization")
@@ -1484,13 +1512,16 @@ async def build_meraki_topology_api(org_ref: int, request: Request):
 
 
 @router.get("/api/sources/builds/{job_id}")
-async def get_meraki_build_api(job_id: str):
-    """A collection job: a source's build or the inventory collection."""
+@scoped("job")
+async def get_meraki_build_api(job_id: str, request: Request):
+    """A collection job: a source's build or the inventory collection (a
+    scoped caller: the inventory collection only)."""
     # Imported here: inventory_collection imports this module.
     from netcontrol.routes.inventory_collection import JOB_KIND as INVENTORY_JOB_KIND
 
     job = background_jobs.get_job(job_id)
-    if job is None or job["kind"] not in (_JOB_KIND, INVENTORY_JOB_KIND):
+    kinds = (_JOB_KIND, INVENTORY_JOB_KIND) if (await request_scope(request)).unrestricted else (INVENTORY_JOB_KIND,)
+    if job is None or job["kind"] not in kinds:
         raise HTTPException(status_code=404, detail="Build job not found (it may have expired)")
     return job
 
@@ -1642,6 +1673,7 @@ async def _build_cloud_sample(cloud: _Cloud, user: str) -> dict:
 
 
 @router.post("/api/sources/sample", status_code=201)
+@scoped("refused")
 async def build_sample_topology_api(request: Request, provider: str = Query(default=PROVIDER_MERAKI)):
     """Build a snapshot from bundled demo data (no API key needed).
     ``provider=cato`` builds the demo Cato account instead of the Meraki one,
@@ -1650,7 +1682,8 @@ async def build_sample_topology_api(request: Request, provider: str = Query(defa
     firewalls, ``provider=appgate`` the demo Appgate SDP collective,
     ``provider=opnsense`` the demo OPNsense firewall,
     ``provider=aws`` / ``provider=azure`` / ``provider=gcp`` the demo AWS
-    account / Azure subscription / GCP project in Cloud Visibility."""
+    account in Cloud Visibility."""
+    await refuse_scoped(request)
     user = _session_user(request)
     provider = _provider_key(provider) or PROVIDER_MERAKI
     if provider == PROVIDER_CATO:
@@ -1682,36 +1715,50 @@ async def build_sample_topology_api(request: Request, provider: str = Query(defa
 
 
 @router.get("/api/sources/snapshots")
+@scoped("list")
 async def list_meraki_snapshots_api(
+    request: Request,
     org_ref: int | None = Query(default=None),
     limit: int = Query(default=100, ge=1, le=500),
 ):
+    if (await request_scope(request)).restricted:
+        return {"snapshots": []}
     return {"snapshots": await db.list_meraki_snapshots(org_ref, limit)}
 
 
-async def _get_snapshot_or_404(snapshot_id: int, *, include_body: bool) -> dict:
+_SNAPSHOT_NOT_FOUND = "Topology snapshot not found"
+
+
+async def _get_snapshot_or_404(snapshot_id: int, *, include_body: bool, request: Request | None = None) -> dict:
+    """The snapshot; 404 when unknown, and for a scoped caller (a source's
+    snapshot is no inventory host's)."""
+    if request is not None and (await request_scope(request)).restricted:
+        raise HTTPException(status_code=404, detail=_SNAPSHOT_NOT_FOUND)
     row = await db.get_meraki_snapshot(snapshot_id, include_body=include_body)
     if not row:
-        raise HTTPException(status_code=404, detail="Topology snapshot not found")
+        raise HTTPException(status_code=404, detail=_SNAPSHOT_NOT_FOUND)
     return row
 
 
 @router.get("/api/sources/snapshots/{snapshot_id}")
-async def get_meraki_snapshot_api(snapshot_id: int):
-    return await _get_snapshot_or_404(snapshot_id, include_body=False)
+@scoped("snapshot")
+async def get_meraki_snapshot_api(snapshot_id: int, request: Request):
+    return await _get_snapshot_or_404(snapshot_id, include_body=False, request=request)
 
 
 @router.get("/api/sources/snapshots/{snapshot_id}/data")
-async def get_meraki_snapshot_data_api(snapshot_id: int):
+@scoped("snapshot")
+async def get_meraki_snapshot_data_api(snapshot_id: int, request: Request):
     """The full node/edge snapshot as JSON (for scripting / other tools)."""
-    return (await _get_snapshot_or_404(snapshot_id, include_body=True))["snapshot"]
+    return (await _get_snapshot_or_404(snapshot_id, include_body=True, request=request))["snapshot"]
 
 
 @router.get("/api/sources/snapshots/{snapshot_id}/warnings")
-async def get_meraki_snapshot_warnings_api(snapshot_id: int):
+@scoped("snapshot")
+async def get_meraki_snapshot_warnings_api(snapshot_id: int, request: Request):
     """The collection warnings of a snapshot (API calls that failed or were
     refused), for the Map Sources dialog."""
-    row = await _get_snapshot_or_404(snapshot_id, include_body=True)
+    row = await _get_snapshot_or_404(snapshot_id, include_body=True, request=request)
     errors = ((row["snapshot"] or {}).get("collection") or {}).get("errors") or []
     return {
         "snapshot_id": snapshot_id,
@@ -1729,8 +1776,9 @@ async def get_meraki_snapshot_warnings_api(snapshot_id: int):
 
 
 @router.delete("/api/sources/snapshots/{snapshot_id}")
+@scoped("snapshot")
 async def delete_meraki_snapshot_api(snapshot_id: int, request: Request):
-    await _get_snapshot_or_404(snapshot_id, include_body=False)
+    await _get_snapshot_or_404(snapshot_id, include_body=False, request=request)
     await db.delete_meraki_snapshot(snapshot_id)
     _topology_changed()
     await _audit(
@@ -1864,15 +1912,21 @@ def _cloud_source(account: dict) -> dict[str, Any]:
 
 
 @router.get("/api/topology/sources")
-async def list_topology_sources_api():
+@scoped("list")
+async def list_topology_sources_api(request: Request = None):  # type: ignore[assignment]
     """Everything that feeds the topology map, with its last collection:
     neighbor discovery of the inventory, the SSH collection of its route tables
     and configurations, Meraki organizations, Cato accounts, Cisco FMCs, Palo
     Alto Panoramas, Appgate SDP collectives, OPNsense firewalls and the AWS, Azure and GCP accounts
-    of Cloud Visibility. Credentials are never included."""
+    of Cloud Visibility. Credentials are never included. A scoped caller gets
+    the two inventory sources, counted over its inventory groups."""
     # Imported here: inventory_collection imports this module.
     from netcontrol.routes.inventory_collection import inventory_source
 
+    scope = await request_scope(request)
+    if scope.restricted:
+        stats = await db.get_topology_link_stats(**await group_filter(request))
+        return {"sources": [_neighbor_source(stats), await inventory_source(scope)]}
     newest: dict[int, dict] = {}
     for snapshot in await db.list_meraki_snapshots(limit=500):
         newest.setdefault(snapshot["org_ref"], snapshot)  # newest first
@@ -1890,9 +1944,14 @@ async def list_topology_sources_api():
 
 
 @router.get("/api/sources/nodes")
-async def get_meraki_node_api(org_ref: int = Query(), node_id: str = Query(min_length=1, max_length=300)):
-    """Detail sections for one Meraki node on the topology map."""
-    for ref, snapshot in await latest_snapshots():
+@scoped("snapshot")
+async def get_meraki_node_api(
+    request: Request, org_ref: int = Query(), node_id: str = Query(min_length=1, max_length=300)
+):
+    """Detail sections for one Meraki node on the topology map (none for a
+    scoped caller, whose map has no source nodes)."""
+    snapshots = await latest_snapshots() if (await request_scope(request)).unrestricted else []
+    for ref, snapshot in snapshots:
         if ref == org_ref:
             details = node_details(snapshot, node_id)
             if details:
@@ -1901,17 +1960,20 @@ async def get_meraki_node_api(org_ref: int = Query(), node_id: str = Query(min_l
 
 
 @router.get("/api/sources/subnets")
-async def list_meraki_subnets_api():
+@scoped("list")
+async def list_meraki_subnets_api(request: Request):
     """Subnets of the latest snapshots with the device that owns each one, for
     picking path endpoints by subnet, then the networks of inventory hosts
     (``org_ref`` ``INVENTORY_ORG_REF``, ``node_id`` the host id).
     ``(org_ref, node_id)`` references are resolved to nodes on the merged
-    graph by the Topology page."""
+    graph by the Topology page. A scoped caller gets those of the inventory
+    hosts it can read."""
+    scope = await request_scope(request)
     subnets: list[dict] = []
-    for org_ref, entry in await _latest_entries():
+    for org_ref, entry in await _latest_entries() if scope.unrestricted else []:
         provider = str(entry["snapshot"].get("provider") or PROVIDER_MERAKI)
         subnets.extend({"org_ref": org_ref, "provider": provider, **subnet} for subnet in await _subnets_of(entry))
-    subnets.extend(await _inventory_subnets())
+    subnets.extend(await _inventory_subnets(scope=scope))
     return {"subnets": subnets}
 
 
@@ -1960,7 +2022,9 @@ async def _cloud_reachability(
 
 
 @router.get("/api/sources/aws/reachability")
+@scoped("refused")
 async def aws_reachability_api(
+    request: Request,
     source: str = Query(min_length=1, max_length=64),
     destination: str = Query(min_length=1, max_length=64),
     source_vpc: str = Query(default="", max_length=64),
@@ -1974,13 +2038,16 @@ async def aws_reachability_api(
     groups of the latest discovery. ``*_vpc`` names the VPC of an address
     whose range exists in several. A route to an instance that is a Meraki
     vMX is followed on through that appliance's VPN."""
+    await refuse_scoped(request)
     return await _cloud_reachability(
         _CLOUD_BY_PROVIDER[PROVIDER_AWS], source, destination, source_vpc, destination_vpc, protocol, port
     )
 
 
 @router.get("/api/sources/azure/reachability")
+@scoped("refused")
 async def azure_reachability_api(
+    request: Request,
     source: str = Query(min_length=1, max_length=64),
     destination: str = Query(min_length=1, max_length=64),
     source_vnet: str = Query(default="", max_length=300),
@@ -1995,13 +2062,16 @@ async def azure_reachability_api(
     discovery. ``*_vnet`` names the VNet (``subscription:group:name``) of an
     address whose range exists in several. A route to a virtual machine that
     is a Meraki vMX is followed on through that appliance's VPN."""
+    await refuse_scoped(request)
     return await _cloud_reachability(
         _CLOUD_BY_PROVIDER[PROVIDER_AZURE], source, destination, source_vnet, destination_vnet, protocol, port
     )
 
 
 @router.get("/api/sources/gcp/reachability")
+@scoped("refused")
 async def gcp_reachability_api(
+    request: Request,
     source: str = Query(min_length=1, max_length=64),
     destination: str = Query(min_length=1, max_length=64),
     source_network: str = Query(default="", max_length=300),
@@ -2016,6 +2086,7 @@ async def gcp_reachability_api(
     discovery. ``*_network`` names the VPC network (``project:network``) of
     an address whose range exists in several. A route to an instance that
     is a Meraki vMX is followed on through that appliance's VPN."""
+    await refuse_scoped(request)
     return await _cloud_reachability(
         _CLOUD_BY_PROVIDER[PROVIDER_GCP], source, destination, source_network, destination_network, protocol, port
     )
@@ -2073,25 +2144,28 @@ async def _inventory_forwarding(nodes: list[dict]) -> dict[int, dict[str, Any]]:
     return {host_id: _HOST_FORWARDING[key] for host_id, key in keys.items() if key in _HOST_FORWARDING}
 
 
-async def _inventory_subnets(nodes: list[dict] | None = None) -> list[dict[str, Any]]:
+async def _inventory_subnets(nodes: list[dict] | None = None, scope: ObjectScope | None = None) -> list[dict[str, Any]]:
     """The subnet index rows of every inventory host on ``nodes`` (the whole
-    map when not given): its VLAN interfaces, connected networks and static
-    routes, under ``INVENTORY_ORG_REF``."""
+    map ``scope`` sees when not given): its VLAN interfaces, connected
+    networks and static routes, under ``INVENTORY_ORG_REF``."""
     if nodes is None:
-        from netcontrol.routes.topology import get_topology
+        from netcontrol.routes.topology import topology_graph
 
-        nodes = (await get_topology(None)).get("nodes") or []
+        nodes = (await topology_graph(None, scope)).get("nodes") or []
     return [row for entry in (await _inventory_forwarding(nodes)).values() for row in entry["subnets"]]
 
 
-async def _trace_sources() -> dict[str, Any]:
+async def _trace_sources(scope: ObjectScope | None = None) -> dict[str, Any]:
     """What a path trace reads over the whole map (every group): the graph,
     the latest snapshot and cloud engine of every source, their subnets and
-    the forwarding block of every inventory host."""
-    from netcontrol.routes.topology import get_topology
+    the forwarding block of every inventory host. A scoped ``scope`` confines
+    it to the map that caller sees: the hosts of its inventory groups and
+    their neighbors, no source snapshots or cloud engines, so a trace stops
+    where it leaves those hosts."""
+    from netcontrol.routes.topology import topology_graph
 
-    graph = await get_topology(None)
-    entries = await _latest_entries()
+    graph = await topology_graph(None, scope)
+    entries = await _latest_entries() if scope is None or scope.unrestricted else []
     subnets: list[dict] = []
     for org_ref, entry in entries:
         provider = str(entry["snapshot"].get("provider") or PROVIDER_MERAKI)
@@ -2134,11 +2208,11 @@ def _tracer_of(sources: dict[str, Any]) -> Callable[[], Tracer]:
     )
 
 
-async def _path_tracer() -> Callable[[], Tracer]:
-    """Gather what a path trace needs over the whole map (every group) and
-    return a builder of the ``Tracer``. Building it indexes the whole map, so
-    callers run the builder off the event loop."""
-    return _tracer_of(await _trace_sources())
+async def _path_tracer(scope: ObjectScope | None = None) -> Callable[[], Tracer]:
+    """Gather what a path trace needs over the whole map (every group; what a
+    scoped ``scope`` sees) and return a builder of the ``Tracer``. Building
+    it indexes the whole map, so callers run the builder off the event loop."""
+    return _tracer_of(await _trace_sources(scope))
 
 
 async def _offline_clouds(clouds: dict[int, Any]) -> dict[int, dict[str, Any]]:
@@ -2178,7 +2252,9 @@ async def _app_address(domain: str, version: int) -> str:
 
 
 @router.get("/api/topology/path")
+@scoped("trace")
 async def topology_path_api(
+    request: Request,
     source: str = Query(min_length=1, max_length=253),
     destination: str | None = Query(default=None, min_length=1, max_length=253),
     source_node: str | None = Query(default=None, max_length=300),
@@ -2201,12 +2277,14 @@ async def topology_path_api(
     domains are decided against it, and the result carries what it was
     taken for (``destination_app``). ``destination`` is then optional: the
     domain is looked up (``_app_address``), and when no address is found
-    the flow goes to an internet address that is not known."""
+    the flow goes to an internet address that is not known.
+
+    A scoped caller traces over the map it sees (``_trace_sources``)."""
     if protocol.strip().lower() not in ("", "any", "all", *PATH_PROTOCOLS):
         raise HTTPException(status_code=400, detail=f"protocol must be one of {', '.join(PATH_PROTOCOLS)}")
     if destination is None and destination_app is None:
         raise HTTPException(status_code=400, detail="destination or destination_app is required")
-    make_tracer = await _path_tracer()
+    make_tracer = await _path_tracer(await request_scope(request))
     try:
         # Building the indexes and walking a large map is CPU-bound.
         tracer = await asyncio.to_thread(make_tracer)
@@ -2231,7 +2309,9 @@ async def topology_path_api(
 
 
 @router.get("/api/topology/path/apps")
+@scoped("list")
 async def topology_path_apps_api(
+    request: Request,
     q: str = Query(default="", max_length=trace_apps.MAX_LENGTH),
     limit: int = Query(default=20, ge=1, le=50),
 ):
@@ -2239,7 +2319,9 @@ async def topology_path_apps_api(
     by name (``destination_app``) whose name holds ``q``, those it starts
     with first: from the collected catalogs (Cato's application catalog and
     custom applications) and every one the rules of the latest snapshots
-    name."""
+    name. A scoped caller, whose traces read no source snapshot, gets none."""
+    if (await request_scope(request)).restricted:
+        return {"items": []}
     snapshots = [snapshot for _org_ref, snapshot in await latest_snapshots()]
     return {"items": trace_apps.suggest(trace_apps.names(snapshots), q, limit)}
 
@@ -2304,6 +2386,7 @@ def _named_subnets(found: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 @router.get("/api/topology/reachability")
+@scoped("trace")
 async def topology_reachability_api(
     request: Request,
     destination: str = Query(default="", max_length=64),
@@ -2455,7 +2538,7 @@ async def topology_reachability_api(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    found = await _trace_sources()
+    found = await _trace_sources(await request_scope(request))
     rows = _named_subnets(found)
     try:
         if typed is not None:
@@ -2569,7 +2652,8 @@ async def topology_reachability_api(
 
 
 @router.post("/api/topology/summarize")
-async def topology_summarize_api(body: SummarizeRequest):
+@scoped("trace")
+async def topology_summarize_api(body: SummarizeRequest, request: Request):
     """The fewest routes that cover ``addresses`` (``prefix`` rolls each up
     first, ``max_routes`` caps the routes of each IP version), each with the
     inputs it covers and the collected networks of the whole map it overlaps
@@ -2599,7 +2683,7 @@ async def topology_summarize_api(body: SummarizeRequest):
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    found = await _trace_sources()
+    found = await _trace_sources(await request_scope(request))
     selected = reach_sweep.select_rows(_named_subnets(found), filters, None)
     make_tracer = _tracer_of(found)
 
@@ -2639,7 +2723,9 @@ def _named_hosts_snippet(hosts: list[dict], wanted: str) -> str:
 
 
 @router.get("/api/topology/search/deep")
+@scoped("list")
 async def topology_deep_search_api(
+    request: Request,
     # Room for a DNS name (up to 253 characters) among the other terms.
     q: str = Query(min_length=2, max_length=500),
     limit: int = Query(default=200, ge=1, le=1000),
@@ -2656,18 +2742,21 @@ async def topology_deep_search_api(
     subnet is no substring of it. A DNS name finds the hosts that answer to
     it first (an FSx file system, a service endpoint), each named with its
     addresses.
+
+    A scoped caller searches the inventory hosts it can read.
     """
     tokens = q.lower().split()[:8]
     results: list[dict] = []
     seen: set[tuple[int, str]] = set()
-    entries = await _latest_entries()
+    scope = await request_scope(request)
+    entries = await _latest_entries() if scope.unrestricted else []
     # An address or network finds the inventory hosts and the snapshot nodes
     # whose networks hold it: the subnets of every source in one list, so the
     # most specific wins whatever source collected it.
     if canonical(q):
-        from netcontrol.routes.topology import get_topology
+        from netcontrol.routes.topology import topology_graph
 
-        nodes = (await get_topology(None)).get("nodes") or []
+        nodes = (await topology_graph(None, scope)).get("nodes") or []
         labels: dict[int, dict[Any, str]] = {INVENTORY_ORG_REF: {n.get("id"): n.get("label") or "" for n in nodes}}
         tagged = [{**subnet, "org_ref": INVENTORY_ORG_REF} for subnet in await _inventory_subnets(nodes)]
         for org_ref, entry in entries:
@@ -2899,6 +2988,7 @@ async def _export_config_sections(request: Request, nodes: list[dict]) -> dict[i
 
 
 @router.get("/api/topology/export.html")
+@scoped("list")
 async def export_topology_html_api(
     request: Request,
     group_id: int | None = Query(default=None),
@@ -2923,18 +3013,22 @@ async def export_topology_html_api(
     inputs of the whole map, so the file traces any two subnets or addresses
     itself, offline. ``engine=0``, or no runtime, gives the smaller file
     without it.
+
+    A scoped caller exports the map it sees, and the tracer over it.
     """
     from netcontrol.routes.topology import get_topology
 
     asked_path = _parse_export_path(path)
-    graph = await get_topology(group_id)
+    scope = await request_scope(request)
+    # 404 for a scoped caller's unreadable group; the graph it sees.
+    graph = await get_topology(group_id, request)
     picks: list[dict[str, Any]] = []
     if asked_path is not None:
         picks = _export_path_picks(asked_path, {str(n["id"]) for n in graph.get("nodes") or []})
     # Packing the runtime the first time reads and compresses megabytes.
     with_engine = engine and await asyncio.to_thread(pyodide_runtime) is not None
     traced_legs = sum(1 for pick in picks if pick["subnet"]) >= 2
-    sources = await _trace_sources() if with_engine or traced_legs else None
+    sources = await _trace_sources(scope) if with_engine or traced_legs else None
     make_tracer = _tracer_of(sources) if sources is not None and traced_legs else None
     # The viewer picks the networks of inventory hosts too.
     inventory_subnets = (
@@ -2943,7 +3037,7 @@ async def export_topology_html_api(
         else await _inventory_subnets(graph.get("nodes") or [])
     )
     cloud_rows = await _offline_clouds(sources["clouds"]) if with_engine and sources is not None else {}
-    snapshots = dict(await latest_snapshots())
+    snapshots = dict(await latest_snapshots()) if scope.unrestricted else {}
     host_sections = {
         node["id"]: await collected_sections(node["id"])
         for node in graph["nodes"]

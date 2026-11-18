@@ -77,6 +77,8 @@ export interface Playbook extends GitOwnership {
   /** Whether the signed-in user may run / commit this task. */
   can_run?: boolean;
   can_commit?: boolean;
+  /** Jobs from this task wait in `pending_approval` until approved. */
+  approval_required?: boolean;
   created_at?: string | null;
   updated_at?: string | null;
 }
@@ -91,6 +93,8 @@ export interface PlaybookCreate {
   input_schema?: JobInputField[];
   /** Admin only. */
   permissions?: JobPermissions;
+  /** Admin only to change. */
+  approval_required?: boolean;
 }
 
 export interface PlaybookUpdate {
@@ -103,9 +107,22 @@ export interface PlaybookUpdate {
   input_schema?: JobInputField[];
   /** Admin only. */
   permissions?: JobPermissions;
+  /** Admin only to change. */
+  approval_required?: boolean;
 }
 
-export type JobStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled' | string;
+export type JobStatus =
+  | 'pending_approval'
+  | 'queued'
+  | 'running'
+  | 'completed'
+  | 'failed'
+  | 'cancelled'
+  | 'denied'
+  | string;
+
+/** `not_required` for a task without approval; else the decision so far. */
+export type JobApprovalStatus = 'not_required' | 'pending' | 'approved' | 'denied';
 
 export interface Job {
   id: number;
@@ -125,6 +142,12 @@ export interface Job {
   launched_by?: string | null;
   /** The validated inputs as JSON text; secret inputs are `{{secret.NAME}}` references. */
   parameters?: string | null;
+  approval_status?: JobApprovalStatus | null;
+  /** Who approved or denied the job, when, and why. */
+  approved_by?: string | null;
+  approved_at?: string | null;
+  approval_comment?: string | null;
+  finished_at?: string | null;
 }
 
 export interface JobLaunchBody {
@@ -150,6 +173,15 @@ export interface JobLaunchBody {
 
 export interface JobLaunchResult {
   job_id: number;
+  /** `pending_approval` when the task needs approval, else `queued`. */
+  status?: JobStatus;
+}
+
+export interface JobDecisionResult {
+  ok: boolean;
+  job_id: number;
+  status: JobStatus;
+  approval_status: JobApprovalStatus;
 }
 
 export interface JobEvent {
@@ -371,6 +403,46 @@ export function useRerunJobLive() {
       qc.invalidateQueries({ queryKey: ['job-events', id] });
     },
   });
+}
+
+// ── Approvals ──────────────────────────────────────────────────────────────
+
+/** Jobs awaiting approval the caller may decide (needs `jobs.approve`; never their own). */
+export function useJobApprovals(enabled = true) {
+  return useQuery<Job[]>({
+    queryKey: ['job-approvals'],
+    queryFn: () => apiRequest<Job[]>('/jobs/approvals'),
+    refetchInterval: 30_000,
+    enabled,
+  });
+}
+
+function useJobDecision(action: 'approve' | 'deny') {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, comment }: { id: number; comment?: string }) =>
+      apiRequest<JobDecisionResult>(`/jobs/${id}/${action}`, {
+        method: 'POST',
+        body: { comment: comment ?? '' },
+      }),
+    onSuccess: (_data, vars) => {
+      qc.invalidateQueries({ queryKey: ['job-approvals'] });
+      qc.invalidateQueries({ queryKey: ['jobs'] });
+      qc.invalidateQueries({ queryKey: ['job-queue'] });
+      qc.invalidateQueries({ queryKey: ['job', vars.id] });
+      qc.invalidateQueries({ queryKey: ['job-events', vars.id] });
+    },
+  });
+}
+
+/** Approve a job awaiting approval: it is queued and runs as usual. */
+export function useApproveJob() {
+  return useJobDecision('approve');
+}
+
+/** Deny a job awaiting approval: it ends in `denied` and never runs. */
+export function useDenyJob() {
+  return useJobDecision('deny');
 }
 
 // ── Templates ──────────────────────────────────────────────────────────────

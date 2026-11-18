@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <!-- UPS icon: battery with a charge bolt -->
+  <rect x="8" y="16" width="44" height="32" rx="4" stroke="#42a5f5" stroke-width="3" fill="#0d47a1"/>
+  <!-- Battery terminal -->
+  <rect x="52" y="26" width="5" height="12" rx="1.5" fill="#42a5f5"/>
+  <!-- Charge bolt -->
+  <path d="M33 20 L21 34 H29 L26 44 L39 29 H31 Z" fill="#69f0ae"/>
+</svg>

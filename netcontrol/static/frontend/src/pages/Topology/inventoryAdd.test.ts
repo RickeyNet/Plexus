@@ -6,6 +6,7 @@ import { DEVICE_TYPES } from '@/lib/deviceTypes';
 import {
   buildBulkAddBody,
   buildInventoryAddRows,
+  canAddToInventory,
   DEFAULT_ADD_GROUP,
   DISCOVERED_NEIGHBORS_GROUP,
   filterInventoryAddRows,
@@ -147,6 +148,21 @@ describe('buildInventoryAddRows', () => {
       ['core-a', false, 'cisco_nxos'],
       ['dist-b', false, 'cisco_xe'],
     ]);
+  });
+
+  it('leaves out what is no device: a WAN uplink, a VPN peer, a remote user, a cloud', () => {
+    // The map never shows one of these as an inventory host: added, it would stay on the list.
+    const ref = (kind: string) => ({ ...MERAKI_HQ, kind, provider: 'cato' });
+    const others = ['wan', 'vpn_peer', 'vpn_server', 'cloud', 'users', 'user', 'vpc'].map((kind, i) =>
+      node({ id: `meraki:2:${kind}`, label: kind, ip: `192.0.2.${i + 1}`, source: 'meraki', meraki: ref(kind) }),
+    );
+    const socket = node({ id: 'meraki:2:s', label: 'socket', ip: '192.0.2.50', source: 'meraki', meraki: ref('appliance') });
+    expect(buildInventoryAddRows([...others, socket]).map((r) => r.label)).toEqual(['socket']);
+    expect(others.some(canAddToInventory)).toBe(false);
+    expect(canAddToInventory(socket)).toBe(true);
+    // Nor a node that is a host already, or one with no address to reach it at.
+    expect(canAddToInventory({ ...socket, in_inventory: true })).toBe(false);
+    expect(canAddToInventory({ ...socket, ip: ' ' })).toBe(false);
   });
 
   it('filters rows by label, IP, platform, site or group', () => {

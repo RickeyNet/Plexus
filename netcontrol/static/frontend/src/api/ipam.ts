@@ -167,6 +167,15 @@ export interface IpamSubnetDetail {
   available_preview?: string[];
   /** Addresses device interfaces carry inside the subnet (at most 1024; absent on older servers). */
   interfaces?: InterfaceAddress[];
+  /** The aggregate that holds the subnet, with its usage (null: none; absent on older servers). */
+  aggregate?: {
+    id: number;
+    prefix: string;
+    rir_name: string;
+    utilization_pct: number;
+    used_addresses: number;
+    total_addresses: number;
+  } | null;
 }
 
 export interface IpamProvider {
@@ -511,7 +520,14 @@ export function useUpdateIpamSyncConfig() {
 export function useCreateIpamPrefix() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (payload: { subnet: string; description?: string; vrf?: string; tenant_id?: number | null }) =>
+    mutationFn: (payload: {
+      subnet: string;
+      description?: string;
+      vrf?: string;
+      tenant_id?: number | null;
+      /** None: the VRF's namespace, else Global. */
+      namespace_id?: number | null;
+    }) =>
       apiRequest('/ipam/prefixes', { method: 'POST', body: payload }),
     onSuccess: () => invalidateOverview(qc),
   });

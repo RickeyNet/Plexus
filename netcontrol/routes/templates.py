@@ -1,11 +1,16 @@
 """
 templates.py -- Template CRUD routes.
+
+Object scope: templates are a shared catalogue (no host or group): accounts
+limited to selected inventory groups read them; only unrestricted callers
+change them.
 """
 
 import routes.database as db
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
+from netcontrol.object_scope import require_model_write, scope_exempt, scoped
 from netcontrol.routes.git_sources import reject_git_owned
 from netcontrol.routes.shared import _audit, _corr_id, _get_session
 
@@ -30,12 +35,15 @@ class TemplateUpdate(BaseModel):
 
 
 @router.get("/api/templates")
+@scope_exempt("shared template catalogue: no host or inventory group data")
 async def list_templates():
     return await db.get_all_templates()
 
 
 @router.post("/api/templates", status_code=201)
+@scoped("catalog")
 async def create_template(body: TemplateCreate, request: Request = None):
+    await require_model_write(request)
     tid = await db.create_template(body.name, body.content, body.description, body.device_type)
     session = _get_session(request) if request else None
     _dt = f" [{body.device_type}]" if body.device_type else ""
@@ -50,6 +58,7 @@ async def create_template(body: TemplateCreate, request: Request = None):
 
 
 @router.get("/api/templates/{template_id}")
+@scope_exempt("shared template catalogue: no host or inventory group data")
 async def get_template(template_id: int):
     tpl = await db.get_template(template_id)
     if not tpl:
@@ -58,7 +67,9 @@ async def get_template(template_id: int):
 
 
 @router.put("/api/templates/{template_id}")
+@scoped("catalog")
 async def update_template(template_id: int, body: TemplateUpdate, request: Request = None):
+    await require_model_write(request)
     reject_git_owned(await db.get_template(template_id), "template")
     await db.update_template(template_id, body.name, body.content, body.description, body.device_type)
     session = _get_session(request) if request else None
@@ -73,7 +84,9 @@ async def update_template(template_id: int, body: TemplateUpdate, request: Reque
 
 
 @router.delete("/api/templates/{template_id}")
+@scoped("catalog")
 async def delete_template(template_id: int, request: Request = None):
+    await require_model_write(request)
     reject_git_owned(await db.get_template(template_id), "template")
     await db.delete_template(template_id)
     session = _get_session(request) if request else None

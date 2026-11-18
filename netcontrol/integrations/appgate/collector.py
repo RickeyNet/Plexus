@@ -19,6 +19,11 @@ What is read (every path is under ``/admin``):
   - ``/ip-pools``, ``/identity-providers`` the addresses clients get
   - ``/stats/active-sessions/dn``        the users connected now
                                          (``/on-boarded-devices`` before it existed)
+  - ``/on-boarded-devices``              every device on-boarded to the collective,
+                                         connected or not: the user directory
+                                         lists the users not connected now from it
+                                         (read once: on an older Controller it is
+                                         the user list itself)
   - ``/session-info/{dn}``               per connected user (``MAX_SESSION_DETAILS``
                                          at most): the Gateways they have a tunnel
                                          to, their tunnel address, and which
@@ -60,7 +65,8 @@ DEFAULT_OPTIONS: dict[str, Any] = {
     "include_appliance_state": True,
     # Policies, entitlements, conditions and ringfence rules.
     "include_entitlements": True,
-    # The users connected with the Appgate Client.
+    # The users connected with the Appgate Client, and every user with a
+    # device on-boarded to the collective (for the user directory).
     "include_users": True,
     # Per connected user, the Gateways and entitlements it holds.
     "include_session_details": True,
@@ -189,7 +195,8 @@ async def collect_appgate(
     total = 6 + len(POOL_PATHS)
     total += 2 * int(opts["include_appliance_state"])
     total += len(POLICY_PATHS) * int(opts["include_entitlements"])
-    total += int(opts["include_users"])
+    # Active sessions and the on-boarded devices (or the fallback to them).
+    total += 2 * int(opts["include_users"])
     done = 0
 
     def report(phase: str, **fields: Any) -> None:
@@ -286,6 +293,10 @@ async def collect_appgate(
 
     sessions: list[dict] | None = None
     sessions_source = ""
+    # Every device on-boarded to the collective, connected or not: the
+    # registered users the directory lists besides those connected now.
+    onboarded: list[dict] | None = None
+    read_onboarded = False
     if opts["include_users"]:
         report("appgate users")
         try:
@@ -293,15 +304,21 @@ async def collect_appgate(
             sessions_source = "active-sessions"
         except AppgateApiError as exc:
             if exc.status_code == 404:
-                # An older Controller: the devices on-boarded, connected or not.
+                # An older Controller: the devices on-boarded, connected or
+                # not, are the user list itself (and are not read twice).
+                read_onboarded = True
                 try:
                     sessions = _scrub(await client.get_list("/on-boarded-devices"))
                     sessions_source = "on-boarded-devices"
                 except AppgateApiError as fallback:
                     errors.append(_error("users", "/on-boarded-devices", fallback))
+                done += 1
             else:
                 errors.append(_error("users", "/stats/active-sessions/dn", exc))
         done += 1
+        if not read_onboarded:
+            found = await best_effort("users", "/on-boarded-devices")
+            onboarded = _scrub(found) if found is not None else None
         report("appgate users", users=len(sessions or []))
 
     session_details: dict[str, dict] | None = None
@@ -341,13 +358,14 @@ async def collect_appgate(
     report("collected")
     LOGGER.info(
         "appgate: collected collective %s - peer v%d, %d appliances, %d sites, %d users (%d with details), "
-        "%d calls, %d errors",
+        "%d on-boarded devices, %d calls, %d errors",
         client.base_url,
         peer_version,
         len(appliances),
         len(sites),
         len(sessions or []),
         len(session_details or {}),
+        len(onboarded or []),
         client.stats["requests"],
         len(errors),
     )
@@ -375,6 +393,7 @@ async def collect_appgate(
         "sessions_source": sessions_source,
         "session_details": session_details,
         "sessions_skipped": skipped,
+        "onboarded_devices": onboarded,
         "license": license_info,
         "global_settings": global_settings,
         "errors": errors,

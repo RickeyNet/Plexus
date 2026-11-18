@@ -12,6 +12,7 @@ import ipaddress
 import json
 import os
 import re
+from collections.abc import Iterable
 from datetime import UTC, datetime, timedelta
 
 import routes.database as _dbcore
@@ -22,7 +23,7 @@ from routes.database import (
     row_to_dict,
     rows_to_list,
 )
-from routes.db.inventory import GROUP_SUBTREE_SQL as _GROUP_SUBTREE_SQL
+from routes.db.inventory import GROUP_SUBTREE_SQL as _GROUP_SUBTREE_SQL, group_ids_condition
 
 __all__ = [
     "set_alert_created_hook",
@@ -161,8 +162,11 @@ async def get_latest_monitoring_polls(
     group_id: int | None = None,
     limit: int = 200,
     include_details: bool = False,
+    *,
+    group_ids: Iterable[int] | None = None,
 ) -> list[dict]:
-    """Return the most recent poll per host, with host info joined."""
+    """Return the most recent poll per host, with host info joined.
+    ``group_ids`` keeps the hosts of those inventory groups (object scope)."""
     detail_cols = ", p.if_details, p.vpn_details, p.route_snapshot" if include_details else ""
     db = await _dbcore.get_db(read_only=True)
     try:
@@ -171,6 +175,10 @@ async def get_latest_monitoring_polls(
         if group_id is not None:
             group_filter = "AND h.group_id = ?"
             params.append(group_id)
+        scope_sql, scope_params = group_ids_condition("h.group_id", group_ids)
+        if scope_sql:
+            group_filter += f" AND {scope_sql}"
+            params.extend(scope_params)
         params.append(limit)
         cursor = await db.execute(
             f"""SELECT p.id, p.host_id, p.cpu_percent, p.memory_percent,
@@ -246,7 +254,9 @@ async def delete_old_monitoring_polls(retention_days: int) -> int:
         await db.close()
 
 
-async def get_monitoring_summary(group_id: int | None = None) -> dict:
+async def get_monitoring_summary(group_id: int | None = None, *, group_ids: Iterable[int] | None = None) -> dict:
+    """Fleet health totals; ``group_ids`` counts only the hosts of those
+    inventory groups (object scope)."""
     db = await _dbcore.get_db(read_only=True)
     try:
         group_filter = ""
@@ -254,6 +264,10 @@ async def get_monitoring_summary(group_id: int | None = None) -> dict:
         if group_id is not None:
             group_filter = "AND h.group_id = ?"
             params.append(group_id)
+        scope_sql, scope_params = group_ids_condition("h.group_id", group_ids)
+        if scope_sql:
+            group_filter += f" AND {scope_sql}"
+            params.extend(scope_params)
 
         cursor = await db.execute(
             f"""SELECT COUNT(DISTINCT p.host_id) FROM monitoring_polls p
@@ -458,7 +472,11 @@ async def get_monitoring_alerts(
     acknowledged: bool | None = None,
     severity: str | None = None,
     limit: int = 200,
+    *,
+    group_ids: Iterable[int] | None = None,
 ) -> list[dict]:
+    """Alerts, newest first; ``group_ids`` keeps the alerts of hosts in
+    those inventory groups (object scope)."""
     db = await _dbcore.get_db(read_only=True)
     try:
         clauses = []
@@ -466,6 +484,10 @@ async def get_monitoring_alerts(
         if host_id is not None:
             clauses.append("a.host_id = ?")
             params.append(host_id)
+        scope_sql, scope_params = group_ids_condition("h.group_id", group_ids)
+        if scope_sql:
+            clauses.append(scope_sql)
+            params.extend(scope_params)
         if acknowledged is not None:
             clauses.append("a.acknowledged = ?")
             params.append(1 if acknowledged else 0)
@@ -936,18 +958,23 @@ async def escalate_alert(alert_id: int, new_severity: str) -> None:
         await db.close()
 
 
-async def bulk_acknowledge_alerts(alert_ids: list[int], acknowledged_by: str) -> int:
-    """Acknowledge multiple alerts at once. Returns count updated."""
+async def bulk_acknowledge_alerts(
+    alert_ids: list[int], acknowledged_by: str, *, host_ids: Iterable[int] | None = None
+) -> int:
+    """Acknowledge multiple alerts at once. Returns count updated.
+    ``host_ids`` acknowledges only the alerts of those hosts (object scope)."""
     if not alert_ids:
         return 0
+    scope_sql, scope_params = group_ids_condition("host_id", host_ids)
+    scope_sql = f" AND {scope_sql}" if scope_sql else ""
     db = await _dbcore.get_db()
     try:
         placeholders = ",".join("?" for _ in alert_ids)
         cursor = await db.execute(
             f"""UPDATE monitoring_alerts
                 SET acknowledged = 1, acknowledged_by = ?, acknowledged_at = datetime('now')
-                WHERE id IN ({placeholders}) AND acknowledged = 0""",
-            (acknowledged_by, *alert_ids),
+                WHERE id IN ({placeholders}) AND acknowledged = 0{scope_sql}""",
+            (acknowledged_by, *alert_ids, *scope_params),
         )
         await db.commit()
         return cursor.rowcount
@@ -1165,10 +1192,12 @@ async def _sla_host_aggregates(
     host_id: int | None = None,
     group_id: int | None = None,
     by_day: bool = False,
+    group_ids: Iterable[int] | None = None,
 ) -> tuple[list[dict], str, str]:
     """Per-host (and per-day with ``by_day``) poll counts and sums over the
     window ``[now - days, now)``, combining raw polls and rollups (see the
-    comment above). Returns ``(rows, window_start, window_end)``."""
+    comment above); ``group_ids`` keeps the hosts of those inventory groups
+    (object scope). Returns ``(rows, window_start, window_end)``."""
     hourly_mark = await _sla_watermark(db, "hourly")
     daily_mark = await _sla_watermark(db, "daily")
     start = now - timedelta(days=days)
@@ -1200,6 +1229,8 @@ async def _sla_host_aggregates(
     roll_day_group = ", substr(m.period_start, 1, 10)" if by_day else ""
     outer_day = "x.day," if by_day else ""
     outer_day_group = ", x.day" if by_day else ""
+    scope_sql, scope_params = group_ids_condition("h.group_id", group_ids)
+    outer_where = f"WHERE {scope_sql}" if scope_sql else ""
 
     cursor = await db.execute(
         f"""SELECT h.id AS host_id, h.hostname, h.ip_address, h.group_id, {outer_day}
@@ -1239,6 +1270,7 @@ async def _sla_host_aggregates(
                 GROUP BY m.host_id{roll_day_group}
             ) x
             JOIN hosts h ON h.id = x.host_id
+            {outer_where}
             GROUP BY h.id{outer_day_group}
             HAVING SUM(x.total) > 0
             ORDER BY h.hostname{outer_day_group}""",
@@ -1254,6 +1286,7 @@ async def _sla_host_aggregates(
             start_day,
             daily_mark or "",
             *filter_params,
+            *scope_params,
         ),
     )
     return rows_to_list(await cursor.fetchall()), start_s, _sla_ts(now)
@@ -1322,10 +1355,13 @@ async def get_sla_summary(
     group_id: int | None = None,
     days: int = 30,
     now: datetime | None = None,
+    *,
+    group_ids: Iterable[int] | None = None,
 ) -> dict:
     """SLA summary over the last ``days``: raw polls combined with the SLA
     rollups (so windows longer than the poll retention are complete), with
-    the latest server-side target evaluation per host."""
+    the latest server-side target evaluation per host. ``group_ids`` keeps
+    the hosts of those inventory groups (object scope)."""
     db = await _dbcore.get_db(read_only=True)
     try:
         group_filter = ""
@@ -1333,8 +1369,12 @@ async def get_sla_summary(
         if group_id is not None:
             group_filter = "AND h.group_id = ?"
             params.append(group_id)
+        scope_sql, scope_params = group_ids_condition("h.group_id", group_ids)
+        if scope_sql:
+            group_filter += f" AND {scope_sql}"
+            params.extend(scope_params)
 
-        rows, _start, _end = await _sla_host_aggregates(db, days, _sla_now(now), group_id=group_id)
+        rows, _start, _end = await _sla_host_aggregates(db, days, _sla_now(now), group_id=group_id, group_ids=group_ids)
 
         # Latest target evaluation per host (worst status across its targets).
         cursor = await db.execute(
@@ -1773,11 +1813,18 @@ async def get_sla_compliance(
     group_id: int | None = None,
     host_id: int | None = None,
     target_id: int | None = None,
+    *,
+    group_ids: Iterable[int] | None = None,
 ) -> list[dict]:
     """Latest evaluation of every (target, host). ``group_id`` keeps the hosts
-    of the group and of its sub-groups."""
+    of the group and of its sub-groups; ``group_ids`` the hosts of those
+    inventory groups (object scope)."""
     where = ["1=1"]
     params: list = []
+    scope_sql, scope_params = group_ids_condition("h.group_id", group_ids)
+    if scope_sql:
+        where.append(scope_sql)
+        params.extend(scope_params)
     if group_id is not None:
         where.append(f"h.group_id IN {_GROUP_SUBTREE_SQL}")
         params.append(group_id)
@@ -1808,10 +1855,17 @@ async def get_sla_compliance_history(
     target_id: int | None = None,
     host_id: int | None = None,
     limit: int = 100,
+    *,
+    group_ids: Iterable[int] | None = None,
 ) -> list[dict]:
-    """Status changes of SLA targets, newest first."""
+    """Status changes of SLA targets, newest first; ``group_ids`` keeps the
+    hosts of those inventory groups (object scope)."""
     where = ["1=1"]
     params: list = []
+    scope_sql, scope_params = group_ids_condition("h.group_id", group_ids)
+    if scope_sql:
+        where.append(scope_sql)
+        params.extend(scope_params)
     if target_id is not None:
         where.append("x.target_id = ?")
         params.append(target_id)

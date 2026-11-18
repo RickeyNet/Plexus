@@ -334,7 +334,7 @@ def test_bad_username_claim(env):
 
 def test_signed_out_status_offers_sso(env, monkeypatch):
     status = _browser().get("/api/auth/status").json()
-    assert status["sso"] == {"oidc": {"enabled": True, "label": "Sign in with Example ID", "primary": False}}
+    assert status["sso"]["oidc"] == {"enabled": True, "label": "Sign in with Example ID", "primary": False}
     monkeypatch.setitem(state.AUTH_CONFIG, "oidc", _oidc_cfg(enabled=False, primary=True))
     status = _browser().get("/api/auth/status").json()
     assert status["sso"]["oidc"]["enabled"] is False and status["sso"]["oidc"]["primary"] is True

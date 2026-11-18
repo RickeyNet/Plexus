@@ -157,6 +157,55 @@ export interface OidcConfig {
   ca_cert_file: string;
 }
 
+// SAML 2.0 single sign-on, next to OIDC (docs/sso-saml.md). The role and
+// access group keys mean what they mean for OIDC.
+export interface SamlConfig {
+  enabled: boolean;
+  idp_entity_id: string;
+  /** HTTP-Redirect SingleSignOnService location. */
+  idp_sso_url: string;
+  /** PEM signing certificates (several during a rollover). */
+  idp_certs: string[];
+  idp_metadata_url: string;
+  /** Empty = derived from the request. */
+  sp_entity_id: string;
+  acs_url: string;
+  ca_cert_file: string;
+  /** Empty = the email attribute, else the NameID. */
+  username_attribute: string;
+  email_attribute: string;
+  display_name_attribute: string;
+  groups_attribute: string;
+  admin_groups: string[];
+  default_role: string;
+  default_group_ids: number[];
+  sync_groups: boolean;
+  group_mappings: OidcGroupMapping[];
+  button_label: string;
+  primary: boolean;
+}
+
+export interface SamlCertSummary {
+  fingerprint: string;
+  not_after: string;
+}
+
+export interface SamlSpInfo {
+  sp_entity_id: string;
+  acs_url: string;
+  metadata_url: string;
+  certs: SamlCertSummary[];
+}
+
+export interface SamlMetadataImport {
+  ok: boolean;
+  idp_entity_id: string;
+  idp_sso_url: string;
+  idp_certs: string[];
+  certs: SamlCertSummary[];
+  error: string;
+}
+
 export interface OidcTestResult {
   ok: boolean;
   issuer: string;
@@ -180,6 +229,8 @@ export interface AuthConfig {
   tacacs: TacacsConfig;
   ldap: LdapConfig;
   oidc: OidcConfig;
+  /** Missing on servers without SAML support. */
+  saml?: SamlConfig;
 }
 
 export interface SyslogConfig {
@@ -463,6 +514,24 @@ export function testOidcConnection(body: { issuer?: string; ca_cert_file?: strin
 
 export function useTestOidcConnection() {
   return useMutation({ mutationFn: testOidcConnection });
+}
+
+/** What to register at the SAML IdP, and the saved certificates. */
+export function useSamlSpInfo() {
+  return useQuery<SamlSpInfo>({
+    queryKey: ['admin', 'auth-config', 'saml-sp'],
+    queryFn: () => apiRequest('/admin/auth-config/saml/sp'),
+  });
+}
+
+/** Read IdP metadata (pasted XML, else fetched from the URL). Nothing is
+ * saved; the form fills itself from the answer. */
+export function importSamlMetadata(body: { xml?: string; url?: string; entity_id?: string; ca_cert_file?: string }) {
+  return apiRequest<SamlMetadataImport>('/admin/auth-config/saml/metadata', { method: 'POST', body });
+}
+
+export function useImportSamlMetadata() {
+  return useMutation({ mutationFn: importSamlMetadata });
 }
 
 // ── Syslog ─────────────────────────────────────────────────────────────────
@@ -1030,5 +1099,54 @@ export function useDeleteServiceCredential() {
     mutationFn: (id: number) =>
       apiRequest(`/credentials/service/${id}`, { method: 'DELETE' }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['credentials', 'service'] }),
+  });
+}
+
+// ── Object scope rules (per model, by tenant or site) ────────────────────────
+
+/** A per-model grant of an access group limited to selected inventory
+ * groups: records of ``model`` (``*``: every model) whose tenant or site is
+ * ``value_id``. */
+export interface ScopeRule {
+  model: string;
+  attribute: 'tenant' | 'site';
+  value_id: number;
+  can_write: boolean;
+}
+
+/** One model of the server's object scope registry. */
+export interface ScopeModelInfo {
+  name: string;
+  keys: string[];
+  shared: boolean;
+  description: string;
+  rule_attributes: ('tenant' | 'site')[];
+}
+
+export function useObjectScopeModels(enabled = true) {
+  return useQuery<ScopeModelInfo[]>({
+    queryKey: ['admin', 'object-scope-models'],
+    queryFn: () => apiRequest('/admin/object-scope/models'),
+    enabled,
+    staleTime: Infinity,
+  });
+}
+
+export function useAccessGroupScopeRules(groupId: number | null) {
+  return useQuery<ScopeRule[]>({
+    queryKey: ['admin', 'access-groups', groupId, 'scope-rules'],
+    queryFn: () => apiRequest(`/admin/access-groups/${groupId}/scope-rules`),
+    enabled: groupId != null,
+  });
+}
+
+export function useSaveAccessGroupScopeRules() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ groupId, rules }: { groupId: number; rules: ScopeRule[] }) =>
+      apiRequest<ScopeRule[]>(`/admin/access-groups/${groupId}/scope-rules`, { method: 'PUT', body: { rules } }),
+    onSuccess: (_data, { groupId }) => {
+      qc.invalidateQueries({ queryKey: ['admin', 'access-groups', groupId, 'scope-rules'] });
+    },
   });
 }

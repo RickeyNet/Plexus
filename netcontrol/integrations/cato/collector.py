@@ -8,9 +8,18 @@ What is read:
 
   - ``accountSnapshot.sites``   sites, their Sockets, WAN links and the PoP
                                 each one is connected to (required)
-  - ``accountSnapshot.users``   remote (SDP client) users that are connected:
+  - ``accountSnapshot.users``   remote (SDP client) users; for those connected:
                                 where they connect from, their PoP, VPN IP,
                                 device and recent connections
+  - ``entityLookup vpnUser``    every registered SDP user, connected or not
+                                (read with the users), for the "All users"
+                                directory the map search finds people by
+  - ``accountSnapshot.users(userIDs:)``
+                                the registered users who are not connected
+                                (the snapshot lists only the connected ones
+                                unless asked by ID): their email, device and
+                                last connection, ``_USER_DETAILS_PAGE`` users
+                                a call
   - ``entityLookup``            the network ranges and LAN interfaces of every
                                 site, for subnets
   - ``site.bgpPeerList``        the BGP peers of every site, for path tracing:
@@ -232,6 +241,24 @@ query plexusUsersBasic($accountID: ID!) {
   }
 }
 """
+
+# The registered users who are not connected: ``accountSnapshot.users``
+# returns the connected ones unless it is given IDs.
+USER_DETAILS_QUERY = """
+query plexusUserDetails($accountID: ID!, $userIDs: [ID!]) {
+  accountSnapshot(accountID: $accountID) {
+    users(userIDs: $userIDs) {
+      id name connectivityStatus operationalStatus deviceName lastConnected
+      info { name status email origin authMethod }
+    }
+  }
+}
+"""
+
+# Users asked for in one ``USER_DETAILS_QUERY``, and the most read in one
+# collection: past the cap a user is still listed, by the registry's name.
+_USER_DETAILS_PAGE = 100
+_MAX_USER_DETAILS = 10_000
 
 LOOKUP_QUERY = """
 query plexusLookup($accountID: ID!, $type: EntityType!, $limit: Int, $from: Int) {
@@ -1160,7 +1187,8 @@ async def collect_account(
     read_reports = opts["include_users"] and opts["include_client_reports"]
     total = (
         1
-        + int(opts["include_users"])
+        # The connected users, and the registry of every SDP user.
+        + 2 * int(opts["include_users"])
         # The first page of the Client reports; more pages add to the total.
         + int(read_reports)
         + 3 * int(opts["include_ranges"])
@@ -1231,6 +1259,51 @@ async def collect_account(
             users = [u for u in found if isinstance(u, dict)]
         except CatoApiError as exc:
             errors.append(error_entry("account", "accountSnapshot.users", exc))
+        done += 1
+
+    # Every registered SDP user, connected or not, for the user directory.
+    # None: not collected, so the directory lists only the snapshot's users.
+    vpn_users: list[dict] | None = None
+    if opts["include_users"]:
+        report("cato users")
+        try:
+            vpn_users = scrub_secrets(await _lookup(client, account_id, "vpnUser"))
+        except CatoApiError as exc:
+            errors.append(error_entry("account", "entityLookup vpnUser", exc))
+        done += 1
+
+    # The email, device and last connection of the registered users the
+    # snapshot did not list (not connected). None: not read: listed by name.
+    user_details: list[dict] | None = None
+    listed_ids = {str(u.get("id")) for u in users}
+    offline_ids = [
+        user_id
+        for item in vpn_users or []
+        if (user_id := str((item.get("entity") or {}).get("id") or "")) and user_id not in listed_ids
+    ]
+    if len(offline_ids) > _MAX_USER_DETAILS:
+        errors.append(
+            note_entry(
+                "account",
+                "accountSnapshot.users (by ID)",
+                f"{len(offline_ids)} registered users are not connected; the details of the first "
+                f"{_MAX_USER_DETAILS} were read, the rest are listed by name",
+            )
+        )
+        offline_ids = offline_ids[:_MAX_USER_DETAILS]
+    pages = [offline_ids[i : i + _USER_DETAILS_PAGE] for i in range(0, len(offline_ids), _USER_DETAILS_PAGE)]
+    total += len(pages)
+    for index, page in enumerate(pages):
+        report("cato users")
+        try:
+            data = await client.query("plexusUserDetails", USER_DETAILS_QUERY, {**variables, "userIDs": page})
+        except CatoApiError as exc:
+            # Refused once is refused for every page: the rest are not asked.
+            errors.append(error_entry("account", "accountSnapshot.users (by ID)", exc))
+            done += len(pages) - index
+            break
+        found = scrub_secrets((data.get("accountSnapshot") or {}).get("users") or [])
+        user_details = (user_details or []) + [u for u in found if isinstance(u, dict)]
         done += 1
 
     # None: not collected, so the normalizer says so instead of "no report".
@@ -1326,7 +1399,7 @@ async def collect_account(
     LOGGER.info(
         "cato: collected account %s - %d sites, %d users, %d BGP peers, %d WAN and %d internet firewall rules, "
         "%d split tunnel rules, %d of %d other policies (%d rules), %d global IP ranges, %d groups, "
-        "%d users groups, %d calls, %d errors",
+        "%d users groups, %d registered users, %d calls, %d errors",
         account_id,
         len(sites),
         len(users),
@@ -1340,6 +1413,7 @@ async def collect_account(
         len(global_ip_ranges or []),
         len(objects["groups"] or []),
         len(objects["user_groups"] or []),
+        len(vpn_users or []),
         client.stats["requests"],
         len(errors),
     )
@@ -1348,6 +1422,8 @@ async def collect_account(
         "timestamp": snapshot.get("timestamp") or "",
         "sites": sites,
         "users": users,
+        "vpn_users": vpn_users,
+        "vpn_user_details": user_details,
         "client_reports": client_reports,
         "ranges": lookups["siteRange"],
         "interfaces": lookups["networkInterface"],

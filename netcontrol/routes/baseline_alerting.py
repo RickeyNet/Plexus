@@ -7,6 +7,11 @@ Provides:
   - Baseline alert rule CRUD API endpoints
   - Integration with the monitoring poll loop for live deviation checks
   - Background loop for periodic baseline recomputation
+
+Object scope: a baseline rule follows the host or inventory group it
+targets (a global rule is read by everyone, changed only by unrestricted
+callers; ``netcontrol.routes.monitoring.MONITORING_RULE``); baselines
+follow their host.
 """
 
 from __future__ import annotations
@@ -19,6 +24,15 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
 import netcontrol.routes.state as state
+from netcontrol.object_scope import (
+    HOST_NOT_FOUND,
+    filter_rows,
+    require_new_row,
+    require_object_host,
+    require_row,
+    scoped,
+)
+from netcontrol.routes.monitoring import MONITORING_RULE, require_rule_change
 from netcontrol.telemetry import configure_logging
 
 router = APIRouter()
@@ -357,21 +371,27 @@ async def run_baseline_computation_cycle():
 # ═════════════════════════════════════════════════════════════════════════════
 
 
+_RULE_NOT_FOUND = "Baseline alert rule not found"
+
+
 @router.get("/api/baseline-rules")
-async def list_rules(enabled_only: bool = Query(False)):
-    return await db.list_baseline_alert_rules(enabled_only)
+@scoped("list")
+async def list_rules(request: Request, enabled_only: bool = Query(False)):
+    return await filter_rows(MONITORING_RULE.name, await db.list_baseline_alert_rules(enabled_only), request)
 
 
 @router.get("/api/baseline-rules/{rule_id}")
-async def get_rule(rule_id: int):
-    rule = await db.get_baseline_alert_rule(rule_id)
-    if not rule:
-        raise HTTPException(404, "Baseline alert rule not found")
-    return rule
+@scoped("rule")
+async def get_rule(rule_id: int, request: Request):
+    return await require_row(
+        request, MONITORING_RULE.name, await db.get_baseline_alert_rule(rule_id), not_found=_RULE_NOT_FOUND
+    )
 
 
 @router.post("/api/baseline-rules", status_code=201)
+@scoped("create")
 async def create_rule(body: BaselineAlertRuleCreate, request: Request):
+    await require_new_row(request, MONITORING_RULE.name, {"host_id": body.host_id, "group_id": body.group_id})
     user = getattr(request.state, "user", None)
     username = user.get("username", "") if user else ""
     rule_id = await db.create_baseline_alert_rule(
@@ -382,52 +402,58 @@ async def create_rule(body: BaselineAlertRuleCreate, request: Request):
 
 
 @router.put("/api/baseline-rules/{rule_id}")
-async def update_rule(rule_id: int, body: BaselineAlertRuleUpdate):
-    existing = await db.get_baseline_alert_rule(rule_id)
-    if not existing:
-        raise HTTPException(404, "Baseline alert rule not found")
+@scoped("rule")
+async def update_rule(rule_id: int, body: BaselineAlertRuleUpdate, request: Request):
     updates = {k: v for k, v in body.dict(exclude_unset=True).items() if v is not None}
+    await require_rule_change(request, await db.get_baseline_alert_rule(rule_id), updates, not_found=_RULE_NOT_FOUND)
     if updates:
         await db.update_baseline_alert_rule(rule_id, **updates)
     return await db.get_baseline_alert_rule(rule_id)
 
 
 @router.delete("/api/baseline-rules/{rule_id}")
-async def delete_rule(rule_id: int):
-    existing = await db.get_baseline_alert_rule(rule_id)
-    if not existing:
-        raise HTTPException(404, "Baseline alert rule not found")
+@scoped("rule")
+async def delete_rule(rule_id: int, request: Request):
+    await require_rule_change(request, await db.get_baseline_alert_rule(rule_id), {}, not_found=_RULE_NOT_FOUND)
     await db.delete_baseline_alert_rule(rule_id)
     return {"deleted": True}
 
 
 @router.get("/api/baselines")
+@scoped("host")
 async def get_baselines(
+    request: Request,
     host_id: int = Query(...),
     metric: str | None = Query(None),
 ):
     """View computed baselines for a host."""
+    await require_object_host(request, host_id, not_found=HOST_NOT_FOUND)
     return await db.get_baselines_for_host(host_id, metric)
 
 
 @router.post("/api/baselines/compute")
+@scoped("host")
 async def trigger_compute(
+    request: Request,
     host_id: int = Query(...),
     metric: str = Query(...),
     learning_days: int = Query(14, ge=1, le=90),
 ):
     """Trigger immediate baseline recomputation for a host/metric."""
+    await require_object_host(request, host_id, write=True, not_found=HOST_NOT_FOUND)
     count = await compute_baselines_for_host(host_id, metric, learning_days)
     return {"baselines_computed": count, "host_id": host_id, "metric": metric}
 
 
 @router.get("/api/baselines/{host_id}/{metric}/chart")
-async def get_baseline_chart_data(host_id: int, metric: str):
+@scoped("host")
+async def get_baseline_chart_data(request: Request, host_id: int, metric: str):
     """Return baseline band data for chart overlay.
 
     Returns 24 entries (one per hour) with avg, min/max band, and p95.
     Uses "any day" baselines (day_of_week=-1) for simplicity.
     """
+    await require_object_host(request, host_id, not_found=HOST_NOT_FOUND)
     baselines = await db.get_baselines_for_host(host_id, metric)
 
     # Filter to any-day baselines

@@ -178,6 +178,9 @@ async def test_show_version_corrects_banner_guess(monkeypatch):
     assert cred is SERVICE
     assert command == "show version"
     assert kwargs["autodetect"] is False
+    # The OS is unknown until show version answers: a device with no
+    # Cisco-style enable mode is still read in user mode.
+    assert kwargs["enable_optional"] is True
 
     assert host["device_type"] == "cisco_xe"
     assert host["model"] == "C9300-48P"
@@ -259,6 +262,101 @@ async def test_hosts_without_ssh_surface_are_not_logged_into(monkeypatch, protoc
     await inventory._enrich_with_show_version(host, SERVICE)
     assert show.calls == []
     assert "ssh" not in host["discovery"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("device_type", ["apc_ups", "aruba_instant_on", "icmp_only"])
+async def test_snmp_identified_platform_without_cli_is_not_logged_into(monkeypatch, device_type):
+    # SNMP named a platform Plexus has no command line driver for (an APC UPS
+    # card answers SSH but is no Cisco CLI): opening a Cisco session on it
+    # failed on `enable` and was reported as an SSH error.
+    show = _FakeShow(IOS_XE_C9300)
+    monkeypatch.setattr(inventory, "_run_show_command", show)
+    host = {
+        "hostname": "ups-a",
+        "ip_address": "192.0.2.20",
+        "device_type": device_type,
+        "model": "Smart-UPS SRT 6000",
+        "discovery": {"protocol": "snmpv3"},
+    }
+    await inventory._enrich_with_show_version(host, SERVICE)
+    assert show.calls == []
+    assert "ssh" not in host["discovery"]
+    assert host["device_type"] == device_type
+
+
+class _FakeNmcShow(_FakeShow):
+    """An APC Network Management Card: no `show version`, answers `upsabout`.
+    Output shapes as confirmed on an NMC3 in a Smart-UPS SRT; values invented."""
+
+    def __init__(self, upsabout: str) -> None:
+        super().__init__("")
+        self.upsabout = upsabout
+
+    async def __call__(self, host, credentials, command, **kwargs):
+        self.calls.append((host, credentials, command, kwargs))
+        if command == "upsabout":
+            return self.upsabout
+        return "E101: Command Not Found\n"
+
+
+UPSABOUT_SRT = (
+    "E000: Success\nModel: Smart-UPS SRT 6000\nSerial Number: ZA0000000001\n"
+    "Firmware Revision: UPS 11.7 (ID1022)\nManufacture Date: \nApparent Power Rating: 6000 VA\n"
+)
+
+
+@pytest.mark.asyncio
+async def test_unknown_ssh_device_that_is_an_apc_card_is_identified(monkeypatch):
+    # No SNMP profile yet: the platform is unknown, so a Cisco session runs
+    # `show version`, which the card answers with an NMC status code.
+    show = _FakeNmcShow(UPSABOUT_SRT)
+    monkeypatch.setattr(inventory, "_run_show_command", show)
+    host = _ssh_probe_hit("192.0.2.30")
+    host["device_type"] = "unknown"
+    host["discovery"].update(banner="SSH-2.0-example", vendor="unknown", os="unknown")
+
+    await inventory._enrich_with_show_version(host, SERVICE)
+
+    assert [call[2] for call in show.calls] == ["show version", "upsabout"]
+    assert all(call[3]["enable_optional"] is True for call in show.calls)
+    assert host["device_type"] == "apc_ups"
+    assert host["model"] == "Smart-UPS SRT 6000"
+    assert host["serial_number"] == "ZA0000000001"
+    assert host["device_category"] == "ups"
+    assert host["discovery"]["device_type_source"] == "ssh"
+    assert host["discovery"]["vendor"] == "apc"
+    assert host["discovery"]["ssh"]["ok"] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "upsabout",
+    [
+        "E101: Command Not Found\n",  # a PDU or transfer switch card
+        "E000: Success\nSomething: else\n",  # nothing that names a UPS
+    ],
+)
+async def test_apc_card_without_a_ups_is_not_taken_for_one(monkeypatch, upsabout):
+    show = _FakeNmcShow(upsabout)
+    monkeypatch.setattr(inventory, "_run_show_command", show)
+    host = _ssh_probe_hit("192.0.2.31")
+    host["device_type"] = "unknown"
+
+    await inventory._enrich_with_show_version(host, SERVICE)
+
+    assert host["device_type"] == "unknown"
+    assert host["discovery"]["ssh"]["ok"] is False
+
+
+@pytest.mark.asyncio
+async def test_non_nmc_unrecognized_output_does_not_try_upsabout(monkeypatch):
+    show = _FakeShow("% Invalid input detected at '^' marker.\n")
+    monkeypatch.setattr(inventory, "_run_show_command", show)
+    host = _ssh_probe_hit()
+    await inventory._enrich_with_show_version(host, SERVICE)
+    assert [call[2] for call in show.calls] == ["show version"]
+    assert host["discovery"]["ssh"]["ok"] is False
 
 
 @pytest.mark.asyncio

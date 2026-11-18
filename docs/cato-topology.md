@@ -108,7 +108,8 @@ Click a remote user for:
   posture, allocation ranges, action...)
 
 Click a **PoP** box for a table of all of its users, and the **Cato Cloud**
-node for the account summary and every policy collected, one table each:
+node for the account summary, the **All users** table (below) and every
+policy collected, one table each:
 
 - **WAN firewall policy**, **Internet firewall policy**: every rule with its
   direction, source, destination, service, action and the conditions
@@ -217,6 +218,30 @@ Cloud** node for the account summary.
 The toolbar search covers everything collected: site names, serials, public
 IPs, subnets, PoP names, and remote users by name, email, device, VPN IP or
 public IP.
+
+### All users
+
+The **Cato Cloud** node holds an **All users** table: every SDP user Cato
+knows, connected now or not, with their email, status (*connected* or
+*disconnected*), when they were last seen, their last VPN address, public IP
+and device, and where Plexus learned of them (*Connected now*, *The
+source's user list*, or *Seen by an earlier collection*). It lists:
+
+- the users connected at collection time;
+- the users the account's registry lists (`entityLookup` of type `vpnUser`,
+  and the users `accountSnapshot` reports as disconnected). Cato's
+  snapshot lists only the connected users unless it is asked by ID, so
+  the registered users it left out are read by ID, 100 a call (10,000 at
+  most), for their email, device and the time they last connected;
+- users an earlier collection saw who appear in neither, carried forward as
+  *disconnected* for 180 days after they were last seen.
+
+So the toolbar search finds a user by name or email even when they are not
+connected: the hit is the Cato Cloud. A disconnected user has no tunnel, so
+it is not a node, not a subnet and not a path endpoint, and a firewall or
+Split Tunnel rule naming only such users matches no address; the address in
+the table is the last one seen, for reference. The summary counts the
+**Registered users** next to the users connected.
 
 In **Path Mode** a Cato site or one of its subnets can be picked like a
 Meraki one. A path between two Cato sites runs Socket → PoP → Cato Cloud →
@@ -368,6 +393,8 @@ both hold, or that sits inside a VPC, is listed under **Overlapping Ranges**
 |---|---|---|
 | Sites, Sockets, WAN links, PoP, HA state | `accountSnapshot` (sites) | always |
 | Connected remote users | `accountSnapshot` (users) | Remote users |
+| Every registered SDP user, connected or not (the All users table) | `entityLookup` (`vpnUser`) | Remote users |
+| Email, device and last connection of the registered users not connected | `accountSnapshot` (users, by ID) | Remote users |
 | Network ranges and LAN interface subnets | `entityLookup` (`siteRange`, `networkInterface`) | Network ranges |
 | WAN and Internet firewall rules | `policy.wanFirewall`, `policy.internetFirewall` | Firewall rules |
 | Split Tunnel policy (Access > Split Tunnel Policy), which needs the SDP Split Tunnel permission | `policy.splitTunnel` | Remote users |
@@ -431,7 +458,12 @@ priority, so its rules are *not decided* for the users they may apply to.
 Every other policy has a reduced query too, which reads each rule's number,
 name and state only.
 
-Only users connected at collection time are read. Their traffic (which
+Only users connected at collection time are drawn and routed; the rest are
+rows of the All users table. If Cato refuses the `vpnUser` lookup, the
+failure is reported and the table lists the users `accountSnapshot` returned
+plus those earlier collections saw. If Cato refuses the users by ID, that
+is reported too and they are listed by the registry's name alone. Users'
+traffic (which
 applications and sites they reach), the contents of containers, the
 account's managed networks, the network each user's device is on (only the
 Split Tunnel configuration its Client reports applying), and hosts

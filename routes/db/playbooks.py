@@ -82,6 +82,7 @@ def _decode_playbook_json(row: dict) -> None:
     row["tags"] = json.loads(row.get("tags") or "[]")
     row["input_schema"] = _json_or(row.get("input_schema"), [])
     row["permissions"] = _json_or(row.get("permissions"), {})
+    row["approval_required"] = bool(row.get("approval_required"))
 
 
 async def get_playbook(playbook_id: int) -> dict | None:
@@ -108,12 +109,13 @@ async def create_playbook(
     type: str = "python",
     input_schema: list[dict] | None = None,
     permissions: dict | None = None,
+    approval_required: bool = False,
 ) -> int:
     db = await _dbcore.get_db()
     try:
         cursor = await db.execute(
-            "INSERT INTO playbooks (name, filename, description, tags, content, type, input_schema, permissions)"
-            " VALUES (?,?,?,?,?,?,?,?)",
+            "INSERT INTO playbooks (name, filename, description, tags, content, type, input_schema, permissions,"
+            " approval_required) VALUES (?,?,?,?,?,?,?,?,?)",
             (
                 name,
                 filename,
@@ -123,6 +125,7 @@ async def create_playbook(
                 type,
                 json.dumps(input_schema or []),
                 json.dumps(permissions or {}),
+                1 if approval_required else 0,
             ),
         )
         await db.commit()
@@ -160,6 +163,7 @@ async def update_playbook(
     type: str = None,
     input_schema: list[dict] | None = None,
     permissions: dict | None = None,
+    approval_required: bool | None = None,
 ):
     """Update playbook fields. None values are not updated."""
     db = await _dbcore.get_db()
@@ -191,6 +195,9 @@ async def update_playbook(
         if permissions is not None:
             updates.append("permissions = ?")
             params.append(json.dumps(permissions))
+        if approval_required is not None:
+            updates.append("approval_required = ?")
+            params.append(1 if approval_required else 0)
 
         if updates:
             updates.append("updated_at = NOW()::text")

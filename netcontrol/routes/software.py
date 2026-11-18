@@ -19,6 +19,12 @@ What runs what:
 Permissions: the ``software`` feature to read, ``software.write`` to
 refresh, acknowledge and manage advisories, admin for the settings and the
 PSIRT credentials (stored encrypted, write-only).
+
+Object scope: a caller limited to selected inventory groups sees the tracked
+devices, history, version changes and alerts of the hosts of those groups
+(no organization or account devices), acknowledges the alerts of hosts it
+can change, and reads the advisory catalogue, which only unrestricted
+callers change; a refresh (every device) is refused to it.
 """
 
 from __future__ import annotations
@@ -47,6 +53,16 @@ from netcontrol.integrations.software.versions import (
     snapshot_devices,
     validate_version_spec,
     version_spread,
+)
+from netcontrol.object_scope import (
+    filter_rows,
+    group_filter,
+    refuse_scoped,
+    request_scope,
+    require_model_write,
+    require_row,
+    scope_exempt,
+    scoped,
 )
 from netcontrol.routes import background_jobs, notification_channels
 from netcontrol.routes.meraki_topology import latest_snapshots
@@ -550,8 +566,16 @@ async def _software_refresh_loop() -> None:
 # ── Routes ───────────────────────────────────────────────────────────────────
 
 
+async def _readable_devices(request: Request, rows: list[dict]) -> list[dict]:
+    """The tracked devices the caller may read: for a scoped caller, the
+    inventory hosts of its groups (organization devices have no host)."""
+    return await filter_rows("host_record", rows, request)
+
+
 @router.get("/api/software/overview")
+@scoped("list")
 async def software_overview_api(
+    request: Request,
     platform: str = Query(default="", max_length=40),
     search: str = Query(default="", max_length=200),
     source: str = Query(default="", max_length=20),
@@ -561,11 +585,14 @@ async def software_overview_api(
         # First visit: build the tracked set from what is already stored.
         await refresh_software(notify=False)
         raw = await _settings()
-    every = await db.list_software_versions()
+    scope_kwargs: dict[str, Any] = await group_filter(request)
+    every = await _readable_devices(request, await db.list_software_versions())
     filtered = (
         every
         if not (platform or search or source)
-        else await db.list_software_versions(platform=platform, source=source, search=search)
+        else await _readable_devices(
+            request, await db.list_software_versions(platform=platform, source=source, search=search)
+        )
     )
     spread = version_spread(every)
     newest = {entry["platform"]: entry["newest_version"] for entry in spread}
@@ -577,7 +604,7 @@ async def software_overview_api(
         device["alert_count"] = counts.get("count", 0)
         device["unacknowledged_alerts"] = counts.get("unacknowledged", 0)
         device["worst_severity"] = counts.get("worst", "")
-    alert_summary = await db.software_alert_summary()
+    alert_summary = await db.software_alert_summary(**scope_kwargs)
     advisories = await db.list_software_advisories()
     sources: dict[str, int] = {}
     for device in every:
@@ -604,15 +631,18 @@ async def software_overview_api(
         ],
         "severities": list(SEVERITIES),
         "devices": filtered,
-        "alerts": await db.list_software_alerts(include_resolved=False),
+        "alerts": await db.list_software_alerts(include_resolved=False, **scope_kwargs),
         "advisories": advisories,
-        "changes": await db.list_recent_version_changes(50),
+        "changes": await db.list_recent_version_changes(50, **scope_kwargs),
         "settings": _public_settings(raw),
     }
 
 
 @router.post("/api/software/refresh")
+@scoped("refused")
 async def software_refresh_api(request: Request):
+    # Refreshes (and reports on) every tracked device.
+    await refuse_scoped(request)
     result = await refresh_software(notify=True)
     await _audit(
         "software",
@@ -625,19 +655,30 @@ async def software_refresh_api(request: Request):
 
 
 @router.get("/api/software/history")
+@scoped("list")
 async def software_history_api(
-    device_key: str = Query(min_length=1, max_length=300), limit: int = Query(default=100, ge=1, le=1000)
+    request: Request,
+    device_key: str = Query(min_length=1, max_length=300),
+    limit: int = Query(default=100, ge=1, le=1000),
 ):
+    if (await request_scope(request)).restricted:
+        # A device the caller cannot read has no history, as an unknown one.
+        readable = {d["device_key"] for d in await _readable_devices(request, await db.list_software_versions())}
+        if device_key not in readable:
+            return {"device_key": device_key, "history": []}
     return {"device_key": device_key, "history": await db.get_software_history(device_key, limit=limit)}
 
 
 @router.get("/api/software/advisories")
+@scope_exempt("the shared advisory catalogue: no host or inventory group data")
 async def list_advisories_api():
     return {"advisories": await db.list_software_advisories()}
 
 
 @router.post("/api/software/advisories", status_code=201)
+@scoped("catalog")
 async def create_advisory_api(body: AdvisoryBody, request: Request):
+    await require_model_write(request)
     advisory = _clean_advisory(body)
     existing = await db.get_software_advisory(advisory["advisory_id"])
     if existing:
@@ -655,7 +696,9 @@ async def create_advisory_api(body: AdvisoryBody, request: Request):
 
 
 @router.put("/api/software/advisories/{advisory_id}")
+@scoped("catalog")
 async def update_advisory_api(advisory_id: str, body: AdvisoryBody, request: Request):
+    await require_model_write(request)
     existing = await db.get_software_advisory(advisory_id)
     if not existing:
         raise HTTPException(status_code=404, detail="Advisory not found")
@@ -676,7 +719,9 @@ async def update_advisory_api(advisory_id: str, body: AdvisoryBody, request: Req
 
 
 @router.delete("/api/software/advisories/{advisory_id}")
+@scoped("catalog")
 async def delete_advisory_api(advisory_id: str, request: Request):
+    await require_model_write(request)
     if not await db.delete_software_advisory(advisory_id):
         raise HTTPException(status_code=404, detail="Advisory not found")
     await _audit(
@@ -690,7 +735,9 @@ async def delete_advisory_api(advisory_id: str, request: Request):
 
 
 @router.post("/api/software/advisories/import")
+@scoped("catalog")
 async def import_advisories_api(body: AdvisoryImportBody, request: Request):
+    await require_model_write(request)
     if not body.advisories:
         raise HTTPException(status_code=400, detail="No advisories to import")
     cleaned = [_clean_advisory(item) for item in body.advisories]
@@ -709,17 +756,28 @@ async def import_advisories_api(body: AdvisoryImportBody, request: Request):
 
 
 @router.get("/api/software/alerts")
+@scoped("list")
 async def list_alerts_api(
-    include_resolved: bool = Query(default=False), limit: int = Query(default=500, ge=1, le=5000)
+    request: Request,
+    include_resolved: bool = Query(default=False),
+    limit: int = Query(default=500, ge=1, le=5000),
 ):
-    return {"alerts": await db.list_software_alerts(include_resolved=include_resolved, limit=limit)}
+    scope_kwargs: dict[str, Any] = await group_filter(request)
+    return {"alerts": await db.list_software_alerts(include_resolved=include_resolved, limit=limit, **scope_kwargs)}
+
+
+_ALERT_NOT_FOUND = "Open alert not found"
 
 
 @router.post("/api/software/alerts/{alert_id}/acknowledge")
+@scoped("alert")
 async def acknowledge_alert_api(alert_id: int, request: Request):
+    if (await request_scope(request)).restricted:
+        rows = await db.list_software_alerts(include_resolved=False, limit=1, alert_id=alert_id)
+        await require_row(request, "host_record", rows[0] if rows else None, write=True, not_found=_ALERT_NOT_FOUND)
     user = _session_user(request)
     if not await db.acknowledge_software_alert(alert_id, user):
-        raise HTTPException(status_code=404, detail="Open alert not found")
+        raise HTTPException(status_code=404, detail=_ALERT_NOT_FOUND)
     await _audit(
         "software", "alert_acknowledge", user=user, detail=f"alert_id={alert_id}", correlation_id=_corr_id(request)
     )
@@ -727,11 +785,13 @@ async def acknowledge_alert_api(alert_id: int, request: Request):
 
 
 @router.get("/api/software/settings", dependencies=[Depends(_require_admin_dep)])
+@scoped("admin")
 async def get_settings_api():
     return {"settings": _public_settings(await _settings())}
 
 
 @router.put("/api/software/settings", dependencies=[Depends(_require_admin_dep)])
+@scoped("admin")
 async def update_settings_api(body: SettingsBody, request: Request):
     values: dict[str, str] = {}
     if body.refresh_interval_seconds is not None:
@@ -779,6 +839,7 @@ async def update_settings_api(body: SettingsBody, request: Request):
 
 
 @router.post("/api/software/psirt/test", dependencies=[Depends(_require_admin_dep)])
+@scoped("admin")
 async def test_psirt_api():
     client_id, secret = await _psirt_credentials()
     try:
@@ -790,6 +851,7 @@ async def test_psirt_api():
 
 
 @router.post("/api/software/psirt/sync", status_code=202, dependencies=[Depends(_require_admin_dep)])
+@scoped("admin")
 async def start_psirt_sync_api(request: Request):
     await _psirt_credentials()
     job = _start_psirt_sync(_session_user(request))
@@ -797,8 +859,11 @@ async def start_psirt_sync_api(request: Request):
 
 
 @router.get("/api/software/psirt/jobs/{job_id}")
-async def get_psirt_job_api(job_id: str):
-    job = background_jobs.get_job(job_id, kind=_JOB_KIND)
+@scoped("job")
+async def get_psirt_job_api(job_id: str, request: Request):
+    # A sync covers every device (and only an administrator starts one).
+    restricted = (await request_scope(request)).restricted
+    job = None if restricted else background_jobs.get_job(job_id, kind=_JOB_KIND)
     if job is None:
         raise HTTPException(status_code=404, detail="Sync job not found (it may have expired)")
     return job

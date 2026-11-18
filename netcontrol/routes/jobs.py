@@ -1,5 +1,11 @@
 """
 jobs.py -- Job orchestration routes: launch, cancel, retry, priority, queue, WebSocket streaming.
+
+Object scope: a job is visible (lists, queue, detail, events, live stream)
+to an account limited to selected inventory groups only when every target
+is readable (``job_visible``); launching, cancelling and re-running need
+every target writable, and ad-hoc addresses (outside the inventory) are
+refused for such accounts.
 """
 
 from __future__ import annotations
@@ -26,14 +32,25 @@ from routes.secret_resolver import (
 
 import netcontrol.routes.state as state
 from netcontrol import job_inputs
+from netcontrol.approvals import ApprovalDecision, decision_audit_detail, require_different_approver
 from netcontrol.dynamic_groups import resolve_group, scope_for_launcher
-from netcontrol.object_scope import request_scope
+from netcontrol.object_scope import (
+    READ_ONLY_DETAIL,
+    ObjectScope,
+    refuse_scoped,
+    request_scope,
+    require_group,
+    require_host_ids,
+    scoped,
+    ws_scope,
+)
 from netcontrol.routes.host_identity import host_ip_problem
 from netcontrol.routes.playbooks import effective_input_schema, playbook_permissions, playbook_supports_dry_run
 from netcontrol.routes.shared import (
     _audit,
     _corr_id,
     _get_session,
+    caller_features,
     require_credential_access,
     require_owner_or_admin,
     verify_ws_session,
@@ -93,6 +110,15 @@ _WS_HISTORY_REPLAY_LIMIT = 2000
 # A job in one of these states has not finished: it is waiting for a worker
 # slot (queued) or executing (running). Anything else is terminal.
 _ACTIVE_JOB_STATUSES = ("queued", "running")
+# A job whose playbook needs approval waits in pending_approval (the queue
+# never starts it) until it is approved (-> queued) or denied (-> denied,
+# terminal). It can be cancelled while it waits.
+_CANCELLABLE_JOB_STATUSES = (db.JOB_PENDING_APPROVAL, *_ACTIVE_JOB_STATUSES)
+# A viewer of a job in one of these states stays subscribed: it has not
+# finished yet (a pending job may still be approved and run).
+_LIVE_JOB_STATUSES = _CANCELLABLE_JOB_STATUSES
+# The feature key that lets a user approve or deny jobs (admins always may).
+JOB_APPROVE_FEATURE = "jobs.approve"
 
 
 async def _broadcast_to_job_sockets(job_id: int, payload: dict) -> None:
@@ -338,9 +364,25 @@ def job_clone_spec(job: dict) -> dict:
     }
 
 
-async def queue_job_from_spec(spec: dict, *, dry_run: bool, launched_by: str) -> int:
+def playbook_requires_approval(playbook: dict | None) -> bool:
+    """Whether jobs launched from ``playbook`` wait for approval."""
+    return bool(playbook and playbook.get("approval_required"))
+
+
+def launch_status(approval_required: bool) -> str:
+    """The status a newly launched job starts in."""
+    return db.JOB_PENDING_APPROVAL if approval_required else "queued"
+
+
+async def queue_job_from_spec(
+    spec: dict, *, dry_run: bool, launched_by: str, approval_required: bool | None = None
+) -> int:
     """Queue a job from a ``job_clone_spec`` and kick the queue. The caller
-    has already checked the launcher may run it."""
+    has already checked the launcher may run it. A job whose playbook needs
+    approval (``approval_required``; ``None``: read from the playbook) is
+    stored as ``pending_approval`` instead and the queue is not kicked."""
+    if approval_required is None:
+        approval_required = playbook_requires_approval(await db.get_playbook(int(spec["playbook_id"])))
     new_job_id = await db.create_job(
         spec["playbook_id"],
         spec.get("inventory_group_id"),
@@ -353,9 +395,103 @@ async def queue_job_from_spec(spec: dict, *, dry_run: bool, launched_by: str) ->
         ad_hoc_ips=spec.get("ad_hoc_ips"),
         parameters=spec.get("parameters"),
         dynamic_group_id=spec.get("dynamic_group_id"),
+        approval_required=approval_required,
     )
-    asyncio.ensure_future(_process_job_queue())
+    if not approval_required:
+        asyncio.ensure_future(_process_job_queue())
     return new_job_id
+
+
+# ── Object scope ─────────────────────────────────────────────────────────────
+
+_JOB_NOT_FOUND = "Job not found"
+
+
+async def job_visible(scope: ObjectScope, job: dict, username: str | None, *, write: bool = False) -> bool:
+    """Whether a caller with ``scope`` (signed in as ``username``) may see
+    ``job`` (``write``: cancel or re-run it): every target must be readable
+    (writable). No ad-hoc addresses (they are outside the inventory); the
+    stored host selection all in the caller's groups (an unknown host
+    fails); a dynamic group job only for its launcher (it resolves within the
+    launcher's own scope); else the job's inventory group. The SQL form of
+    this rule is ``routes.db.jobs.job_scope_condition``."""
+    if scope.unrestricted:
+        return True
+    if _stored_list(job, "ad_hoc_ips"):
+        return False
+    allowed = scope.can_write_group if write else scope.can_read_group
+    host_ids = _stored_list(job, "host_ids")
+    if host_ids:
+        try:
+            ids = list(dict.fromkeys(int(h) for h in host_ids))
+        except TypeError, ValueError:
+            return False
+        hosts = await db.get_hosts_by_ids(ids)
+        return len(hosts) == len(ids) and all(allowed(h.get("group_id")) for h in hosts)
+    if job.get("dynamic_group_id"):
+        return bool(username) and job.get("launched_by") == username
+    group_id = job.get("inventory_group_id")
+    return group_id is not None and allowed(group_id)
+
+
+def _caller_name(request: Request) -> str:
+    session = _get_session(request)
+    return session["user"] if session else ""
+
+
+async def _job_list_filter(request: Request) -> dict:
+    """Keyword arguments for the job list readers: ``{}`` for an unrestricted
+    caller, else the caller's readable groups and user name."""
+    scope = await request_scope(request)
+    if scope.unrestricted:
+        return {}
+    return {"group_ids": scope.read_groups, "launched_by": _caller_name(request)}
+
+
+async def _require_job(request: Request, job_id: int, *, write: bool = False) -> dict:
+    """The job; 404 when unknown or (scoped caller) a target is not readable,
+    403 on ``write`` when a target is not writable."""
+    job = await db.get_job(job_id)
+    if not job:
+        raise HTTPException(404, _JOB_NOT_FOUND)
+    scope = await request_scope(request)
+    if scope.restricted:
+        name = _caller_name(request)
+        if not await job_visible(scope, job, name):
+            raise HTTPException(404, _JOB_NOT_FOUND)
+        if write and not await job_visible(scope, job, name, write=True):
+            raise HTTPException(403, READ_ONLY_DETAIL)
+    return job
+
+
+async def _require_input_scope(request: Request, schema: list[dict], values: dict) -> None:
+    """For a scoped caller: host and inventory group inputs must be readable;
+    one that is not answers like an input naming an unknown id (422)."""
+    scope = await request_scope(request)
+    if scope.unrestricted or not schema or not values:
+        return
+    errors: dict[str, str] = {}
+    for fld in schema:
+        name = fld.get("name")
+        kind = fld.get("type")
+        if name not in values or kind not in ("host", "group"):
+            continue
+        value = values[name]
+        ref = value.get("id") if isinstance(value, dict) else value
+        if ref is None or ref == "":
+            continue
+        label = fld.get("label") or name
+        try:
+            ref_id = int(ref)
+        except TypeError, ValueError:
+            continue
+        if kind == "host":
+            if ref_id not in (await scope.reach()).read_hosts:
+                errors[name] = f"{label}: host {ref} does not exist."
+        elif not scope.can_read_group(ref_id):
+            errors[name] = f"{label}: inventory group {ref} does not exist."
+    if errors:
+        raise _input_error(job_inputs.JobInputError("Some inputs are not valid.", errors))
 
 
 # ── Post-job SNMP re-probe ──────────────────────────────────────────────────
@@ -435,6 +571,9 @@ async def _resolve_job_hosts(job: dict) -> list[dict]:
     if job.get("dynamic_group_id"):
         scope = await scope_for_launcher(job.get("launched_by"))
         hosts = await resolve_group(int(job["dynamic_group_id"]), scope) or []
+        if scope.restricted:
+            # A job changes its targets: keep the hosts the launcher may change.
+            hosts = [h for h in hosts if scope.can_write_group(h.get("group_id"))]
         LOGGER.info("job %s: dynamic group %s resolved to %d hosts", job.get("id"), job["dynamic_group_id"], len(hosts))
         return hosts
     if job.get("inventory_group_id"):
@@ -946,14 +1085,17 @@ def _jobs_deps():
 
 
 @router.get("/api/jobs")
-async def list_jobs(limit: int = Query(50, ge=1, le=200)):
-    return await db.get_all_jobs(limit=limit)
+@scoped("list")
+async def list_jobs(request: Request, limit: int = Query(50, ge=1, le=200)):
+    return await db.get_all_jobs(limit=limit, **await _job_list_filter(request))
 
 
 @router.get("/api/jobs/queue")
-async def get_job_queue():
-    """Get all queued and running jobs with queue positions."""
-    queue = await db.get_job_queue()
+@scoped("list")
+async def get_job_queue(request: Request):
+    """Get all queued and running jobs with queue positions (a scoped caller:
+    the jobs it may see, counted over those only)."""
+    queue = await db.get_job_queue(**await _job_list_filter(request))
     running_count = sum(1 for j in queue if j["status"] == "running")
     queued_count = sum(1 for j in queue if j["status"] == "queued")
     return {
@@ -964,25 +1106,98 @@ async def get_job_queue():
     }
 
 
+# ── Approvals ────────────────────────────────────────────────────────────────
+
+
+async def _require_approver(request: Request) -> str:
+    """403 unless the caller holds ``jobs.approve`` (admins and the API token
+    always do); the caller's user name (``""`` for the API token)."""
+    features = await caller_features(request)
+    if features is not None and JOB_APPROVE_FEATURE not in features:
+        raise HTTPException(403, f"Access denied for feature '{JOB_APPROVE_FEATURE}'")
+    return _caller_name(request)
+
+
+@router.get("/api/jobs/approvals")
+@scoped("list")
+async def list_job_approvals(request: Request, limit: int = Query(200, ge=1, le=500)):
+    """Jobs awaiting approval that the caller may decide: within the
+    caller's object scope (every target writable) and not launched by the
+    caller (no self-approval)."""
+    user = await _require_approver(request)
+    scope = await request_scope(request)
+    scope_filter = {} if scope.unrestricted else {"group_ids": scope.write_groups, "launched_by": user}
+    return await db.get_jobs_pending_approval(exclude_launched_by=user or None, limit=limit, **scope_filter)
+
+
+async def _decide_job(job_id: int, body: ApprovalDecision, request: Request, *, approve: bool) -> dict:
+    """Approve or deny a job awaiting approval: the caller needs
+    ``jobs.approve`` and every target writable, and may not decide a job
+    they launched (four-eyes, admins included, like deployments)."""
+    job = await _require_job(request, job_id, write=True)
+    user = await _require_approver(request)
+    if job["status"] != db.JOB_PENDING_APPROVAL:
+        verb = "approve" if approve else "deny"
+        raise HTTPException(400, f"Cannot {verb} job with status '{job['status']}'")
+    require_different_approver(user, job.get("launched_by"), requester_label="requester")
+    comment = body.comment.strip()
+    if not await db.decide_job_approval(job_id, approve=approve, decided_by=user, comment=comment):
+        raise HTTPException(409, "The job is no longer awaiting approval")
+    who = user or "API token"
+    level = "info" if approve else "warning"
+    message = f"{'Approved' if approve else 'Denied'} by {who}" + (f": {comment}" if comment else "")
+    await db.add_job_event(job_id, level, message)
+    # Viewers of the pending job see the decision; a denied job is finished.
+    await _broadcast_to_job_sockets(job_id, LogEvent(level, message).to_dict())
+    if not approve:
+        await _broadcast_to_job_sockets(job_id, {"type": "job_complete", "job_id": job_id, "status": db.JOB_DENIED})
+        async with _job_sockets_lock:
+            _job_sockets.pop(job_id, None)
+    await _audit(
+        "jobs",
+        "job.approved" if approve else "job.approval_denied",
+        user=user,
+        detail=decision_audit_detail(f"id={job_id}", comment),
+        correlation_id=_corr_id(request),
+    )
+    if approve:
+        asyncio.ensure_future(_process_job_queue())
+    status = "queued" if approve else db.JOB_DENIED
+    return {"ok": True, "job_id": job_id, "status": status, "approval_status": "approved" if approve else "denied"}
+
+
+@router.post("/api/jobs/{job_id}/approve")
+@scoped("job")
+async def approve_job(job_id: int, body: ApprovalDecision, request: Request):
+    """Approve a job awaiting approval; it is queued and runs as usual."""
+    return await _decide_job(job_id, body, request, approve=True)
+
+
+@router.post("/api/jobs/{job_id}/deny")
+@scoped("job")
+async def deny_job(job_id: int, body: ApprovalDecision, request: Request):
+    """Deny a job awaiting approval; it ends in ``denied`` and never runs."""
+    return await _decide_job(job_id, body, request, approve=False)
+
+
 @router.get("/api/jobs/{job_id}")
+@scoped("job")
 async def get_job(job_id: int, request: Request):
-    job = await db.get_job(job_id)
-    if not job:
-        raise HTTPException(404, "Job not found")
+    job = await _require_job(request, job_id)
     await require_owner_or_admin(request, job.get("launched_by"))
     return job
 
 
 @router.get("/api/jobs/{job_id}/events")
+@scoped("job")
 async def get_job_events(job_id: int, request: Request, limit: int = Query(default=10000, ge=1, le=100000)):
-    job = await db.get_job(job_id)
-    if not job:
-        raise HTTPException(404, "Job not found")
+    job = await _require_job(request, job_id)
     await require_owner_or_admin(request, job.get("launched_by"))
     return await db.get_job_events(job_id, limit)
 
 
 @router.post("/api/jobs/launch", status_code=201)
+@scoped("hosts")
 async def launch_job(body: JobLaunch, request: Request):
     """
     Launch a playbook execution as a background task.
@@ -1024,15 +1239,14 @@ async def launch_job(body: JobLaunch, request: Request):
     inventory_group_id = None
 
     if body.host_ids and len(body.host_ids) > 0:
+        await require_host_ids(request, body.host_ids, write=True)
         hosts = await db.get_hosts_by_ids(body.host_ids)
         if not hosts:
             raise HTTPException(400, "No valid hosts selected")
         if hosts:
             inventory_group_id = hosts[0].get("group_id")
     elif body.inventory_group_id:
-        group = await db.get_group(body.inventory_group_id)
-        if not group:
-            raise HTTPException(404, "Inventory group not found")
+        await require_group(request, body.inventory_group_id, write=True, not_found="Inventory group not found")
         hosts = await db.get_hosts_for_group(body.inventory_group_id)
         if not hosts:
             raise HTTPException(400, "No hosts in inventory group")
@@ -1045,10 +1259,14 @@ async def launch_job(body: JobLaunch, request: Request):
             raise HTTPException(404, "Dynamic group not found")
         if not resolved:
             raise HTTPException(400, "The dynamic group matches no hosts")
+        await require_host_ids(request, [h.get("id") for h in resolved], write=True)
         hosts = resolved
 
     # Build synthetic host dicts for ad-hoc IPs
     if body.ad_hoc_ips:
+        if any(ip.strip() for ip in body.ad_hoc_ips):
+            # Addresses outside the inventory cannot be confined to a scope.
+            await refuse_scoped(request)
         for ip in body.ad_hoc_ips:
             ip = ip.strip()
             if ip:
@@ -1129,6 +1347,7 @@ async def launch_job(body: JobLaunch, request: Request):
     schema, _source = effective_input_schema(playbook)
     raw_inputs = body.inputs if body.inputs is not None else (body.parameters or {})
     coerced_params = _coerce_parameters(schema, raw_inputs)
+    await _require_input_scope(request, schema, coerced_params)
     try:
         coerced_params = await job_inputs.resolve_references(schema, coerced_params)
     except job_inputs.JobInputError as exc:
@@ -1136,12 +1355,16 @@ async def launch_job(body: JobLaunch, request: Request):
 
     launched_by = session["user"] if session else "admin"
     priority = max(0, min(4, body.priority))
+    if body.depends_on and (await request_scope(request)).restricted:
+        for dep_id in body.depends_on:
+            await _require_job(request, int(dep_id))
     # Store specific host_ids so the queue processor targets only selected
     # hosts; a dynamic group stores the group instead (resolved at run time).
     dynamic_group_id = body.dynamic_group_id if not body.host_ids and not body.inventory_group_id else None
     selected_host_ids = None if dynamic_group_id else [h["id"] for h in hosts if h.get("id") is not None] or None
     # Store ad-hoc IPs separately so the queue processor can reconstruct them
     stored_ad_hoc = [ip.strip() for ip in body.ad_hoc_ips if ip.strip()] if body.ad_hoc_ips else None
+    needs_approval = playbook_requires_approval(playbook)
     job_id = await db.create_job(
         body.playbook_id,
         inventory_group_id,
@@ -1155,10 +1378,13 @@ async def launch_job(body: JobLaunch, request: Request):
         ad_hoc_ips=stored_ad_hoc,
         parameters=coerced_params,
         dynamic_group_id=dynamic_group_id,
+        approval_required=needs_approval,
     )
 
-    # Trigger queue processor to potentially start this job immediately
-    asyncio.ensure_future(_process_job_queue())
+    # Trigger queue processor to potentially start this job immediately (a
+    # job awaiting approval is queued when it is approved).
+    if not needs_approval:
+        asyncio.ensure_future(_process_job_queue())
 
     await _audit(
         "jobs",
@@ -1167,20 +1393,19 @@ async def launch_job(body: JobLaunch, request: Request):
         detail=(
             f"queued job {job_id} playbook='{playbook['name']}' hosts={len(hosts)} "
             f"mode={'dry-run' if dry_run else 'commit'} dry_run={dry_run} priority={priority} "
-            f"inputs={sorted(coerced_params)}"
+            f"inputs={sorted(coerced_params)}" + (" approval=pending" if needs_approval else "")
         ),
         correlation_id=_corr_id(request),
     )
-    return {"job_id": job_id, "status": "queued"}
+    return {"job_id": job_id, "status": launch_status(needs_approval)}
 
 
 @router.post("/api/jobs/{job_id}/cancel")
+@scoped("job")
 async def cancel_job_endpoint(job_id: int, request: Request):
-    """Cancel a queued or running job."""
-    job = await db.get_job(job_id)
-    if not job:
-        raise HTTPException(404, "Job not found")
-    if job["status"] not in _ACTIVE_JOB_STATUSES:
+    """Cancel a job that is awaiting approval, queued or running."""
+    job = await _require_job(request, job_id, write=True)
+    if job["status"] not in _CANCELLABLE_JOB_STATUSES:
         raise HTTPException(400, f"Cannot cancel job with status '{job['status']}'")
 
     await require_owner_or_admin(request, job.get("launched_by"))
@@ -1216,71 +1441,77 @@ async def cancel_job_endpoint(job_id: int, request: Request):
 
 
 @router.post("/api/jobs/{job_id}/retry", status_code=201)
+@scoped("job")
 async def retry_job_endpoint(job_id: int, request: Request):
-    """Retry a failed or cancelled job by creating a new job with the same parameters."""
-    job = await db.get_job(job_id)
-    if not job:
-        raise HTTPException(404, "Job not found")
-    if job["status"] not in ("failed", "cancelled"):
-        raise HTTPException(400, f"Can only retry failed or cancelled jobs, current status: '{job['status']}'")
+    """Retry a failed, cancelled or denied job by creating a new job with the
+    same parameters (awaiting approval again when its playbook needs it)."""
+    job = await _require_job(request, job_id, write=True)
+    if job["status"] not in ("failed", "cancelled", db.JOB_DENIED):
+        raise HTTPException(400, f"Can only retry failed, cancelled or denied jobs, current status: '{job['status']}'")
 
     await require_owner_or_admin(request, job.get("launched_by"))
     playbook = await db.get_playbook(job["playbook_id"])
     if playbook:
         await _require_job_permission(request, playbook, commit=not bool(job.get("dry_run", 1)))
+        await _require_input_scope(request, effective_input_schema(playbook)[0], _stored_params(job.get("parameters")))
     session = _get_session(request)
     user = session["user"] if session else "admin"
 
-    new_job_id = await queue_job_from_spec(job_clone_spec(job), dry_run=bool(job.get("dry_run", 1)), launched_by=user)
+    needs_approval = playbook_requires_approval(playbook)
+    new_job_id = await queue_job_from_spec(
+        job_clone_spec(job), dry_run=bool(job.get("dry_run", 1)), launched_by=user, approval_required=needs_approval
+    )
 
     await _audit(
         "jobs",
         "job.retry",
         user=user,
-        detail=f"retried job {job_id} as new job {new_job_id}",
+        detail=f"retried job {job_id} as new job {new_job_id}" + (" approval=pending" if needs_approval else ""),
         correlation_id=_corr_id(request),
     )
-    return {"job_id": new_job_id, "status": "queued", "retried_from": job_id}
+    return {"job_id": new_job_id, "status": launch_status(needs_approval), "retried_from": job_id}
 
 
 @router.post("/api/jobs/{job_id}/rerun", status_code=201)
+@scoped("job")
 async def rerun_job_endpoint(job_id: int, request: Request):
     """Re-run a completed job with dry_run disabled (live mode).
 
     Works on any finished job (completed, failed, cancelled).  Clones the
     original parameters but forces ``dry_run=False``.
     """
-    job = await db.get_job(job_id)
-    if not job:
-        raise HTTPException(404, "Job not found")
-    if job["status"] in _ACTIVE_JOB_STATUSES:
+    job = await _require_job(request, job_id, write=True)
+    if job["status"] in _CANCELLABLE_JOB_STATUSES:
         raise HTTPException(400, f"Job is still {job['status']} - wait for it to finish first")
 
     await require_owner_or_admin(request, job.get("launched_by"))
     playbook = await db.get_playbook(job["playbook_id"])
     if playbook:
         await _require_job_permission(request, playbook, commit=True)
+        await _require_input_scope(request, effective_input_schema(playbook)[0], _stored_params(job.get("parameters")))
     session = _get_session(request)
     user = session["user"] if session else "admin"
 
-    new_job_id = await queue_job_from_spec(job_clone_spec(job), dry_run=False, launched_by=user)
+    needs_approval = playbook_requires_approval(playbook)
+    new_job_id = await queue_job_from_spec(
+        job_clone_spec(job), dry_run=False, launched_by=user, approval_required=needs_approval
+    )
 
     await _audit(
         "jobs",
         "job.rerun_live",
         user=user,
-        detail=f"re-ran job {job_id} as live job {new_job_id}",
+        detail=f"re-ran job {job_id} as live job {new_job_id}" + (" approval=pending" if needs_approval else ""),
         correlation_id=_corr_id(request),
     )
-    return {"job_id": new_job_id, "status": "queued", "rerun_from": job_id}
+    return {"job_id": new_job_id, "status": launch_status(needs_approval), "rerun_from": job_id}
 
 
 @router.patch("/api/jobs/{job_id}/priority")
+@scoped("job")
 async def update_job_priority_endpoint(job_id: int, body: dict, request: Request):
     """Change the priority of a queued job."""
-    job = await db.get_job(job_id)
-    if not job:
-        raise HTTPException(404, "Job not found")
+    job = await _require_job(request, job_id, write=True)
     if job["status"] != "queued":
         raise HTTPException(400, "Can only change priority of queued jobs")
     await require_owner_or_admin(request, job.get("launched_by"))
@@ -1307,6 +1538,7 @@ async def update_job_priority_endpoint(job_id: int, body: dict, request: Request
 
 
 @ws_router.websocket("/ws/jobs/{job_id}")
+@scoped("job")
 async def websocket_job(websocket: WebSocket, job_id: int):
     """
     Stream job events in real-time.
@@ -1338,6 +1570,11 @@ async def websocket_job(websocket: WebSocket, job_id: int):
     if not job:
         await websocket.close(code=1008)
         return
+    # Object-level permissions: a job with a target the caller may not read
+    # answers like an unknown job.
+    if not await job_visible(await ws_scope(session), job, session.get("user")):
+        await websocket.close(code=1008)
+        return
     if user.get("role") != "admin" and job.get("launched_by") != session.get("user"):
         await websocket.close(code=1008)
         return
@@ -1364,7 +1601,7 @@ async def websocket_job(websocket: WebSocket, job_id: int):
     # Already finished: say so and close. A queued job is not finished - it
     # is waiting for a worker slot - so it subscribes like a running one
     # (treating it as done closed the stream before the job even started).
-    if job["status"] not in _ACTIVE_JOB_STATUSES:
+    if job["status"] not in _LIVE_JOB_STATUSES:
         await websocket.send_json({"type": "job_complete", "job_id": job_id, "status": job["status"]})
         await websocket.close()
         return
@@ -1380,7 +1617,7 @@ async def websocket_job(websocket: WebSocket, job_id: int):
     # nobody. Re-check now: send what was logged after the replay, then
     # job_complete, instead of leaving the viewer waiting on a dead stream.
     latest = await db.get_job(job_id)
-    if latest and latest["status"] not in _ACTIVE_JOB_STATUSES:
+    if latest and latest["status"] not in _LIVE_JOB_STATUSES:
         last_id = max((int(e["id"]) for e in events if e.get("id") is not None), default=0)
         missed = [
             e

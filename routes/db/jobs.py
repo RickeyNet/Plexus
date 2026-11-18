@@ -12,6 +12,7 @@ import ipaddress
 import json
 import os
 import re
+from collections.abc import Iterable
 from datetime import UTC, datetime, timedelta
 
 import routes.database as _dbcore
@@ -24,6 +25,8 @@ from routes.database import (
 from routes.db.change_events import tracks_changes
 
 __all__ = [
+    "host_ids_json_condition",
+    "job_scope_condition",
     "get_all_jobs",
     "get_job",
     "create_job",
@@ -35,6 +38,10 @@ __all__ = [
     "start_job",
     "cancel_job",
     "update_job_priority",
+    "JOB_PENDING_APPROVAL",
+    "JOB_DENIED",
+    "decide_job_approval",
+    "get_jobs_pending_approval",
     "get_job_queue",
     "get_next_queued_job",
     "check_job_dependencies_met",
@@ -47,20 +54,79 @@ __all__ = [
 # Jobs
 # ═════════════════════════════════════════════════════════════════════════════
 
+# A job whose playbook needs approval waits here; the queue never starts it.
+JOB_PENDING_APPROVAL = "pending_approval"
+# A job whose approval was denied (terminal).
+JOB_DENIED = "denied"
 
-async def get_all_jobs(limit: int = 50) -> list[dict]:
+
+def host_ids_json_condition(column: str, group_ids: Iterable[int] | None) -> tuple[str, tuple[int, ...]]:
+    """A SQL condition (and its parameters) keeping rows whose ``column`` (a
+    JSON list of host ids stored as text, e.g. ``jobs.host_ids``) names only
+    hosts in ``group_ids`` (object-level permissions): an unknown host or one
+    in no group fails; an empty or NULL list passes. ``None``: no condition.
+    ``column`` is a fixed identifier."""
+    if group_ids is None:
+        return "", ()
+    ids = tuple(sorted({int(g) for g in group_ids}))
+    if not ids:
+        return "1 = 0", ()
+    marks = ",".join("?" * len(ids))
+    return (
+        "NOT EXISTS (SELECT 1 FROM jsonb_array_elements_text("
+        f"(CASE WHEN COALESCE({column}, '') IN ('', 'null') THEN '[]' ELSE {column} END)::jsonb) AS scope_t(v)"
+        " LEFT JOIN hosts scope_h ON scope_h.id = scope_t.v::bigint"
+        f" WHERE scope_h.group_id IS NULL OR scope_h.group_id NOT IN ({marks}))",
+        ids,
+    )
+
+
+def job_scope_condition(
+    group_ids: Iterable[int] | None, launched_by: str | None = None, alias: str = "j"
+) -> tuple[str, tuple]:
+    """A SQL condition (and its parameters) keeping the jobs whose every
+    target is in ``group_ids`` (object-level permissions, see
+    ``netcontrol.routes.jobs.job_visible``): no ad-hoc addresses; the stored
+    host selection all in those groups (an unknown host fails), else a
+    dynamic group job launched by ``launched_by`` (resolved within that
+    user's own scope), else the job's inventory group in those groups.
+    ``None``: no condition. ``alias`` is a fixed identifier."""
+    if group_ids is None:
+        return "", ()
+    ids = tuple(sorted({int(g) for g in group_ids}))
+    if not ids:
+        return "1 = 0", ()
+    a = alias
+    hosts_sql, hosts_params = host_ids_json_condition(f"{a}.host_ids", ids)
+    sql = (
+        f"(COALESCE({a}.ad_hoc_ips, '') IN ('', '[]', 'null') AND CASE"
+        f" WHEN COALESCE({a}.host_ids, '') NOT IN ('', '[]', 'null') THEN {hosts_sql}"
+        f" WHEN {a}.dynamic_group_id IS NOT NULL THEN {a}.launched_by = ?"
+        f" ELSE {a}.inventory_group_id IN ({','.join('?' * len(ids))}) END)"
+    )
+    return sql, (*hosts_params, launched_by or "", *ids)
+
+
+async def get_all_jobs(
+    limit: int = 50, *, group_ids: Iterable[int] | None = None, launched_by: str | None = None
+) -> list[dict]:
+    """The newest jobs. ``group_ids`` (object scope): only jobs whose every
+    target is in those inventory groups (``job_scope_condition``)."""
+    cond, cond_params = job_scope_condition(group_ids, launched_by)
+    where = f"WHERE {cond}" if cond else ""
     db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
-            """
+            f"""
             SELECT j.*, p.name AS playbook_name, g.name AS group_name, dg.name AS dynamic_group_name
             FROM jobs j
             JOIN playbooks p ON p.id = j.playbook_id
             LEFT JOIN inventory_groups g ON g.id = j.inventory_group_id
             LEFT JOIN dynamic_groups dg ON dg.id = j.dynamic_group_id
+            {where}
             ORDER BY j.id DESC LIMIT ?
-        """,
-            (limit,),
+        """,  # nosec B608
+            (*cond_params, limit),
         )
         return rows_to_list(await cursor.fetchall())
     finally:
@@ -100,7 +166,10 @@ async def create_job(
     ad_hoc_ips: list[str] | None = None,
     parameters: dict | None = None,
     dynamic_group_id: int | None = None,
+    approval_required: bool = False,
 ) -> int:
+    """Store a new job. ``approval_required``: it waits in
+    ``pending_approval`` (never started by the queue) instead of ``queued``."""
     db = await _dbcore.get_db()
     try:
         deps_json = json.dumps(depends_on or [])
@@ -112,15 +181,15 @@ async def create_job(
             """INSERT INTO jobs
                (playbook_id, inventory_group_id, credential_id, template_id,
                 dry_run, status, priority, depends_on, queued_at, launched_by,
-                host_ids, ad_hoc_ips, parameters, dynamic_group_id)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                host_ids, ad_hoc_ips, parameters, dynamic_group_id, approval_status)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 playbook_id,
                 inventory_group_id,
                 credential_id,
                 template_id,
                 1 if dry_run else 0,
-                "queued",
+                JOB_PENDING_APPROVAL if approval_required else "queued",
                 priority,
                 deps_json,
                 now,
@@ -129,6 +198,7 @@ async def create_job(
                 ad_hoc_json,
                 params_json,
                 dynamic_group_id,
+                "pending" if approval_required else "not_required",
             ),
         )
         await db.commit()
@@ -196,7 +266,7 @@ async def delete_expired_jobs(retention_days: int) -> int:
         cursor = await db.execute(
             """
             DELETE FROM jobs
-            WHERE status IN ('success', 'failed', 'cancelled')
+            WHERE status IN ('success', 'failed', 'cancelled', 'denied')
               AND COALESCE(finished_at, started_at, queued_at) IS NOT NULL
               AND COALESCE(finished_at, started_at, queued_at)::timestamp <= (NOW() - (?::int * INTERVAL '1 day'))
             """,
@@ -229,14 +299,15 @@ async def start_job(job_id: int) -> bool:
 
 @tracks_changes("job", "update", id_arg="job_id")
 async def cancel_job(job_id: int, cancelled_by: str = "") -> bool:
-    """Cancel a queued or running job. Returns True if the job was updated."""
+    """Cancel a job awaiting approval, queued or running. Returns True if
+    the job was updated."""
     db = await _dbcore.get_db()
     try:
         now = datetime.now(UTC).isoformat()
         cursor = await db.execute(
             """UPDATE jobs SET status = 'cancelled', cancelled_at = ?, cancelled_by = ?,
                finished_at = COALESCE(finished_at, ?)
-               WHERE id = ? AND status IN ('queued', 'running')""",
+               WHERE id = ? AND status IN ('pending_approval', 'queued', 'running')""",
             (now, cancelled_by, now, job_id),
         )
         await db.commit()
@@ -259,17 +330,85 @@ async def update_job_priority(job_id: int, priority: int) -> bool:
         await db.close()
 
 
-async def get_job_queue() -> list[dict]:
-    """Get all queued and running jobs ordered by priority (desc) then queued_at (asc)."""
+@tracks_changes("job", "update", id_arg="job_id")
+async def decide_job_approval(job_id: int, *, approve: bool, decided_by: str, comment: str = "") -> bool:
+    """Record an approval decision on a job awaiting approval: approved moves
+    it to ``queued`` (the queue picks it up as usual), denied to ``denied``
+    (terminal). Returns False when the job was no longer awaiting approval
+    (another decision or a cancel won)."""
+    now = datetime.now(UTC).isoformat()
+    if approve:
+        sql = (
+            "UPDATE jobs SET status = 'queued', approval_status = 'approved', approved_by = ?,"
+            " approved_at = ?, approval_comment = ? WHERE id = ? AND status = ?"
+        )
+        params: tuple = (decided_by, now, comment, job_id, JOB_PENDING_APPROVAL)
+    else:
+        sql = (
+            "UPDATE jobs SET status = ?, approval_status = 'denied', approved_by = ?,"
+            " approved_at = ?, approval_comment = ?, finished_at = ? WHERE id = ? AND status = ?"
+        )
+        params = (JOB_DENIED, decided_by, now, comment, now, job_id, JOB_PENDING_APPROVAL)
+    db = await _dbcore.get_db()
+    try:
+        cursor = await db.execute(sql, params)
+        await db.commit()
+        return (cursor.rowcount or 0) == 1
+    finally:
+        await db.close()
+
+
+async def get_jobs_pending_approval(
+    *,
+    group_ids: Iterable[int] | None = None,
+    launched_by: str | None = None,
+    exclude_launched_by: str | None = None,
+    limit: int = 200,
+) -> list[dict]:
+    """Jobs awaiting approval, oldest first. ``group_ids`` (object scope):
+    only jobs whose every target is in those inventory groups
+    (``job_scope_condition``); ``exclude_launched_by``: leave out the jobs
+    this user launched (they cannot approve their own)."""
+    cond, cond_params = job_scope_condition(group_ids, launched_by)
+    extra = f" AND {cond}" if cond else ""
+    params: list = [JOB_PENDING_APPROVAL, *cond_params]
+    if exclude_launched_by:
+        extra += " AND COALESCE(j.launched_by, '') <> ?"
+        params.append(exclude_launched_by)
+    params.append(max(1, int(limit)))
     db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
-            """SELECT j.*, p.name AS playbook_name, g.name AS group_name
+            f"""SELECT j.*, p.name AS playbook_name, g.name AS group_name, dg.name AS dynamic_group_name
                FROM jobs j
                JOIN playbooks p ON p.id = j.playbook_id
                LEFT JOIN inventory_groups g ON g.id = j.inventory_group_id
-               WHERE j.status IN ('queued', 'running')
-               ORDER BY j.status = 'running' DESC, j.priority DESC, j.queued_at ASC"""
+               LEFT JOIN dynamic_groups dg ON dg.id = j.dynamic_group_id
+               WHERE j.status = ?{extra}
+               ORDER BY j.queued_at ASC, j.id ASC LIMIT ?""",  # nosec B608 - fixed clauses, values bound
+            tuple(params),
+        )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+async def get_job_queue(*, group_ids: Iterable[int] | None = None, launched_by: str | None = None) -> list[dict]:
+    """Get all queued and running jobs ordered by priority (desc) then
+    queued_at (asc). ``group_ids`` (object scope): only jobs whose every
+    target is in those inventory groups (``job_scope_condition``)."""
+    cond, cond_params = job_scope_condition(group_ids, launched_by)
+    extra = f" AND {cond}" if cond else ""
+    db = await _dbcore.get_db(read_only=True)
+    try:
+        cursor = await db.execute(
+            f"""SELECT j.*, p.name AS playbook_name, g.name AS group_name
+               FROM jobs j
+               JOIN playbooks p ON p.id = j.playbook_id
+               LEFT JOIN inventory_groups g ON g.id = j.inventory_group_id
+               WHERE j.status IN ('queued', 'running'){extra}
+               ORDER BY j.status = 'running' DESC, j.priority DESC, j.queued_at ASC""",  # nosec B608
+            cond_params,
         )
         return rows_to_list(await cursor.fetchall())
     finally:

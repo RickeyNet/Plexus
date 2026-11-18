@@ -3,18 +3,37 @@
  * device, or only the granted inventory groups, each read only or read and
  * write. A grant covers the group's sub-groups too.
  */
-import type { AccessGroup, InventoryScopeGrant, ObjectScope } from '@/api/settings';
+import type { AccessGroup, InventoryScopeGrant, ObjectScope, ScopeRule } from '@/api/settings';
 
 /** The access one inventory group gets in the dialog. */
 export type GrantChoice = 'none' | 'read' | 'write';
 
-/** The pages an account limited to selected inventory groups can use. Every
- * other page is closed to it until its module enforces the limit. */
-export const SCOPED_ACCOUNT_PAGES = [
-  'Inventory',
-  'Configuration (Config Drift, Intended, Backups, Config Search)',
-  'Credentials (their own)',
-];
+/** What an account limited to selected inventory groups sees: every page
+ * it has the feature for, filtered to its objects. */
+export const SCOPED_ACCOUNT_NOTE =
+  'Accounts limited this way keep every page their features allow, filtered: devices and their records ' +
+  '(monitoring, jobs, compliance, software, MAC tracking, topology ...) in the granted groups, and IPAM, ' +
+  'DCIM, circuits and virtualization records of the tenants of those devices and the sites they stand in. ' +
+  'Shared catalogues are read only. Scope rules below add tenants or sites per record type. AI access ' +
+  'stays closed to them.';
+
+/** A key for one scope rule (model, attribute, value). */
+export function ruleKey(rule: Pick<ScopeRule, 'model' | 'attribute' | 'value_id'>): string {
+  return `${rule.model}|${rule.attribute}|${rule.value_id}`;
+}
+
+/** The rules to send: complete ones only (a value picked), one per key
+ * (write wins), sorted. */
+export function normaliseRules(rules: Partial<ScopeRule>[]): ScopeRule[] {
+  const out = new Map<string, ScopeRule>();
+  for (const r of rules) {
+    if (!r.model || !r.attribute || !r.value_id) continue;
+    const rule: ScopeRule = { model: r.model, attribute: r.attribute, value_id: r.value_id, can_write: Boolean(r.can_write) };
+    const prev = out.get(ruleKey(rule));
+    out.set(ruleKey(rule), prev ? { ...rule, can_write: prev.can_write || rule.can_write } : rule);
+  }
+  return Array.from(out.values()).sort((a, b) => ruleKey(a).localeCompare(ruleKey(b)));
+}
 
 /** The dialog's per-group choices from an access group's grants. */
 export function choicesFromGrants(grants: InventoryScopeGrant[] | undefined): Map<number, GrantChoice> {

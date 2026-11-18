@@ -119,7 +119,8 @@ export function DeviceDetail() {
   const loadSyslog = tab === 'syslog';
 
   const polls = useMonitoringPollHistory(hostId, 1);
-  // An APC UPS has no CPU or memory: its Overview charts battery, load and runtime.
+  // An APC UPS has no CPU or memory: its Overview charts battery, load,
+  // runtime, voltage, frequency and temperature.
   const isUps = polls.data?.polls?.[0]?.device_type === 'apc_ups';
   const vendor = useVendorStatus(hostId, isUps);
   const cpu = useMetricQuery('cpu_percent', hostId, range, loadOverview && !isUps);
@@ -127,6 +128,11 @@ export function DeviceDetail() {
   const battery = useMetricQuery('ups_battery_capacity_pct', hostId, range, loadOverview && isUps);
   const load = useMetricQuery('ups_output_load_pct', hostId, range, loadOverview && isUps);
   const runtime = useMetricQuery('ups_runtime_minutes', hostId, range, loadOverview && isUps);
+  const inVolts = useMetricQuery('ups_input_voltage_v', hostId, range, loadOverview && isUps);
+  const outVolts = useMetricQuery('ups_output_voltage_v', hostId, range, loadOverview && isUps);
+  const inHertz = useMetricQuery('ups_input_frequency_hz', hostId, range, loadOverview && isUps);
+  const batteryTemp = useMetricQuery('ups_battery_temperature_c', hostId, range, loadOverview && isUps);
+  const probeTemp = useMetricQuery('ups_probe_temperature_c', hostId, range, loadOverview && isUps);
   const rt = useMetricQuery('response_time_ms', hostId, range, loadOverview);
   const pl = useMetricQuery('packet_loss_pct', hostId, range, loadOverview);
   const ifData = useInterfaceTimeSeries(hostId, range, loadInterfaces);
@@ -187,7 +193,18 @@ export function DeviceDetail() {
         <PageHelp pageKey={`device-detail.${tab}`} title={TAB_HELP[tab].title} text={TAB_HELP[tab].text} />
         {tab === 'overview' &&
           (isUps ? (
-            <UpsOverviewTab battery={battery} load={load} runtime={runtime} rt={rt} pl={pl} />
+            <UpsOverviewTab
+              battery={battery}
+              load={load}
+              runtime={runtime}
+              inVolts={inVolts}
+              outVolts={outVolts}
+              inHertz={inHertz}
+              batteryTemp={batteryTemp}
+              probeTemp={probeTemp}
+              rt={rt}
+              pl={pl}
+            />
           ) : (
             <OverviewTab cpu={cpu} mem={mem} rt={rt} pl={pl} />
           ))}
@@ -336,18 +353,41 @@ function UpsOverviewTab({
   battery,
   load,
   runtime,
+  inVolts,
+  outVolts,
+  inHertz,
+  batteryTemp,
+  probeTemp,
   rt,
   pl,
 }: {
   battery: MetricQuery;
   load: MetricQuery;
   runtime: MetricQuery;
+  inVolts: MetricQuery;
+  outVolts: MetricQuery;
+  inHertz: MetricQuery;
+  batteryTemp: MetricQuery;
+  probeTemp: MetricQuery;
   rt: MetricQuery;
   pl: MetricQuery;
 }) {
   const batterySeries = useMemo(() => extractSeries(battery.data, 'Battery %'), [battery.data]);
   const loadSeries = useMemo(() => extractSeries(load.data, 'Load %'), [load.data]);
   const runtimeSeries = useMemo(() => extractSeries(runtime.data, 'Runtime'), [runtime.data]);
+  const voltageSeries = useMemo(
+    () => [...extractSeries(inVolts.data, 'Input'), ...extractSeries(outVolts.data, 'Output')],
+    [inVolts.data, outVolts.data],
+  );
+  const hertzSeries = useMemo(() => extractSeries(inHertz.data, 'Input frequency'), [inHertz.data]);
+  const tempSeries = useMemo(
+    // Most cards have no probe: leave its empty line out of the legend.
+    () =>
+      [...extractSeries(batteryTemp.data, 'Battery'), ...extractSeries(probeTemp.data, 'Probe')].filter(
+        (s) => s.data.length > 0,
+      ),
+    [batteryTemp.data, probeTemp.data],
+  );
   const rtSeries = useMemo(() => extractSeries(rt.data, 'Response Time'), [rt.data]);
   const plSeries = useMemo(() => extractSeries(pl.data, 'Packet Loss'), [pl.data]);
 
@@ -367,6 +407,15 @@ function UpsOverviewTab({
       </ChartCard>
       <ChartCard title="Runtime Left (min)" query={runtime} series={runtimeSeries}>
         <TimeSeriesChart series={runtimeSeries} area yAxisName="min" yMin={0} />
+      </ChartCard>
+      <ChartCard title="Input / Output Voltage (V)" query={inVolts} series={voltageSeries}>
+        <TimeSeriesChart series={voltageSeries} yAxisName="V" />
+      </ChartCard>
+      <ChartCard title="Input Frequency (Hz)" query={inHertz} series={hertzSeries}>
+        <TimeSeriesChart series={hertzSeries} yAxisName="Hz" />
+      </ChartCard>
+      <ChartCard title="Temperature (°C)" query={batteryTemp} series={tempSeries}>
+        <TimeSeriesChart series={tempSeries} yAxisName="°C" />
       </ChartCard>
       <ChartCard title="Response Time (ms)" query={rt} series={rtSeries}>
         <TimeSeriesChart series={rtSeries} area yAxisName="ms" />

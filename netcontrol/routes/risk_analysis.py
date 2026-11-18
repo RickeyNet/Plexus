@@ -1,5 +1,11 @@
 """
 risk_analysis.py -- Pre-change risk analysis engine and API routes.
+
+Object scope (model ``risk_analysis``): an analysis is placed by its host
+and inventory group; an account limited to selected inventory groups sees
+the analyses of its readable hosts and groups, analyzes only writable
+targets and approves or deletes only writable analyses. Offline analyses
+(no host or group) are visible to unrestricted callers only.
 """
 
 from __future__ import annotations
@@ -13,6 +19,18 @@ from pydantic import BaseModel
 from routes.crypto import decrypt
 
 import netcontrol.routes.state as state
+from netcontrol.object_scope import (
+    ScopeModel,
+    register_model,
+    request_scope,
+    require_group,
+    require_host,
+    require_host_ids,
+    require_row,
+    scope_exempt,
+    scoped,
+    sql_condition,
+)
 from netcontrol.routes.device_config import ON_DEMAND_MAX_AGE_SECONDS, get_device_config
 from netcontrol.routes.shared import (
     _audit,
@@ -25,6 +43,24 @@ from netcontrol.telemetry import configure_logging
 
 router = APIRouter()
 LOGGER = configure_logging("plexus.risk_analysis")
+
+_ANALYSIS_NOT_FOUND = "Risk analysis not found"
+register_model(
+    ScopeModel(
+        "risk_analysis",
+        {"group": "group_id", "host": "host_id"},
+        not_found=_ANALYSIS_NOT_FOUND,
+        description="Risk analyses (by their host and inventory group)",
+    )
+)
+
+
+async def require_risk_analysis(request: Request, analysis_id: int, *, write: bool = False) -> dict:
+    """The analysis; 404 when unknown or outside the caller's read scope,
+    403 on ``write`` when not writable."""
+    return await require_row(
+        request, "risk_analysis", await db.get_risk_analysis(analysis_id), write=write, not_found=_ANALYSIS_NOT_FOUND
+    )
 
 
 # ── Models ────────────────────────────────────────────────────────────────────
@@ -410,9 +446,18 @@ async def _run_risk_analysis_for_host(
 
 
 @router.post("/api/risk-analysis/analyze")
+@scoped("hosts")
 async def run_risk_analysis(body: RiskAnalysisRequest, request: Request):
-    """Run pre-change risk analysis for proposed commands against target hosts."""
+    """Run pre-change risk analysis for proposed commands against target
+    hosts (a scoped caller: every target host and the group writable)."""
     session = _get_session(request)
+    if (await request_scope(request)).restricted:
+        if body.group_id is not None:
+            await require_group(request, body.group_id, write=True)
+        if body.host_ids:
+            await require_host_ids(request, body.host_ids, write=True)
+        elif body.host_id:
+            await require_host(request, body.host_id, write=True)
 
     # Resolve credentials
     cred = await require_credential_access(body.credential_id, session=session)
@@ -523,33 +568,42 @@ async def run_risk_analysis(body: RiskAnalysisRequest, request: Request):
 
 
 @router.get("/api/risk-analysis")
+@scoped("list")
 async def list_risk_analyses(
+    request: Request,
     host_id: int | None = Query(default=None),
     group_id: int | None = Query(default=None),
     risk_level: str | None = Query(default=None),
     limit: int = Query(default=100, ge=1, le=500),
 ):
-    return await db.get_risk_analyses(host_id=host_id, group_id=group_id, risk_level=risk_level, limit=limit)
+    scope_kwargs = await _scope_kwargs(request)
+    return await db.get_risk_analyses(
+        host_id=host_id, group_id=group_id, risk_level=risk_level, limit=limit, **scope_kwargs
+    )
+
+
+async def _scope_kwargs(request: Request) -> dict:
+    """``{}`` for an unrestricted caller, else the SQL scope condition."""
+    cond = await sql_condition("risk_analysis", request, alias="r")
+    return {"scope_condition": cond} if cond[0] else {}
 
 
 @router.get("/api/risk-analysis/summary")
-async def get_risk_analysis_summary_endpoint():
-    return await db.get_risk_analysis_summary()
+@scoped("list")
+async def get_risk_analysis_summary_endpoint(request: Request):
+    return await db.get_risk_analysis_summary(**await _scope_kwargs(request))
 
 
 @router.get("/api/risk-analysis/{analysis_id}")
-async def get_risk_analysis(analysis_id: int):
-    analysis = await db.get_risk_analysis(analysis_id)
-    if not analysis:
-        raise HTTPException(status_code=404, detail="Risk analysis not found")
-    return analysis
+@scoped("risk_analysis")
+async def get_risk_analysis(analysis_id: int, request: Request):
+    return await require_risk_analysis(request, analysis_id)
 
 
 @router.post("/api/risk-analysis/{analysis_id}/approve")
+@scoped("risk_analysis")
 async def approve_risk_analysis(analysis_id: int, request: Request):
-    analysis = await db.get_risk_analysis(analysis_id)
-    if not analysis:
-        raise HTTPException(status_code=404, detail="Risk analysis not found")
+    analysis = await require_risk_analysis(request, analysis_id, write=True)
     session = _get_session(request)
     user = session["user"] if session else ""
     await db.approve_risk_analysis(analysis_id, approved_by=user)
@@ -564,10 +618,9 @@ async def approve_risk_analysis(analysis_id: int, request: Request):
 
 
 @router.delete("/api/risk-analysis/{analysis_id}")
+@scoped("risk_analysis")
 async def delete_risk_analysis(analysis_id: int, request: Request):
-    analysis = await db.get_risk_analysis(analysis_id)
-    if not analysis:
-        raise HTTPException(status_code=404, detail="Risk analysis not found")
+    await require_risk_analysis(request, analysis_id, write=True)
     await db.delete_risk_analysis(analysis_id)
     session = _get_session(request)
     await _audit(
@@ -584,6 +637,7 @@ async def delete_risk_analysis(analysis_id: int, request: Request):
 
 
 @router.post("/api/risk-analysis/analyze-offline")
+@scope_exempt("analyzes configuration text the caller supplies; touches no host or inventory group")
 async def run_offline_risk_analysis(request: Request):
     """Analyze risk without connecting to devices - uses provided config text."""
     body = await request.json()

@@ -484,20 +484,51 @@ async def set_host_device_fields(host_id: int, values: dict, lock: bool = True) 
     if not exprs:
         return await _host_exists(host_id)
     sql, sql_params = _safe_dynamic_update("hosts", exprs, params, "id = ?", int(host_id))
+    new_type = values.get("device_type_id")
     db = await _dbcore.get_db()
     try:
+        changed = await _type_changing(db, [int(host_id)], int(new_type)) if new_type is not None else []
         cursor = await db.execute(sql, sql_params)
         await db.commit()
-        return (cursor.rowcount or 0) > 0
+        written = (cursor.rowcount or 0) > 0
     except Exception:
         await db.rollback()
         raise
     finally:
         await db.close()
+    await _instantiate_components(changed)
+    return written
 
 
 async def _host_exists(host_id: int) -> bool:
     return bool(await _select("SELECT 1 FROM hosts WHERE id = ?", (int(host_id),)))
+
+
+async def _type_changing(db, host_ids: list[int], device_type_id: int) -> list[int]:
+    """The hosts among ``host_ids`` whose device type is about to change to
+    ``device_type_id``."""
+    changing: list[int] = []
+    for chunk in _chunks(host_ids):
+        cursor = await db.execute(
+            f"SELECT id FROM hosts WHERE id IN ({_marks(chunk)}) AND device_type_id IS DISTINCT FROM ?",  # nosec B608 - placeholders only
+            (*chunk, int(device_type_id)),
+        )
+        changing.extend(int(r["id"]) for r in rows_to_list(await cursor.fetchall()))
+    return changing
+
+
+async def _instantiate_components(host_ids: list[int]) -> None:
+    """Create the components of each host's new device type
+    (``routes.db.component_templates``). A failure is logged, never raised:
+    the device type write is already committed."""
+    from routes.db.change_events import current_actor
+    from routes.db.component_templates import instantiate_host_components
+
+    for host_id in host_ids:
+        try:
+            await instantiate_host_components(host_id, current_actor.get())
+        except Exception as exc:
+            _LOGGER.warning("device model: components of host %s not created: %s", host_id, exc)
 
 
 @tracks_changes("host", "update", ids_arg="host_ids")
@@ -509,8 +540,10 @@ async def bulk_set_host_device_fields(host_ids: Iterable[int], values: dict, loc
     if not ids or not exprs:
         return 0
     updated = 0
+    new_type = values.get("device_type_id")
     db = await _dbcore.get_db()
     try:
+        changed = await _type_changing(db, ids, int(new_type)) if new_type is not None else []
         for chunk in _chunks(ids):
             cursor = await db.execute(
                 f"UPDATE hosts SET {', '.join(exprs)} WHERE id IN ({_marks(chunk)})",  # nosec B608 - fixed column names, placeholders only
@@ -523,6 +556,7 @@ async def bulk_set_host_device_fields(host_ids: Iterable[int], values: dict, loc
         raise
     finally:
         await db.close()
+    await _instantiate_components(changed)
     return updated
 
 

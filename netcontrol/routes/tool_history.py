@@ -9,7 +9,9 @@ server keeps the newest ``TOOL_HISTORY_LIMIT`` per user and kind
 (``routes.db.tool_history``).
 
 Endpoints (the ``topology`` feature; every user sees only their own;
-``kind`` is ``path``, ``reachability`` or ``summarize``):
+``kind`` is ``path``, ``reachability`` or ``summarize``). Object scope does
+not apply: the entries are the caller's own inputs, and opening one again
+runs the tool, which applies the caller's scope):
 
 - ``GET /api/topology/history/{kind}``: the runs, newest first.
 - ``POST /api/topology/history/{kind}``: record one (``data``, ``key``).
@@ -26,6 +28,7 @@ import routes.database as db
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field, field_validator
 
+from netcontrol.object_scope import scope_exempt
 from netcontrol.routes.shared import _session_user_id
 
 router = APIRouter(prefix="/api/topology/history")
@@ -57,16 +60,19 @@ def signature(entry: ToolHistoryEntry) -> str:
 
 
 @router.get("/{kind}")
+@scope_exempt("the caller's own tool history")
 async def list_tool_history(kind: ToolKind, request: Request) -> dict:
     return {"entries": await db.list_tool_history(_session_user_id(request), kind), "limit": db.TOOL_HISTORY_LIMIT}
 
 
 @router.post("/{kind}")
+@scope_exempt("the caller's own tool history")
 async def record_tool_history(kind: ToolKind, payload: ToolHistoryEntry, request: Request) -> dict:
     return await db.record_tool_history(_session_user_id(request), kind, signature(payload), payload.data)
 
 
 @router.delete("/{kind}/{entry_id}")
+@scope_exempt("the caller's own tool history")
 async def delete_tool_history(kind: ToolKind, entry_id: int, request: Request) -> dict:
     if not await db.delete_tool_history(_session_user_id(request), kind, entry_id):
         raise HTTPException(status_code=404, detail="No such entry in your history")
@@ -74,5 +80,6 @@ async def delete_tool_history(kind: ToolKind, entry_id: int, request: Request) -
 
 
 @router.delete("/{kind}")
+@scope_exempt("the caller's own tool history")
 async def clear_tool_history(kind: ToolKind, request: Request) -> dict:
     return {"ok": True, "removed": await db.clear_tool_history(_session_user_id(request), kind)}

@@ -12,6 +12,7 @@ import {
   useRequestDeploymentApproval,
   useRollbackDeployment,
 } from '@/api/deployments';
+import { ApprovalSection } from '@/components/ApprovalSection';
 import { Badge, StatusBadge } from '@/components/Badge';
 import { BusyButton } from '@/components/BusyButton';
 import { LoadingState } from '@/components/LoadingState';
@@ -20,7 +21,7 @@ import { QueryError } from '@/components/QueryError';
 import { useDialogs } from '@/components/DialogProvider-context';
 import { changeTypeLabel } from '@/lib/changeTypes';
 import { formatBackendDateTime, formatBackendTime } from '@/lib/datetime';
-import { statusLabel, statusTone, toneColor } from '@/lib/severity';
+import { statusLabel } from '@/lib/severity';
 
 import {
   canExecute,
@@ -271,6 +272,7 @@ function DetailBody({ deployment }: { deployment: DeploymentDetail }) {
                 },
               );
             }}
+            pendingNote="This deployment is awaiting approval from a user other than the creator."
             onReject={async () => {
               const ok = await confirm({
                 title: 'Reject deployment',
@@ -357,107 +359,6 @@ function DetailBody({ deployment }: { deployment: DeploymentDetail }) {
     </>
   );
 }
-
-function ApprovalSection({
-  status,
-  approvedBy,
-  approvedAt,
-  comment,
-  requestedAt,
-  canApprove,
-  approverInput,
-  onApproverInput,
-  isPending,
-  busyAction,
-  onApprove,
-  onReject,
-}: {
-  status: string;
-  approvedBy: string;
-  approvedAt: string;
-  comment: string;
-  requestedAt: string;
-  canApprove: boolean;
-  approverInput: string;
-  onApproverInput: (v: string) => void;
-  isPending: boolean;
-  /** Which approval decision is in flight, for the spinner. */
-  busyAction: 'approve' | 'reject' | null;
-  onApprove: () => void;
-  onReject: () => void;
-}) {
-  const color = toneColor(statusTone(status));
-  return (
-    <div
-      style={{
-        border: `1px solid ${color}`,
-        background: 'var(--bg-secondary)',
-        padding: '0.75rem',
-        borderRadius: 6,
-      }}
-    >
-      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-        <strong>Approval gate:</strong>
-        <StatusBadge status={status} />
-        {requestedAt && status === 'pending' && (
-          <span style={{ color: 'var(--text-muted)', fontSize: '0.85em' }}>
-            requested {formatBackendDateTime(requestedAt, '')}
-          </span>
-        )}
-      </div>
-      {status === 'approved' && (
-        <div style={{ marginTop: '0.4rem', fontSize: '0.85em', color: 'var(--text-muted)' }}>
-          Approved by {approvedBy || 'unknown'} at {formatBackendDateTime(approvedAt, '')}.
-          {comment && <div>"{comment}"</div>}
-        </div>
-      )}
-      {status === 'rejected' && (
-        <div style={{ marginTop: '0.4rem', fontSize: '0.85em', color: 'var(--text-muted)' }}>
-          Rejected by {approvedBy || 'unknown'} at {formatBackendDateTime(approvedAt, '')}.
-          {comment && <div>"{comment}"</div>}
-        </div>
-      )}
-      {canApprove && (
-        <div style={{ marginTop: '0.5rem', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-          <input
-            type="text"
-            className="form-input"
-            placeholder="Optional comment"
-            aria-label="Approval comment"
-            value={approverInput}
-            onChange={(e) => onApproverInput(e.target.value)}
-            style={{ width: '100%' }}
-          />
-          <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>
-            <BusyButton
-              className="btn btn-secondary btn-sm"
-              style={{ border: '1px solid var(--danger)', color: 'var(--danger)' }}
-              busy={busyAction === 'reject'}
-              disabled={isPending}
-              onClick={onReject}
-            >
-              Reject
-            </BusyButton>
-            <BusyButton
-              className="btn btn-primary btn-sm"
-              busy={busyAction === 'approve'}
-              disabled={isPending}
-              onClick={onApprove}
-            >
-              Approve
-            </BusyButton>
-          </div>
-        </div>
-      )}
-      {!canApprove && status === 'pending' && (
-        <div style={{ marginTop: '0.4rem', fontSize: '0.85em', color: 'var(--text-muted)' }}>
-          This deployment is awaiting approval from a user other than the creator.
-        </div>
-      )}
-    </div>
-  );
-}
-
 
 function CheckpointSection({
   title,

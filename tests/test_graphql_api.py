@@ -192,9 +192,10 @@ def test_scope_hides_out_of_scope_hosts_and_groups(admin, world):
     assert {g["name"] for g in data["groups"]} == {"site-a", "floor-1"}
     assert data["visible"] == {"hostname": "edge-r1"}
     assert data["hidden"] is None and data["groupB"] is None
-    # IPAM is not scope-enforced: a scoped user never holds the feature.
-    assert data["prefixes"] is None
-    assert [e["message"] for e in body["errors"]] == ["Access denied for feature 'ipam'"]
+    # IPAM is filtered by the scope model registry: a prefix of no tenant is
+    # not one a scoped caller reaches.
+    assert data["prefixes"] == []
+    assert "errors" not in body
 
     # A grant on the sub-group only: its parent reads null.
     floor = _scoped_user(admin, "floor-ops", world["a1"], ["graphql", "inventory"])

@@ -217,10 +217,11 @@ export function App() {
           <Route path="/deployments" element={<Navigate to="/change-management/deployments" replace />} />
           <Route path="/maintenance-windows" element={<Navigate to="/change-management/maintenance" replace />} />
           <Route path="/graph-templates" element={<Navigate to="/monitoring/configure/graph-templates" replace />} />
-          {/* Delegator: one page renders all four tabs. The legacy paths
+          {/* Delegator: one page renders all its tabs. The legacy paths
               (/jobs, /playbooks, /templates) point at Jobs too so old deep
               links keep working - Jobs.tsx maps them to the right tab. */}
           <Route path="/assignments" element={<Jobs />} />
+          <Route path="/approvals" element={<Jobs />} />
           <Route path="/tasks" element={<Jobs />} />
           <Route path="/instructions" element={<Jobs />} />
           <Route path="/credentials" element={<Jobs />} />

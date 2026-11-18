@@ -26,7 +26,7 @@ import {
   useSoftwareOverview,
   useStartPsirtSync,
 } from '@/api/software';
-import { visibleTabs } from '@/lib/tabGating';
+import { canWriteFeature, visibleTabs } from '@/lib/tabGating';
 import { usePathTab } from '@/lib/usePathTab';
 import { usePendingKeys } from '@/lib/usePendingKeys';
 import { UpgradesContent } from '@/pages/Upgrades/Upgrades';
@@ -106,7 +106,7 @@ function VersionsTab() {
   const { alert, confirm } = useDialogs();
   const { data: auth } = useAuthStatus();
   const isAdmin = auth?.role === 'admin';
-  const canWrite = isAdmin || (auth?.feature_access ?? []).includes('software.write');
+  const canWrite = canWriteFeature('software', auth);
 
   const [platform, setPlatform] = useState('');
   const [source, setSource] = useState('');

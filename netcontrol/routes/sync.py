@@ -13,8 +13,10 @@ devices. That is checked when such a job is saved and when it is run for
 real; a dry run writes nothing and needs ``sync.write`` only. Scheduled runs
 act for the job (``sync:<job name>`` in the change log).
 
-Sync is not enrolled in object scope (``netcontrol.object_scope``): accounts
-limited to selected inventory groups never reach it. Every write and every
+Object scope: jobs and runs act on the whole estate, so accounts limited to
+selected inventory groups read them as shared records (models ``sync_job``
+and ``sync_run``) but never add, edit, delete or run a job (403); a run's
+entries show them only the devices that are hosts in their scope. Every write and every
 run is audited (category ``sync``). Errors: 404 unknown record, 409 a taken
 name, a connection still used by jobs or a job already running, 422 bad
 input (``{"message", "fields"}``). Logic: ``netcontrol.sync``; storage:
@@ -32,6 +34,16 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from netcontrol.custom_fields import TEXT_MAX
+from netcontrol.object_scope import (
+    ScopeModel,
+    filter_rows,
+    readable_host_ids,
+    refuse_scoped,
+    register_model,
+    require_row,
+    scope_exempt,
+    scoped,
+)
 from netcontrol.routes.outbound_http import tls_verify
 from netcontrol.routes.shared import _audit, _corr_id, _session_user, caller_features
 from netcontrol.sync import runner
@@ -56,6 +68,11 @@ GROUP_PATH_MAX = 200
 INTERVAL_MIN = 5
 INTERVAL_MAX = 7 * 24 * 60
 PEM_MAX = 64 * 1024
+
+# Jobs and runs cover the whole estate: shared records a scoped caller reads
+# (never changes or runs).
+register_model(ScopeModel("sync_job", {}, shared=True, not_found="Job not found", description="Sync jobs"))
+register_model(ScopeModel("sync_run", {}, shared=True, not_found="Run not found", description="Sync runs"))
 
 Kind = Literal["netbox", "nautobot", "servicenow"]
 AuthType = Literal["token", "basic", "oauth"]
@@ -150,10 +167,21 @@ async def _check_plexus_rights(request: Request, job: dict) -> None:
         raise HTTPException(status_code=403, detail="Writing devices into Plexus needs inventory.write.")
 
 
+async def _readable_device_names(request: Request) -> list[str] | None:
+    """For a scoped caller: the host names of the hosts in their scope (a
+    run's entries then show only those devices); ``None``: no filter."""
+    host_ids = await readable_host_ids(request)
+    if host_ids is None:
+        return None
+    hosts = await db.get_hosts_by_ids(sorted(host_ids)) if host_ids else []
+    return [str(h["hostname"]) for h in hosts if h.get("hostname")]
+
+
 # ── Catalogue ────────────────────────────────────────────────────────────────
 
 
 @router.get(f"{PREFIX}/catalog")
+@scope_exempt("static option lists")
 async def get_catalog() -> dict:
     """Connection kinds, object types with their fields, directions, conflict
     policies and the default mapping of every kind."""
@@ -181,11 +209,13 @@ async def get_catalog() -> dict:
 
 
 @router.get(f"{PREFIX}/connections")
+@scope_exempt("global connection settings; no host, tenant or site data")
 async def list_connections() -> dict:
     return {"connections": await sync_db.list_connections()}
 
 
 @router.get(f"{PREFIX}/connections/{{connection_id}}")
+@scope_exempt("global connection settings; no host, tenant or site data")
 async def get_connection(connection_id: int) -> dict:
     return _found(await sync_db.get_connection(connection_id), "Connection")
 
@@ -272,16 +302,18 @@ async def test_connection(connection_id: int, request: Request) -> dict:
 
 
 @router.get(f"{PREFIX}/jobs")
-async def list_jobs(connection_id: int | None = None) -> dict:
-    jobs = await sync_db.list_jobs(connection_id)
+@scoped("list")
+async def list_jobs(request: Request, connection_id: int | None = None) -> dict:
+    jobs = await filter_rows("sync_job", await sync_db.list_jobs(connection_id), request)
     for job in jobs:
         job["running"] = runner.is_running(job["id"])
     return {"jobs": jobs}
 
 
 @router.get(f"{PREFIX}/jobs/{{job_id}}")
-async def get_job(job_id: int) -> dict:
-    job = _found(await sync_db.get_job(job_id), "Job")
+@scoped("sync_job")
+async def get_job(job_id: int, request: Request) -> dict:
+    job = await require_row(request, "sync_job", await sync_db.get_job(job_id))
     job["running"] = runner.is_running(job_id)
     return job
 
@@ -322,7 +354,9 @@ async def _job_values(body: JobBody) -> dict:
 
 
 @router.post(f"{PREFIX}/jobs", status_code=201)
+@scoped("refused")
 async def create_job(body: JobBody, request: Request) -> dict:
+    await refuse_scoped(request)
     values = await _job_values(body)
     await _check_plexus_rights(request, values)
     try:
@@ -338,7 +372,9 @@ async def create_job(body: JobBody, request: Request) -> dict:
 
 
 @router.put(f"{PREFIX}/jobs/{{job_id}}")
+@scoped("refused")
 async def update_job(job_id: int, body: JobBody, request: Request) -> dict:
+    await refuse_scoped(request)
     current = _found(await sync_db.get_job(job_id), "Job")
     await _check_plexus_rights(request, current)
     values = await _job_values(body)
@@ -353,7 +389,9 @@ async def update_job(job_id: int, body: JobBody, request: Request) -> dict:
 
 
 @router.delete(f"{PREFIX}/jobs/{{job_id}}")
+@scoped("refused")
 async def delete_job(job_id: int, request: Request) -> dict:
+    await refuse_scoped(request)
     current = _found(await sync_db.get_job(job_id), "Job")
     await _check_plexus_rights(request, current)
     if runner.is_running(job_id):
@@ -364,9 +402,11 @@ async def delete_job(job_id: int, request: Request) -> dict:
 
 
 @router.post(f"{PREFIX}/jobs/{{job_id}}/run", status_code=202)
+@scoped("refused")
 async def run_job(job_id: int, body: RunBody, request: Request, background: BackgroundTasks) -> dict:
     """Start a run (``dry_run`` true by default) and answer with the
     ``running`` run; poll ``GET /api/sync/runs/{id}`` for its outcome."""
+    await refuse_scoped(request)
     job = _found(await sync_db.get_job(job_id), "Job")
     if not body.dry_run:
         await _check_plexus_rights(request, job)
@@ -383,25 +423,34 @@ async def run_job(job_id: int, body: RunBody, request: Request, background: Back
 
 
 @router.get(f"{PREFIX}/runs")
-async def list_runs(job_id: int | None = None, limit: int = Query(default=100, ge=1, le=500)) -> dict:
-    return {"runs": await sync_db.list_runs(job_id, limit)}
+@scoped("list")
+async def list_runs(request: Request, job_id: int | None = None, limit: int = Query(default=100, ge=1, le=500)) -> dict:
+    return {"runs": await filter_rows("sync_run", await sync_db.list_runs(job_id, limit), request)}
 
 
 @router.get(f"{PREFIX}/runs/{{run_id}}")
-async def get_run(run_id: int) -> dict:
-    return _found(await sync_db.get_run(run_id), "Run")
+@scoped("sync_run")
+async def get_run(run_id: int, request: Request) -> dict:
+    return await require_row(request, "sync_run", await sync_db.get_run(run_id))
 
 
 @router.get(f"{PREFIX}/runs/{{run_id}}/entries")
+@scoped("sync_run")
 async def list_run_entries(
     run_id: int,
+    request: Request,
     object_type: str | None = Query(default=None, max_length=40),
     outcome: str | None = Query(default=None, max_length=20),
     limit: int = Query(default=200, ge=1, le=1000),
     offset: int = Query(default=0, ge=0),
 ) -> dict:
-    _found(await sync_db.get_run(run_id), "Run")
+    await require_row(request, "sync_run", await sync_db.get_run(run_id))
     entries, total = await sync_db.list_run_entries(
-        run_id, object_type=object_type, outcome=outcome, limit=limit, offset=offset
+        run_id,
+        object_type=object_type,
+        outcome=outcome,
+        limit=limit,
+        offset=offset,
+        device_names=await _readable_device_names(request),
     )
     return {"entries": entries, "total": total, "limit": limit, "offset": offset}

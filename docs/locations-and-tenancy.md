@@ -103,8 +103,10 @@ criteria (see [dynamic-groups.md](dynamic-groups.md)).
 | Set the tenant of a host | Users who may edit the host (inventory). |
 | Set the tenant of a prefix, IP address, VLAN or VRF | Admins, like every IPAM write. |
 
-The `organization` feature is not scope-enforced: an account limited to
-selected inventory groups does not get it.
+An account limited to selected inventory groups sees the tenants of its
+devices, the sites they stand in, and the tenants and sites its access
+groups' scope rules grant; regions and tenant groups are read with counts
+over those (see [object-level permissions](object-permissions.md)).
 
 Every write is audited (category `organization`; sites `geolocation`).
 Every create, update and delete of a region, site, tenant group and tenant

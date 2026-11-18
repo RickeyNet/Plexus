@@ -56,11 +56,13 @@ __all__ = [
     "get_vm_interface",
     "list_cloud_virtual_machines",
     "list_cluster_groups",
+    "list_cluster_host_links",
     "list_cluster_hosts",
     "list_cluster_types",
     "list_clusters",
     "list_virtual_machines",
     "list_vm_interfaces",
+    "list_vm_interfaces_by_vm_ids",
     "missing_references",
     "remove_cluster_host",
     "replace_vm_interface_addresses",
@@ -429,6 +431,11 @@ async def list_cluster_hosts(cluster_id: int) -> list[dict]:
     )
 
 
+async def list_cluster_host_links() -> list[dict]:
+    """Every cluster membership: ``{cluster_id, host_id}``, by cluster."""
+    return await _fetch_all("SELECT cluster_id, host_id FROM cluster_hosts ORDER BY cluster_id, host_id")
+
+
 async def add_cluster_host(cluster_id: int, host_id: int, user: str = "") -> bool:
     """Add a host to a cluster; ``False`` when it is a member already."""
     db = await _dbcore.get_db()
@@ -499,12 +506,24 @@ async def list_virtual_machines(
     origin: str | None = None,
     search: str | None = None,
     limit: int = 5000,
+    scope_tenant_ids: Iterable[int] | None = None,
+    scope_cluster_ids: Iterable[int] | None = None,
 ) -> list[dict]:
     """Virtual machines with their cluster, type, group, site, role, tenant
     and cloud resource names, by name. ``site_id`` is the cluster's site;
-    ``search`` matches the name, description, platform and primary IPs."""
+    ``search`` matches the name, description, platform and primary IPs.
+    Object scope: when ``scope_tenant_ids`` or ``scope_cluster_ids`` is
+    given, only the VMs of those tenants or in those clusters."""
     clauses: list[str] = []
     params: list[Any] = []
+    if scope_tenant_ids is not None or scope_cluster_ids is not None:
+        either: list[str] = []
+        for column, ids in (("v.tenant_id", scope_tenant_ids), ("v.cluster_id", scope_cluster_ids)):
+            wanted = sorted({int(i) for i in ids or ()})
+            if wanted:
+                either.append(f"{column} IN ({_marks(wanted)})")
+                params += wanted
+        clauses.append(f"({' OR '.join(either)})" if either else "1 = 0")
     for column, value in (
         ("v.cluster_id", cluster_id),
         ("c.cluster_type_id", cluster_type_id),
@@ -618,6 +637,23 @@ async def list_vm_interfaces(vm_id: int) -> list[dict]:
     """A VM's interfaces by name, each with its ``addresses`` (CIDR text)."""
     rows = await _fetch_all(f"{_INTERFACE_SELECT} WHERE i.vm_id = ? ORDER BY lower(i.name), i.id", (int(vm_id),))  # nosec B608
     return await _with_addresses(rows)
+
+
+async def list_vm_interfaces_by_vm_ids(vm_ids: Iterable[int]) -> dict[int, list[dict]]:
+    """VM id -> its interfaces by name, each with its ``addresses``, for
+    every VM of ``vm_ids`` (one query for the interfaces, one for the
+    addresses)."""
+    ids = sorted({int(v) for v in vm_ids})
+    if not ids:
+        return {}
+    rows = await _fetch_all(
+        f"{_INTERFACE_SELECT} WHERE i.vm_id IN ({_marks(ids)}) ORDER BY lower(i.name), i.id",  # nosec B608 - placeholders only
+        ids,
+    )
+    out: dict[int, list[dict]] = {}
+    for row in await _with_addresses(rows):
+        out.setdefault(int(row["vm_id"]), []).append(row)
+    return out
 
 
 async def get_vm_interface(interface_id: int) -> dict | None:

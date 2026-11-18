@@ -12,6 +12,7 @@ import ipaddress
 import json
 import os
 import re
+from collections.abc import Iterable
 from datetime import UTC, datetime, timedelta
 
 import routes.database as _dbcore
@@ -21,6 +22,7 @@ from routes.database import (
     row_to_dict,
     rows_to_list,
 )
+from routes.db.inventory import group_ids_condition
 
 __all__ = [
     "upsert_mac_entry",
@@ -446,17 +448,40 @@ async def upsert_arp_entries_batch(host_id: int, entries: list[dict]) -> int:
 # ── MAC move events (drift-style) ───────────────────────────────────────────
 
 
-async def get_mac_move_events(status: str = "", limit: int = 200, host_id: int | None = None) -> list[dict]:
+def _move_scope(group_ids: Iterable[int] | None, prefix: str = "") -> tuple[list[str], tuple]:
+    """The condition (a list of none or one clause) keeping move events with
+    a switch (either side) in the inventory groups ``group_ids``; ``prefix``
+    is the events table's alias with its dot."""
+    if group_ids is None:
+        return [], ()
+    scope_sql, scope_params = group_ids_condition("group_id", group_ids)
+    hosts = f"SELECT id FROM hosts WHERE {scope_sql}"
+    return [f"({prefix}from_host_id IN ({hosts}) OR {prefix}to_host_id IN ({hosts}))"], scope_params + scope_params
+
+
+async def get_mac_move_events(
+    status: str = "",
+    limit: int = 200,
+    host_id: int | None = None,
+    *,
+    event_id: int | None = None,
+    group_ids: Iterable[int] | None = None,
+) -> list[dict]:
     """List MAC move events, newest first.
 
     Optionally filter by status, and by a switch "involved" in the move -
     host_id matches when the device is on either the from- or to-side, since
-    a move is inherently a between-devices event.
+    a move is inherently a between-devices event. ``event_id``: that event
+    only; ``group_ids``: events with a switch in those inventory groups
+    (before the limit).
     """
     db = await _dbcore.get_db(read_only=True)
     try:
-        clauses: list[str] = []
-        params: list = []
+        clauses, scope_params = _move_scope(group_ids, "e.")
+        params: list = list(scope_params)
+        if event_id is not None:
+            clauses.append("e.id = ?")
+            params.append(event_id)
         if status:
             clauses.append("e.status = ?")
             params.append(status)
@@ -480,11 +505,14 @@ async def get_mac_move_events(status: str = "", limit: int = 200, host_id: int |
         await db.close()
 
 
-async def get_mac_move_event_summary() -> dict:
-    """Counts by status for the summary cards."""
+async def get_mac_move_event_summary(group_ids: Iterable[int] | None = None) -> dict:
+    """Counts by status for the summary cards; ``group_ids``: of the events
+    with a switch in those inventory groups."""
     db = await _dbcore.get_db(read_only=True)
     try:
-        cursor = await db.execute("SELECT status, COUNT(*) AS n FROM mac_move_events GROUP BY status")
+        clauses, params = _move_scope(group_ids)
+        where = f"WHERE {clauses[0]} " if clauses else ""
+        cursor = await db.execute(f"SELECT status, COUNT(*) AS n FROM mac_move_events {where}GROUP BY status", params)
         rows = rows_to_list(await cursor.fetchall())
         by_status = {r["status"]: r["n"] for r in rows}
         return {
@@ -550,11 +578,14 @@ async def acknowledge_mac_move_event(event_id: int, actor: str = "") -> bool:
         await db.close()
 
 
-async def acknowledge_open_mac_move_events(actor: str = "") -> int:
-    """Bulk-acknowledge every open event. Returns the number acknowledged."""
+async def acknowledge_open_mac_move_events(actor: str = "", group_ids: Iterable[int] | None = None) -> int:
+    """Bulk-acknowledge every open event (``group_ids``: those with a switch
+    in these inventory groups). Returns the number acknowledged."""
     db = await _dbcore.get_db()
     try:
-        cursor = await db.execute("SELECT id, mac_address FROM mac_move_events WHERE status = 'open'")
+        clauses, params = _move_scope(group_ids)
+        where = " AND ".join(["status = 'open'", *clauses])
+        cursor = await db.execute(f"SELECT id, mac_address FROM mac_move_events WHERE {where}", params)
         open_rows = rows_to_list(await cursor.fetchall())
         for ev in open_rows:
             await db.execute(
@@ -614,7 +645,7 @@ async def delete_old_mac_history(retention_days: int) -> int:
         await db.close()
 
 
-async def search_mac_tracking(query: str, limit: int = 100) -> list[dict]:
+async def search_mac_tracking(query: str, limit: int = 100, group_ids: Iterable[int] | None = None) -> list[dict]:
     """Search MAC/ARP tables by MAC address, IP address, or port name.
 
     An empty/blank query returns the most recently seen entries so the UI can
@@ -624,9 +655,15 @@ async def search_mac_tracking(query: str, limit: int = 100) -> list[dict]:
     ``aabbccddeeff`` all match the canonical ``aa:bb:cc:dd:ee:ff`` storage
     form. Pure-hex fragments of 6+ characters also match — handy for paging
     through an OUI prefix or a tail like ``deadbeef``.
+
+    ``group_ids``: only the entries of hosts in those inventory groups
+    (before the limit).
     """
+    scope_sql, scope_params = group_ids_condition("h.group_id", group_ids)
     db = await _dbcore.get_db()
     try:
+        if scope_sql:
+            return await _search_mac_tracking_scoped(db, query, limit, scope_sql, scope_params)
         raw = query.strip()
         if raw:
             ip_port_pattern = f"%{raw}%"
@@ -664,6 +701,35 @@ async def search_mac_tracking(query: str, limit: int = 100) -> list[dict]:
         return rows_to_list(await cursor.fetchall())
     finally:
         await db.close()
+
+
+async def _search_mac_tracking_scoped(db, query: str, limit: int, scope_sql: str, scope_params: tuple) -> list[dict]:
+    """``search_mac_tracking`` over the hosts ``scope_sql`` keeps."""
+    raw = query.strip()
+    clauses = [scope_sql]
+    params: list = list(scope_params)
+    if raw:
+        ip_port_pattern = f"%{raw}%"
+        normalized = raw.lower().replace(":", "").replace("-", "").replace(".", "").replace(" ", "")
+        hex_only = normalized and all(c in "0123456789abcdef" for c in normalized)
+        if hex_only and len(normalized) >= 6:
+            clauses.append(
+                "(REPLACE(LOWER(m.mac_address), ':', '') LIKE ? OR m.ip_address LIKE ? OR m.port_name LIKE ?)"
+            )
+            params.extend([f"%{normalized}%", ip_port_pattern, ip_port_pattern])
+        else:
+            clauses.append("(m.mac_address LIKE ? OR m.ip_address LIKE ? OR m.port_name LIKE ?)")
+            params.extend([ip_port_pattern, ip_port_pattern, ip_port_pattern])
+    params.append(limit)
+    cursor = await db.execute(
+        f"""SELECT m.*, h.hostname, h.ip_address as host_ip
+            FROM mac_address_table m
+            JOIN hosts h ON h.id = m.host_id
+            WHERE {" AND ".join(clauses)}
+            ORDER BY m.last_seen DESC LIMIT ?""",
+        tuple(params),
+    )
+    return rows_to_list(await cursor.fetchall())
 
 
 async def get_mac_collection_by_host() -> list[dict]:
@@ -714,22 +780,29 @@ async def get_mac_collection_by_host() -> list[dict]:
         await db.close()
 
 
-async def get_mac_tracking_stats() -> dict:
+async def get_mac_tracking_stats(group_ids: Iterable[int] | None = None) -> dict:
     """Summary counts for the MAC tracking header.
 
     Returns total rows (one per host/MAC/VLAN), unique MAC addresses across
     all switches, the number of switches that contributed any entry, and the
     most recent ``last_seen`` timestamp (interpreted by the UI as the freshest
-    collection time).
+    collection time). ``group_ids``: over the hosts in those inventory
+    groups only.
     """
     db = await _dbcore.get_db(read_only=True)
     try:
+        where, params = "", ()
+        if group_ids is not None:
+            scope_sql, params = group_ids_condition("group_id", group_ids)
+            where = f" WHERE host_id IN (SELECT id FROM hosts WHERE {scope_sql})"
         cursor = await db.execute(
             """SELECT COUNT(*)                          AS total_entries,
                       COUNT(DISTINCT mac_address)       AS unique_macs,
                       COUNT(DISTINCT host_id)           AS switches_reporting,
                       MAX(last_seen)                    AS last_collected_at
                FROM mac_address_table"""
+            + where,
+            params,
         )
         row = await cursor.fetchone()
         if not row:
@@ -750,16 +823,22 @@ async def get_mac_tracking_stats() -> dict:
         await db.close()
 
 
-async def get_mac_history(mac_address: str, limit: int = 100) -> list[dict]:
+async def get_mac_history(mac_address: str, limit: int = 100, group_ids: Iterable[int] | None = None) -> list[dict]:
+    """Where a MAC address was seen, newest first; ``group_ids``: only on
+    hosts in those inventory groups (before the limit)."""
+    scope_sql, scope_params = group_ids_condition("h.group_id", group_ids)
+    scope_where = f" AND {scope_sql}" if scope_sql else ""
     db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             """SELECT mh.*, h.hostname, h.ip_address as host_ip
                FROM mac_tracking_history mh
                LEFT JOIN hosts h ON h.id = mh.host_id
-               WHERE mh.mac_address = ?
+               WHERE mh.mac_address = ?"""
+            + scope_where
+            + """
                ORDER BY mh.seen_at DESC LIMIT ?""",
-            (mac_address, limit),
+            (mac_address, *scope_params, limit),
         )
         return rows_to_list(await cursor.fetchall())
     finally:

@@ -13,6 +13,30 @@ export function priorityTone(p?: number): Tone {
   return JOB_PRIORITY_TONES[p] ?? 'neutral';
 }
 
+/** Statuses of a job that has not finished: awaiting approval, queued or running. */
+const UNFINISHED_JOB_STATUSES = new Set(['pending_approval', 'queued', 'running']);
+/** Statuses a job can be retried from (a denied one asks for approval again). */
+const RETRYABLE_JOB_STATUSES = new Set(['failed', 'cancelled', 'denied']);
+
+/** Whether a job can still be cancelled (it has not finished). */
+export function isJobCancellable(status?: string | null): boolean {
+  return UNFINISHED_JOB_STATUSES.has(status ?? '');
+}
+
+/** Whether a job has finished (success, failure, cancelled or denied). */
+export function isJobFinished(status?: string | null): boolean {
+  return Boolean(status) && !UNFINISHED_JOB_STATUSES.has(status ?? '');
+}
+
+export function isJobRetryable(status?: string | null): boolean {
+  return RETRYABLE_JOB_STATUSES.has(status ?? '');
+}
+
+/** What a job targets, for its list row: its dynamic group, else its inventory group. */
+export function jobTargetLabel(job: Pick<Job, 'dynamic_group_name' | 'group_name'>): string {
+  return job.dynamic_group_name ? `Dynamic group: ${job.dynamic_group_name}` : `Group: ${job.group_name || 'Unknown'}`;
+}
+
 export function parseDeps(raw?: string | null): number[] {
   if (!raw) return [];
   try {

@@ -157,6 +157,13 @@ export interface UpsStatus {
   runtime_minutes?: number | null;
   output_load_pct?: number | null;
   battery_needs_replacing?: boolean;
+  input_voltage_v?: number | null;
+  input_frequency_hz?: number | null;
+  output_voltage_v?: number | null;
+  last_transfer_cause?: number | null;
+  last_transfer_cause_label?: string;
+  battery_temperature_c?: number | null;
+  probe_temperature_c?: number | null;
   nmc_model?: string;
   nmc_firmware?: string;
   nmc_application?: string;

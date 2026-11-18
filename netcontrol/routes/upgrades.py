@@ -5,6 +5,12 @@ Campaign-based upgrade manager with per-device phase tracking,
 image management, and real-time WebSocket streaming.
 
 Ported from standalone iosxe_upgrade.py into the Plexus platform.
+
+Object scope: images are a shared catalogue (changed by unrestricted callers
+only). An account limited to selected inventory groups sees a campaign when
+every device in it is a readable inventory host, and edits or runs it when
+every device is writable; ad-hoc addresses and the prestage backup files
+(named by hostname, not tied to a host) are kept from such accounts.
 """
 
 from __future__ import annotations
@@ -30,6 +36,19 @@ import netcontrol.routes.state as state
 from netcontrol.drivers import DriverCapabilityError, get_driver
 from netcontrol.drivers.show_version import classify_show_version_os, parse_show_version
 from netcontrol.integrations.apc import upgrade as apc_upgrade
+from netcontrol.object_scope import (
+    READ_ONLY_DETAIL,
+    WRITE_SCOPE_DETAIL,
+    ObjectScope,
+    group_filter,
+    refuse_scoped,
+    request_scope,
+    require_host_ids,
+    require_model_write,
+    scope_exempt,
+    scoped,
+    ws_scope,
+)
 from netcontrol.routes.device_config import store_device_config
 from netcontrol.routes.shared import (
     _audit,
@@ -773,13 +792,61 @@ async def _repair_stale_running_campaign(campaign: dict) -> dict:
 # ═════════════════════════════════════════════════════════════════════════════
 
 
+# ── Object scope ─────────────────────────────────────────────────────────────
+
+_CAMPAIGN_NOT_FOUND = "Campaign not found"
+
+
+async def _campaign_visible(scope: ObjectScope, campaign_id: int, *, write: bool = False) -> bool:
+    """Whether a caller with ``scope`` may see (``write``: edit or run) a
+    campaign: it has devices and every one is an inventory host the caller
+    may read (change). The SQL form of the read rule is the ``group_ids``
+    filter of ``routes.db.baselines.get_all_upgrade_campaigns``."""
+    if scope.unrestricted:
+        return True
+    host_ids = {d.get("host_id") for d in await db.get_upgrade_devices(campaign_id)}
+    if not host_ids or None in host_ids:
+        return False
+    reach = await scope.reach()
+    return {int(h) for h in host_ids if h is not None} <= (reach.write_hosts if write else reach.read_hosts)
+
+
+async def _require_campaign(request: Request, campaign_id: int, *, write: bool = False) -> dict:
+    """The campaign; 404 when unknown or (scoped caller) not visible, 403 on
+    ``write`` when a device is not writable."""
+    campaign = await db.get_upgrade_campaign(campaign_id)
+    if not campaign:
+        raise HTTPException(404, _CAMPAIGN_NOT_FOUND)
+    scope = await request_scope(request)
+    if scope.restricted:
+        if not await _campaign_visible(scope, campaign_id):
+            raise HTTPException(404, _CAMPAIGN_NOT_FOUND)
+        if write and not await _campaign_visible(scope, campaign_id, write=True):
+            raise HTTPException(403, READ_ONLY_DETAIL)
+    return campaign
+
+
+async def _require_campaign_targets(request: Request, host_ids: list[int], ad_hoc_ips: list[str]) -> None:
+    """For a scoped caller: a campaign's devices must be writable inventory
+    hosts (at least one; no ad-hoc addresses, which are outside the scope)."""
+    if (await request_scope(request)).unrestricted:
+        return
+    if any(ip.strip() for ip in ad_hoc_ips):
+        await refuse_scoped(request)
+    if not host_ids:
+        raise HTTPException(403, WRITE_SCOPE_DETAIL)
+    await require_host_ids(request, host_ids, write=True)
+
+
 # Maximum upload size: 2 GiB (IOS-XE images are typically 400-900 MB)
 _MAX_IMAGE_UPLOAD_BYTES = int(os.getenv("PLEXUS_MAX_IMAGE_UPLOAD_MB", "2048")) * 1024 * 1024
 
 
 @router.post("/api/upgrades/images")
+@scoped("catalog")
 async def upload_image(request: Request, file: UploadFile = File(...)):
     """Upload a software image file."""
+    await require_model_write(request)
     session = _get_session(request)
     user = session.get("user", "unknown") if session else "unknown"
 
@@ -914,11 +981,13 @@ async def upload_image(request: Request, file: UploadFile = File(...)):
 
 
 @router.get("/api/upgrades/images")
+@scope_exempt("shared software image catalogue: no host or inventory group data")
 async def list_images():
     return await db.get_all_upgrade_images()
 
 
 @router.get("/api/upgrades/images/{image_id}")
+@scope_exempt("shared software image catalogue: no host or inventory group data")
 async def get_image(image_id: int):
     img = await db.get_upgrade_image(image_id)
     if not img:
@@ -927,7 +996,9 @@ async def get_image(image_id: int):
 
 
 @router.patch("/api/upgrades/images/{image_id}")
+@scoped("catalog")
 async def update_image(image_id: int, body: ImageUpdate, request: Request):
+    await require_model_write(request)
     session = _get_session(request)
     user = session.get("user", "unknown") if session else "unknown"
 
@@ -946,7 +1017,9 @@ async def update_image(image_id: int, body: ImageUpdate, request: Request):
 
 
 @router.delete("/api/upgrades/images/{image_id}")
+@scoped("catalog")
 async def delete_image(image_id: int, request: Request):
+    await require_model_write(request)
     session = _get_session(request)
     user = session.get("user", "unknown") if session else "unknown"
 
@@ -975,10 +1048,12 @@ async def delete_image(image_id: int, request: Request):
 
 
 @router.post("/api/upgrades/campaigns")
+@scoped("create")
 async def create_campaign(body: CampaignCreate, request: Request):
     """Create a new upgrade campaign with target devices."""
     session = _get_session(request)
     user = session.get("user", "unknown") if session else "unknown"
+    await _require_campaign_targets(request, body.host_ids, body.ad_hoc_ips)
     mix_error = await apc_upgrade.campaign_mix_error(body.host_ids, body.ad_hoc_ips)
     if mix_error:
         raise HTTPException(400, mix_error)
@@ -1059,8 +1134,9 @@ async def create_campaign(body: CampaignCreate, request: Request):
 
 
 @router.get("/api/upgrades/campaigns")
-async def list_campaigns():
-    campaigns = await db.get_all_upgrade_campaigns()
+@scoped("list")
+async def list_campaigns(request: Request):
+    campaigns = await db.get_all_upgrade_campaigns(**await group_filter(request))
     # Enrich with device counts. One grouped query for all campaigns instead of
     # one get_upgrade_devices() per campaign (the old N+1).
     counts = await db.get_upgrade_device_counts()
@@ -1075,10 +1151,9 @@ async def list_campaigns():
 
 
 @router.get("/api/upgrades/campaigns/{campaign_id}")
+@scoped("campaign")
 async def get_campaign(campaign_id: int, request: Request):
-    campaign = await db.get_upgrade_campaign(campaign_id)
-    if not campaign:
-        raise HTTPException(404, "Campaign not found")
+    campaign = await _require_campaign(request, campaign_id)
     # Object-level authz: a campaign's events/operations carry device output
     # and config captures, so only its creator (or an admin) may read it -
     # holding the `upgrades` feature is not enough (matches the jobs WS).
@@ -1091,14 +1166,14 @@ async def get_campaign(campaign_id: int, request: Request):
 
 
 @router.patch("/api/upgrades/campaigns/{campaign_id}")
+@scoped("campaign")
 async def update_campaign(campaign_id: int, body: CampaignUpdate, request: Request):
     """Update an existing campaign's settings and device list."""
     session = _get_session(request)
     user = session.get("user", "unknown") if session else "unknown"
 
-    campaign = await db.get_upgrade_campaign(campaign_id)
-    if not campaign:
-        raise HTTPException(404, "Campaign not found")
+    await _require_campaign(request, campaign_id, write=True)
+    await _require_campaign_targets(request, body.host_ids, body.ad_hoc_ips)
 
     if campaign_id in _running_campaigns:
         raise HTTPException(409, "Cannot edit a running campaign")
@@ -1175,13 +1250,12 @@ async def update_campaign(campaign_id: int, body: CampaignUpdate, request: Reque
 
 
 @router.delete("/api/upgrades/campaigns/{campaign_id}")
+@scoped("campaign")
 async def delete_campaign(campaign_id: int, request: Request):
     session = _get_session(request)
     user = session.get("user", "unknown") if session else "unknown"
 
-    campaign = await db.get_upgrade_campaign(campaign_id)
-    if not campaign:
-        raise HTTPException(404, "Campaign not found")
+    await _require_campaign(request, campaign_id, write=True)
 
     # Don't delete running campaigns
     if campaign_id in _running_campaigns:
@@ -1193,15 +1267,14 @@ async def delete_campaign(campaign_id: int, request: Request):
 
 
 @router.get("/api/upgrades/campaigns/{campaign_id}/events")
+@scoped("campaign")
 async def get_campaign_events(
     campaign_id: int,
     request: Request,
     device_id: int | None = None,
     limit: int = Query(default=1000, ge=1, le=10000),
 ):
-    campaign = await db.get_upgrade_campaign(campaign_id)
-    if not campaign:
-        raise HTTPException(404, "Campaign not found")
+    campaign = await _require_campaign(request, campaign_id)
     # Same object-level authz as get_campaign - the events are device output.
     await require_owner_or_admin(request, campaign.get("created_by"))
     return await db.get_upgrade_events(campaign_id, device_id=device_id, limit=limit)
@@ -1213,9 +1286,12 @@ async def get_campaign_events(
 
 
 @router.get("/api/upgrades/backups")
-async def list_backups():
-    """List all config backup files from upgrade prestage."""
-    if not os.path.isdir(BACKUPS_DIR):
+@scoped("hidden")
+async def list_backups(request: Request):
+    """List all config backup files from upgrade prestage (none for a scoped
+    caller: the files are named by hostname, not tied to an inventory host;
+    inventory hosts' copies are in Config Backups)."""
+    if not os.path.isdir(BACKUPS_DIR) or (await request_scope(request)).restricted:
         return []
 
     backups = []
@@ -1235,23 +1311,26 @@ async def list_backups():
 
 
 @router.get("/api/upgrades/backups/{filename}")
-async def download_backup(filename: str):
-    """Download a specific backup file."""
+@scoped("hidden")
+async def download_backup(filename: str, request: Request):
+    """Download a specific backup file (not found for a scoped caller)."""
     # Prevent path traversal (CWE-22)
     safe = os.path.basename(filename)
     fpath = os.path.realpath(os.path.join(BACKUPS_DIR, safe))
     if not fpath.startswith(os.path.realpath(BACKUPS_DIR) + os.sep):
         raise HTTPException(400, "Invalid filename")
 
-    if not os.path.isfile(fpath):
+    if not os.path.isfile(fpath) or (await request_scope(request)).restricted:
         raise HTTPException(404, "Backup file not found")
 
     return FileResponse(fpath, filename=safe, media_type="text/plain")
 
 
 @router.delete("/api/upgrades/backups/{filename}")
+@scoped("refused")
 async def delete_backup(filename: str, request: Request):
     """Delete a specific backup file."""
+    await refuse_scoped(request)
     session = _get_session(request)
     user = session.get("user", "unknown") if session else "unknown"
 
@@ -1274,6 +1353,7 @@ async def delete_backup(filename: str, request: Request):
 
 
 @router.post("/api/upgrades/campaigns/{campaign_id}/execute")
+@scoped("campaign")
 async def execute_phase(campaign_id: int, body: CampaignPhaseRequest, request: Request):
     """Execute a specific phase for a campaign."""
     session = _get_session(request)
@@ -1282,9 +1362,7 @@ async def execute_phase(campaign_id: int, body: CampaignPhaseRequest, request: R
     if not NETMIKO_AVAILABLE:
         raise HTTPException(500, "netmiko is not installed")
 
-    campaign = await db.get_upgrade_campaign(campaign_id)
-    if not campaign:
-        raise HTTPException(404, "Campaign not found")
+    campaign = await _require_campaign(request, campaign_id, write=True)
 
     if body.phase not in _SUPPORTED_PHASES:
         raise HTTPException(400, f"Invalid phase: {body.phase}")
@@ -1460,8 +1538,11 @@ async def execute_phase(campaign_id: int, body: CampaignPhaseRequest, request: R
 
 
 @router.post("/api/upgrades/campaigns/{campaign_id}/cancel")
+@scoped("campaign")
 async def cancel_campaign(campaign_id: int, request: Request):
     """Cancel a running campaign phase."""
+    if (await request_scope(request)).restricted:
+        await _require_campaign(request, campaign_id, write=True)
     task = _running_campaigns.get(campaign_id)
     if not task:
         raise HTTPException(404, "No running phase for this campaign")
@@ -1493,6 +1574,7 @@ async def cancel_campaign(campaign_id: int, request: Request):
 
 
 @router.post("/api/upgrades/campaigns/{campaign_id}/devices/cancel")
+@scoped("campaign")
 async def cancel_campaign_devices(
     campaign_id: int,
     body: CampaignDeviceCancelRequest,
@@ -1502,9 +1584,7 @@ async def cancel_campaign_devices(
     session = _get_session(request)
     user = session.get("user", "unknown") if session else "unknown"
 
-    campaign = await db.get_upgrade_campaign(campaign_id)
-    if not campaign:
-        raise HTTPException(404, "Campaign not found")
+    campaign = await _require_campaign(request, campaign_id, write=True)
 
     requested_ids = {int(did) for did in body.device_ids}
     if not requested_ids:
@@ -1593,15 +1673,14 @@ async def cancel_campaign_devices(
 
 
 @router.post("/api/upgrades/campaigns/{campaign_id}/devices/{device_id}/logic-reset-confirm")
+@scoped("campaign")
 async def confirm_device_logic_reset(campaign_id: int, device_id: int, request: Request):
     """Record that the manual Logic Reset a Smart-UPS Ultra (UPS ID 1226 /
     1227) needs was done, so Transfer and Activate may run on it."""
     session = _get_session(request)
     user = session.get("user", "unknown") if session else "unknown"
 
-    campaign = await db.get_upgrade_campaign(campaign_id)
-    if not campaign:
-        raise HTTPException(404, "Campaign not found")
+    await _require_campaign(request, campaign_id, write=True)
     if campaign_id in _running_campaigns:
         raise HTTPException(409, "Wait for the running step to finish before confirming a Logic Reset")
     device = await db.get_upgrade_device(device_id)
@@ -1628,6 +1707,7 @@ async def confirm_device_logic_reset(campaign_id: int, device_id: int, request: 
 
 
 @ws_router.websocket("/ws/upgrades/{campaign_id}")
+@scoped("campaign")
 async def upgrade_websocket(ws: WebSocket, campaign_id: int):
     """Stream upgrade events to the browser in real-time."""
     # Verify auth before accepting the connection. The token comes from the
@@ -1659,6 +1739,10 @@ async def upgrade_websocket(ws: WebSocket, campaign_id: int):
         await ws.close(code=4001, reason="Unauthorized")
         return
     if user.get("role") != "admin" and campaign.get("created_by") != session.get("user"):
+        await ws.close(code=4001, reason="Unauthorized")
+        return
+    # Object scope: every device of the campaign must be readable.
+    if not await _campaign_visible(await ws_scope(session), campaign_id):
         await ws.close(code=4001, reason="Unauthorized")
         return
 

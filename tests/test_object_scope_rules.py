@@ -52,27 +52,32 @@ def test_filters_use_the_given_key():
 
 
 def test_status_payload():
-    assert UNRESTRICTED.status() == {"restricted": False, "write_group_ids": []}
+    assert UNRESTRICTED.status() == {"restricted": False, "write_group_ids": [], "read_only": False}
     scope = ObjectScope(unrestricted=False, read_groups=frozenset({5, 9}), write_groups=frozenset({9, 5}))
-    assert scope.status() == {"restricted": True, "write_group_ids": [5, 9]}
+    assert scope.status() == {"restricted": True, "write_group_ids": [5, 9], "read_only": False}
+    reader = ObjectScope(unrestricted=False, read_groups=frozenset({5}))
+    assert reader.status()["read_only"] is True
+    # A writable scope rule is something to change.
+    ruled = ObjectScope(
+        unrestricted=False, read_groups=frozenset({5}), rules=(object_scope.ScopeRule("*", "tenant", 3, True),)
+    )
+    assert ruled.status()["read_only"] is False
 
 
 def test_enforced_features_keep_only_enrolled_keys():
-    assert object_scope.enforced_features(["dashboard", "inventory", "jobs", "inventory.write", "ipam"]) == [
+    from netcontrol.routes import state
+
+    # Every gateable feature is enrolled; anything else (a plugin's key) is not.
+    assert object_scope.enforced_features(["dashboard", "inventory", "plugin-x", "jobs.write", "ipam"]) == [
+        "dashboard",
         "inventory",
-        "inventory.write",
+        "jobs.write",
+        "ipam",
     ]
-    assert object_scope.SCOPE_ENFORCED_FEATURES == {
-        "inventory",
-        "inventory.write",
-        "config-backups",
-        "config-backups.write",
-        "config-drift",
-        "config-drift.write",
-        "credentials",
-        "credentials.write",
-        "graphql",
-    }
+    catalog = {e["key"] for e in state._FEATURE_CATALOG if e["gateable"]}
+    catalog |= {f"{e['key']}.write" for e in state._FEATURE_CATALOG if e["gateable"] and e["writable"]}
+    catalog |= {f"{e['key']}.{x}" for e in state._FEATURE_CATALOG if e["gateable"] for x in e.get("extra_keys", ())}
+    assert catalog == object_scope.SCOPE_ENFORCED_FEATURES
 
 
 def test_group_ids_condition():

@@ -18,12 +18,12 @@ import {
   useTestGroupSnmpProfile,
   groupLabel,
 } from '@/api/inventory';
-import { credentialIdFromChoice } from '@/lib/credentialChoice';
 import { useObjectScope } from '@/lib/objectScope';
 import { useCredentialChoice } from '@/lib/useCredentialChoice';
 
 import {
   describeSshEnrichment,
+  discoveryCredentialOptions,
   discoveredHostFacts,
   discoveredHostSshError,
   type SnmpTestOutcome,
@@ -72,9 +72,6 @@ export function DiscoveryModal({ mode, group, groups, onClose }: Props) {
   const onboard = useOnboardDiscoveredHosts();
   const testSnmp = useTestGroupSnmpProfile();
   const isAdmin = useAuthStatus().data?.role === 'admin';
-  const sshDefaults = useDiscoverySshDefaults();
-  const serviceCredentialId = sshDefaults.data?.service_credential_id ?? null;
-  const credentialChoice = useCredentialChoice(serviceCredentialId, isAdmin);
 
   const initialCidrs = isSync && group?.hosts
     ? (group.hosts.map((h) => h.ip_address).filter(Boolean) as string[]).join('\n')
@@ -85,6 +82,15 @@ export function DiscoveryModal({ mode, group, groups, onClose }: Props) {
   // account picks from the groups it may change.
   const targetChoices = useObjectScope().writableGroups(groups);
   const [groupId, setGroupId] = useState<number>(group?.id ?? targetChoices[0]?.id ?? 0);
+  const targetGroupId = isGlobal ? groupId : (group?.id ?? groupId);
+  // The group remembers the credential its last scan or sync was run with:
+  // preselected when it is in the user's list.
+  const sshDefaults = useDiscoverySshDefaults(targetGroupId || null);
+  const serviceCredentialId = sshDefaults.data?.service_credential_id ?? null;
+  const groupCredentialId = sshDefaults.data?.group_credential_id ?? null;
+  const credentialChoice = useCredentialChoice(serviceCredentialId, isAdmin, groupCredentialId);
+  const groupCredentialSelected =
+    groupCredentialId != null && credentialChoice.credential === String(groupCredentialId);
   const [cidrs, setCidrs] = useState(initialCidrs);
   const [timeoutSeconds, setTimeoutSeconds] = useState(0.35);
   const [maxHosts, setMaxHosts] = useState(256);
@@ -135,7 +141,11 @@ export function DiscoveryModal({ mode, group, groups, onClose }: Props) {
     useSnmp,
     useIcmp,
     useSsh,
-    credentialId: credentialIdFromChoice(credentialChoice.credential),
+    ...discoveryCredentialOptions(
+      credentialChoice.credential,
+      credentialChoice.picked,
+      groupCredentialId,
+    ),
     removeAbsent,
   });
 
@@ -212,7 +222,6 @@ export function DiscoveryModal({ mode, group, groups, onClose }: Props) {
 
     if (isSync) {
       try {
-        const targetGroupId = group?.id ?? groupId;
         let finalSync: SyncResult | null = null;
         await streamSyncInventoryGroup(
           targetGroupId,
@@ -266,7 +275,6 @@ export function DiscoveryModal({ mode, group, groups, onClose }: Props) {
 
     try {
       let finalDiscovered: DiscoveredHost[] = [];
-      const targetGroupId = isGlobal ? groupId : group?.id ?? groupId;
       await streamScanInventoryGroup(
         targetGroupId,
         parsedCidrs,
@@ -320,7 +328,6 @@ export function DiscoveryModal({ mode, group, groups, onClose }: Props) {
       .map((i) => discovered[i])
       .filter(Boolean);
     try {
-      const targetGroupId = isGlobal ? groupId : group?.id ?? groupId;
       const r = await onboard.mutateAsync({
         groupId: targetGroupId,
         hosts: selected,
@@ -873,9 +880,14 @@ export function DiscoveryModal({ mode, group, groups, onClose }: Props) {
                   isAdmin={isAdmin}
                 />
                 <div className="form-help">
-                  {sshDefaults.data && !sshDefaults.data.service_credential
-                    ? 'No Plexus service credential is set in Settings: pick a credential, or hosts are found without SSH details.'
-                    : 'Defaults to the Plexus service credential. Hosts that refuse the login are still found; the error is shown per host.'}
+                  {groupCredentialSelected
+                    ? 'Remembered from this group\'s last scan or sync. Pick the service credential to go back to the default.'
+                    : groupCredentialId != null && !credentialChoice.picked
+                      ? 'This group remembers a credential you cannot use: the Plexus service credential is used unless you pick one.'
+                      : sshDefaults.data && !sshDefaults.data.service_credential
+                        ? 'No Plexus service credential is set in Settings: pick a credential, or hosts are found without SSH details.'
+                        : 'Defaults to the Plexus service credential. Hosts that refuse the login are still found; the error is shown per host.'}{' '}
+                  {!groupCredentialSelected && targetGroupId > 0 && 'The credential you run with is remembered for the group.'}
                 </div>
               </div>
             )}

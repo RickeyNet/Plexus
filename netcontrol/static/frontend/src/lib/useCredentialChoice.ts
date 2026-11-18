@@ -17,15 +17,19 @@ export interface CredentialChoice {
   /** The user's own credentials. */
   ownRows: CredentialSummary[];
   loading: boolean;
+  /** True once the user picked a credential (false: the preselected default). */
+  picked: boolean;
 }
 
 /**
- * The credential picker's state: the service credential Settings names is
- * preselected (see `defaultCollectCredential`) until the user picks another.
+ * The credential picker's state: `preferredId` when the user's list holds
+ * it, else the service credential Settings names, is preselected (see
+ * `defaultCollectCredential`) until the user picks another.
  */
 export function useCredentialChoice(
   serviceCredentialId: number | null,
   isAdmin: boolean,
+  preferredId?: number | null,
 ): CredentialChoice {
   const serviceCredentials = useServiceCredentialsList(isAdmin);
   const ownCredentials = useCredentialsList();
@@ -40,6 +44,7 @@ export function useCredentialChoice(
       serviceRows.map((c) => c.id),
       ownRows.map((c) => c.id),
       isAdmin,
+      preferredId,
     );
   return {
     credential,
@@ -48,5 +53,6 @@ export function useCredentialChoice(
     ownRows,
     loading:
       ownCredentials.isPending || (isAdmin && serviceCredentials.isPending),
+    picked: picked != null,
   };
 }

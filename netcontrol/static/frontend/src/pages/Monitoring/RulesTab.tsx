@@ -33,6 +33,11 @@ const METRIC_OPTIONS: { value: string; label: string }[] = [
   { value: 'ups_battery_capacity_pct', label: 'UPS battery capacity %' },
   { value: 'ups_runtime_minutes', label: 'UPS runtime left (minutes)' },
   { value: 'ups_output_load_pct', label: 'UPS output load %' },
+  { value: 'ups_input_voltage_v', label: 'UPS input voltage (V)' },
+  { value: 'ups_input_frequency_hz', label: 'UPS input frequency (Hz)' },
+  { value: 'ups_output_voltage_v', label: 'UPS output voltage (V)' },
+  { value: 'ups_battery_temperature_c', label: 'UPS battery temperature (°C)' },
+  { value: 'ups_probe_temperature_c', label: 'UPS probe temperature (°C)' },
 ];
 const OPERATOR_OPTIONS = ['>=', '>', '<=', '<', '==', '!='];
 const SEVERITY_OPTIONS: { value: string; label: string }[] = [

@@ -146,6 +146,7 @@ const STATUS_TONE: Record<string, Tone> = {
   failed: 'danger',
   failure: 'danger',
   rejected: 'danger',
+  denied: 'danger',
   error: 'danger',
   errored: 'danger',
   'verification-failed': 'danger',
@@ -159,6 +160,8 @@ const STATUS_TONE: Record<string, Tone> = {
   warning: 'warning',
   degraded: 'warning',
   'rolled-back': 'warning',
+  // A job waiting for someone to approve it: needs attention.
+  'pending-approval': 'warning',
 
   running: 'info',
   'in-progress': 'info',

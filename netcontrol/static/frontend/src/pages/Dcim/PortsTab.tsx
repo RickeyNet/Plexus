@@ -176,6 +176,33 @@ export function PortsTab() {
           },
         ]}
       />
+      <RecordSection
+        kind="console_port"
+        title="Console ports"
+        what="console port"
+        filters={{ host_id: hostId }}
+        emptyText="No console ports yet."
+        fields={[
+          {
+            key: 'host_id',
+            label: 'Device',
+            kind: 'ref',
+            options: hosts,
+            required: true,
+            initial: hostId,
+            createOnly: true,
+          },
+          { key: 'name', label: 'Name', kind: 'text', required: true },
+          { key: 'type', label: 'Connector', kind: 'select', options: choices('console_port_types'), initial: 'rj-45' },
+          { key: 'description', label: 'Description', kind: 'text' },
+        ]}
+        columns={[
+          { label: 'Device', render: (r) => <Val value={r.host_name} /> },
+          { label: 'Name', render: (r) => String(r.name) },
+          { label: 'Connector', render: (r) => <Val value={r.type} /> },
+          { label: 'Description', render: (r) => <Val value={r.description} /> },
+        ]}
+      />
     </div>
   );
 }

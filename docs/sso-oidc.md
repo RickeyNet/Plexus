@@ -11,6 +11,9 @@ The flow is the authorization code flow with PKCE (S256), `state` and
 or `client_secret_post`); with an empty client secret it acts as a public
 client and relies on PKCE.
 
+For a SAML 2.0 identity provider, see [sso-saml.md](sso-saml.md); both can
+be on at once and share the account, role and access group rules below.
+
 ## 1. Register Plexus at the provider
 
 Create a **web application** (OIDC, authorization code flow) and note:
@@ -139,6 +142,6 @@ SSO under Settings > Authentication. With "Lead with SSO" on, use the
 
 ## Not supported
 
-SAML; RP-initiated logout (signing out of Plexus does not sign out of the
+SAML (see [sso-saml.md](sso-saml.md)); RP-initiated logout (signing out of Plexus does not sign out of the
 provider); SCIM provisioning; fetching overage groups from
 Microsoft Graph; the implicit and hybrid flows.

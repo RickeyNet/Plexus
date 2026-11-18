@@ -37,6 +37,12 @@ export interface TopologyNode {
   ipam_utilization_pct?: number | null;
   /** 'meraki' for devices that exist only in a Meraki organization. */
   source?: 'meraki' | string;
+  /**
+   * An inventory host that is also a device of an integration: the role the
+   * integration gives it (a Meraki switch is a 'switch'), for a host with no
+   * role of its own.
+   */
+  source_category?: string | null;
   /** Present when the node is (or matches) a node of a Meraki snapshot. */
   meraki?: TopologyMerakiRef | null;
   /** Other integrations that know this node (an AWS instance that is a Cato vSocket). */

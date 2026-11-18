@@ -192,12 +192,14 @@ async def inventory_commit(
 
 
 @ipam_router.get("/api/import/ipam/{object_type}/template")
+@scope_exempt("an empty CSV of column headers: no host or inventory group data")
 async def ipam_template(object_type: str) -> Response:
     _check_type(object_type, IPAM_TYPES)
     return await _template(object_type)
 
 
 @ipam_router.post("/api/import/ipam/{object_type}/preview", dependencies=[Depends(_require_admin_dep)])
+@scoped("admin")
 async def ipam_preview(
     object_type: str,
     request: Request,
@@ -212,6 +214,7 @@ async def ipam_preview(
 
 
 @ipam_router.post("/api/import/ipam/{object_type}/commit", dependencies=[Depends(_require_admin_dep)])
+@scoped("admin")
 async def ipam_commit(
     object_type: str,
     request: Request,

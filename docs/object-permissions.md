@@ -40,44 +40,75 @@ Answers to a scoped user:
 | Lists, counts, summaries, searches and exports of the configuration modules | Computed over readable hosts only, filtered in SQL before limits and counts, so totals never include hidden rows |
 | Device actions and stored changes (capture, check, analyze, restore, revert, accept or resolve drift, baselines, deletes, generate) | Need write on the host's group (or, for a group action, on the group) |
 
-## Fail-closed rule
+## Every feature, filtered
 
-Scope is enforced module by module. Until a module enforces it, a scoped
-user must not reach it:
+Every feature of the catalog is enrolled: a scoped user keeps every page
+their access groups grant, and each shows only the objects in their scope
+(multi-team and MSP use). `SCOPE_ENFORCED_FEATURES` in
+`netcontrol/object_scope.py` lists them; a feature that is not listed (a
+plugin's) stays closed to scoped users (fail closed): `_get_user_features`
+drops it, so its HTTP routes, WebSockets and sidebar entry are refused.
+MCP (AI access) tokens owned by a scoped user are still refused (`403`),
+and ChatOps commands refuse scoped users.
 
-- `SCOPE_ENFORCED_FEATURES` in `netcontrol/object_scope.py` lists the
-  feature keys whose modules enforce scope. Today that is `inventory`,
-  `config-backups`, `config-drift` (which also covers intended
-  configuration), `credentials` (per owner, so nothing to filter) and
-  their `.write` keys.
-- For a scoped user, the effective features (`_get_user_features`) keep only
-  those keys, whatever their access groups grant. Every other feature gate
-  (HTTP routes, WebSocket streams, the dashboard) answers `403`, and the
-  sidebar hides those pages. `GET /api/auth/status` reports the reduced
-  `feature_access`.
-- MCP (AI access) tokens owned by a scoped user are refused with `403`
-  (`{"error": "forbidden", "message": ...}`), since MCP tools read every
-  device.
-- Routes open to any signed-in user (`require_auth` only) return no host or
-  inventory group rows: custom field and tag definitions, the device model
-  catalogues, secret variable names, the user's own profile. The tag, field
-  and catalogue lists carry usage counts over all devices.
+### Records beyond hosts: the model registry
 
-### Pages a scoped account can use now
+Records reach the scope through the **model registry**
+(`object_scope.MODELS`). A model names the fields of its rows that place it:
+an inventory group, a host, a tenant or a site (or a list of hosts or sites,
+e.g. a circuit's terminations). For a scoped user a row is
 
-Inventory: groups, hosts, custom data and tags on hosts and groups, bulk
-edit, CSV export, discovery into writable groups, SNMP assignments, the
-Ansible dynamic inventory.
+- **readable** when any key is in scope: its group or host is in a granted
+  group; its tenant is the tenant of such a host; its site holds such a host
+  (its own site, its rack's or its floor plan placement's); or a **scope rule** grants the tenant
+  or site for the model;
+- **writable** when any key is writable: a writable group or host, the
+  tenant of a host in a writable group, or a writable scope rule. A site
+  reached only through a host is read only (sites are often shared); write
+  on a site needs a scope rule;
+- of a **shared** model (reference data: providers, provider networks,
+  circuit, cluster and rack types and roles, templates, playbooks,
+  compliance profiles, end-of-life notices, advisories, untenanted VRFs,
+  VLANs and autonomous systems, global alert rules) readable when it has no
+  key, and never changed (unrestricted users only). A row of any other model
+  with no key (an untenanted prefix, a circuit with no tenant or
+  termination) is visible to unrestricted users only.
 
-Configuration (with the `config-backups` and `config-drift` features):
-Config Drift, Intended, Backups and Config Search. Settings pages that need
-admin stay admin-only.
+### Scope rules
 
-Credentials (with the `credentials` feature): a scoped account manages its
-own credentials as any user does. Credentials are per owner and hold no
-host or inventory group data, so nothing is filtered there. Capture, check,
-restore and revert log in with a credential the user owns, so a scoped
-account that should run them needs this feature too.
+A scope rule extends an access group with **Selected inventory groups**
+beyond its inventory groups: the records of one model (or every model,
+`*`) whose **tenant** or **site** is the given one, Read or Read and write.
+Rules live in `access_group_scope_rules` (migration 0111), are deleted with
+the access group, and apply only while the group's device access is
+Selected inventory groups. A rule naming a model without that key is
+refused (`400`). Example: a team granted a customer's inventory group, plus
+"Circuits, tenant = that customer, Read" to see the circuits that terminate
+outside their devices.
+
+### What each feature enforces
+
+| Feature | Lists and details | Writes and actions |
+|---------|-------------------|--------------------|
+| Dashboard | Stats, recent jobs, groups, health and open alerts over the user's hosts and jobs (not cached); no topology problems | - |
+| Monitoring (polls, alerts, rules, suppressions, SLA, availability, baselines, interface errors, metrics, Meraki alerts) | Per host, filtered in SQL before limits and counts; rules by target host or group (global rules shared); integration entities only when mapped to a readable host; Cato egress findings empty | Acknowledge, poll and compute need write on the host; a rule needs write on its target; global rules, OID profile changes, site mutes and Cato checks are refused |
+| Jobs | A job is visible when every target host (or its group) is readable; dynamic group jobs to their launcher only | Launch, cancel, retry, rerun and priority need write on every target; ad-hoc IPs are refused |
+| Playbooks, templates | Shared catalogue | Unrestricted users only |
+| Deployments, maintenance windows, risk analysis | By group and hosts | Need write on the group and hosts; global windows unrestricted only |
+| Compliance | Results, status, summary by host; assignments by group; profiles shared | Scans and remediation need write; Meraki compliance is hidden and refused |
+| Upgrades | A campaign is visible when every device is a readable host; images shared | Campaign changes need write on every device; prestage backup files hidden |
+| Topology, path trace, MAC tracking, traffic analysis | Links whose ends are visible (a neighbour matching a hidden host is dropped); path traces over the user's map without vendor or cloud snapshots; MAC and flow data of readable hosts | Discovery, collection and acknowledgements on writable groups; cleanup refused |
+| Meraki and cloud sources, cloud visibility | Hidden (not tied to inventory groups) | Refused |
+| Software, lifecycle | Devices of readable hosts; advisories and notices shared | Acknowledge needs write; refresh, settings and checks refused |
+| IPAM, DHCP, VRFs, VLANs | Subnets of readable hosts and of the user's tenants; prefixes and IP addresses by tenant; VRFs and VLANs by tenant and site (untenanted ones shared); DHCP servers hidden | Admin only, as before |
+| Organization, floor plans | Tenants of readable hosts, sites holding them, plus scope rules; regions and tenant groups shared with recounted totals | Organization writes admin only; floor plans need write on the site (scope rule) and host |
+| Circuits | By tenant, or the sites and hosts of their terminations | Need write on the circuit; providers and types shared |
+| Virtualization | Clusters by tenant, site or member host; VMs by tenant or their cluster | Need write; types and groups shared |
+| Routing | Instances, peer groups and peerings by device; ASes by tenant (untenanted shared) | Need write on the device |
+| DCIM | Racks, reservations, panels and feeds by tenant and site; ports, modules and placements by host; cables by tenant and ends; other devices in a visible rack show as occupied units; traces stop at hidden records (`restricted`) | Need write on the record (site writes through a scope rule) |
+| Sync, secrets providers | Jobs, runs (entries of readable devices) and providers are read | Refused |
+| Reports, audit, graphs, billing, lab | Reports need a group or host in scope (IPAM reports refused); audit findings, host graphs, billing circuits and lab twins by host; graph templates shared | Writes need write on the host; audit runs and schedules refused |
+| GraphQL | Only the fields whose resolvers filter by scope (`GRAPHQL_SCOPED_FEATURES`: inventory and backups today) | Read-only API |
 
 ### Configuration modules
 
@@ -139,11 +170,14 @@ target) offer writable groups only, and "None (top level)" is disabled.
 
 Settings > Access Groups > New Group / Edit: **Device access** is All devices
 or Selected inventory groups. For the second, each inventory group gets No
-access, Read, or Read and write. The table shows each group's device access.
-Settings > Users marks restricted users "Limited to selected inventory
-groups". On the Inventory page, write controls of groups the user may only
-read are disabled with the reason, and "+ New Group" (top level) is disabled
-for scoped users.
+access, Read, or Read and write, and **Scope rules** add a tenant or site
+for one record type (or every type), Read or Read and write. The table shows
+each group's device access. Settings > Users marks restricted users "Limited
+to selected inventory groups". On the Inventory page, write controls of
+groups the user may only read are disabled with the reason, and "+ New
+Group" (top level) is disabled for scoped users. A scoped account with no
+writable grant or rule (`object_scope.read_only`) sees no write controls on
+any page that gates writes with `canWriteFeature`.
 
 ## API
 
@@ -156,8 +190,17 @@ for scoped users.
   `access_group.update` with the scope change, `access_group.delete`).
 - `GET /api/admin/users`: each user carries `object_scope_restricted`.
 - `GET /api/auth/status` (signed in) and the login response carry
-  `object_scope: {restricted, write_group_ids}`. `write_group_ids` are
-  expanded with sub-groups and empty when unrestricted.
+  `object_scope: {restricted, write_group_ids, read_only}`.
+  `write_group_ids` are expanded with sub-groups and empty when
+  unrestricted; `read_only` is true for a scoped account with no writable
+  grant or scope rule.
+- `GET /api/admin/object-scope/models`: the model registry (name, keys,
+  shared, which rule attributes apply).
+- `GET/PUT /api/admin/access-groups/{id}/scope-rules`: the scope rules
+  (`{"rules": [{model, attribute, value_id, can_write}]}`; `model` a
+  registry name or `*`, `attribute` `tenant` or `site`). An unknown model,
+  attribute, tenant or site is `400`; changes are audited
+  (`access_group.scope_rules`).
 
 ## Enrolling another module
 
@@ -165,33 +208,43 @@ for scoped users.
    `netcontrol/object_scope.py`:
    - `await request_scope(request)` - the caller's `ObjectScope` (cached on
      `request.state`); `ws_scope(session)` for WebSocket handlers.
-   - `await require_group(request, group_id, write=...)`,
-     `require_host(...)`, `require_hosts(...)` - the row(s), or `404`/`403`.
-   - `scope.filter_groups(rows, key="id")`,
-     `scope.filter_hosts(rows, key="group_id")`,
-     `scope.can_read_group(id)`, `scope.can_write_group(id)` for lists,
-     counts and summaries.
-   - `require_object_host(request, host_id, not_found=..., write=...)` for
-     a record addressed by its own id that belongs to a host.
-   - `**await group_filter(request)` as keyword arguments of a `routes.db`
-     reader that takes `group_ids` (built with
-     `routes.db.inventory.group_ids_condition`), so lists and counts are
-     filtered in SQL; it is empty for unrestricted callers.
+   - `require_group`, `require_host`, `require_hosts`,
+     `require_object_host`, `require_host_ids` for hosts and groups.
+   - The row helpers over the model registry: `filter_rows(model, rows,
+     request)`, `require_row(request, model, row, write=...)` (`404` /
+     `403`), `require_new_row(request, model, values)` for creates and key
+     changes, `require_model_write(request)` for shared catalogues,
+     `can_access(...)`.
+   - SQL pushdown for lists and counts: `**await group_filter(request)` for
+     readers taking `group_ids`, `sql_condition(model, request, alias=...)`,
+     `readable_host_ids(request)`.
    - `refuse_scoped(request)` for an action that cannot be confined.
-2. Mark every route `@scoped("<kind>")` or `@scope_exempt("<reason: no host
-   or group data>")`.
+   - A model the registry lacks: `register_model(ScopeModel(name, keys,
+     shared=...))` in the route module.
+2. Mark every route `@scoped("<kind>")` or `@scope_exempt("<reason>")`
+   (kinds ending in `:live` contact a device, `:nodata` may answer `404` for
+   a host with no stored data; `refused` and `admin` routes answer `403` to
+   every scoped user).
 3. Add its routers to `SCOPE_ENFORCED_ROUTERS` and its feature key (and
-   `<key>.write` when the feature has one) to `SCOPE_ENFORCED_FEATURES`.
-4. `tests/test_object_scope_api.py` then requires every HTTP and
-   WebSocket route of those routers to be marked (a WebSocket router of an
-   enrolled module must be listed too), and drives every scoped GET route
+   `<key>.write`) to `SCOPE_ENFORCED_FEATURES`.
+4. `tests/test_object_scope_api.py` then requires every HTTP and WebSocket
+   route of those routers to be marked and drives every scoped GET route
    with a `group_id` or `host_id` path parameter with an out-of-scope id,
-   expecting `404`.
-5. Add the page to `SCOPED_ACCOUNT_PAGES` in
-   `src/pages/Settings/accessGroupScope.ts` and this document.
+   expecting `404`; `tests/test_object_scope_features.py` holds the
+   per-feature authorization matrix.
+
+Other consumers use the same rules with a scope from `scope_for_user`:
+`filter_rows(model, rows, scope)`, `can_access(scope, model, row)` and
+`sql_condition(model, scope, alias=...)` (GraphQL resolvers, reports).
 
 ## Not covered
 
-Per-object grants on anything but inventory groups (sites, tenants, single
-hosts); scope on monitoring, topology, reports, jobs, deployments, upgrades,
-IPAM and MCP (scoped users are shut out of them instead).
+- MCP (AI access) and ChatOps stay closed to scoped users.
+- GraphQL fields other than inventory and backups answer "Access denied"
+  for scoped users until their resolvers filter by scope.
+- Integration data with no inventory host (Meraki organizations and
+  snapshots, cloud accounts, Cato egress findings, DHCP servers, upgrade
+  prestage backup files) is hidden from scoped users.
+- Some totals stay estate-wide: a tenant's usage counts, IPAM source
+  counts, a sync run's summary counters, a site's floor and placement
+  counts.

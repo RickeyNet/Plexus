@@ -628,10 +628,44 @@ def test_merge_adds_meraki_nodes_and_collapses_inventory_match(snapshot):
     assert not any(str(k).startswith("ext_") for k in nodes)
     assert any(7 in (e["from"], e["to"]) and e["source"] == "meraki" for e in edges)
 
+    # A neighbor is no device of the source: it gives the host no role.
+    assert "source_category" not in host
+
     assert all(e["from"] in nodes and e["to"] in nodes for e in edges)
     assert {e["protocol"] for e in edges} >= {"lldp", "wan", "vpn", "vpn-ipsec"}
     assert any(e["protocol"] == "vpn" and e["status"] == "unreachable" for e in edges)
     assert len({e["id"] for e in edges}) == len(edges)
+
+
+def test_merge_gives_a_device_that_is_an_inventory_host_the_role_of_its_source(snapshot):
+    # A Meraki switch added to the inventory as an ICMP-only host has no role
+    # of its own: its node carries the role the source gives the device, so
+    # the map still draws it as a switch.
+    switch = next(n for n in snapshot["nodes"] if n["kind"] == "switch")
+    appliance = next(n for n in snapshot["nodes"] if n["kind"] == "appliance")
+    hosts = {
+        9: {**_host_graph_node(9), "device_type": "icmp_only", "device_category": ""},
+        10: {**_host_graph_node(10), "device_category": "router"},
+    }
+    matches = {switch["id"]: 9, appliance["id"]: 10}
+    nodes_by_id: dict = dict(hosts)
+    merge_meraki_into_graph(
+        nodes_by_id,
+        [],
+        [(3, snapshot)],
+        host_node=lambda host_id: nodes_by_id.get(host_id),
+        resolve_external=lambda _name, _ip: None,
+        match_host=lambda _org_ref, node: matches.get(node["id"]),
+    )
+    assert nodes_by_id[9]["meraki"]["node_id"] == switch["id"]
+    assert (nodes_by_id[9]["device_category"], nodes_by_id[9]["source_category"]) == ("", "switch")
+    # The host's own role is left as it is; the source's is beside it.
+    assert (nodes_by_id[10]["device_category"], nodes_by_id[10]["source_category"]) == ("router", "firewall")
+    # The export's viewer draws the host with its own role, else the source's.
+    viewer = {
+        n["id"]: n for n in graph_to_snapshot({"nodes": list(nodes_by_id.values()), "edges": []}, {}, {})["nodes"]
+    }
+    assert (viewer["9"]["kind"], viewer["10"]["kind"]) == ("switch", "router")
 
 
 def test_merge_keeps_unmatched_neighbor_as_external_and_is_stable(snapshot):
