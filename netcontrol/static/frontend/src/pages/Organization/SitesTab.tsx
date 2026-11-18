@@ -7,6 +7,7 @@ import { CardHeader, CatalogueBody, Dash, RowActions } from '@/components/Catalo
 import { ChangelogPanel } from '@/components/ChangelogPanel';
 import { DataTable } from '@/components/DataTable';
 import { EmptyState } from '@/components/EmptyState';
+import { ExportTemplatesMenu } from '@/components/ExportTemplatesMenu';
 import { useConfirmDelete } from '@/components/useConfirmDelete';
 import { clickableProps } from '@/lib/clickable';
 import { siteStatusLabel, siteStatusTone } from '@/lib/organization';
@@ -46,7 +47,12 @@ export function SitesTab() {
       <CardHeader
         title="Sites"
         sub={q.data && `${rows.length.toLocaleString()} site${rows.length === 1 ? '' : 's'}`}
-        actions={rows.length > 0 && addButton}
+        actions={
+          <>
+            <ExportTemplatesMenu objectType="site" />
+            {rows.length > 0 && addButton}
+          </>
+        }
       />
       <CatalogueBody
         query={q}

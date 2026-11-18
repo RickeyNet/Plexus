@@ -9,6 +9,7 @@ import { ChangelogPanel } from '@/components/ChangelogPanel';
 import { DataTable } from '@/components/DataTable';
 import { useDialogs } from '@/components/DialogProvider-context';
 import { EmptyState } from '@/components/EmptyState';
+import { ExportTemplatesMenu } from '@/components/ExportTemplatesMenu';
 import { ImportDialog } from '@/components/ImportDialog';
 import { LoadingState } from '@/components/LoadingState';
 import { QueryError } from '@/components/QueryError';
@@ -97,6 +98,7 @@ export function VlansTab() {
         actions={
           <>
             {siteFilter}
+            <ExportTemplatesMenu objectType="vlan" params={{ site_id: site === 'all' ? undefined : String(site) }} />
             {importButton}
             {rows.length > 0 && addButton}
           </>

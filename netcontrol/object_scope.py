@@ -80,6 +80,9 @@ SCOPE_ENFORCED_ROUTERS: tuple[str, ...] = (
     # The change log is open to every signed-in user; it filters by feature
     # per object type and by the caller's inventory groups itself.
     "netcontrol.routes.object_changes:router",
+    # Export templates: open to every signed-in user; a render checks the
+    # object type's feature and loads through the type's scoped list.
+    "netcontrol.routes.export_templates:router",
 )
 
 READ_ONLY_DETAIL = "Read-only access to this inventory group"

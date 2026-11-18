@@ -14,6 +14,7 @@ import { CardHeader, CatalogueBody, Dash, RowActions } from '@/components/Catalo
 import { ChangelogPanel } from '@/components/ChangelogPanel';
 import { DataTable } from '@/components/DataTable';
 import { EmptyState } from '@/components/EmptyState';
+import { ExportTemplatesMenu } from '@/components/ExportTemplatesMenu';
 import { LoadingState } from '@/components/LoadingState';
 import { QueryError } from '@/components/QueryError';
 import {
@@ -79,7 +80,12 @@ export function CircuitsTab() {
       <CardHeader
         title="Circuits"
         sub={circuits.data && `${rows.length.toLocaleString()} circuit${rows.length === 1 ? '' : 's'}${filtered ? ' match' : ''}`}
-        actions={addButton}
+        actions={
+          <>
+            <ExportTemplatesMenu objectType="circuit" params={{ ...filter }} />
+            {addButton}
+          </>
+        }
       />
       <div style={{ display: 'flex', gap: 'var(--space-2)', flexWrap: 'wrap', marginBottom: '0.75rem' }}>
         <input

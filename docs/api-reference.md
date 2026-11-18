@@ -308,6 +308,22 @@ A Template: `id`, `name`, `kind` (`device` or `snippet`), `device_type` (`""`: a
 | GET    | `/api/intended-config/hosts/{host_id}` | The Row plus `config_text`, `lines: [{text, missing}]`, `extra: [{path, text}]` and `backup: {id, captured_at}` (null when not compared). `404` when the host has no intended configuration |
 | POST   | `/api/intended-config/generate` | `{host_ids?, group_id?}` (neither: every host). Renders and compares now: `{hosts, generated, changed, errors, no_template}` |
 
+### Export templates
+Any signed-in user reads and renders the templates of the object types whose feature they hold (`host`: `inventory`; `prefix`, `ip_address`, `vlan`: `ipam`; `circuit`: `circuits`; `site`: `organization`); the rows marked *Admin* need an administrator. Writes and renders are audited (category `export_templates`). `400` for bad input or a template that fails, `404` for an unknown id or a type the caller does not read, `409` when the object type has a template of that name ignoring case. See [export-templates.md](export-templates.md).
+
+An ExportTemplate: `id`, `name`, `object_type`, `description`, `template_text`, `mime_type`, `file_extension` (no dot; may be empty), `as_attachment`, `created_by`, `created_at`, `updated_by`, `updated_at`.
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET    | `/api/export-templates` | `?object_type=`. `{"templates": [ExportTemplate]}` by object type, then name |
+| GET    | `/api/export-templates/object-types` | `{"object_types": [{key, label, feature, filters, fields, tags, readable}]}` |
+| GET    | `/api/export-templates/{id}` | The ExportTemplate |
+| GET    | `/api/export-templates/{id}/render` | The type's filters in the query string (see the guide). The rendered file with the template's `Content-Type` (plus `charset=utf-8`) and `Content-Disposition` (`attachment` or `inline`, `filename` from the name and extension). A template that fails gives `400` with `detail = {message, line}`; a scoped caller gets `403` for `prefix` and `ip_address` |
+| POST   | `/api/export-templates` | *Admin.* `{name, object_type, template_text?, description?, mime_type?, file_extension?, as_attachment?}`. `201` with the ExportTemplate. A Jinja syntax error gives `400` with `detail = {message, line}` |
+| PUT    | `/api/export-templates/{id}` | *Admin.* Full replace, same body and checks |
+| DELETE | `/api/export-templates/{id}` | *Admin.* `{"ok": true}` |
+| POST   | `/api/export-templates/preview` | *Admin.* `{object_type, template_text, limit?}` (default 20, at most 1000) and the type's filters in the query string: `{output, error, count, total}`; `error` is null or `{message, template, line}`. Stores nothing |
+
 ### Credentials
 | Method | Endpoint                | Description                                   |
 |--------|-------------------------|-----------------------------------------------|

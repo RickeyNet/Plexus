@@ -184,6 +184,10 @@ from netcontrol.routes.device_model import (
 from netcontrol.routes.dhcp import init_dhcp, router as dhcp_router, sync_dhcp_server
 from netcontrol.routes.dhcp_adapters import DhcpAdapterError, collect_dhcp_snapshot, is_collection_fed
 from netcontrol.routes.dynamic_groups import router as dynamic_groups_router
+from netcontrol.routes.export_templates import (
+    admin_router as export_templates_admin_router,
+    router as export_templates_router,
+)
 from netcontrol.routes.federation import (
     federation_sync_loop,
     init_federation,
@@ -2548,6 +2552,10 @@ app.include_router(intended_config_admin_router, dependencies=[Depends(require_a
 app.include_router(git_sources_router, dependencies=[Depends(require_admin)])
 # Data validation rules (enforced on inventory and IPAM writes): admin only.
 app.include_router(validation_rules_router, dependencies=[Depends(require_admin)])
+# Export templates: read and render by any signed-in user (each render checks
+# the object type's feature and object scope); managed by admins.
+app.include_router(export_templates_router, dependencies=[Depends(require_auth)])
+app.include_router(export_templates_admin_router, dependencies=[Depends(require_admin)])
 # Config Backups + admin
 app.include_router(
     config_backups_router,
