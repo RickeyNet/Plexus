@@ -26,6 +26,7 @@ import routes.database as db
 
 import netcontrol.routes.state as state
 from netcontrol.integrations.meraki.normalize import InventoryIndex, _add, table_section, text_section
+from netcontrol.mcp.redact import redact_config_text
 from netcontrol.routes.shared import service_credential
 from netcontrol.telemetry import configure_logging, redact_value
 
@@ -46,6 +47,7 @@ _SHOW_COMMANDS: tuple[tuple[str, tuple[str, ...]], ...] = (
 
 _MAX_OUTPUT_CHARS = 120_000
 _MAX_ROUTE_TEXT_CHARS = 200_000
+_MAX_CONFIG_CHARS = 400_000
 _ALIAS_CHUNK = 500
 _SSH_TIMEOUT_SECONDS = 90
 
@@ -135,6 +137,21 @@ async def collected_sections(host_id: int) -> list[dict]:
                 _truncate(str(route_snapshot["routes_text"]), _MAX_ROUTE_TEXT_CHARS),
             ),
         )
+    return sections
+
+
+async def config_sections(host_ids: list[int]) -> dict[int, dict]:
+    """``host id -> section`` holding each host's newest successful
+    configuration backup, secrets masked (the text leaves Plexus in an
+    exported file). A host with no backup is left out."""
+    sections: dict[int, dict] = {}
+    for host_id, backup in (await db.get_latest_config_texts_for_hosts(host_ids)).items():
+        section = text_section(
+            f"Configuration (backup captured {backup.get('captured_at') or 'unknown'}, secrets masked)",
+            _truncate(redact_config_text(str(backup.get("config_text") or "")), _MAX_CONFIG_CHARS),
+        )
+        if section:
+            sections[host_id] = section
     return sections
 
 

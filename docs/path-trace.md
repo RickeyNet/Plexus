@@ -885,7 +885,7 @@ additions in its own meta policy.
 ## Reachability sweep
 
 Path Mode answers one question at a time. The **Reachability** tab of the
-Topology page (**Network → Topology → Reachability**, `/topology/reachability`)
+Network Tools page (**Network Tools → Reachability**, `/network-tools/reachability`)
 asks the same question of many networks at once: *which networks cannot
 reach this destination with this traffic?* For example, which user VLANs
 of every branch cannot reach a file server on `tcp/445`.
@@ -1044,7 +1044,7 @@ download of [many destinations](#many-destinations) is named
 
 ## Summarize addresses
 
-The **Summarize** tab of the Topology page (`/topology/summarize`) finds the
+The **Summarize** tab of the Network Tools page (`/network-tools/summarize`) finds the
 fewest routes that cover a list of addresses, and checks each route against
 the networks collected from every source. For example, the hosts of Meraki
 networks that an Azure route table must reach: a handful of aggregate routes

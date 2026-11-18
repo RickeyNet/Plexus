@@ -1,6 +1,6 @@
 # Network tools
 
-The Network Tools page has two tools:
+The Network Tools page has four tools:
 
 - **MAC Tracking** finds where a device is connected. It searches the MAC
   address tables and ARP tables that Plexus collects from switches and
@@ -8,13 +8,21 @@ The Network Tools page has two tools:
 - **Traffic Analysis** shows who sends the most traffic, which services carry
   it, and how it changes over time. It reads the NetFlow, sFlow and IPFIX
   records that devices export to Plexus.
+- **Reachability** traces one destination and traffic from many source
+  networks at once, for example which user VLANs cannot reach a file server
+  on `tcp/445`. See [Reachability sweep](path-trace.md#reachability-sweep).
+- **Summarize** finds the fewest routes that cover a list of addresses and
+  checks each route against the collected networks. See
+  [Summarize addresses](path-trace.md#summarize-addresses).
 
 ## Where it is and what you need
 
 - Open **Observe > Network Tools** in the sidebar. Each tool is a tab.
 - The **MAC Tracking** tab needs the `mac-tracking` feature. The **Traffic
-  Analysis** tab needs the `traffic-analysis` feature. You see only the tabs
-  you have access to.
+  Analysis** tab needs the `traffic-analysis` feature. The **Reachability**
+  and **Summarize** tabs need the `topology` feature, since they work on the
+  networks collected from the topology sources. You see only the tabs you
+  have access to.
 - MAC Tracking collects from hosts whose inventory group has SNMP turned on.
   It first tries SSH with the service credential (or the default credential)
   set in Settings, on platforms whose driver can read the MAC table. It falls

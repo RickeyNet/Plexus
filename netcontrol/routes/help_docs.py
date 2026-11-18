@@ -84,7 +84,17 @@ def _markdown() -> MarkdownIt:
             tokens[idx].attrSet("rel", "noopener noreferrer")
         return renderer.renderToken(tokens, idx, options, env)
 
+    # Each table sits in a scroll box, so a wide table scrolls on its own on a
+    # narrow window while the table itself can still stretch to full width.
+    def table_open(renderer: RendererHTML, tokens: list[Token], idx: int, options: OptionsDict, env: dict) -> str:
+        return '<div class="help-table">' + renderer.renderToken(tokens, idx, options, env)
+
+    def table_close(renderer: RendererHTML, tokens: list[Token], idx: int, options: OptionsDict, env: dict) -> str:
+        return renderer.renderToken(tokens, idx, options, env) + "</div>\n"
+
     md.add_render_rule("link_open", link_open)
+    md.add_render_rule("table_open", table_open)
+    md.add_render_rule("table_close", table_close)
     return md
 
 

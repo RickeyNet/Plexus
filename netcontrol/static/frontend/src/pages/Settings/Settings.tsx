@@ -1,5 +1,3 @@
-import { useEffect, useRef } from 'react';
-
 import { useAdminCapabilities } from '@/api/settings';
 import { useAuthStatus } from '@/api/auth';
 import { ApiError } from '@/api/client';
@@ -15,8 +13,8 @@ import { usePathTab } from '@/lib/usePathTab';
 import { AccessGroupsTab } from './AccessGroupsTab';
 import { AiAccessTab } from './AiAccessTab';
 import { AppearanceTab } from './AppearanceTab';
-import { AuthTab } from './AuthTab';
 import { ChatOpsTab } from './ChatOpsTab';
+import { AuthTab } from './AuthTab';
 import { CustomDataTab } from './CustomDataTab';
 import { DeviceModelTab } from './DeviceModelTab';
 import { DiscoveryTab } from './DiscoveryTab';
@@ -147,32 +145,60 @@ const TAB_HELP: Record<Tab, { title: string; text: string }> = {
   },
 };
 
-const ADMIN_TABS: { key: Tab; label: string }[] = [
-  { key: 'appearance', label: 'Appearance' },
-  { key: 'users', label: 'Users' },
-  { key: 'access-groups', label: 'Access Groups' },
-  { key: 'auth', label: 'Authentication' },
-  { key: 'logging', label: 'Logging' },
-  { key: 'siem', label: 'SIEM' },
-  { key: 'discovery', label: 'Discovery' },
-  { key: 'monitoring', label: 'Monitoring' },
-  { key: 'netflow', label: 'NetFlow' },
-  { key: 'notifications', label: 'Notifications' },
-  { key: 'webhooks', label: 'Webhooks' },
-  { key: 'features', label: 'Features' },
-  { key: 'custom-data', label: 'Custom Fields & Tags' },
-  { key: 'device-model', label: 'Device Model' },
-  { key: 'validation-rules', label: 'Validation Rules' },
-  { key: 'git-sources', label: 'Git Sources' },
-  { key: 'secrets-providers', label: 'Secrets Providers' },
-  { key: 'ai-access', label: 'AI Access' },
-  { key: 'chatops', label: 'ChatOps' },
-  { key: 'plugins', label: 'Plugins' },
-  { key: 'system', label: 'System' },
-];
-const TAB_KEYS = ADMIN_TABS.map((t) => t.key);
+type TabItem = { key: Tab; label: string };
 
-const NON_ADMIN_TABS: { key: Tab; label: string }[] = [
+// The admin sections, grouped for the side navigation.
+const ADMIN_GROUPS: { title: string; tabs: TabItem[] }[] = [
+  {
+    title: 'General',
+    tabs: [
+      { key: 'appearance', label: 'Appearance' },
+      { key: 'features', label: 'Features' },
+      { key: 'plugins', label: 'Plugins' },
+      { key: 'system', label: 'System' },
+    ],
+  },
+  {
+    title: 'Access',
+    tabs: [
+      { key: 'users', label: 'Users' },
+      { key: 'access-groups', label: 'Access Groups' },
+      { key: 'auth', label: 'Authentication' },
+      { key: 'secrets-providers', label: 'Secrets Providers' },
+      { key: 'ai-access', label: 'AI Access' },
+    ],
+  },
+  {
+    title: 'Monitoring',
+    tabs: [
+      { key: 'discovery', label: 'Discovery' },
+      { key: 'monitoring', label: 'Monitoring' },
+      { key: 'netflow', label: 'NetFlow' },
+    ],
+  },
+  {
+    title: 'Alerts & logs',
+    tabs: [
+      { key: 'notifications', label: 'Notifications' },
+      { key: 'webhooks', label: 'Webhooks' },
+      { key: 'chatops', label: 'ChatOps' },
+      { key: 'logging', label: 'Logging' },
+      { key: 'siem', label: 'SIEM' },
+    ],
+  },
+  {
+    title: 'Data model',
+    tabs: [
+      { key: 'custom-data', label: 'Custom Fields & Tags' },
+      { key: 'device-model', label: 'Device Model' },
+      { key: 'validation-rules', label: 'Validation Rules' },
+      { key: 'git-sources', label: 'Git Sources' },
+    ],
+  },
+];
+const TAB_KEYS = ADMIN_GROUPS.flatMap((g) => g.tabs.map((t) => t.key));
+
+const NON_ADMIN_TABS: TabItem[] = [
   { key: 'appearance', label: 'Appearance' },
 ];
 const NON_ADMIN_KEYS = NON_ADMIN_TABS.map((t) => t.key);
@@ -205,14 +231,6 @@ export function Settings() {
     }
     navigateToTab(next);
   }
-
-  // The admin tab row scrolls sideways on narrow windows; keep the open tab
-  // in view after a switch or a deep link.
-  const tabBarRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const active = tabBarRef.current?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]');
-    active?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
-  }, [tab, capabilities.data]);
 
   if (auth.isLoading) {
     return (
@@ -267,55 +285,94 @@ export function Settings() {
     <div>
       <PageHeader title="Settings" />
 
-      <div ref={tabBarRef}>
-        <TabBar
-          tabs={ADMIN_TABS}
-          active={tab}
-          onChange={(next) => void selectTab(next)}
-          className="tab-bar-oneline"
-          aria-label="Settings sections"
-        />
-      </div>
+      <div className="side-nav-layout">
+        <SettingsNav active={tab} onSelect={(next) => void selectTab(next)} />
 
-      <UnsavedContext.Provider value={unsaved}>
-        <div className="card card-sm">
-          <PageHelp pageKey={`settings.${tab}`} title={TAB_HELP[tab].title} text={TAB_HELP[tab].text} />
-          {tab === 'appearance' && <AppearanceTab />}
-          {tab === 'users' && <UsersTab />}
-          {tab === 'access-groups' && <AccessGroupsTab capabilities={caps} />}
-          {tab === 'auth' && <AuthTab capabilities={caps} />}
-          {tab === 'logging' && <LoggingTab />}
-          {tab === 'siem' && <SiemTab />}
-          {tab === 'discovery' && <DiscoveryTab />}
-          {tab === 'monitoring' && <MonitoringTab />}
-          {tab === 'netflow' && <NetFlowTab />}
-          {tab === 'notifications' && <NotificationsTab />}
-          {tab === 'webhooks' && <WebhooksTab />}
-          {tab === 'features' && <FeaturesTab capabilities={caps} />}
-          {tab === 'custom-data' && <CustomDataTab />}
-          {tab === 'device-model' && <DeviceModelTab />}
-          {tab === 'validation-rules' && <ValidationRulesTab />}
-          {tab === 'git-sources' && <GitSourcesTab />}
-          {tab === 'secrets-providers' && <SecretsProvidersTab />}
-          {tab === 'ai-access' && <AiAccessTab />}
-          {tab === 'chatops' && <ChatOpsTab />}
-          {tab === 'plugins' && <PluginsTab />}
-          {tab === 'system' && (
-            <div className="stack">
-              <SystemTab />
-              {/* Outside SystemTab so an updater error does not hide it. */}
-              <section>
-                <h4 style={{ margin: '0 0 0.5rem 0' }}>Job history</h4>
-                <JobRetentionSection />
-              </section>
-              <section>
-                <h4 style={{ margin: '0 0 0.5rem 0' }}>Change log</h4>
-                <ChangeLogRetentionSection />
-              </section>
-            </div>
-          )}
-        </div>
-      </UnsavedContext.Provider>
+        <UnsavedContext.Provider value={unsaved}>
+          <div className="card card-sm side-nav-main">
+            <PageHelp pageKey={`settings.${tab}`} title={TAB_HELP[tab].title} text={TAB_HELP[tab].text} />
+            {tab === 'appearance' && <AppearanceTab />}
+            {tab === 'users' && <UsersTab />}
+            {tab === 'access-groups' && <AccessGroupsTab capabilities={caps} />}
+            {tab === 'auth' && <AuthTab capabilities={caps} />}
+            {tab === 'logging' && <LoggingTab />}
+            {tab === 'siem' && <SiemTab />}
+            {tab === 'discovery' && <DiscoveryTab />}
+            {tab === 'monitoring' && <MonitoringTab />}
+            {tab === 'netflow' && <NetFlowTab />}
+            {tab === 'notifications' && <NotificationsTab />}
+            {tab === 'webhooks' && <WebhooksTab />}
+            {tab === 'features' && <FeaturesTab capabilities={caps} />}
+            {tab === 'custom-data' && <CustomDataTab />}
+            {tab === 'device-model' && <DeviceModelTab />}
+            {tab === 'validation-rules' && <ValidationRulesTab />}
+            {tab === 'git-sources' && <GitSourcesTab />}
+            {tab === 'secrets-providers' && <SecretsProvidersTab />}
+            {tab === 'ai-access' && <AiAccessTab />}
+            {tab === 'chatops' && <ChatOpsTab />}
+            {tab === 'plugins' && <PluginsTab />}
+            {tab === 'system' && (
+              <div className="stack">
+                <SystemTab />
+                {/* Outside SystemTab so an updater error does not hide it. */}
+                <section>
+                  <h4 style={{ margin: '0 0 0.5rem 0' }}>Job history</h4>
+                  <JobRetentionSection />
+                </section>
+                <section>
+                  <h4 style={{ margin: '0 0 0.5rem 0' }}>Change log</h4>
+                  <ChangeLogRetentionSection />
+                </section>
+              </div>
+            )}
+          </div>
+        </UnsavedContext.Provider>
+      </div>
     </div>
+  );
+}
+
+/**
+ * Grouped section list beside the settings form. On narrow windows the list
+ * gives way to one select with the same groups.
+ */
+function SettingsNav({ active, onSelect }: { active: Tab; onSelect: (next: Tab) => void }) {
+  return (
+    <nav className="side-nav card" aria-label="Settings sections">
+      <select
+        className="form-select side-nav-select"
+        aria-label="Settings section"
+        value={active}
+        onChange={(e) => onSelect(e.target.value as Tab)}
+      >
+        {ADMIN_GROUPS.map((group) => (
+          <optgroup key={group.title} label={group.title}>
+            {group.tabs.map((t) => (
+              <option key={t.key} value={t.key}>
+                {t.label}
+              </option>
+            ))}
+          </optgroup>
+        ))}
+      </select>
+      <div className="side-nav-list">
+        {ADMIN_GROUPS.map((group) => (
+          <div key={group.title} className="side-nav-section">
+            <div className="side-nav-heading">{group.title}</div>
+            {group.tabs.map((t) => (
+              <button
+                key={t.key}
+                type="button"
+                className={`side-nav-link${t.key === active ? ' active' : ''}`}
+                aria-current={t.key === active ? 'page' : undefined}
+                onClick={() => onSelect(t.key)}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
+        ))}
+      </div>
+    </nav>
   );
 }

@@ -35,7 +35,7 @@ export function ExportMenu({ onPNG, onSVG, onJSON, htmlDownloadUrl, htmlOpenUrl,
     },
     {
       label: withPath ? 'HTML map with path (download)' : 'HTML map (download)',
-      description: `One self-contained, interactive file with every device's details. Opens in any browser, no Plexus login needed.${pathNote}`,
+      description: `One self-contained, interactive file with every device's details and its latest config backup (secrets masked). Opens in any browser, no Plexus login needed.${pathNote}`,
       href: htmlDownloadUrl,
       download: true,
     },
