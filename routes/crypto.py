@@ -21,6 +21,7 @@ import hmac
 import logging
 import os
 import stat
+import tempfile
 
 from cryptography.fernet import Fernet, InvalidToken
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -114,29 +115,40 @@ def _load_or_create_key() -> bytes:
         os.makedirs(key_dir, exist_ok=True)
     key_bytes = AESGCM.generate_key(bit_length=256)  # 32 raw bytes
     key_b64 = base64.urlsafe_b64encode(key_bytes)  # 44 bytes on disk
-    tmp_path = KEY_FILE + ".tmp"
+    # Several processes may start at once with no key yet (app workers, test
+    # workers importing this module in parallel). Each writes the whole key
+    # to its own temporary file, then publishes it with a hard link, which
+    # creates KEY_FILE only if it does not exist yet: the file never appears
+    # half written, and exactly one process's key wins. A loser reads the
+    # winner's key.
+    fd, tmp_path = tempfile.mkstemp(prefix=".netcontrol-key-", dir=key_dir or ".")
     try:
-        fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         try:
             os.write(fd, key_b64)
+            os.fsync(fd)
         finally:
             os.close(fd)
-        os.replace(tmp_path, KEY_FILE)  # atomic on POSIX
-    except FileExistsError:
-        # Another process beat us - read their key instead
+        try:
+            os.link(tmp_path, KEY_FILE)  # mkstemp made it 0600 already
+        except FileExistsError:
+            # Another process published its key first: use that one.
+            return _load_or_create_key()
+        except OSError:
+            # No hard links on this filesystem: create the file exclusively
+            # and write it (a concurrent reader could see it short here).
+            try:
+                excl = os.open(KEY_FILE, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            except FileExistsError:
+                return _load_or_create_key()
+            try:
+                os.write(excl, key_b64)
+            finally:
+                os.close(excl)
+    finally:
         try:
             os.remove(tmp_path)
         except OSError as exc:
             LOGGER.debug("Could not remove temporary key file %s: %s", tmp_path, exc)
-        return _load_or_create_key()
-    except OSError:
-        # Fallback for Windows where O_EXCL may behave differently
-        with open(KEY_FILE, "wb") as f:
-            f.write(key_b64)
-        try:
-            os.chmod(KEY_FILE, 0o600)
-        except OSError as exc:
-            LOGGER.debug("Could not set permissions on key file %s: %s", KEY_FILE, exc)
     LOGGER.info("Generated new AES-256 encryption key at %s", KEY_FILE)
     return key_b64
 
