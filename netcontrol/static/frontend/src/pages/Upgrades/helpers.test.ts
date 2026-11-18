@@ -7,8 +7,11 @@ import {
   formatBytes,
   formatEta,
   formatScheduledTime,
+  isUpsCampaign,
+  isUpsFirmwareFile,
   liveStreamStatus,
   phaseLabel,
+  upgradeStepCopy,
 } from './helpers';
 
 describe('liveStreamStatus', () => {
@@ -122,5 +125,29 @@ describe('formatScheduledTime', () => {
     const iso = '2026-06-01T12:30:00+00:00';
     const now = Date.UTC(2026, 5, 1, 12, 0, 0);
     expect(formatScheduledTime(iso, now)?.relative).toBe('in 30m');
+  });
+});
+
+describe('APC Smart-UPS campaigns', () => {
+  it('recognises UPS firmware file names', () => {
+    expect(isUpsFirmwareFile('SRT1025UPS_15-0.enc')).toBe(true);
+    expect(isUpsFirmwareFile('SRTL1227UPS_01-2.enc')).toBe(true);
+    expect(isUpsFirmwareFile('cat9k_iosxe.17.09.04a.SPA.bin')).toBe(false);
+    expect(isUpsFirmwareFile('firmware.enc')).toBe(false);
+    expect(isUpsFirmwareFile(null)).toBe(false);
+  });
+
+  it('detects a UPS campaign from its devices or its images', () => {
+    expect(isUpsCampaign({}, [{ ups_id: '1025' }])).toBe(true);
+    expect(isUpsCampaign({ '1025': 'SRT1025UPS_15-0.enc' }, [])).toBe(true);
+    expect(isUpsCampaign({ '9300': 'cat9k_iosxe.17.09.04a.SPA.bin' }, [{ ups_id: '' }])).toBe(false);
+    expect(isUpsCampaign({}, [])).toBe(false);
+  });
+
+  it('describes UPS steps without a reload', () => {
+    const ups = upgradeStepCopy(true);
+    expect(ups.activateNow).toBe('Install now');
+    expect(ups.activate).toContain('output stays on');
+    expect(upgradeStepCopy(false).activateNow).toBe('Activate now (reload)');
   });
 });

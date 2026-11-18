@@ -133,6 +133,7 @@ A new file under `docs/` must be added to `PAGES` in
 - [docs/meraki-topology.md](docs/meraki-topology.md) - Meraki in the topology map
 - [docs/aruba-switches.md](docs/aruba-switches.md) - HPE Aruba AOS-CX, AOS-Switch / HP ProCurve and Instant On switches
 - [docs/netgear.md](docs/netgear.md) - Netgear managed switches, smart switches and access points
+- [docs/apc-ups.md](docs/apc-ups.md) - APC Smart-UPS through its Network Management Card (SNMP monitoring, UPS alerts)
 - [docs/meraki-alerts.md](docs/meraki-alerts.md) - near-real-time Meraki alerts (polling and webhook receiver, per deployment scenario)
 - [docs/meraki-compliance.md](docs/meraki-compliance.md) - Meraki security compliance audits
 - [docs/path-trace.md](docs/path-trace.md) - Path Mode on the topology map

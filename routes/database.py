@@ -35,6 +35,7 @@ Tables:
     deployment_snapshots   - per-host config snapshots captured before/after deployment
     monitoring_polls       - periodic device health poll snapshots (CPU/mem/interfaces/VPN/routes)
     monitoring_alerts      - threshold violations and anomaly alerts (with dedup/escalation)
+    host_vendor_status     - newest vendor-specific poll state per host, e.g. an APC UPS (migration 0114)
     route_snapshots        - route table captures for churn detection
     alert_rules            - user-defined threshold/anomaly alert rules
     alert_suppressions     - time-windowed alert suppression entries
@@ -2998,5 +2999,6 @@ from routes.db.topology import *  # noqa: E402,F403
 from routes.db.topology_availability import *  # noqa: E402,F403
 from routes.db.users import *  # noqa: E402,F403
 from routes.db.validation_rules import *  # noqa: E402,F403
+from routes.db.vendor_status import *  # noqa: E402,F403
 from routes.db.virtualization import *  # noqa: E402,F403
 from routes.db.webhooks import *  # noqa: E402,F403

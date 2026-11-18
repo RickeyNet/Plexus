@@ -90,7 +90,13 @@ export function ImagesTab() {
                 </td>
                 <td style={{ textAlign: 'left' }}>{img.version || '-'}</td>
                 <td style={{ textAlign: 'left' }}>
-                  <code>{img.model_pattern || '-'}</code>
+                  {img.platform === 'apc_ups' && img.model_pattern ? (
+                    <span title="APC Smart-UPS firmware for this UPS ID">
+                      UPS ID <code>{img.model_pattern}</code>
+                    </span>
+                  ) : (
+                    <code>{img.model_pattern || '-'}</code>
+                  )}
                 </td>
                 <td style={{ textAlign: 'left' }}>{formatBytes(img.file_size)}</td>
                 <td style={{ textAlign: 'left' }} title={img.md5_hash}>

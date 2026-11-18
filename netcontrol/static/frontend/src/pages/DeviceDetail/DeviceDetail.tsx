@@ -30,6 +30,7 @@ import {
   useMonitoringAlerts,
   useMonitoringPollHistory,
   useSyslogEvents,
+  useVendorStatus,
 } from '@/api/deviceDetail';
 
 import { AlertCorrelationModal } from './AlertCorrelationModal';
@@ -38,6 +39,7 @@ import { ErrorTrendingTab } from './ErrorTrendingTab';
 import { FlowTab } from './FlowTab';
 import { InterfaceTab } from './InterfaceTab';
 import { DeviceInfoBar } from './DeviceInfoBar';
+import { UpsStatusCard } from './UpsStatusCard';
 
 const ALL_TABS = [
   { id: 'overview', label: 'Overview' },
@@ -117,8 +119,14 @@ export function DeviceDetail() {
   const loadSyslog = tab === 'syslog';
 
   const polls = useMonitoringPollHistory(hostId, 1);
-  const cpu = useMetricQuery('cpu_percent', hostId, range, loadOverview);
-  const mem = useMetricQuery('memory_percent', hostId, range, loadOverview);
+  // An APC UPS has no CPU or memory: its Overview charts battery, load and runtime.
+  const isUps = polls.data?.polls?.[0]?.device_type === 'apc_ups';
+  const vendor = useVendorStatus(hostId, isUps);
+  const cpu = useMetricQuery('cpu_percent', hostId, range, loadOverview && !isUps);
+  const mem = useMetricQuery('memory_percent', hostId, range, loadOverview && !isUps);
+  const battery = useMetricQuery('ups_battery_capacity_pct', hostId, range, loadOverview && isUps);
+  const load = useMetricQuery('ups_output_load_pct', hostId, range, loadOverview && isUps);
+  const runtime = useMetricQuery('ups_runtime_minutes', hostId, range, loadOverview && isUps);
   const rt = useMetricQuery('response_time_ms', hostId, range, loadOverview);
   const pl = useMetricQuery('packet_loss_pct', hostId, range, loadOverview);
   const ifData = useInterfaceTimeSeries(hostId, range, loadInterfaces);
@@ -160,6 +168,7 @@ export function DeviceDetail() {
 
       <div className="stack stack-sm" style={{ marginBottom: 'var(--space-4)' }}>
         <DeviceInfoBar poll={latestPoll} hostId={hostId} />
+        {isUps && <UpsStatusCard vendor={vendor.data} />}
         {ipamCtx.data && <IpamContext ctx={ipamCtx.data} vrf={vrf} />}
         <HostClusters hostId={hostId} />
         <DeviceDcim hostId={hostId} />
@@ -176,9 +185,12 @@ export function DeviceDetail() {
 
       <div className="card card-sm" style={{ overflow: 'hidden' }}>
         <PageHelp pageKey={`device-detail.${tab}`} title={TAB_HELP[tab].title} text={TAB_HELP[tab].text} />
-        {tab === 'overview' && (
-          <OverviewTab cpu={cpu} mem={mem} rt={rt} pl={pl} />
-        )}
+        {tab === 'overview' &&
+          (isUps ? (
+            <UpsOverviewTab battery={battery} load={load} runtime={runtime} rt={rt} pl={pl} />
+          ) : (
+            <OverviewTab cpu={cpu} mem={mem} rt={rt} pl={pl} />
+          ))}
         {tab === 'interfaces' && (
           <div className="stack">
             <InterfaceTab ifData={ifData.data} latestPoll={latestPoll} loading={ifData.isLoading} />
@@ -309,6 +321,52 @@ function OverviewTab({
       </ChartCard>
       <ChartCard title="Memory %" query={mem} series={memSeries}>
         <TimeSeriesChart series={memSeries} area yAxisName="%" yMin={0} yMax={100} />
+      </ChartCard>
+      <ChartCard title="Response Time (ms)" query={rt} series={rtSeries}>
+        <TimeSeriesChart series={rtSeries} area yAxisName="ms" />
+      </ChartCard>
+      <ChartCard title="Packet Loss (%)" query={pl} series={plSeries}>
+        <TimeSeriesChart series={plSeries} area yAxisName="%" yMin={0} />
+      </ChartCard>
+    </div>
+  );
+}
+
+function UpsOverviewTab({
+  battery,
+  load,
+  runtime,
+  rt,
+  pl,
+}: {
+  battery: MetricQuery;
+  load: MetricQuery;
+  runtime: MetricQuery;
+  rt: MetricQuery;
+  pl: MetricQuery;
+}) {
+  const batterySeries = useMemo(() => extractSeries(battery.data, 'Battery %'), [battery.data]);
+  const loadSeries = useMemo(() => extractSeries(load.data, 'Load %'), [load.data]);
+  const runtimeSeries = useMemo(() => extractSeries(runtime.data, 'Runtime'), [runtime.data]);
+  const rtSeries = useMemo(() => extractSeries(rt.data, 'Response Time'), [rt.data]);
+  const plSeries = useMemo(() => extractSeries(pl.data, 'Packet Loss'), [pl.data]);
+
+  return (
+    <div
+      style={{
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 360px), 1fr))',
+        gap: 'var(--space-3)',
+      }}
+    >
+      <ChartCard title="Battery Capacity %" query={battery} series={batterySeries}>
+        <TimeSeriesChart series={batterySeries} area yAxisName="%" yMin={0} yMax={100} />
+      </ChartCard>
+      <ChartCard title="Output Load %" query={load} series={loadSeries}>
+        <TimeSeriesChart series={loadSeries} area yAxisName="%" yMin={0} yMax={100} />
+      </ChartCard>
+      <ChartCard title="Runtime Left (min)" query={runtime} series={runtimeSeries}>
+        <TimeSeriesChart series={runtimeSeries} area yAxisName="min" yMin={0} />
       </ChartCard>
       <ChartCard title="Response Time (ms)" query={rt} series={rtSeries}>
         <TimeSeriesChart series={rtSeries} area yAxisName="ms" />

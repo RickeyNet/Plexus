@@ -53,6 +53,9 @@ describe('guessDeviceType', () => {
     expect(guess('GS724Tv4 ProSafe 24-port Gigabit Ethernet Smart Switch')).toBe('netgear_smart');
     expect(guess('NETGEAR WAX620')).toBe('netgear_ap');
     expect(guess('Zyxel WAX650S')).toBe('icmp_only');
+    // An APC UPS card: SNMP only.
+    expect(guess('APC Smart-UPS 1500')).toBe('apc_ups');
+    expect(guess('', 'APC Web/SNMP Management Card (MB:v4.1.0 PF:v6.8.2)')).toBe('apc_ups');
   });
 
   it('makes unknown and Linux devices ICMP-only', () => {

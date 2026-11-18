@@ -55,6 +55,11 @@ PLATFORMS: dict[str, dict[str, Any]] = {
     "netgear-managed": {"label": "Netgear managed switch", "psirt": None},
     "netgear-smart": {"label": "Netgear smart switch", "psirt": None},
     "netgear-ap": {"label": "Netgear access point", "psirt": None},
+    # An APC Smart-UPS host is two tracked devices: its Network Management
+    # Card (the host's own version, the card's AOS firmware) and the UPS
+    # behind it (``UPS_FIRMWARE_PLATFORM``, from the poll's PowerNet-MIB read).
+    "apc-nmc": {"label": "APC Network Management Card", "psirt": None},
+    "apc-ups": {"label": "APC Smart-UPS firmware", "psirt": None},
     "other": {"label": "Other", "psirt": None},
 }
 
@@ -83,7 +88,12 @@ DEVICE_TYPE_PLATFORMS = {
     "netgear_prosafe": "netgear-managed",
     "netgear_smart": "netgear-smart",
     "netgear_ap": "netgear-ap",
+    "apc_ups": "apc-nmc",
 }
+
+# The platform of the UPS firmware of an ``apc_ups`` host (its own tracked
+# device, ``host:<id>:ups``).
+UPS_FIRMWARE_PLATFORM = "apc-ups"
 
 _MERAKI_KIND_PLATFORMS = {
     "appliance": "meraki-mx",
@@ -115,6 +125,7 @@ _TEXT_PLATFORMS = (
     ("instant on", "instant-on"),
     ("aos-cx", "aos-cx"),
     ("procurve", "aos-switch"),
+    ("management card", "apc-nmc"),
 )
 
 # An IOS XE release is 16.x or later with three dotted parts; classic IOS

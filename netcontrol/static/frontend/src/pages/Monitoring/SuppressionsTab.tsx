@@ -220,6 +220,9 @@ function CreateSuppressionModal({ isOpen, onClose }: { isOpen: boolean; onClose:
             <option value="interface_down">Interfaces Down</option>
             <option value="vpn_down">VPN Down</option>
             <option value="route_churn">Route Churn</option>
+            <option value="ups_on_battery">UPS On Battery</option>
+            <option value="ups_battery">UPS Battery</option>
+            <option value="ups_output">UPS Output Off / Bypass</option>
           </select>
         </div>
         <div className="form-group">

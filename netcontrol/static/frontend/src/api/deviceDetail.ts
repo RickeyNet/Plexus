@@ -143,6 +143,35 @@ export interface IpamAddressContext {
   conflict_groups?: string[];
 }
 
+/** An APC Smart-UPS's newest state, read over PowerNet-MIB by the poll. */
+export interface UpsStatus {
+  model?: string;
+  firmware?: string;
+  firmware_version?: string;
+  serial?: string;
+  output_status?: number | null;
+  output_status_label?: string;
+  battery_status?: number | null;
+  battery_status_label?: string;
+  battery_capacity_pct?: number | null;
+  runtime_minutes?: number | null;
+  output_load_pct?: number | null;
+  battery_needs_replacing?: boolean;
+  nmc_model?: string;
+  nmc_firmware?: string;
+  nmc_application?: string;
+  nmc_application_firmware?: string;
+  nmc_serial?: string;
+}
+
+/** The newest vendor-specific state of a host (`kind` '' when none). */
+export interface VendorStatus {
+  host_id: number;
+  kind: string;
+  status: UpsStatus;
+  polled_at: string;
+}
+
 // ── Hooks ──────────────────────────────────────────────────────────────────
 
 export function useMetricQuery(
@@ -162,6 +191,14 @@ export function useMetricQuery(
       });
       return apiRequest(`/metrics/query?${p}`);
     },
+    enabled: hostId != null && enabled,
+  });
+}
+
+export function useVendorStatus(hostId: number | null, enabled = true) {
+  return useQuery<VendorStatus>({
+    queryKey: ['device-vendor-status', hostId],
+    queryFn: () => apiRequest(`/monitoring/hosts/${hostId}/vendor-status`),
     enabled: hostId != null && enabled,
   });
 }

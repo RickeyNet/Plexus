@@ -163,6 +163,12 @@ DEFAULT_RULES = {
     "netcontrol/git_sources.py": 90.0,
     "netcontrol/routes/git_sources.py": 83.0,
     "routes/db/git_sources.py": 92.0,
+    # APC Smart-UPS firmware updates: the file name / update rules, the NMC
+    # CLI parsing and the Upgrades phases. Measured by tests/test_apc_ups_*.py
+    # (99%, 97%, 86%); do not lower them to land a change.
+    "netcontrol/integrations/apc/firmware.py": 95.0,
+    "netcontrol/integrations/apc/nmc_cli.py": 92.0,
+    "netcontrol/integrations/apc/upgrade.py": 80.0,
 }
 
 

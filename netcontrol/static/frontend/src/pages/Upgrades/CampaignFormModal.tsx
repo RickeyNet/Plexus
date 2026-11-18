@@ -381,6 +381,9 @@ export function CampaignFormModal({ mode, campaignId, onClose }: Props) {
             </legend>
             <p style={{ fontSize: '0.85em', opacity: 0.7, marginTop: 0 }}>
               Map model patterns to images. Patterns are matched longest-first.
+              APC Smart-UPS devices take the mapped image whose UPS ID matches
+              theirs (use the UPS ID, e.g. 1025, as the pattern). A campaign holds
+              either UPS devices or other devices, not both.
             </p>
             {imageMapRows.map((row, i) => (
               <div

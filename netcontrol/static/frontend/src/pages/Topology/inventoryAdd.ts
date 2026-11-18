@@ -86,6 +86,9 @@ export function suggestGroupPath(node: Pick<TopologyNode, 'meraki' | 'source' | 
 // Ordered: the first rule that matches the node's model/platform text wins.
 // Each rule names the device types to try, best first.
 const RULES: readonly { test: RegExp; types: readonly string[] }[] = [
+  // An APC UPS behind its Network Management Card: SNMP only. First, so a
+  // card's text ("... PF:v6.8.2 ...") is never read as another platform.
+  { test: /smart-?ups|\bapc\b.*\bups\b|management card|powernet/i, types: ['apc_ups'] },
   { test: /nx-?os|nexus/i, types: ['cisco_nxos'] },
   { test: /\bftd\b|firepower|threat defense/i, types: ['cisco_ftd'] },
   { test: /\basa\d*\b|adaptive security/i, types: ['cisco_asa'] },
