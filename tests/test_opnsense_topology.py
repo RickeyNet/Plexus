@@ -32,6 +32,7 @@ from __future__ import annotations
 import base64
 import copy
 import json
+from datetime import UTC, datetime
 
 import httpx
 import netcontrol.app as app_module  # noqa: F401 - the app the fixture serves
@@ -71,6 +72,7 @@ from netcontrol.integrations.opnsense.sample import (
     build_sample_raw,
     sample_api_answers,
 )
+from netcontrol.integrations.remote_users import DIRECTORY_KEY, apply_user_directory
 from netcontrol.integrations.software.versions import find_advisory_matches, snapshot_devices
 
 from test_meraki_topology import _CsrfClient, api  # noqa: F401 - the fixture is used by name
@@ -653,6 +655,33 @@ def test_gateways_and_tunnels_are_edges_with_their_monitor_data(snapshot):
     assert _titles(server) == ["OpenVPN server", "Connected clients"]
     assert _table(server, "Connected clients")[0]["User"] == "ana"
     assert _node(snapshot, "ovpn:server:3")["status"] == "offline"
+
+
+def test_openvpn_clients_are_the_remote_user_directory(snapshot):
+    directory = snapshot[DIRECTORY_KEY]
+    assert directory["node_id"] == FIREWALL
+    (ana,) = directory["users"]
+    assert (ana["name"], ana["status"], ana["source"]) == ("ana", "connected", "session")
+    assert ana["address"] == "192.0.2.226" and ana["public_ip"] == "198.51.100.50"
+    # The certificate's common name, when the user logged in with their own name.
+    assert ana["device"] == "ana.example"
+
+
+def test_openvpn_users_who_left_are_carried_forward_on_the_firewall():
+    first = build_snapshot(build_sample_raw())
+    raw = build_sample_raw()
+    raw["openvpn"] = [r for r in raw["openvpn"] if not r.get("is_client")]
+    second = build_snapshot(raw)
+    # Nobody connected: the directory still names the node history lands on.
+    assert second[DIRECTORY_KEY] == {"node_id": FIREWALL, "users": []}
+    now = datetime(2026, 11, 15, tzinfo=UTC)
+    apply_user_directory(first, None, now=now)
+    assert apply_user_directory(second, first, now=now) == 1
+    (row,) = _table(_node(second, FIREWALL), "All users")
+    assert (row["User"], row["Status"], row["Last VPN address"]) == ("ana", "disconnected", "192.0.2.226")
+    # No OpenVPN server at all: no directory.
+    raw["openvpn"] = [r for r in raw["openvpn"] if r.get("type") != "server"]
+    assert DIRECTORY_KEY not in build_snapshot(raw)
 
 
 def test_ipsec_child_sa_and_gateway_metric_rules():

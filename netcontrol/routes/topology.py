@@ -1,5 +1,12 @@
 """
 topology.py -- Topology visualization, discovery, and change-tracking routes.
+
+Object scope: a caller limited to selected inventory groups sees the hosts of
+those groups and the links between them, plus the neighbors those hosts
+report that are not inventory hosts (``LinkScope``); a link to a host outside
+the scope is left out, and so are the Meraki, Cato and cloud organizations.
+Discovery, acknowledgements and node positions are confined to the caller's
+groups.
 """
 
 from __future__ import annotations
@@ -10,13 +17,24 @@ import json
 import os
 import re
 import time
+from dataclasses import dataclass, field
+from typing import Any
 
 import routes.database as db
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
 import netcontrol.routes.state as state
 from netcontrol.integrations.meraki.unified import external_key, external_keys
+from netcontrol.object_scope import (
+    ObjectScope,
+    group_filter,
+    readable_host_ids,
+    request_scope,
+    require_group,
+    require_host,
+    scoped,
+)
 from netcontrol.routes.snmp import _discover_neighbors, _infer_device_category, _snmp_walk  # noqa: F401
 from netcontrol.telemetry import configure_logging, increment_metric, redact_value
 
@@ -1357,6 +1375,78 @@ async def admin_delete_topology_stp_root_policy(policy_id: int):
 # ══════════════════════════════════════════════════════════════════════════════
 
 
+def _name_key(name: str) -> str:
+    """A device name as the map matches neighbors by it (no domain, lower case)."""
+    return str(name or "").strip().lower().split(".")[0]
+
+
+# The most changes counted for a scoped caller (filtered in Python).
+_SCOPED_CHANGE_LIMIT = 10000
+
+
+@dataclass(frozen=True)
+class LinkScope:
+    """Which discovered links (and topology changes) a caller limited to
+    selected inventory groups sees: those whose source is a host it can read
+    and whose other end is either such a host or a neighbor that is no
+    inventory host. A neighbor that is a host outside the scope (by its
+    resolved id, its address or its name) is never shown, so the link to it
+    is left out."""
+
+    read_groups: frozenset[int]
+    read_hosts: frozenset[int]
+    hidden_ips: frozenset[str] = field(default_factory=frozenset)
+    hidden_names: frozenset[str] = field(default_factory=frozenset)
+
+    def visible(self, link: dict) -> bool:
+        source = link.get("source_host_id")
+        if source is None or int(source) not in self.read_hosts:
+            return False
+        target = link.get("target_host_id")
+        if target:
+            return int(target) in self.read_hosts
+        if str(link.get("target_ip") or "").strip() in self.hidden_ips:
+            return False
+        return _name_key(link.get("target_device_name") or "") not in self.hidden_names
+
+
+async def link_scope(scope: ObjectScope) -> LinkScope | None:
+    """The ``LinkScope`` of a scoped caller; ``None`` (no filter) for an
+    unrestricted one."""
+    if scope.unrestricted:
+        return None
+    read_hosts = frozenset((await scope.reach()).read_hosts)
+    hosts = await db.get_all_hosts()
+    visible_names = {_name_key(h.get("hostname") or "") for h in hosts if int(h["id"]) in read_hosts}
+    hidden = [h for h in hosts if int(h["id"]) not in read_hosts]
+    return LinkScope(
+        read_groups=scope.read_groups,
+        read_hosts=read_hosts,
+        hidden_ips=frozenset(ip for h in hidden if (ip := str(h.get("ip_address") or "").strip())),
+        # A name an in-scope host also has resolves to that host.
+        hidden_names=frozenset(
+            name for h in hidden if (name := _name_key(h.get("hostname") or "")) and name not in visible_names
+        ),
+    )
+
+
+async def _scoped_changes(links: LinkScope, *, unacknowledged_only: bool, limit: int) -> list[dict]:
+    """The topology changes a scoped caller sees: of its hosts, not naming a
+    host outside its scope."""
+    rows = await db.get_topology_changes(
+        unacknowledged_only=unacknowledged_only, limit=limit, group_ids=links.read_groups
+    )
+    return [row for row in rows if links.visible(row)]
+
+
+async def _change_count(links: LinkScope | None) -> int:
+    """The unacknowledged topology changes the caller sees (``links``: a
+    scoped caller's ``LinkScope``, ``None`` for an unrestricted one)."""
+    if links is None:
+        return await db.get_topology_changes_count(unacknowledged_only=True)
+    return len(await _scoped_changes(links, unacknowledged_only=True, limit=_SCOPED_CHANGE_LIMIT))
+
+
 # Assembled-graph cache. Building the topology graph is the heaviest handler on
 # the request path (~9 DB round-trips + O(nodes*subnets) IPAM prefix matching +
 # dedup passes), and on SQLite it serializes behind the global access lock. The
@@ -1366,7 +1456,8 @@ async def admin_delete_topology_stp_root_policy(policy_id: int):
 # concurrent misses (e.g. several tabs opening at once) into one build.
 # invalidate_topology_cache() is called when discovery rewrites links or a user
 # acknowledges changes; the short TTL bounds staleness otherwise.
-_TOPOLOGY_CACHE: dict[int | None, tuple[float, dict]] = {}
+# A scoped caller's graph is cached under (group_id, its readable groups).
+_TOPOLOGY_CACHE: dict[Any, tuple[float, dict]] = {}
 _TOPOLOGY_CACHE_TTL = 15.0  # seconds
 _topology_cache_lock = asyncio.Lock()
 
@@ -1377,29 +1468,48 @@ def invalidate_topology_cache() -> None:
 
 
 @router.get("/api/topology")
-async def get_topology(group_id: int | None = Query(default=None)):
+@scoped("list")
+async def get_topology(group_id: int | None = Query(default=None), request: Request = None):  # type: ignore[assignment]
     """Return topology graph data (nodes + edges) for vis-network rendering.
 
-    Served from a short-TTL per-group cache (see _TOPOLOGY_CACHE)."""
+    Served from a short-TTL per-group cache (see _TOPOLOGY_CACHE). A scoped
+    caller gets the graph of its inventory groups (``LinkScope``)."""
+    scope = await request_scope(request)
+    if scope.restricted and group_id is not None:
+        await require_group(request, group_id)
+    return await topology_graph(group_id, scope)
+
+
+async def topology_graph(group_id: int | None, scope: ObjectScope | None = None) -> dict:
+    """The topology graph of ``group_id`` (every group when ``None``) as
+    ``scope`` may see it (``None``: everything), from the TTL cache."""
+    restricted = scope is not None and scope.restricted
+    key: Any = (group_id, scope.read_groups) if scope is not None and restricted else group_id
     now = time.monotonic()
-    hit = _TOPOLOGY_CACHE.get(group_id)
+    hit = _TOPOLOGY_CACHE.get(key)
     if hit is not None and now - hit[0] < _TOPOLOGY_CACHE_TTL:
         return hit[1]
     async with _topology_cache_lock:
         # Re-check: a request that held the lock ahead of us may have just built it.
-        hit = _TOPOLOGY_CACHE.get(group_id)
+        hit = _TOPOLOGY_CACHE.get(key)
         if hit is not None and time.monotonic() - hit[0] < _TOPOLOGY_CACHE_TTL:
             return hit[1]
-        result = await _build_topology(group_id)
-        _TOPOLOGY_CACHE[group_id] = (time.monotonic(), result)
+        if scope is not None and restricted:
+            result = await _build_topology(group_id, await link_scope(scope))
+        else:
+            result = await _build_topology(group_id)
+        _TOPOLOGY_CACHE[key] = (time.monotonic(), result)
         return result
 
 
-async def _build_topology(group_id: int | None) -> dict:
+async def _build_topology(group_id: int | None, links_scope: LinkScope | None = None) -> dict:
     """Assemble the topology graph (nodes + edges + change count) from the DB.
-    Uncached; called by get_topology behind the TTL cache."""
+    Uncached; called by get_topology behind the TTL cache. ``links_scope``:
+    only what a scoped caller sees (and no Meraki, Cato or cloud sources)."""
     try:
         links = await db.get_topology_links(group_id)
+        if links_scope is not None:
+            links = [link for link in links if links_scope.visible(link)]
 
         # Build node set from hosts in groups + external neighbors
         nodes_by_id: dict[str | int, dict] = {}
@@ -1436,6 +1546,8 @@ async def _build_topology(group_id: int | None) -> dict:
                 await _db.close()
             for row in rows:
                 h = dict(row)
+                if links_scope is not None and int(h["id"]) not in links_scope.read_hosts:
+                    continue
                 if h["id"] not in existing_ids:
                     hosts.append(h)
                     existing_ids.add(h["id"])
@@ -1490,7 +1602,7 @@ async def _build_topology(group_id: int | None) -> dict:
                 util_map[(stat["host_id"], stat["if_name"])] = util
 
         # Fetch unacknowledged change count
-        change_count = await db.get_topology_changes_count(unacknowledged_only=True)
+        change_count = await _change_count(links_scope)
 
         # Build edges + external nodes
         # Deduplicate bidirectional links: when both A→B and B→A are
@@ -1673,7 +1785,7 @@ async def _build_topology(group_id: int | None) -> dict:
         # Meraki organizations join the all-groups view (their devices belong
         # to no inventory group). Best-effort: a problem with Meraki data must
         # never take the SNMP-discovered map down with it.
-        if group_id is None:
+        if group_id is None and links_scope is None:
             try:
                 await _merge_meraki(nodes_by_id, edges, _host_node, _dup_host_map, _ext_to_host, _ip_to_host)
             except Exception as exc:
@@ -1850,10 +1962,25 @@ async def _get_util_map_and_links(group_id: int | None) -> tuple[list, dict]:
         return data
 
 
+async def _visible_links(request: Any, group_id: int | None) -> LinkScope | None:
+    """For a scoped caller: 404 unless ``group_id`` (when given) is readable,
+    and the ``LinkScope`` its links are filtered by; ``None`` when unrestricted."""
+    scope = await request_scope(request)
+    if scope.unrestricted:
+        return None
+    if group_id is not None:
+        await require_group(request, group_id)
+    return await link_scope(scope)
+
+
 @router.get("/api/topology/utilization")
-async def get_topology_utilization(group_id: int | None = Query(None)):
+@scoped("list")
+async def get_topology_utilization(group_id: int | None = Query(None), request: Request = None):  # type: ignore[assignment]
     """Return lightweight utilization data for all topology edges."""
+    links_scope = await _visible_links(request, group_id)
     links, util_map = await _get_util_map_and_links(group_id)
+    if links_scope is not None:
+        links = [link for link in links if links_scope.visible(link)]
 
     edges = []
     for link in links:
@@ -1873,11 +2000,15 @@ async def get_topology_utilization(group_id: int | None = Query(None)):
 
 
 @router.get("/api/topology/utilization/stream")
+@scoped("list")
 async def stream_topology_utilization(
     group_id: int | None = Query(None),
     interval: int = Query(30, ge=5, le=300),
+    request: Request = None,  # type: ignore[assignment]
 ):
     """SSE endpoint that pushes utilization updates at regular intervals."""
+    # The caller's scope is read once, when the stream opens.
+    links_scope = await _visible_links(request, group_id)
 
     async def _event_gen():
         try:
@@ -1889,6 +2020,8 @@ async def stream_topology_utilization(
 
                 edges = []
                 for link in links:
+                    if links_scope is not None and not links_scope.visible(link):
+                        continue
                     src_id = link["source_host_id"]
                     src_iface = link.get("source_interface", "")
                     util_data = util_map.get((src_id, src_iface))
@@ -1911,13 +2044,24 @@ async def stream_topology_utilization(
     return StreamingResponse(_event_gen(), media_type="text/event-stream")
 
 
+async def _discoverable_groups(request: Any) -> list[dict]:
+    """The inventory groups a run over "all groups" covers: every group, or
+    for a scoped caller the groups it can change."""
+    groups = await db.get_all_groups()
+    scope = await request_scope(request)
+    if scope.unrestricted:
+        return groups
+    return [group for group in groups if scope.can_write_group(group["id"])]
+
+
 @router.post("/api/topology/discover/stream")
-async def discover_topology_stream():
+@scoped("groups")
+async def discover_topology_stream(request: Request = None):  # type: ignore[assignment]
     """Run neighbor discovery on all groups, streaming progress via SSE."""
 
     async def _event_generator():
         try:
-            groups = await db.get_all_groups()
+            groups = await _discoverable_groups(request)
             # (group, SNMP-enabled hosts, their configs by host id) per group
             work: list[tuple[dict, list[dict], dict[int, dict]]] = []
             for group in groups:
@@ -2025,8 +2169,11 @@ async def discover_topology_stream():
 
 
 @router.post("/api/topology/discover/{group_id}")
-async def discover_topology_for_group(group_id: int):
+@scoped("group")
+async def discover_topology_for_group(group_id: int, request: Request = None):  # type: ignore[assignment]
     """Run CDP/LLDP neighbor discovery on all hosts in a group."""
+    if (await request_scope(request)).restricted:
+        await require_group(request, group_id, write=True)
     try:
         group = await db.get_group(group_id)
         if not group:
@@ -2140,10 +2287,11 @@ async def discover_topology_for_group(group_id: int):
 
 
 @router.post("/api/topology/discover")
-async def discover_topology_all():
+@scoped("groups")
+async def discover_topology_all(request: Request = None):  # type: ignore[assignment]
     """Run CDP/LLDP neighbor discovery on all groups."""
     try:
-        groups = await db.get_all_groups()
+        groups = await _discoverable_groups(request)
         total_hosts = 0
         total_links = 0
         total_errors = 0
@@ -2227,10 +2375,13 @@ async def discover_topology_all():
 
 
 @router.post("/api/topology/discover/{group_id}/stream")
-async def discover_topology_for_group_stream(group_id: int):
+@scoped("group")
+async def discover_topology_for_group_stream(group_id: int, request: Request = None):  # type: ignore[assignment]
     """Run neighbor discovery on a single group, streaming progress via SSE."""
 
     # Validate upfront before starting the stream
+    if (await request_scope(request)).restricted:
+        await require_group(request, group_id, write=True)
     group = await db.get_group(group_id)
     if not group:
         raise HTTPException(status_code=404, detail="Group not found")
@@ -2343,13 +2494,19 @@ async def discover_topology_for_group_stream(group_id: int):
 
 
 @router.get("/api/topology/host/{host_id}")
-async def get_host_topology(host_id: int):
+@scoped("host")
+async def get_host_topology(host_id: int, request: Request = None):  # type: ignore[assignment]
     """Return topology links for a specific host."""
+    links_scope = await _visible_links(request, None)
     try:
-        host = await db.get_host(host_id)
+        host: dict | None = (
+            await require_host(request, host_id) if links_scope is not None else await db.get_host(host_id)
+        )
         if not host:
             raise HTTPException(status_code=404, detail="Host not found")
         links = await db.get_topology_links_for_host(host_id)
+        if links_scope is not None:
+            links = [link for link in links if links_scope.visible(link)]
         return {"host": host, "links": links}
     except HTTPException:
         raise
@@ -2359,13 +2516,20 @@ async def get_host_topology(host_id: int):
 
 
 @router.get("/api/topology/changes")
+@scoped("list")
 async def get_topology_changes(
-    unacknowledged: bool = Query(default=True), limit: int = Query(default=100, ge=1, le=10000)
+    unacknowledged: bool = Query(default=True),
+    limit: int = Query(default=100, ge=1, le=10000),
+    request: Request = None,  # type: ignore[assignment]
 ):
     """Return recent topology changes (added/removed links)."""
+    links_scope = await _visible_links(request, None)
     try:
-        changes = await db.get_topology_changes(unacknowledged_only=unacknowledged, limit=limit)
-        count = await db.get_topology_changes_count(unacknowledged_only=True)
+        if links_scope is not None:
+            changes = await _scoped_changes(links_scope, unacknowledged_only=unacknowledged, limit=limit)
+        else:
+            changes = await db.get_topology_changes(unacknowledged_only=unacknowledged, limit=limit)
+        count = await _change_count(links_scope)
         return {"changes": changes, "unacknowledged_count": count}
     except Exception as exc:
         LOGGER.error("topology: changes error: %s", exc, exc_info=True)
@@ -2373,10 +2537,13 @@ async def get_topology_changes(
 
 
 @router.post("/api/topology/changes/acknowledge")
-async def acknowledge_topology_changes():
-    """Mark all topology changes as acknowledged."""
+@scoped("groups")
+async def acknowledge_topology_changes(request: Request = None):  # type: ignore[assignment]
+    """Mark all topology changes as acknowledged (a scoped caller: those of
+    the hosts of the groups it can change)."""
+    scope_kwargs = await group_filter(request, write=True)
     try:
-        count = await db.acknowledge_topology_changes()
+        count = await db.acknowledge_topology_changes(**scope_kwargs)
         invalidate_topology_cache()  # refresh the unacknowledged_changes badge now
         return {"acknowledged": count}
     except Exception as exc:
@@ -2391,8 +2558,12 @@ async def _run_stp_discovery_once(
     all_vlans: bool = False,
     max_vlans: int = STP_SCAN_DEFAULT_MAX_VLANS,
     require_enabled: bool = False,
+    group_ids: frozenset[int] | None = None,
 ) -> dict:
-    """Run STP snapshot collection across one group or all SNMP-enabled groups."""
+    """Run STP snapshot collection across one group or all SNMP-enabled groups.
+    ``group_ids``: only these groups (a scoped caller's writable groups), and
+    the unacknowledged events counted over them."""
+    count_kwargs = {} if group_ids is None else {"group_ids": group_ids}
     if require_enabled and not state.STP_DISCOVERY_CONFIG.get("enabled"):
         return {
             "enabled": False,
@@ -2404,7 +2575,7 @@ async def _run_stp_discovery_once(
             "vlan_id": None,
             "all_vlans": False,
             "vlans_scanned": [],
-            "unacknowledged_events": await db.get_stp_topology_events_count(unacknowledged_only=True),
+            "unacknowledged_events": await db.get_stp_topology_events_count(unacknowledged_only=True, **count_kwargs),
         }
 
     group_filter = group_id if (group_id is not None and int(group_id) > 0) else None
@@ -2419,6 +2590,8 @@ async def _run_stp_discovery_once(
         groups = [group]
     else:
         groups = await db.get_all_groups()
+    if group_ids is not None:
+        groups = [group for group in groups if int(group["id"]) in group_ids]
 
     try:
         policy_rows = await db.get_stp_root_policies(enabled_only=True, limit=10000)
@@ -2535,7 +2708,7 @@ async def _run_stp_discovery_once(
                 updated_hosts += 1
             total_errors += int(err_count or 0)
 
-    unacknowledged = await db.get_stp_topology_events_count(unacknowledged_only=True)
+    unacknowledged = await db.get_stp_topology_events_count(unacknowledged_only=True, **count_kwargs)
     return {
         "enabled": True,
         "groups_scanned": groups_scanned,
@@ -2552,21 +2725,31 @@ async def _run_stp_discovery_once(
 
 
 @router.post("/api/topology/stp/discover")
+@scoped("groups")
 async def discover_topology_stp(
     group_id: int | None = Query(default=None),
     vlan_id: int = Query(default=1, ge=0, le=4094),
     all_vlans: bool = Query(default=False),
     max_vlans: int = Query(default=STP_SCAN_DEFAULT_MAX_VLANS, ge=1, le=256),
+    request: Request = None,  # type: ignore[assignment]
 ):
-    """Poll Bridge-MIB STP state for all SNMP-enabled hosts (or one group)."""
+    """Poll Bridge-MIB STP state for all SNMP-enabled hosts (or one group);
+    a scoped caller polls the groups it can change."""
+    group_id_int = _safe_int(group_id, default=0) if group_id is not None else 0
+    scope_kwargs: dict[str, Any] = {}
+    scope = await request_scope(request)
+    if scope.restricted:
+        if group_id_int > 0:
+            await require_group(request, group_id_int, write=True)
+        scope_kwargs["group_ids"] = scope.write_groups
     try:
-        group_id_int = _safe_int(group_id, default=0) if group_id is not None else 0
         return await _run_stp_discovery_once(
             group_id=group_id_int if group_id_int > 0 else None,
             vlan_id=max(0, min(4094, _safe_int(vlan_id, default=1))),
             all_vlans=_as_bool(all_vlans, default=False),
             max_vlans=max(1, min(256, _safe_int(max_vlans, default=STP_SCAN_DEFAULT_MAX_VLANS))),
             require_enabled=False,
+            **scope_kwargs,
         )
     except HTTPException:
         raise
@@ -2576,19 +2759,28 @@ async def discover_topology_stp(
 
 
 @router.get("/api/topology/stp")
+@scoped("list")
 async def get_topology_stp_state(
     group_id: int | None = Query(default=None),
     host_id: int | None = Query(default=None),
     vlan_id: int = Query(default=1, ge=1, le=4094),
     limit: int = Query(default=5000, ge=1, le=20000),
+    request: Request = None,  # type: ignore[assignment]
 ):
     """Return latest STP state rows for topology overlay."""
+    scope_kwargs = await group_filter(request)
+    if scope_kwargs:
+        if group_id is not None:
+            await require_group(request, group_id)
+        if host_id is not None:
+            await require_host(request, host_id)
     try:
         rows = await db.get_stp_port_states(
             group_id=group_id,
             host_id=host_id,
             vlan_id=vlan_id,
             limit=limit,
+            **scope_kwargs,
         )
 
         by_state: dict[str, int] = {}
@@ -2611,7 +2803,7 @@ async def get_topology_stp_state(
                         }
                     )
 
-        unacknowledged = await db.get_stp_topology_events_count(unacknowledged_only=True)
+        unacknowledged = await db.get_stp_topology_events_count(unacknowledged_only=True, **scope_kwargs)
         return {
             "vlan_id": vlan_id,
             "count": len(rows),
@@ -2628,17 +2820,21 @@ async def get_topology_stp_state(
 
 
 @router.get("/api/topology/stp/events")
+@scoped("list")
 async def get_topology_stp_events(
     unacknowledged: bool = Query(default=True),
     limit: int = Query(default=200, ge=1, le=5000),
+    request: Request = None,  # type: ignore[assignment]
 ):
     """Return recent STP events (root/state/topology changes)."""
+    scope_kwargs = await group_filter(request)
     try:
         events = await db.get_stp_topology_events(
             unacknowledged_only=unacknowledged,
             limit=limit,
+            **scope_kwargs,
         )
-        count = await db.get_stp_topology_events_count(unacknowledged_only=True)
+        count = await db.get_stp_topology_events_count(unacknowledged_only=True, **scope_kwargs)
         return {"events": events, "unacknowledged_count": count}
     except Exception as exc:
         LOGGER.error("topology stp: events query failed: %s", exc, exc_info=True)
@@ -2646,31 +2842,51 @@ async def get_topology_stp_events(
 
 
 @router.post("/api/topology/stp/events/acknowledge")
-async def acknowledge_topology_stp_events():
-    """Mark all unacknowledged STP events as acknowledged."""
+@scoped("groups")
+async def acknowledge_topology_stp_events(request: Request = None):  # type: ignore[assignment]
+    """Mark all unacknowledged STP events as acknowledged (a scoped caller:
+    those of the hosts of the groups it can change)."""
+    scope_kwargs = await group_filter(request, write=True)
     try:
-        count = await db.acknowledge_stp_topology_events()
+        count = await db.acknowledge_stp_topology_events(**scope_kwargs)
         return {"acknowledged": count}
     except Exception as exc:
         LOGGER.error("topology stp: acknowledge failed: %s", exc, exc_info=True)
         raise HTTPException(status_code=500, detail="An internal error occurred.")
 
 
+def _host_node_id(node_id: Any) -> int | None:
+    """The host id a saved position's node id names (``None``: not a host)."""
+    text = str(node_id).strip()
+    return int(text) if text.isdigit() else None
+
+
 @router.get("/api/topology/positions")
-async def get_topology_positions():
-    """Return saved node positions."""
+@scoped("list")
+async def get_topology_positions(request: Request = None):  # type: ignore[assignment]
+    """Return saved node positions (a scoped caller: of the hosts it can read)."""
+    hosts = await readable_host_ids(request)
     try:
-        return await db.get_topology_positions()
+        positions = await db.get_topology_positions()
+        if hosts is not None:
+            positions = {k: v for k, v in positions.items() if _host_node_id(k) in hosts}
+        return positions
     except Exception as exc:
         LOGGER.error("topology: get positions error: %s", exc, exc_info=True)
         raise HTTPException(status_code=500, detail="An internal error occurred.")
 
 
 @router.put("/api/topology/positions")
-async def save_topology_positions(payload: dict):
-    """Save/update node positions. Body: {positions: {nodeId: {x, y}}}."""
+@scoped("hosts")
+async def save_topology_positions(payload: dict, request: Request = None):  # type: ignore[assignment]
+    """Save/update node positions. Body: {positions: {nodeId: {x, y}}}. The
+    layout is shared: a scoped caller places only the hosts it can read
+    (other nodes it sends are skipped)."""
+    hosts = await readable_host_ids(request)
     try:
         positions = payload.get("positions", {})
+        if hosts is not None and isinstance(positions, dict):
+            positions = {k: v for k, v in positions.items() if _host_node_id(k) in hosts}
         count = await db.save_topology_positions(positions)
         return {"saved": count}
     except Exception as exc:
@@ -2679,10 +2895,17 @@ async def save_topology_positions(payload: dict):
 
 
 @router.delete("/api/topology/positions")
-async def delete_topology_positions():
-    """Delete all saved node positions (reset layout)."""
+@scoped("hosts")
+async def delete_topology_positions(request: Request = None):  # type: ignore[assignment]
+    """Delete all saved node positions (reset layout); a scoped caller resets
+    those of the hosts it can read."""
+    hosts = await readable_host_ids(request)
     try:
-        count = await db.delete_topology_positions()
+        if hosts is not None:
+            saved = await db.get_topology_positions()
+            count = await db.save_topology_positions({k: None for k in saved if _host_node_id(k) in hosts})
+        else:
+            count = await db.delete_topology_positions()
         return {"deleted": count}
     except Exception as exc:
         LOGGER.error("topology: delete positions error: %s", exc, exc_info=True)

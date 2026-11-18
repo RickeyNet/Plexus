@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { AuthStatus } from '@/api/auth';
-import { canUseFeature, resolveTab, visibleTabs, type GatedTab } from './tabGating';
+import { canUseFeature, canWriteFeature, resolveTab, visibleTabs, type GatedTab } from './tabGating';
 
 const TABS: GatedTab<'a' | 'b' | 'c'>[] = [
   { key: 'a', feature: 'alpha' },
@@ -50,5 +50,18 @@ describe('canUseFeature', () => {
     expect(canUseFeature('topology', auth({ role: 'admin' }))).toBe(true);
     expect(canUseFeature('topology', auth({ role: 'admin', feature_visibility_hidden: ['topology'] }))).toBe(false);
     expect(canUseFeature('topology', undefined)).toBe(false);
+  });
+});
+
+describe('canWriteFeature', () => {
+  it('needs the write key, and no read-only object scope', () => {
+    expect(canWriteFeature('ipam', auth({ feature_access: ['ipam', 'ipam.write'] }))).toBe(true);
+    expect(canWriteFeature('ipam', auth({ feature_access: ['ipam'] }))).toBe(false);
+    const readOnly = { restricted: true, write_group_ids: [], read_only: true };
+    expect(canWriteFeature('ipam', auth({ feature_access: ['ipam', 'ipam.write'], object_scope: readOnly }))).toBe(false);
+    const writable = { restricted: true, write_group_ids: [3], read_only: false };
+    expect(canWriteFeature('ipam', auth({ feature_access: ['ipam', 'ipam.write'], object_scope: writable }))).toBe(true);
+    expect(canWriteFeature('ipam', auth({ role: 'admin' }))).toBe(true);
+    expect(canWriteFeature('ipam', undefined)).toBe(false);
   });
 });

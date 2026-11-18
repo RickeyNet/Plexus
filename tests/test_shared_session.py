@@ -193,6 +193,55 @@ def test_open_session_calls_enable_when_secret_present(fake_netmiko):
     assert conn.enable_called == 1
 
 
+class _NoEnableMode(_FakeNetConnect):
+    """A device without a Cisco-style enable mode, as Netmiko reports it."""
+
+    def enable(self):
+        self.enable_called += 1
+        raise ValueError("Failed to enter enable mode. Please ensure you pass the 'secret' argument to ConnectHandler.")
+
+
+def _no_enable_mode_netmiko(monkeypatch, holder):
+    def _connect_handler(**kwargs):
+        conn = _NoEnableMode(**kwargs)
+        holder["conn"] = conn
+        return conn
+
+    monkeypatch.setattr(sys.modules["netmiko"], "ConnectHandler", _connect_handler)
+
+
+def test_open_session_enable_failure_closes_session_and_raises(fake_netmiko, monkeypatch):
+    from netcontrol.routes.shared import _open_netmiko_session
+
+    _no_enable_mode_netmiko(monkeypatch, fake_netmiko)
+    host = {"ip_address": "192.0.2.1", "device_type": "cisco_xe"}
+    with pytest.raises(ValueError, match="enable mode"):
+        _open_netmiko_session(host, {"username": "u", "password": "p", "secret": "s"})
+    assert fake_netmiko["conn"].disconnect_called == 1
+
+
+def test_open_session_enable_optional_keeps_user_mode(fake_netmiko, monkeypatch):
+    from netcontrol.routes.shared import _open_netmiko_session
+
+    _no_enable_mode_netmiko(monkeypatch, fake_netmiko)
+    host = {"ip_address": "192.0.2.1", "device_type": "cisco_xe"}
+    conn, _ = _open_netmiko_session(host, {"username": "u", "password": "p", "secret": "s"}, enable_optional=True)
+    assert conn.enable_called == 1
+    assert conn.disconnect_called == 0  # still usable for read-only commands
+
+
+def test_run_show_command_passes_enable_optional(fake_netmiko, monkeypatch):
+    from netcontrol.routes.shared import _run_show_command
+
+    _no_enable_mode_netmiko(monkeypatch, fake_netmiko)
+    host = {"ip_address": "192.0.2.1", "device_type": "cisco_xe"}
+    out = asyncio.run(
+        _run_show_command(host, {"username": "u", "password": "p", "secret": "s"}, "show version", enable_optional=True)
+    )
+    assert out == "<output of show version>"
+    assert fake_netmiko["conn"].disconnect_called == 1
+
+
 def test_open_session_skips_enable_when_no_secret(fake_netmiko):
     from netcontrol.routes.shared import _open_netmiko_session
 

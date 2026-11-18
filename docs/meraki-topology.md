@@ -363,7 +363,9 @@ Catalyst core, or a cloud-monitored Catalyst that Plexus manages directly.
 one from the map: the Topology toolbar's **Add to inventory…** lists every
 device on the current map that is not in inventory and has an IP address
 (CDP/LLDP neighbors reported by Meraki devices, external neighbors from SNMP
-discovery, cloud instances), one row per address. Each row suggests a device
+discovery, cloud instances), one row per address. What is no device is left
+out: a WAN uplink, a VPN peer or server, a cloud or VPC, a remote user. The
+map never shows one of those as an inventory host. Each row suggests a device
 type from the model or platform the map reported (`cisco C9410R` is IOS-XE,
 NX-OS is NX-OS, an unknown device is ICMP-only) that can be changed before
 adding. Tick the devices (the search box filters them; **Select all N

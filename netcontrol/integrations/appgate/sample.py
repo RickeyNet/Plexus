@@ -4,7 +4,8 @@ Lets the Appgate part of the map be previewed (and tested) without
 credentials. All addresses are private or documentation ranges that no
 other sample uses: the sites are 10.160.0.0/16 and 10.161.0.0/16, the
 client pool 10.253.0.0/22, and the users connect from 198.51.100.160/28 and
-203.0.113.160/28.
+203.0.113.160/28. Two more users have a device on-boarded but are not
+connected, so the user directory lists them without a node.
 """
 
 from __future__ import annotations
@@ -47,6 +48,9 @@ DANA_DEVICE = "0d4a0000-0001-4a00-8000-00000000da0a"
 SAM_DEVICE = "0d4a0000-0002-4a00-8000-00000000005a"
 PRIYA_DEVICE = "0d4a0000-0003-4a00-8000-00000000091a"
 SCANNER_DEVICE = "0d4a0000-0004-4a00-8000-0000000005ca"
+# On-boarded, not connected when the sample was collected.
+LEE_DEVICE = "0d4a0000-0005-4a00-8000-00000000013e"
+MARTA_DEVICE = "0d4a0000-0006-4a00-8000-0000000003a7"
 
 PEER_VERSION = 22
 APPLIANCE_VERSION = "6.4.2-37201-release"
@@ -255,7 +259,8 @@ def _session(device: str, username: str, provider: str, hostname: str, os_family
 def build_sample_raw() -> dict[str, Any]:
     """A raw collection of a three-site collective: an HQ data center with two
     Controllers, two Gateways, a Portal and a Connector; an AWS site with one
-    Gateway; a lab whose only Gateway is suspended. Four users are connected."""
+    Gateway; a lab whose only Gateway is suspended. Four users are connected;
+    two more have a device on-boarded but are not connected."""
     appliances = [
         _appliance(
             CTRL_1,
@@ -716,6 +721,42 @@ def build_sample_raw() -> dict[str, Any]:
         _session(PRIYA_DEVICE, "priya.nair", "Okta SAML", "PRIYA-DT02", "Windows", "Windows 11 Pro"),
         _session(SCANNER_DEVICE, "svc-scanner", "local", "scanner-01", "Linux", "Ubuntu 24.04"),
     ]
+    # Every device on-boarded: the four connected, a second (older) device
+    # of a connected user, and two users who are not connected now.
+    onboarded_devices = [
+        {**session, "onBoardedAt": "2026-08-03T09:00:00Z", "lastSeenAt": "2026-10-01T09:29:00Z"} for session in sessions
+    ] + [
+        _session(
+            "0d4a0000-0007-4a00-8000-0000000d0a11",
+            "dana.reyes",
+            "Okta SAML",
+            "DANA-OLD-LT",
+            "Windows",
+            "Windows 10 Enterprise",
+            onBoardedAt="2025-11-20T14:00:00Z",
+            lastSeenAt="2026-06-30T16:45:00Z",
+        ),
+        _session(
+            LEE_DEVICE,
+            "lee.moreau@example.com",
+            "Okta SAML",
+            "LEE-LT07",
+            "Windows",
+            "Windows 11 Enterprise",
+            onBoardedAt="2026-07-14T08:10:00Z",
+            lastSeenAt="2026-09-28T17:12:00Z",
+        ),
+        _session(
+            MARTA_DEVICE,
+            "marta.lind",
+            "local",
+            "marta-mba",
+            "macOS",
+            "macOS 15.5",
+            onBoardedAt="2026-05-02T12:30:00Z",
+            lastSeenAt="2026-09-15T11:05:00Z",
+        ),
+    ]
     employees = ["Employees", "Device posture"]
     session_details = {
         _dn(DANA_DEVICE, "dana.reyes", "Okta SAML"): {
@@ -839,6 +880,7 @@ def build_sample_raw() -> dict[str, Any]:
         "sessions_source": "active-sessions",
         "session_details": session_details,
         "sessions_skipped": 0,
+        "onboarded_devices": onboarded_devices,
         "license": {"type": "Production", "users": 500, "portalUsers": 50, "sites": 10, "expiration": "2027-06-30"},
         "global_settings": {
             "collectiveName": "Acme Appgate",

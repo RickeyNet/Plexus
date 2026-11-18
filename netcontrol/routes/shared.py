@@ -445,13 +445,20 @@ def _compute_config_diff(
     return diff_text, added, removed
 
 
-def _open_netmiko_session(host: dict, credentials: dict, *, autodetect: bool = True, **connect_options):
+def _open_netmiko_session(
+    host: dict, credentials: dict, *, autodetect: bool = True, enable_optional: bool = False, **connect_options
+):
     """Open a Netmiko session, autodetecting device_type when generic.
 
     ``autodetect=False`` opens one session with the given type and skips the
     SSHDetect login (discovery reads ``show version`` itself and classifies
     the OS from it). ``connect_options`` (``conn_timeout``, ``auth_timeout``
     ...) go to Netmiko's ``ConnectHandler``.
+
+    With an enable secret the session enters enable mode; a failure there
+    closes the session and raises, unless ``enable_optional`` (a read-only
+    caller that does not know the platform yet, such as discovery), which
+    keeps the session in user mode instead.
 
     Returns ``(connection, resolved_device_type)``.  The caller is
     responsible for ``disconnect()``.
@@ -512,7 +519,17 @@ def _open_netmiko_session(host: dict, credentials: dict, *, autodetect: bool = T
     session_device = {**device, "device_type": session_platform(device["device_type"])}
     net_connect = netmiko.ConnectHandler(**session_device, **connect_options)
     if device["secret"]:
-        net_connect.enable()
+        try:
+            net_connect.enable()
+        except Exception as exc:
+            if not enable_optional:
+                # Close the session before raising, or it leaks until GC.
+                try:
+                    net_connect.disconnect()
+                except Exception:
+                    LOGGER.debug("disconnect after failed enable failed for %s", device["host"])
+                raise
+            LOGGER.info("No enable mode on %s (%s); continuing in user mode", device["host"], type(exc).__name__)
     return net_connect, device["device_type"]
 
 
@@ -606,18 +623,26 @@ async def _capture_running_config(host: dict, credentials: dict) -> str:
 
 
 async def _run_show_command(
-    host: dict, credentials: dict, command: str, *, autodetect: bool = True, **connect_options
+    host: dict,
+    credentials: dict,
+    command: str,
+    *,
+    autodetect: bool = True,
+    enable_optional: bool = False,
+    **connect_options,
 ) -> str:
     """SSH to a device and run a single show command via Netmiko.
 
     The command is supplied by the caller verbatim - this helper only
     handles the SSH session lifecycle and autodetect.  Returns the raw
-    command output string. ``autodetect`` and ``connect_options`` are
-    passed to :func:`_open_netmiko_session`.
+    command output string. ``autodetect``, ``enable_optional`` and
+    ``connect_options`` are passed to :func:`_open_netmiko_session`.
     """
 
     def _do_run():
-        conn, _ = _open_netmiko_session(host, credentials, autodetect=autodetect, **connect_options)
+        conn, _ = _open_netmiko_session(
+            host, credentials, autodetect=autodetect, enable_optional=enable_optional, **connect_options
+        )
         try:
             return conn.send_command(command)
         finally:

@@ -7,6 +7,10 @@ Provides:
   - Billing period generation with overage detection
   - CSV export for invoices
   - Overage alerting integration
+
+Object scope: a billing circuit (and its periods) follows its host; lists,
+customers, exports and the summary cover only circuits on hosts in the
+caller's scope, and generating for every circuit generates for those only.
 """
 
 from __future__ import annotations
@@ -22,6 +26,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
+from netcontrol.object_scope import filter_rows, readable_host_ids, require_new_row, require_row, scoped
 from netcontrol.routes.shared import _audit, _corr_id, _get_session
 from netcontrol.telemetry import configure_logging
 
@@ -266,26 +271,47 @@ def _format_bps(bps: float) -> str:
 # ═════════════════════════════════════════════════════════════════════════════
 
 
+async def _circuit(request: Request, circuit_id: int, *, write: bool = False) -> dict:
+    """The circuit; 404 when unknown or its host is outside the caller's
+    read scope, 403 on ``write`` when the host is not writable."""
+    return await require_row(
+        request, "host_record", await db.get_billing_circuit(circuit_id), write=write, not_found="Circuit not found"
+    )
+
+
+async def _period(request: Request, period_id: int, *, write: bool = False) -> dict:
+    """The billing period (scoped by its circuit's host, like ``_circuit``)."""
+    return await require_row(
+        request,
+        "host_record",
+        await db.get_billing_period(period_id),
+        write=write,
+        not_found="Billing period not found",
+    )
+
+
 @router.get("/api/billing/circuits")
+@scoped("list")
 async def list_circuits(
+    request: Request,
     customer: str | None = Query(default=None),
     host_id: int | None = Query(default=None),
     enabled: bool = Query(default=False),
 ):
     circuits = await db.list_billing_circuits(customer, host_id, enabled)
-    return {"circuits": circuits}
+    return {"circuits": await filter_rows("host_record", circuits, request)}
 
 
 @router.get("/api/billing/circuits/{circuit_id}")
-async def get_circuit(circuit_id: int):
-    circuit = await db.get_billing_circuit(circuit_id)
-    if not circuit:
-        raise HTTPException(status_code=404, detail="Circuit not found")
-    return circuit
+@scoped("host_record")
+async def get_circuit(circuit_id: int, request: Request):
+    return await _circuit(request, circuit_id)
 
 
 @router.post("/api/billing/circuits", status_code=201)
+@scoped("create")
 async def create_circuit(payload: BillingCircuitCreate, request: Request):
+    await require_new_row(request, "host_record", {"host_id": payload.host_id})
     user = getattr(request.state, "user", None) or {}
     owner = user.get("username", "") if isinstance(user, dict) else ""
     circuit = await db.create_billing_circuit(
@@ -316,10 +342,9 @@ async def create_circuit(payload: BillingCircuitCreate, request: Request):
 
 
 @router.put("/api/billing/circuits/{circuit_id}")
+@scoped("host_record")
 async def update_circuit(circuit_id: int, payload: BillingCircuitUpdate, request: Request):
-    existing = await db.get_billing_circuit(circuit_id)
-    if not existing:
-        raise HTTPException(status_code=404, detail="Circuit not found")
+    existing = await _circuit(request, circuit_id, write=True)
     updates = payload.model_dump(exclude_none=True)
     if not updates:
         return existing
@@ -336,7 +361,9 @@ async def update_circuit(circuit_id: int, payload: BillingCircuitUpdate, request
 
 
 @router.delete("/api/billing/circuits/{circuit_id}")
+@scoped("host_record")
 async def delete_circuit(circuit_id: int, request: Request):
+    await _circuit(request, circuit_id, write=True)
     deleted = await db.delete_billing_circuit(circuit_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Circuit not found")
@@ -345,8 +372,12 @@ async def delete_circuit(circuit_id: int, request: Request):
 
 
 @router.get("/api/billing/customers")
-async def list_customers():
-    return {"customers": await db.get_billing_customers()}
+@scoped("list")
+async def list_customers(request: Request):
+    if await readable_host_ids(request) is None:
+        return {"customers": await db.get_billing_customers()}
+    circuits = await filter_rows("host_record", await db.list_billing_circuits(), request)
+    return {"customers": sorted({c["customer"] for c in circuits if c.get("customer")})}
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -355,14 +386,14 @@ async def list_customers():
 
 
 @router.post("/api/billing/generate")
+@scoped("host_record")
 async def generate_billing(payload: BillingGenerateRequest, request: Request):
-    """Generate 95th percentile billing reports for one or all circuits."""
+    """Generate 95th percentile billing reports for one or all circuits
+    (a scoped caller: the circuits on hosts they may change)."""
     results = []
 
     if payload.circuit_id:
-        circuit = await db.get_billing_circuit(payload.circuit_id)
-        if not circuit:
-            raise HTTPException(status_code=404, detail="Circuit not found")
+        circuit = await _circuit(request, payload.circuit_id, write=True)
         if not circuit["enabled"]:
             raise HTTPException(status_code=400, detail="Circuit is disabled")
         period = await generate_billing_for_circuit(
@@ -377,6 +408,7 @@ async def generate_billing(payload: BillingGenerateRequest, request: Request):
             customer=payload.customer,
             enabled_only=True,
         )
+        circuits = await filter_rows("host_record", circuits, request, write=True)
         for circuit in circuits:
             try:
                 period = await generate_billing_for_circuit(
@@ -408,26 +440,30 @@ async def generate_billing(payload: BillingGenerateRequest, request: Request):
 
 
 @router.get("/api/billing/periods")
+@scoped("list")
 async def list_periods(
+    request: Request,
     circuit_id: int | None = Query(default=None),
     customer: str | None = Query(default=None),
     start_after: str | None = Query(default=None),
     limit: int = Query(default=100, ge=1, le=1000),
 ):
-    periods = await db.list_billing_periods(circuit_id, customer, start_after, limit)
+    periods = await db.list_billing_periods(
+        circuit_id, customer, start_after, limit, host_ids=await readable_host_ids(request)
+    )
     return {"periods": periods}
 
 
 @router.get("/api/billing/periods/{period_id}")
-async def get_period(period_id: int):
-    period = await db.get_billing_period(period_id)
-    if not period:
-        raise HTTPException(status_code=404, detail="Billing period not found")
-    return period
+@scoped("host_record")
+async def get_period(period_id: int, request: Request):
+    return await _period(request, period_id)
 
 
 @router.delete("/api/billing/periods/{period_id}")
+@scoped("host_record")
 async def delete_period(period_id: int, request: Request):
+    await _period(request, period_id, write=True)
     deleted = await db.delete_billing_period(period_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Billing period not found")
@@ -439,11 +475,10 @@ async def delete_period(period_id: int, request: Request):
 
 
 @router.get("/api/billing/periods/{period_id}/usage")
-async def get_period_usage(period_id: int):
+@scoped("host_record")
+async def get_period_usage(period_id: int, request: Request):
     """Return time-series samples for the billing period (for usage graphs)."""
-    period = await db.get_billing_period(period_id)
-    if not period:
-        raise HTTPException(status_code=404, detail="Billing period not found")
+    period = await _period(request, period_id)
 
     circuit = await db.get_billing_circuit(period["circuit_id"])
     if not circuit:
@@ -469,13 +504,17 @@ async def get_period_usage(period_id: int):
 
 
 @router.get("/api/billing/export/periods")
+@scoped("list")
 async def export_periods_csv(
+    request: Request,
     customer: str | None = Query(default=None),
     circuit_id: int | None = Query(default=None),
     limit: int = Query(default=500, ge=1, le=10000),
 ):
     """Export billing periods as CSV for invoicing."""
-    periods = await db.list_billing_periods(circuit_id, customer, limit=limit)
+    periods = await db.list_billing_periods(
+        circuit_id, customer, limit=limit, host_ids=await readable_host_ids(request)
+    )
     if not periods:
         return StreamingResponse(
             io.StringIO(""),
@@ -545,10 +584,11 @@ async def export_periods_csv(
 
 
 @router.get("/api/billing/summary")
-async def billing_summary(customer: str | None = Query(default=None)):
+@scoped("list")
+async def billing_summary(request: Request, customer: str | None = Query(default=None)):
     """High-level billing dashboard statistics."""
-    circuits = await db.list_billing_circuits(customer=customer)
-    periods = await db.list_billing_periods(customer=customer, limit=500)
+    circuits = await filter_rows("host_record", await db.list_billing_circuits(customer=customer), request)
+    periods = await db.list_billing_periods(customer=customer, limit=500, host_ids=await readable_host_ids(request))
 
     total_circuits = len(circuits)
     enabled_circuits = sum(1 for c in circuits if c.get("enabled"))

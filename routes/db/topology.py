@@ -231,16 +231,28 @@ async def get_topology_links(group_id: int | None = None) -> list[dict]:
         await db.close()
 
 
-async def get_topology_link_stats() -> dict:
-    """How much neighbor discovery has found, and when it last found any."""
+async def get_topology_link_stats(group_ids: Iterable[int] | None = None) -> dict:
+    """How much neighbor discovery has found, and when it last found any.
+    ``group_ids``: over the hosts in those inventory groups only."""
     db = await _dbcore.get_db(read_only=True)
     try:
-        cursor = await db.execute(
-            "SELECT COUNT(*), COUNT(DISTINCT source_host_id), MAX(discovered_at) FROM topology_links"
-        )
-        links, sources, last = await cursor.fetchone()
-        cursor = await db.execute("SELECT COUNT(*) FROM hosts")
-        (hosts,) = await cursor.fetchone()
+        if group_ids is not None:
+            scope_sql, scope_params = group_ids_condition("group_id", group_ids)
+            cursor = await db.execute(
+                "SELECT COUNT(*), COUNT(DISTINCT source_host_id), MAX(discovered_at) FROM topology_links "
+                f"WHERE source_host_id IN (SELECT id FROM hosts WHERE {scope_sql})",
+                scope_params,
+            )
+            links, sources, last = await cursor.fetchone()
+            cursor = await db.execute(f"SELECT COUNT(*) FROM hosts WHERE {scope_sql}", scope_params)
+            (hosts,) = await cursor.fetchone()
+        else:
+            cursor = await db.execute(
+                "SELECT COUNT(*), COUNT(DISTINCT source_host_id), MAX(discovered_at) FROM topology_links"
+            )
+            links, sources, last = await cursor.fetchone()
+            cursor = await db.execute("SELECT COUNT(*) FROM hosts")
+            (hosts,) = await cursor.fetchone()
         return {
             "links": int(links or 0),
             "hosts_with_links": int(sources or 0),
@@ -717,37 +729,60 @@ async def insert_topology_change(
         await db.close()
 
 
-async def get_topology_changes(unacknowledged_only: bool = False, limit: int = 100) -> list[dict]:
-    """Return recent topology changes."""
+def _source_scope(group_ids: Iterable[int] | None, column: str = "source_host_id") -> tuple[list[str], tuple]:
+    """The condition (a list of none or one clause) keeping rows whose host
+    ``column`` is a host of the inventory groups ``group_ids`` (``None``: no
+    condition)."""
+    if group_ids is None:
+        return [], ()
+    scope_sql, scope_params = group_ids_condition("group_id", group_ids)
+    return [f"{column} IN (SELECT id FROM hosts WHERE {scope_sql})"], scope_params
+
+
+async def get_topology_changes(
+    unacknowledged_only: bool = False, limit: int = 100, group_ids: Iterable[int] | None = None
+) -> list[dict]:
+    """Return recent topology changes; ``group_ids``: only those of hosts in
+    these inventory groups (before the limit)."""
     db = await _dbcore.get_db(read_only=True)
     try:
-        where = "WHERE acknowledged = 0" if unacknowledged_only else ""
+        clauses, params = _source_scope(group_ids)
+        if unacknowledged_only:
+            clauses.insert(0, "acknowledged = 0")
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         cursor = await db.execute(
             f"SELECT * FROM topology_changes {where} ORDER BY detected_at DESC LIMIT ?",
-            (limit,),
+            (*params, limit),
         )
         return rows_to_list(await cursor.fetchall())
     finally:
         await db.close()
 
 
-async def get_topology_changes_count(unacknowledged_only: bool = True) -> int:
-    """Return count of topology changes."""
+async def get_topology_changes_count(unacknowledged_only: bool = True, group_ids: Iterable[int] | None = None) -> int:
+    """Return count of topology changes; ``group_ids``: of hosts in these
+    inventory groups only."""
     db = await _dbcore.get_db(read_only=True)
     try:
-        where = "WHERE acknowledged = 0" if unacknowledged_only else ""
-        cursor = await db.execute(f"SELECT COUNT(*) FROM topology_changes {where}")
+        clauses, params = _source_scope(group_ids)
+        if unacknowledged_only:
+            clauses.insert(0, "acknowledged = 0")
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        cursor = await db.execute(f"SELECT COUNT(*) FROM topology_changes {where}", params)
         row = await cursor.fetchone()
         return row[0] if row else 0
     finally:
         await db.close()
 
 
-async def acknowledge_topology_changes() -> int:
-    """Mark all unacknowledged changes as acknowledged."""
+async def acknowledge_topology_changes(group_ids: Iterable[int] | None = None) -> int:
+    """Mark all unacknowledged changes as acknowledged; ``group_ids``: only
+    those of hosts in these inventory groups."""
     db = await _dbcore.get_db()
     try:
-        cursor = await db.execute("UPDATE topology_changes SET acknowledged = 1 WHERE acknowledged = 0")
+        clauses, params = _source_scope(group_ids)
+        where = " AND ".join(["acknowledged = 0", *clauses])
+        cursor = await db.execute(f"UPDATE topology_changes SET acknowledged = 1 WHERE {where}", params)
         await db.commit()
         return cursor.rowcount
     finally:
@@ -858,12 +893,18 @@ async def get_stp_port_states(
     host_id: int | None = None,
     vlan_id: int | None = None,
     limit: int = 5000,
+    group_ids: Iterable[int] | None = None,
 ) -> list[dict]:
-    """Return latest STP port states joined with host metadata."""
+    """Return latest STP port states joined with host metadata; ``group_ids``:
+    only hosts in these inventory groups (before the limit)."""
     db = await _dbcore.get_db(read_only=True)
     try:
         clauses: list[str] = []
         params: list = []
+        if group_ids is not None:
+            scope_sql, scope_params = group_ids_condition("h.group_id", group_ids)
+            clauses.append(scope_sql)
+            params.extend(scope_params)
         if group_id is not None:
             clauses.append("h.group_id = ?")
             params.append(group_id)
@@ -929,11 +970,18 @@ async def insert_stp_topology_event(
 async def get_stp_topology_events(
     unacknowledged_only: bool = True,
     limit: int = 200,
+    group_ids: Iterable[int] | None = None,
 ) -> list[dict]:
-    """Return STP events newest-first with host context."""
+    """Return STP events newest-first with host context; ``group_ids``: only
+    hosts in these inventory groups (before the limit)."""
     db = await _dbcore.get_db(read_only=True)
     try:
-        where_sql = "WHERE e.acknowledged = 0" if unacknowledged_only else ""
+        clauses = ["e.acknowledged = 0"] if unacknowledged_only else []
+        params: tuple = ()
+        if group_ids is not None:
+            scope_sql, params = group_ids_condition("h.group_id", group_ids)
+            clauses.append(scope_sql)
+        where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         cursor = await db.execute(
             f"""SELECT e.*, h.hostname, h.ip_address
                 FROM stp_topology_events e
@@ -941,30 +989,39 @@ async def get_stp_topology_events(
                 {where_sql}
                 ORDER BY e.created_at DESC, e.id DESC
                 LIMIT ?""",
-            (max(1, min(int(limit), 5000)),),
+            (*params, max(1, min(int(limit), 5000))),
         )
         return rows_to_list(await cursor.fetchall())
     finally:
         await db.close()
 
 
-async def get_stp_topology_events_count(unacknowledged_only: bool = True) -> int:
-    """Return count of STP events."""
+async def get_stp_topology_events_count(
+    unacknowledged_only: bool = True, group_ids: Iterable[int] | None = None
+) -> int:
+    """Return count of STP events; ``group_ids``: of hosts in these inventory
+    groups only."""
     db = await _dbcore.get_db(read_only=True)
     try:
-        where_sql = "WHERE acknowledged = 0" if unacknowledged_only else ""
-        cursor = await db.execute(f"SELECT COUNT(*) FROM stp_topology_events {where_sql}")
+        clauses, params = _source_scope(group_ids, "host_id")
+        if unacknowledged_only:
+            clauses.insert(0, "acknowledged = 0")
+        where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        cursor = await db.execute(f"SELECT COUNT(*) FROM stp_topology_events {where_sql}", params)
         row = await cursor.fetchone()
         return int(row[0]) if row else 0
     finally:
         await db.close()
 
 
-async def acknowledge_stp_topology_events() -> int:
-    """Mark all unacknowledged STP events as acknowledged."""
+async def acknowledge_stp_topology_events(group_ids: Iterable[int] | None = None) -> int:
+    """Mark all unacknowledged STP events as acknowledged; ``group_ids``: only
+    those of hosts in these inventory groups."""
     db = await _dbcore.get_db()
     try:
-        cursor = await db.execute("UPDATE stp_topology_events SET acknowledged = 1 WHERE acknowledged = 0")
+        clauses, params = _source_scope(group_ids, "host_id")
+        where = " AND ".join(["acknowledged = 0", *clauses])
+        cursor = await db.execute(f"UPDATE stp_topology_events SET acknowledged = 1 WHERE {where}", params)
         await db.commit()
         return cursor.rowcount
     finally:
@@ -2803,12 +2860,19 @@ async def get_compliance_scan_results(
     assignment_id: int | None = None,
     status: str | None = None,
     limit: int = 200,
+    *,
+    group_ids: Iterable[int] | None = None,
 ) -> list[dict]:
-    """List compliance scan results with optional filters."""
+    """List compliance scan results with optional filters. ``group_ids``
+    (object scope): only results of hosts in those inventory groups."""
     db = await _dbcore.get_db(read_only=True)
     try:
         where_clauses = []
         params: list = []
+        scope_sql, scope_params = group_ids_condition("h.group_id", group_ids)
+        if scope_sql:
+            where_clauses.append(scope_sql)
+            params.extend(scope_params)
         if host_id is not None:
             where_clauses.append("r.host_id = ?")
             params.append(host_id)
@@ -2879,31 +2943,53 @@ async def delete_old_compliance_scan_results(days: int = 90) -> int:
         await db.close()
 
 
-async def get_compliance_summary() -> dict:
-    """Return summary stats for compliance scanning."""
+async def get_compliance_summary(*, group_ids: Iterable[int] | None = None) -> dict:
+    """Return summary stats for compliance scanning. ``group_ids`` (object
+    scope): assignments of those inventory groups and results of their hosts
+    only (profiles are a shared catalogue and always counted)."""
+    group_sql, group_params = group_ids_condition("group_id", group_ids)
+    host_sql, host_params = group_ids_condition("scope_h.group_id", group_ids)
+    if group_sql:
+        # Fixed clauses, values bound.
+        assign_and = f" AND {group_sql}"
+        host_cond = f"host_id IN (SELECT scope_h.id FROM hosts scope_h WHERE {host_sql})"
+        result_where = f" WHERE {host_cond}"
+        result_and = f" AND {host_cond}"
+    else:
+        assign_and = result_where = result_and = ""
     db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute("SELECT COUNT(*) FROM compliance_profiles")
         row = await cursor.fetchone()
         total_profiles = row[0] if row else 0
 
-        cursor = await db.execute("SELECT COUNT(*) FROM compliance_profile_assignments WHERE enabled = 1")
+        cursor = await db.execute(
+            f"SELECT COUNT(*) FROM compliance_profile_assignments WHERE enabled = 1{assign_and}",  # nosec B608
+            group_params,
+        )
         row = await cursor.fetchone()
         active_assignments = row[0] if row else 0
 
-        cursor = await db.execute("SELECT COUNT(DISTINCT host_id) FROM compliance_scan_results")
+        cursor = await db.execute(
+            f"SELECT COUNT(DISTINCT host_id) FROM compliance_scan_results{result_where}",  # nosec B608
+            host_params,
+        )
         row = await cursor.fetchone()
         hosts_scanned = row[0] if row else 0
 
         cursor = await db.execute(
-            """SELECT COUNT(DISTINCT host_id) FROM compliance_scan_results
+            f"""SELECT COUNT(DISTINCT host_id) FROM compliance_scan_results
                WHERE status = 'non-compliant'
-                 AND id IN (SELECT MAX(id) FROM compliance_scan_results GROUP BY host_id, profile_id)"""
+                 AND id IN (SELECT MAX(id) FROM compliance_scan_results GROUP BY host_id, profile_id){result_and}""",  # nosec B608
+            host_params,
         )
         row = await cursor.fetchone()
         hosts_non_compliant = row[0] if row else 0
 
-        cursor = await db.execute("SELECT MAX(scanned_at) FROM compliance_scan_results")
+        cursor = await db.execute(
+            f"SELECT MAX(scanned_at) FROM compliance_scan_results{result_where}",  # nosec B608
+            host_params,
+        )
         row = await cursor.fetchone()
         last_scan_at = row[0] if row else None
 
@@ -2918,12 +3004,20 @@ async def get_compliance_summary() -> dict:
         await db.close()
 
 
-async def get_compliance_host_status(profile_id: int | None = None) -> list[dict]:
-    """Get latest compliance status per host (optionally filtered by profile)."""
+async def get_compliance_host_status(
+    profile_id: int | None = None, *, group_ids: Iterable[int] | None = None
+) -> list[dict]:
+    """Get latest compliance status per host (optionally filtered by
+    profile). ``group_ids`` (object scope): only hosts in those groups."""
     db = await _dbcore.get_db(read_only=True)
     try:
-        where_clause = "WHERE r.profile_id = ?" if profile_id is not None else ""
-        params = (profile_id,) if profile_id is not None else ()
+        clauses = ["r.profile_id = ?"] if profile_id is not None else []
+        params: tuple = (profile_id,) if profile_id is not None else ()
+        scope_sql, scope_params = group_ids_condition("h.group_id", group_ids)
+        if scope_sql:
+            clauses.append(scope_sql)
+            params = (*params, *scope_params)
+        where_clause = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         cursor = await db.execute(
             f"""SELECT r.host_id, h.hostname, h.ip_address, r.profile_id,
                        p.name as profile_name, r.status, r.total_rules,
@@ -2999,12 +3093,18 @@ async def get_risk_analyses(
     group_id: int | None = None,
     risk_level: str | None = None,
     limit: int = 100,
+    *,
+    scope_condition: tuple[str, tuple] = ("", ()),
 ) -> list[dict]:
-    """List risk analyses with optional filters."""
+    """List risk analyses with optional filters. ``scope_condition``: an
+    object scope SQL condition on alias ``r`` (``object_scope.sql_condition``)."""
     db = await _dbcore.get_db(read_only=True)
     try:
         where_clauses = []
         params: list = []
+        if scope_condition[0]:
+            where_clauses.append(scope_condition[0])
+            params.extend(scope_condition[1])
         if host_id is not None:
             where_clauses.append("r.host_id = ?")
             params.append(host_id)
@@ -3071,27 +3171,35 @@ async def delete_risk_analysis(analysis_id: int) -> None:
         await db.close()
 
 
-async def get_risk_analysis_summary() -> dict:
-    """Return summary stats for risk analyses."""
+async def get_risk_analysis_summary(*, scope_condition: tuple[str, tuple] = ("", ())) -> dict:
+    """Return summary stats for risk analyses. ``scope_condition``: an object
+    scope SQL condition on alias ``r`` (``object_scope.sql_condition``)."""
+    cond, params = scope_condition
+    # Fixed clauses, values bound.
+    where = f" WHERE {cond}" if cond else ""
+    extra = f" AND {cond}" if cond else ""
     db = await _dbcore.get_db(read_only=True)
     try:
-        cursor = await db.execute("SELECT COUNT(*) FROM risk_analyses")
+        cursor = await db.execute(f"SELECT COUNT(*) FROM risk_analyses r{where}", params)  # nosec B608
         row = await cursor.fetchone()
         total = row[0] if row else 0
 
-        cursor = await db.execute("SELECT COUNT(*) FROM risk_analyses WHERE risk_level IN ('high', 'critical')")
+        cursor = await db.execute(
+            f"SELECT COUNT(*) FROM risk_analyses r WHERE r.risk_level IN ('high', 'critical'){extra}",  # nosec B608
+            params,
+        )
         row = await cursor.fetchone()
         high_risk = row[0] if row else 0
 
-        cursor = await db.execute("SELECT COUNT(*) FROM risk_analyses WHERE approved = 1")
+        cursor = await db.execute(f"SELECT COUNT(*) FROM risk_analyses r WHERE r.approved = 1{extra}", params)  # nosec B608
         row = await cursor.fetchone()
         approved = row[0] if row else 0
 
-        cursor = await db.execute("SELECT COUNT(*) FROM risk_analyses WHERE approved = 0")
+        cursor = await db.execute(f"SELECT COUNT(*) FROM risk_analyses r WHERE r.approved = 0{extra}", params)  # nosec B608
         row = await cursor.fetchone()
         pending = row[0] if row else 0
 
-        cursor = await db.execute("SELECT MAX(created_at) FROM risk_analyses")
+        cursor = await db.execute(f"SELECT MAX(r.created_at) FROM risk_analyses r{where}", params)  # nosec B608
         row = await cursor.fetchone()
         last_analysis_at = row[0] if row else None
 
@@ -3148,11 +3256,28 @@ async def create_deployment(
         await db.close()
 
 
+def deployment_scope_condition(group_ids: Iterable[int] | None, alias: str = "d") -> tuple[str, tuple[int, ...]]:
+    """A SQL condition keeping the deployments whose inventory group and
+    every target host are in ``group_ids`` (object-level permissions, see
+    ``netcontrol.routes.deployments``). ``None``: no condition."""
+    if group_ids is None:
+        return "", ()
+    from routes.db.jobs import host_ids_json_condition
+
+    group_sql, group_params = group_ids_condition(f"{alias}.group_id", group_ids)
+    hosts_sql, hosts_params = host_ids_json_condition(f"{alias}.host_ids", group_ids)
+    return f"({group_sql} AND {hosts_sql})", (*group_params, *hosts_params)
+
+
 async def get_deployments(
     status: str | None = None,
     group_id: int | None = None,
     limit: int = 100,
+    *,
+    group_ids: Iterable[int] | None = None,
 ) -> list[dict]:
+    """Deployments, newest first. ``group_ids`` (object scope): only those
+    whose group and every target host are in those inventory groups."""
     db = await _dbcore.get_db(read_only=True)
     try:
         where_clauses = []
@@ -3163,6 +3288,10 @@ async def get_deployments(
         if group_id is not None:
             where_clauses.append("d.group_id = ?")
             params.append(group_id)
+        scope_sql, scope_params = deployment_scope_condition(group_ids)
+        if scope_sql:
+            where_clauses.append(scope_sql)
+            params.extend(scope_params)
         where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
         params.append(limit)
         cursor = await db.execute(
@@ -3260,27 +3389,49 @@ async def delete_deployment(deployment_id: int) -> None:
         await db.close()
 
 
-async def get_deployment_summary() -> dict:
+async def get_deployment_summary(*, group_ids: Iterable[int] | None = None) -> dict:
+    """Deployment counts by status. ``group_ids`` (object scope): counted
+    over the deployments ``get_deployments`` returns for those groups."""
+    scope_sql, scope_params = deployment_scope_condition(group_ids, alias="deployments")
+    if scope_sql:
+        # Fixed clauses, values bound.
+        scope_where = f" WHERE {scope_sql}"
+        scope_and = f" AND {scope_sql}"
+    else:
+        scope_where = scope_and = ""
     db = await _dbcore.get_db(read_only=True)
     try:
-        cursor = await db.execute("SELECT COUNT(*) FROM deployments")
+        cursor = await db.execute(f"SELECT COUNT(*) FROM deployments{scope_where}", scope_params)  # nosec B608
         total = (await cursor.fetchone())[0]
 
-        cursor = await db.execute("SELECT COUNT(*) FROM deployments WHERE status = 'completed'")
+        cursor = await db.execute(
+            f"SELECT COUNT(*) FROM deployments WHERE status = 'completed'{scope_and}",  # nosec B608
+            scope_params,
+        )
         completed = (await cursor.fetchone())[0]
 
         cursor = await db.execute(
-            "SELECT COUNT(*) FROM deployments WHERE status IN ('executing', 'pre-check', 'post-check')"
+            f"SELECT COUNT(*) FROM deployments WHERE status IN ('executing', 'pre-check', 'post-check'){scope_and}",  # nosec B608
+            scope_params,
         )
         active = (await cursor.fetchone())[0]
 
-        cursor = await db.execute("SELECT COUNT(*) FROM deployments WHERE status = 'rolled-back'")
+        cursor = await db.execute(
+            f"SELECT COUNT(*) FROM deployments WHERE status = 'rolled-back'{scope_and}",  # nosec B608
+            scope_params,
+        )
         rolled_back = (await cursor.fetchone())[0]
 
-        cursor = await db.execute("SELECT COUNT(*) FROM deployments WHERE status = 'failed'")
+        cursor = await db.execute(
+            f"SELECT COUNT(*) FROM deployments WHERE status = 'failed'{scope_and}",  # nosec B608
+            scope_params,
+        )
         failed = (await cursor.fetchone())[0]
 
-        cursor = await db.execute("SELECT COUNT(*) FROM deployments WHERE status = 'planning'")
+        cursor = await db.execute(
+            f"SELECT COUNT(*) FROM deployments WHERE status = 'planning'{scope_and}",  # nosec B608
+            scope_params,
+        )
         planning = (await cursor.fetchone())[0]
 
         return {

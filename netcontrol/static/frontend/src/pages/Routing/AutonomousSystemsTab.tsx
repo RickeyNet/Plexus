@@ -9,6 +9,7 @@ import { useDialogs } from '@/components/DialogProvider-context';
 import { EmptyState } from '@/components/EmptyState';
 import { LoadingState } from '@/components/LoadingState';
 import { QueryError } from '@/components/QueryError';
+import { ObjectDataPanel } from '@/components/ObjectDataPanel';
 import { clickableProps } from '@/lib/clickable';
 import { formatAsn } from '@/lib/routing';
 import { usePendingKeys } from '@/lib/usePendingKeys';
@@ -204,6 +205,7 @@ export function AutonomousSystemDetailPanel({ id }: { id: number | null }) {
         </DataTable>
       </DetailSection>
       <ChangelogPanel objectType="autonomous_system" objectId={a.id} pageSize={10} />
+      <ObjectDataPanel objectType="autonomous_system" objectId={a.id} />
     </div>
   );
 }

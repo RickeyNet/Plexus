@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
 import { groupLabel, type InventoryGroupFull, type InventoryHost } from '@/api/inventory';
+import { SETTINGS_SERVICE_CREDENTIAL } from '@/lib/credentialChoice';
 
 import {
   applyGroupOrder,
   describeSshEnrichment,
   descendantIds,
+  discoveryCredentialOptions,
   discoveredHostFacts,
   discoveredHostSshError,
   filterGroups,
@@ -206,6 +208,38 @@ describe('discovery SSH show version', () => {
     expect(describeSshEnrichment({ ...base, attempted: 0 })).toBe(
       'SSH show version (plexus-svc, service credential): no host answered on SSH.',
     );
+    expect(
+      describeSshEnrichment({ ...base, credential: 'ups-login', credential_source: 'group', attempted: 2, enriched: 2, failed: 0 }),
+    ).toBe('SSH show version (ups-login, remembered for this group): read 2 of 2 hosts.');
+    expect(
+      describeSshEnrichment({ ...base, attempted: 1, enriched: 1, failed: 0, note: 'The credential this group remembers cannot be used' }),
+    ).toBe(
+      'SSH show version (plexus-svc, service credential): read 1 of 1 host. The credential this group remembers cannot be used.',
+    );
+  });
+
+  it('sends the remembered credential choice of a scan or sync', () => {
+    // The group's credential preselected: sent (the server keeps it).
+    expect(discoveryCredentialOptions('12', false, 12)).toEqual({ credentialId: 12, useServiceCredential: false });
+    // The group's credential is not in the user's list and the default
+    // was left alone: nothing, the server decides and says why.
+    expect(discoveryCredentialOptions(SETTINGS_SERVICE_CREDENTIAL, false, 7)).toEqual({
+      credentialId: null,
+      useServiceCredential: false,
+    });
+    expect(discoveryCredentialOptions('4', false, 7)).toEqual({ credentialId: null, useServiceCredential: false });
+    // A pick is sent; the Settings placeholder tells the group to forget.
+    expect(discoveryCredentialOptions(SETTINGS_SERVICE_CREDENTIAL, true, 7)).toEqual({
+      credentialId: null,
+      useServiceCredential: true,
+    });
+    expect(discoveryCredentialOptions('4', true, 7)).toEqual({ credentialId: 4, useServiceCredential: false });
+    // No remembered credential: the default as before.
+    expect(discoveryCredentialOptions('4', false, null)).toEqual({ credentialId: 4, useServiceCredential: false });
+    expect(discoveryCredentialOptions(SETTINGS_SERVICE_CREDENTIAL, false, null)).toEqual({
+      credentialId: null,
+      useServiceCredential: true,
+    });
   });
 
   it('lists what a host reported and its SSH error', () => {

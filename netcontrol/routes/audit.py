@@ -12,6 +12,12 @@ New packs slot in by appending a class to the registry.
 The orchestrator is patterned on ``reporting._report_scheduler_loop``:
 a single background task polls for due runs (cron-style schedule) and
 also services on-demand ``POST /api/audit/runs`` triggers.
+
+Object scope: a run audits the whole estate, so accounts limited to
+selected inventory groups cannot start runs or change schedules (403); they
+read runs with the counters recomputed over the findings of their hosts,
+only their hosts' findings, the per-host endpoints of their hosts, and
+overrides of their hosts (plus global ones, read only).
 """
 
 from __future__ import annotations
@@ -24,9 +30,21 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 import routes.database as db
-from fastapi import APIRouter, Body, HTTPException, Query
+from fastapi import APIRouter, Body, HTTPException, Query, Request
 
 from netcontrol.drivers import parse_vlan_ranges
+from netcontrol.object_scope import (
+    ScopeModel,
+    filter_rows,
+    readable_host_ids,
+    refuse_scoped,
+    register_model,
+    require_host,
+    require_new_row,
+    require_row,
+    scope_exempt,
+    scoped,
+)
 from netcontrol.routes.reporting import (
     _parse_db_datetime_utc,
     _parse_schedule_interval_seconds,
@@ -39,6 +57,18 @@ LOGGER = configure_logging("plexus.audit")
 router = APIRouter()
 
 AUDIT_POLL_SECONDS = max(30, int(os.getenv("APP_AUDIT_POLL_SECONDS", "60")))
+
+# A finding override of one host, or of every host (``host_id`` NULL: read
+# by every scoped caller, changed by unrestricted callers only).
+register_model(
+    ScopeModel(
+        "audit_override",
+        {"host": "host_id"},
+        shared=True,
+        not_found="override not found",
+        description="Audit finding overrides (by host; global ones shared)",
+    )
+)
 
 
 # ── Domain types ────────────────────────────────────────────────────────────
@@ -1092,21 +1122,68 @@ async def _execute_existing_run(run_id: int, trigger: str) -> None:
 # Auth is enforced at include_router level in app.py (Depends(require_auth)
 # + feature gate), matching the reporting / mac_tracking pattern.
 
+_RUN_COUNTERS = ("findings_critical", "findings_high", "findings_medium", "findings_low", "findings_info")
+
+
+def _host_in(host_ids: frozenset[int], column: str = "host_id") -> tuple[str, tuple[int, ...]]:
+    """``column IN (...)`` for a scoped caller's hosts (``1 = 0`` for none)."""
+    ids = tuple(sorted(host_ids))
+    if not ids:
+        return "1 = 0", ()
+    return f"{column} IN ({','.join('?' * len(ids))})", ids
+
+
+async def _scope_runs(runs: list[dict], host_ids: frozenset[int] | None) -> list[dict]:
+    """For a scoped caller (``host_ids`` not None): each run's finding
+    counters recomputed over the findings of the caller's hosts, the host
+    count left out and the run summary emptied (no totals of hidden hosts)."""
+    if host_ids is None or not runs:
+        return runs
+    counts: dict[int, dict[str, int]] = {}
+    cond, params = _host_in(host_ids)
+    run_ids = tuple(int(r["id"]) for r in runs)
+    conn = await db.get_db()
+    try:
+        cursor = await conn.execute(
+            "SELECT run_id, severity, COUNT(*) FROM audit_findings "  # nosec B608 - fixed placeholders
+            f"WHERE run_id IN ({','.join('?' * len(run_ids))}) AND {cond} GROUP BY run_id, severity",
+            (*run_ids, *params),
+        )
+        for run_id, severity, n in await cursor.fetchall():
+            counts.setdefault(int(run_id), {})[str(severity)] = int(n)
+    finally:
+        await conn.close()
+    for run in runs:
+        by_sev = counts.get(int(run["id"]), {})
+        for col in _RUN_COUNTERS:
+            run[col] = by_sev.get(col.removeprefix("findings_"), 0)
+        run["findings_total"] = sum(by_sev.values())
+        run["host_count"] = None
+        if "summary_json" in run:
+            run["summary_json"] = "{}"
+        if "summary" in run:
+            run["summary"] = {}
+    return runs
+
 
 @router.post("/api/audit/runs", status_code=201)
-async def trigger_audit_run():
+@scoped("refused")
+async def trigger_audit_run(request: Request):
     """Trigger an audit run synchronously and return the resulting row.
 
     Runs in-process. For very large fleets this should be flipped to a
     queued execution via the background loop, but for v1 sync keeps the
     UX simple ("click button -> see result").
     """
+    await refuse_scoped(request)
     run_id = await run_audit(trigger="manual")
-    return await get_audit_run_detail(run_id)
+    return await get_audit_run_detail(run_id, request)
 
 
 @router.get("/api/audit/runs")
+@scoped("list")
 async def list_audit_runs(
+    request: Request,
     limit: int = Query(default=50, ge=1, le=500),
 ):
     conn = await db.get_db()
@@ -1137,13 +1214,15 @@ async def list_audit_runs(
             "findings_low",
             "findings_info",
         ]
-        return {"runs": [dict(zip(cols, r)) for r in rows]}
+        runs = [dict(zip(cols, r)) for r in rows]
     finally:
         await conn.close()
+    return {"runs": await _scope_runs(runs, await readable_host_ids(request))}
 
 
 @router.get("/api/audit/runs/{run_id}")
-async def get_audit_run_detail(run_id: int):
+@scoped("audit_run")
+async def get_audit_run_detail(run_id: int, request: Request):
     conn = await db.get_db()
     try:
         cursor = await conn.execute("SELECT * FROM audit_runs WHERE id = ?", (run_id,))
@@ -1158,17 +1237,20 @@ async def get_audit_run_detail(run_id: int):
             run["summary"] = json.loads(run.get("summary_json") or "{}")
         except Exception:
             run["summary"] = {}
-        return run
     finally:
         await conn.close()
+    return (await _scope_runs([run], await readable_host_ids(request)))[0]
 
 
 @router.get("/api/audit/runs/{run_id}/findings")
+@scoped("list")
 async def list_audit_findings(
     run_id: int,
+    request: Request,
     severity: str | None = Query(default=None),
     host_id: int | None = Query(default=None),
 ):
+    scope_hosts = await readable_host_ids(request)
     conn = await db.get_db()
     try:
         clauses = ["run_id = ?"]
@@ -1179,6 +1261,10 @@ async def list_audit_findings(
         if host_id is not None:
             clauses.append("host_id = ?")
             params.append(host_id)
+        if scope_hosts is not None:
+            cond, ids = _host_in(scope_hosts)
+            clauses.append(cond)
+            params.extend(ids)
         sql = (
             "SELECT id, run_id, host_id, rule_id, category, severity, "
             "cis_control, title, detail, evidence_json, created_at "
@@ -1220,11 +1306,13 @@ def _validate_schedule_payload(name: str, schedule: str) -> None:
 
 
 @router.get("/api/audit/schedules")
+@scope_exempt("audit schedules hold a name and an interval; no host data")
 async def list_audit_schedules():
     return {"schedules": await _list_schedules()}
 
 
 @router.get("/api/audit/schedules/{schedule_id}")
+@scope_exempt("audit schedules hold a name and an interval; no host data")
 async def get_audit_schedule(schedule_id: int):
     sched = await _get_schedule(schedule_id)
     if sched is None:
@@ -1233,7 +1321,9 @@ async def get_audit_schedule(schedule_id: int):
 
 
 @router.post("/api/audit/schedules", status_code=201)
-async def create_audit_schedule(payload: dict = Body(...)):
+@scoped("refused")
+async def create_audit_schedule(request: Request, payload: dict = Body(...)):
+    await refuse_scoped(request)
     name = str(payload.get("name") or "").strip()
     schedule = str(payload.get("schedule") or "").strip()
     enabled = bool(payload.get("enabled", True))
@@ -1243,7 +1333,9 @@ async def create_audit_schedule(payload: dict = Body(...)):
 
 
 @router.put("/api/audit/schedules/{schedule_id}")
-async def update_audit_schedule(schedule_id: int, payload: dict = Body(...)):
+@scoped("refused")
+async def update_audit_schedule(schedule_id: int, request: Request, payload: dict = Body(...)):
+    await refuse_scoped(request)
     existing = await _get_schedule(schedule_id)
     if existing is None:
         raise HTTPException(status_code=404, detail="schedule not found")
@@ -1264,7 +1356,9 @@ async def update_audit_schedule(schedule_id: int, payload: dict = Body(...)):
 
 
 @router.delete("/api/audit/schedules/{schedule_id}", status_code=204)
-async def delete_audit_schedule(schedule_id: int):
+@scoped("refused")
+async def delete_audit_schedule(schedule_id: int, request: Request):
+    await refuse_scoped(request)
     ok = await _delete_schedule(schedule_id)
     if not ok:
         raise HTTPException(status_code=404, detail="schedule not found")
@@ -1272,9 +1366,11 @@ async def delete_audit_schedule(schedule_id: int):
 
 
 @router.post("/api/audit/schedules/{schedule_id}/run-now", status_code=202)
-async def run_schedule_now(schedule_id: int):
+@scoped("refused")
+async def run_schedule_now(schedule_id: int, request: Request):
     """Enqueue an immediate run tagged with this schedule. The background
     loop picks it up on the next tick."""
+    await refuse_scoped(request)
     sched = await _get_schedule(schedule_id)
     if sched is None:
         raise HTTPException(status_code=404, detail="schedule not found")
@@ -1430,20 +1526,20 @@ def _validate_override_payload(
 
 
 @router.get("/api/audit/overrides")
-async def list_audit_overrides():
-    return {"overrides": await _list_overrides()}
+@scoped("list")
+async def list_audit_overrides(request: Request):
+    return {"overrides": await filter_rows("audit_override", await _list_overrides(), request)}
 
 
 @router.get("/api/audit/overrides/{override_id}")
-async def get_audit_override(override_id: int):
-    ovr = await _get_override(override_id)
-    if ovr is None:
-        raise HTTPException(status_code=404, detail="override not found")
-    return ovr
+@scoped("audit_override")
+async def get_audit_override(override_id: int, request: Request):
+    return await require_row(request, "audit_override", await _get_override(override_id))
 
 
 @router.post("/api/audit/overrides", status_code=201)
-async def create_audit_override(payload: dict = Body(...)):
+@scoped("create")
+async def create_audit_override(payload: dict = Body(...), request: Request = None):  # type: ignore[assignment]
     rule_id = str(payload.get("rule_id") or "").strip()
     host_id_raw = payload.get("host_id")
     host_id = int(host_id_raw) if host_id_raw is not None and host_id_raw != "" else None
@@ -1453,6 +1549,7 @@ async def create_audit_override(payload: dict = Body(...)):
     expires_raw = payload.get("expires_at")
     expires_at = str(expires_raw).strip() if expires_raw else None
     _validate_override_payload(rule_id, mode, expires_at)
+    await require_new_row(request, "audit_override", {"host_id": host_id})
     try:
         return await _create_override(
             rule_id=rule_id,
@@ -1473,7 +1570,9 @@ async def create_audit_override(payload: dict = Body(...)):
 
 
 @router.delete("/api/audit/overrides/{override_id}", status_code=204)
-async def delete_audit_override(override_id: int):
+@scoped("audit_override")
+async def delete_audit_override(override_id: int, request: Request):
+    await require_row(request, "audit_override", await _get_override(override_id), write=True)
     ok = await _delete_override(override_id)
     if not ok:
         raise HTTPException(status_code=404, detail="override not found")
@@ -1489,24 +1588,30 @@ async def delete_audit_override(override_id: int):
 
 
 @router.get("/api/hosts/{host_id}/interface-inventory")
-async def list_host_interface_inventory(host_id: int):
+@scoped("host")
+async def list_host_interface_inventory(host_id: int, request: Request):
+    await require_host(request, host_id)
     rows = await db.get_interface_inventory_for_host(host_id)
     return {"host_id": host_id, "interfaces": rows}
 
 
 @router.get("/api/hosts/{host_id}/vlans")
-async def list_host_vlans(host_id: int):
+@scoped("host")
+async def list_host_vlans(host_id: int, request: Request):
+    await require_host(request, host_id)
     rows = await db.get_vlan_definitions_for_host(host_id)
     return {"host_id": host_id, "vlans": rows}
 
 
 @router.get("/api/hosts/{host_id}/audit-findings")
-async def list_host_audit_findings(host_id: int, limit: int = Query(default=50, ge=1, le=500)):
+@scoped("host")
+async def list_host_audit_findings(host_id: int, request: Request, limit: int = Query(default=50, ge=1, le=500)):
     """Latest findings across all runs for one host (most recent first).
 
     Powers the NodeDetails Audit tab so the topology pane can surface
     every open issue for a device without needing to know a run_id.
     """
+    await require_host(request, host_id)
     conn = await db.get_db()
     try:
         cursor = await conn.execute(
@@ -1532,7 +1637,8 @@ async def list_host_audit_findings(host_id: int, limit: int = Query(default=50, 
 
 
 @router.get("/api/topology/search/hosts-by-vlan")
-async def search_hosts_by_vlan(vlan_id: int = Query(..., ge=1, le=4094)):
+@scoped("list")
+async def search_hosts_by_vlan(request: Request, vlan_id: int = Query(..., ge=1, le=4094)):
     """Return every host that carries a given VLAN, with how it carries it.
 
     Powers the topology search panel's VLAN-highlight mode. A host is
@@ -1570,9 +1676,11 @@ async def search_hosts_by_vlan(vlan_id: int = Query(..., ge=1, le=4094)):
                 entry["roles"].append(mode)
             entry["ports"].append({"name": port["interface"], "kind": mode})
 
-        return {"vlan_id": vlan_id, "hosts": list(roles.values())}
     finally:
         await conn.close()
+    scope_hosts = await readable_host_ids(request)
+    hosts = [h for h in roles.values() if scope_hosts is None or h["host_id"] in scope_hosts]
+    return {"vlan_id": vlan_id, "hosts": hosts}
 
 
 # ── Topology status overlay (Phase D) ───────────────────────────────────────
@@ -1584,7 +1692,8 @@ async def search_hosts_by_vlan(vlan_id: int = Query(..., ge=1, le=4094)):
 
 
 @router.get("/api/topology/overlay/status")
-async def topology_overlay_status():
+@scoped("list")
+async def topology_overlay_status(request: Request):
     """Return per-host status badges for the topology status overlay.
 
     For every host with at least one open finding/event/drift, returns:
@@ -1656,9 +1765,10 @@ async def topology_overlay_status():
             if cur is None or err_rank.get(sev, 99) < err_rank.get(cur, 99):
                 entry["errors_worst"] = sev
 
-        return {
-            "latest_audit_run_id": latest_run_id,
-            "hosts": list(out.values()),
-        }
     finally:
         await conn.close()
+    scope_hosts = await readable_host_ids(request)
+    return {
+        "latest_audit_run_id": latest_run_id,
+        "hosts": [h for h in out.values() if scope_hosts is None or h["host_id"] in scope_hosts],
+    }

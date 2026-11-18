@@ -63,3 +63,11 @@ export function rollbackConfirmOptions(name: string): ConfirmOptions {
     confirmLabel: 'Roll back',
   };
 }
+
+/** The deployment a link opens (`?deployment=<id>`), or null. */
+export function deploymentIdFromSearch(search: string): number | null {
+  const raw = new URLSearchParams(search).get('deployment');
+  if (!raw || !/^\d+$/.test(raw)) return null;
+  const id = Number(raw);
+  return id > 0 ? id : null;
+}

@@ -243,9 +243,30 @@ async def delete_old_report_runs(days: int = 90) -> int:
         await db.close()
 
 
-async def get_report_runs(report_id: int | None = None, limit: int = 50) -> list[dict]:
+async def get_report_runs(
+    report_id: int | None = None, limit: int = 50, *, run_ids: list[int] | frozenset[int] | set[int] | None = None
+) -> list[dict]:
+    """The newest report runs. ``run_ids`` (object scope): keep only these
+    runs; ``None`` keeps every run."""
     db = await _dbcore.get_db(read_only=True)
     try:
+        if run_ids is not None:
+            ids = sorted(int(i) for i in run_ids)
+            if not ids:
+                return []
+            marks = ",".join("?" * len(ids))
+            if report_id is not None:
+                cursor = await db.execute(
+                    f"SELECT * FROM report_runs WHERE report_id = ? AND id IN ({marks}) "  # nosec B608 - placeholders only
+                    "ORDER BY started_at DESC LIMIT ?",
+                    (report_id, *ids, limit),
+                )
+            else:
+                cursor = await db.execute(
+                    f"SELECT * FROM report_runs WHERE id IN ({marks}) ORDER BY started_at DESC LIMIT ?",  # nosec B608
+                    (*ids, limit),
+                )
+            return rows_to_list(await cursor.fetchall())
         if report_id is not None:
             cursor = await db.execute(
                 "SELECT * FROM report_runs WHERE report_id = ? ORDER BY started_at DESC LIMIT ?",

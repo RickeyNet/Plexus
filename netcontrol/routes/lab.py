@@ -25,6 +25,13 @@ Endpoints:
     GET    /api/lab/runs/{id}
     POST   /api/lab/runs/{id}/apply-to-device
     POST   /api/lab/runs/{id}/promote
+
+Object scope: environments keep their owner/shared rules; a twin cloned
+from an inventory host (``source_host_id``) follows that host, so a caller
+limited to selected inventory groups sees and uses only the twins of hosts
+they may read (model ``lab_device``; twins with no source host follow the
+environment rules only). Cloning needs read access to the source host;
+promoting to a deployment needs write access to the target group and hosts.
 """
 
 from __future__ import annotations
@@ -35,6 +42,18 @@ import routes.database as db
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
+from netcontrol.object_scope import (
+    READ_ONLY_DETAIL,
+    ScopeModel,
+    filter_rows,
+    register_model,
+    request_scope,
+    require_group,
+    require_host,
+    require_host_ids,
+    require_row,
+    scoped,
+)
 from netcontrol.routes.risk_analysis import (
     _classify_change_areas,
     _compute_risk_score,
@@ -51,6 +70,18 @@ from netcontrol.telemetry import configure_logging
 
 router = APIRouter()
 LOGGER = configure_logging("plexus.lab")
+
+# A lab twin follows the inventory host it was cloned from; a twin with no
+# source host is visible under the environment's owner/shared rules alone.
+register_model(
+    ScopeModel(
+        "lab_device",
+        {"host": "source_host_id"},
+        shared=True,
+        not_found="Lab device not found",
+        description="Lab twins (by the inventory host they were cloned from)",
+    )
+)
 
 
 # ── Models ────────────────────────────────────────────────────────────────────
@@ -225,18 +256,38 @@ async def _resolve_commands(
     return commands
 
 
+async def require_lab_device(request: Request, device: dict | None, *, not_found: str = "Lab device not found") -> None:
+    """404 ``not_found`` when ``device`` is a twin of a host outside the
+    caller's read scope. Nothing is checked for an unrestricted caller or a
+    missing device (the route answers that itself)."""
+    if device is None or (await request_scope(request)).unrestricted:
+        return
+    await require_row(request, "lab_device", device, not_found=not_found)
+
+
+async def visible_lab_devices(request: Request, devices: list[dict]) -> list[dict]:
+    """The twins of ``devices`` the caller may see (all for an unrestricted caller)."""
+    return await filter_rows("lab_device", devices, request)
+
+
 # ── Environment routes ───────────────────────────────────────────────────────
 
 
 @router.get("/api/lab/environments")
+@scoped("lab_environment")
 async def list_environments(request: Request):
     session, user, role = await _resolve_session_user(request)
     is_admin = role == "admin" or bool(session and session.get("auth_mode") == "token")
     user_id = session.get("user_id") if session else None
-    return await db.list_lab_environments(user_id=user_id, is_admin=is_admin)
+    envs = await db.list_lab_environments(user_id=user_id, is_admin=is_admin)
+    if (await request_scope(request)).restricted:
+        for env in envs:
+            env["device_count"] = len(await visible_lab_devices(request, await db.list_lab_devices(env["id"])))
+    return envs
 
 
 @router.post("/api/lab/environments")
+@scoped("lab_environment")
 async def create_environment(body: EnvironmentCreate, request: Request):
     session, _, _ = await _resolve_session_user(request)
     if not body.name.strip():
@@ -266,6 +317,7 @@ async def create_environment(body: EnvironmentCreate, request: Request):
 
 
 @router.get("/api/lab/environments/{env_id}")
+@scoped("lab_environment")
 async def get_environment(env_id: int, request: Request):
     env = await db.get_lab_environment(env_id)
     if not env:
@@ -273,12 +325,12 @@ async def get_environment(env_id: int, request: Request):
     session, _, role = await _resolve_session_user(request)
     if not _user_can_access_env(env, session, role):
         raise HTTPException(status_code=403, detail="Not allowed")
-    devices = await db.list_lab_devices(env_id)
-    env["devices"] = devices
+    env["devices"] = await visible_lab_devices(request, await db.list_lab_devices(env_id))
     return env
 
 
 @router.patch("/api/lab/environments/{env_id}")
+@scoped("lab_environment")
 async def update_environment(env_id: int, body: EnvironmentUpdate, request: Request):
     env = await db.get_lab_environment(env_id)
     if not env:
@@ -304,6 +356,7 @@ async def update_environment(env_id: int, body: EnvironmentUpdate, request: Requ
 
 
 @router.delete("/api/lab/environments/{env_id}")
+@scoped("lab_environment")
 async def delete_environment(env_id: int, request: Request):
     env = await db.get_lab_environment(env_id)
     if not env:
@@ -311,6 +364,11 @@ async def delete_environment(env_id: int, request: Request):
     session, _, role = await _resolve_session_user(request)
     if not _user_can_access_env(env, session, role):
         raise HTTPException(status_code=403, detail="Not allowed")
+    if (await request_scope(request)).restricted:
+        devices = await db.list_lab_devices(env_id)
+        if len(await visible_lab_devices(request, devices)) != len(devices):
+            # Deleting would remove twins of hosts outside the caller's scope.
+            raise HTTPException(status_code=403, detail=READ_ONLY_DETAIL)
     await db.delete_lab_environment(env_id)
     await _audit(
         "lab",
@@ -326,6 +384,7 @@ async def delete_environment(env_id: int, request: Request):
 
 
 @router.get("/api/lab/environments/{env_id}/devices")
+@scoped("lab_environment")
 async def list_devices(env_id: int, request: Request):
     env = await db.get_lab_environment(env_id)
     if not env:
@@ -333,10 +392,11 @@ async def list_devices(env_id: int, request: Request):
     session, _, role = await _resolve_session_user(request)
     if not _user_can_access_env(env, session, role):
         raise HTTPException(status_code=403, detail="Not allowed")
-    return await db.list_lab_devices(env_id)
+    return await visible_lab_devices(request, await db.list_lab_devices(env_id))
 
 
 @router.post("/api/lab/environments/{env_id}/devices")
+@scoped("lab_environment")
 async def create_device(env_id: int, body: DeviceCreate, request: Request):
     env = await db.get_lab_environment(env_id)
     if not env:
@@ -366,6 +426,7 @@ async def create_device(env_id: int, body: DeviceCreate, request: Request):
 
 
 @router.post("/api/lab/environments/{env_id}/clone-host")
+@scoped("host")
 async def clone_host(env_id: int, body: CloneHostRequest, request: Request):
     """Clone a production host into the lab using its latest config snapshot."""
     env = await db.get_lab_environment(env_id)
@@ -375,9 +436,7 @@ async def clone_host(env_id: int, body: CloneHostRequest, request: Request):
     if not _user_can_access_env(env, session, role):
         raise HTTPException(status_code=403, detail="Not allowed")
 
-    host = await db.get_host(body.host_id)
-    if not host:
-        raise HTTPException(status_code=404, detail="Source host not found")
+    host = await require_host(request, body.host_id, not_found="Source host not found")
 
     snapshot = await db.get_latest_config_snapshot(body.host_id)
     config_text = (snapshot or {}).get("config_text", "") if snapshot else ""
@@ -411,10 +470,12 @@ async def clone_host(env_id: int, body: CloneHostRequest, request: Request):
 
 
 @router.get("/api/lab/devices/{device_id}")
+@scoped("lab_device")
 async def get_device(device_id: int, request: Request):
     device = await db.get_lab_device(device_id)
     if not device:
         raise HTTPException(status_code=404, detail="Lab device not found")
+    await require_lab_device(request, device)
     env = await db.get_lab_environment(device["environment_id"])
     session, _, role = await _resolve_session_user(request)
     if not _user_can_access_env(env or {}, session, role):
@@ -423,10 +484,12 @@ async def get_device(device_id: int, request: Request):
 
 
 @router.patch("/api/lab/devices/{device_id}")
+@scoped("lab_device")
 async def update_device(device_id: int, body: DeviceUpdate, request: Request):
     device = await db.get_lab_device(device_id)
     if not device:
         raise HTTPException(status_code=404, detail="Lab device not found")
+    await require_lab_device(request, device)
     env = await db.get_lab_environment(device["environment_id"])
     session, _, role = await _resolve_session_user(request)
     if not _user_can_access_env(env or {}, session, role):
@@ -451,10 +514,12 @@ async def update_device(device_id: int, body: DeviceUpdate, request: Request):
 
 
 @router.delete("/api/lab/devices/{device_id}")
+@scoped("lab_device")
 async def delete_device(device_id: int, request: Request):
     device = await db.get_lab_device(device_id)
     if not device:
         raise HTTPException(status_code=404, detail="Lab device not found")
+    await require_lab_device(request, device)
     env = await db.get_lab_environment(device["environment_id"])
     session, _, role = await _resolve_session_user(request)
     if not _user_can_access_env(env or {}, session, role):
@@ -474,11 +539,13 @@ async def delete_device(device_id: int, request: Request):
 
 
 @router.post("/api/lab/devices/{device_id}/simulate")
+@scoped("lab_device")
 async def simulate(device_id: int, body: SimulateRequest, request: Request):
     """Apply commands to the lab device's snapshot, score risk, save a run."""
     device = await db.get_lab_device(device_id)
     if not device:
         raise HTTPException(status_code=404, detail="Lab device not found")
+    await require_lab_device(request, device)
     env = await db.get_lab_environment(device["environment_id"])
     session, _, role = await _resolve_session_user(request)
     if not _user_can_access_env(env or {}, session, role):
@@ -569,10 +636,12 @@ async def simulate(device_id: int, body: SimulateRequest, request: Request):
 
 
 @router.get("/api/lab/devices/{device_id}/runs")
+@scoped("lab_device")
 async def list_runs(device_id: int, request: Request, limit: int = 50):
     device = await db.get_lab_device(device_id)
     if not device:
         raise HTTPException(status_code=404, detail="Lab device not found")
+    await require_lab_device(request, device)
     env = await db.get_lab_environment(device["environment_id"])
     session, _, role = await _resolve_session_user(request)
     if not _user_can_access_env(env or {}, session, role):
@@ -581,11 +650,13 @@ async def list_runs(device_id: int, request: Request, limit: int = 50):
 
 
 @router.get("/api/lab/runs/{run_id}")
+@scoped("lab_device")
 async def get_run(run_id: int, request: Request):
     run = await db.get_lab_run(run_id)
     if not run:
         raise HTTPException(status_code=404, detail="Lab run not found")
     device = await db.get_lab_device(run["lab_device_id"])
+    await require_lab_device(request, device, not_found="Lab run not found")
     env = await db.get_lab_environment(device["environment_id"]) if device else None
     session, _, role = await _resolve_session_user(request)
     if not _user_can_access_env(env or {}, session, role):
@@ -603,6 +674,7 @@ async def get_run(run_id: int, request: Request):
 
 
 @router.post("/api/lab/runs/{run_id}/apply-to-device")
+@scoped("lab_device")
 async def apply_run_to_device(run_id: int, request: Request):
     """Promote a simulated run's post_config to the lab device's snapshot."""
     run = await db.get_lab_run(run_id)
@@ -611,6 +683,7 @@ async def apply_run_to_device(run_id: int, request: Request):
     device = await db.get_lab_device(run["lab_device_id"])
     if not device:
         raise HTTPException(status_code=404, detail="Lab device not found")
+    await require_lab_device(request, device, not_found="Lab run not found")
     env = await db.get_lab_environment(device["environment_id"])
     session, _, role = await _resolve_session_user(request)
     if not _user_can_access_env(env or {}, session, role):
@@ -628,6 +701,7 @@ async def apply_run_to_device(run_id: int, request: Request):
 
 
 @router.post("/api/lab/runs/{run_id}/promote")
+@scoped("group")
 async def promote_run(run_id: int, body: PromoteRequest, request: Request):
     """Create a Deployment record from a successful lab run.
 
@@ -640,6 +714,7 @@ async def promote_run(run_id: int, body: PromoteRequest, request: Request):
     device = await db.get_lab_device(run["lab_device_id"])
     if not device:
         raise HTTPException(status_code=404, detail="Lab device not found")
+    await require_lab_device(request, device, not_found="Lab run not found")
     env = await db.get_lab_environment(device["environment_id"])
     session, _, role = await _resolve_session_user(request)
     if not _user_can_access_env(env or {}, session, role):
@@ -665,6 +740,9 @@ async def promote_run(run_id: int, body: PromoteRequest, request: Request):
             status_code=400,
             detail="target_group_id is required (or clone from a production host)",
         )
+    if (await request_scope(request)).restricted:
+        await require_group(request, int(group_id), write=True)
+        await require_host_ids(request, target_host_ids, write=True)
 
     try:
         commands = json.loads(run.get("commands") or "[]")

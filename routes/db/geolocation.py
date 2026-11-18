@@ -12,6 +12,7 @@ import ipaddress
 import json
 import os
 import re
+from collections.abc import Iterable
 from datetime import UTC, datetime, timedelta
 
 import routes.database as _dbcore
@@ -23,6 +24,7 @@ from routes.database import (
     rows_to_list,
 )
 from routes.db.change_events import tracks_changes
+from routes.db.inventory import group_ids_condition
 
 __all__ = [
     "list_geo_sites",
@@ -46,10 +48,13 @@ __all__ = [
 # ═════════════════════════════════════════════════════════════════════════════
 
 
-async def list_geo_sites() -> list:
+async def list_geo_sites(group_ids: Iterable[int] | None = None) -> list:
     """Every site with its ``floor_count``, ``placed_device_count``,
     ``host_count`` (hosts whose ``site_id`` is the site), ``region_name``
-    and ``tenant_name``."""
+    and ``tenant_name``. ``group_ids``: the device counts cover the hosts of
+    those inventory groups only."""
+    if group_ids is not None:
+        return await _scoped_geo_sites(group_ids)
     db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
@@ -64,6 +69,32 @@ async def list_geo_sites() -> list:
                LEFT JOIN geo_placements p ON p.floor_id = f.id
                GROUP BY s.id
                ORDER BY s.name"""
+        )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+async def _scoped_geo_sites(group_ids: Iterable[int]) -> list:
+    """``list_geo_sites`` with device counts over the hosts of ``group_ids``."""
+    scope_sql, scope_params = group_ids_condition("group_id", group_ids)
+    host_sql, _ = group_ids_condition("h.group_id", group_ids)
+    db = await _dbcore.get_db(read_only=True)
+    try:
+        cursor = await db.execute(
+            f"""SELECT s.*,
+                       COUNT(DISTINCT f.id)                                AS floor_count,
+                       COUNT(DISTINCT p.id)                                AS placed_device_count,
+                       (SELECT COUNT(*) FROM hosts h WHERE h.site_id = s.id AND {host_sql}) AS host_count,
+                       (SELECT r.name FROM regions r WHERE r.id = s.region_id) AS region_name,
+                       (SELECT t.name FROM tenants t WHERE t.id = s.tenant_id) AS tenant_name
+                FROM geo_sites s
+                LEFT JOIN geo_floors f ON f.site_id = s.id
+                LEFT JOIN geo_placements p ON p.floor_id = f.id
+                     AND p.host_id IN (SELECT id FROM hosts WHERE {scope_sql})
+                GROUP BY s.id
+                ORDER BY s.name""",
+            scope_params + scope_params,
         )
         return rows_to_list(await cursor.fetchall())
     finally:
@@ -295,8 +326,13 @@ async def delete_geo_placement(floor_id: int, host_id: int) -> bool:
         await db.close()
 
 
-async def get_geo_overview() -> list:
-    """Return all sites enriched with floor count and device status counts."""
+async def get_geo_overview(group_ids: Iterable[int] | None = None) -> list:
+    """Return all sites enriched with floor count and device status counts;
+    ``group_ids``: the counts cover the hosts of those inventory groups only."""
+    placement_scope, params = "", ()
+    if group_ids is not None:
+        scope_sql, params = group_ids_condition("group_id", group_ids)
+        placement_scope = f" AND p.host_id IN (SELECT id FROM hosts WHERE {scope_sql})"
     db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
@@ -310,10 +346,13 @@ async def get_geo_overview() -> list:
                                THEN 1 ELSE 0 END) AS unknown_count
                FROM geo_sites s
                LEFT JOIN geo_floors f    ON f.site_id = s.id
-               LEFT JOIN geo_placements p ON p.floor_id = f.id
+               LEFT JOIN geo_placements p ON p.floor_id = f.id"""
+            + placement_scope
+            + """
                LEFT JOIN hosts h          ON h.id = p.host_id
                GROUP BY s.id
-               ORDER BY s.name"""
+               ORDER BY s.name""",
+            params,
         )
         return rows_to_list(await cursor.fetchall())
     finally:

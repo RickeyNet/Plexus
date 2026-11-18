@@ -107,6 +107,14 @@ _OBJECT_TABLES: dict[str, str] = {
     # Hardware lifecycle (migration 0103).
     "hardware_notice": "hardware_notices",
     "support_contract": "support_contracts",
+    # IPAM namespaces, route targets, VLAN groups, RIRs, aggregates and
+    # console ports (migration 0110).
+    "namespace": "ipam_namespaces",
+    "route_target": "route_targets",
+    "vlan_group": "vlan_groups",
+    "rir": "rirs",
+    "aggregate": "aggregates",
+    "console_port": "console_ports",
 }
 CHANGE_OBJECT_TYPES: tuple[str, ...] = tuple(_OBJECT_TABLES)
 CHANGE_ACTIONS: tuple[str, ...] = ("create", "update", "delete")

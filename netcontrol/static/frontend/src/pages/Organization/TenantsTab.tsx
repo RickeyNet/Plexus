@@ -16,6 +16,7 @@ import { EmptyState } from '@/components/EmptyState';
 import { LoadingState } from '@/components/LoadingState';
 import { QueryError } from '@/components/QueryError';
 import { useConfirmDelete } from '@/components/useConfirmDelete';
+import { ObjectDataPanel } from '@/components/ObjectDataPanel';
 import { clickableProps } from '@/lib/clickable';
 import { tenantCountRows } from '@/lib/organization';
 import { usePendingKeys } from '@/lib/usePendingKeys';
@@ -225,6 +226,7 @@ export function TenantDetailPanel({ id }: { id: number | null }) {
         </DataTable>
       </section>
       <ChangelogPanel objectType="tenant" objectId={t.id} />
+      <ObjectDataPanel objectType="tenant" objectId={t.id} />
     </div>
   );
 }

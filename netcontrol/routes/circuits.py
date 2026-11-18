@@ -12,6 +12,11 @@ storage is ``routes.db.circuits``, the rules ``netcontrol.circuits``. See
 Utilisation: a circuit with a committed rate and a termination on a device
 port reports the port's latest in / out rate from the interface counters the
 topology poller already stores (``interface_stats``); nothing new is polled.
+
+Object scope: providers, provider networks and circuit types are shared
+(read by every scoped caller, changed by unrestricted callers only, their
+circuit counts scoped); a scoped caller reads and changes the circuits of
+their tenants or with a termination at their sites or on their hosts.
 """
 
 from __future__ import annotations
@@ -36,6 +41,17 @@ from netcontrol.circuits import (
     clean_term_side,
     clean_url,
 )
+from netcontrol.object_scope import (
+    filter_rows,
+    request_scope,
+    require_host,
+    require_host_ids,
+    require_model_write,
+    require_new_row,
+    require_row,
+    scoped,
+)
+from netcontrol.routes.custom_fields import custom_list, with_custom_data
 from netcontrol.routes.shared import _audit, _corr_id, _session_user
 from netcontrol.routes.topology import _calc_interface_utilization
 
@@ -160,6 +176,83 @@ def _in_use(message: str, usage: dict[str, int]) -> HTTPException:
     return HTTPException(status_code=409, detail={"message": message, "affected": sum(usage.values()), "usage": usage})
 
 
+# ── Object scope ─────────────────────────────────────────────────────────────
+
+
+def _scope_keys(tenant_id: int | None, terminations: list[dict]) -> dict:
+    """The ``circuit`` scope model fields of a circuit with ``terminations``."""
+    return {
+        "tenant_id": tenant_id,
+        "scope_site_ids": [t["site_id"] for t in terminations if t.get("site_id") is not None],
+        "scope_host_ids": [t["host_id"] for t in terminations if t.get("host_id") is not None],
+    }
+
+
+def _keyed(circuit: dict) -> dict:
+    """A copy of ``circuit`` with its scope keys (the response keeps its shape)."""
+    return {**circuit, **_scope_keys(circuit.get("tenant_id"), circuit.get("terminations") or [])}
+
+
+async def _readable_circuits(request: Request, circuits: list[dict]) -> list[dict]:
+    """The ``circuits`` the caller may read, in order."""
+    if (await request_scope(request)).unrestricted:
+        return circuits
+    allowed = {int(c["id"]) for c in await filter_rows("circuit", [_keyed(c) for c in circuits], request)}
+    return [c for c in circuits if int(c["id"]) in allowed]
+
+
+async def _require_circuit(request: Request, circuit_id: int, *, write: bool = False) -> dict:
+    """The circuit; 404 when unknown or outside the caller's read scope, 403
+    on ``write`` when it is not writable."""
+    circuit = await db.get_circuit(circuit_id)
+    await require_row(
+        request, "circuit", _keyed(circuit) if circuit else None, write=write, not_found="Circuit not found"
+    )
+    return _found(circuit, "Circuit")
+
+
+async def _check_new_terminations(request: Request, terms: list[dict]) -> None:
+    """A scoped caller places a termination only on a host and at a site
+    they may read (404 like an unknown one); the circuit itself must be
+    writable (``require_new_row`` / ``_require_circuit``)."""
+    if (await request_scope(request)).unrestricted:
+        return
+    await require_host_ids(request, [t.get("host_id") for t in terms])
+    wanted = {int(t["site_id"]) for t in terms if t.get("site_id") is not None}
+    if wanted:
+        readable = {int(s["id"]) for s in await filter_rows("site", await db.list_geo_sites(), request)}
+        if not wanted <= readable:
+            raise HTTPException(status_code=404, detail="Site not found")
+
+
+async def _circuit_counts(request: Request) -> dict[str, dict[int, int]] | None:
+    """For a scoped caller: the readable circuits per ``provider_id`` and
+    ``circuit_type_id``, and their terminations per ``provider_network_id``
+    (``None`` for an unrestricted caller: the stored counts stand)."""
+    if (await request_scope(request)).unrestricted:
+        return None
+    counts: dict[str, dict[int, int]] = {"provider_id": {}, "circuit_type_id": {}, "provider_network_id": {}}
+
+    def add(key: str, value: Any) -> None:
+        if value is not None:
+            counts[key][int(value)] = counts[key].get(int(value), 0) + 1
+
+    for circuit in await _readable_circuits(request, await db.list_circuits()):
+        add("provider_id", circuit.get("provider_id"))
+        add("circuit_type_id", circuit.get("circuit_type_id"))
+        for term in circuit.get("terminations") or []:
+            add("provider_network_id", term.get("provider_network_id"))
+    return counts
+
+
+def _recount(rows: list[dict], counts: dict[str, dict[int, int]] | None, key: str, field: str) -> list[dict]:
+    """``rows`` with ``field`` set from ``counts[key]`` by row id (unchanged
+    when ``counts`` is ``None``)."""
+    if counts is None:
+        return rows
+    return [{**r, field: counts[key].get(int(r["id"]), 0)} for r in rows]
+
+
 # ── Providers ────────────────────────────────────────────────────────────────
 
 
@@ -178,18 +271,28 @@ async def _provider_values(raw: dict) -> dict:
 
 
 @router.get(f"{PREFIX}/providers")
-async def list_providers() -> dict:
-    return {"providers": await db.list_circuit_providers()}
+@scoped("list")
+async def list_providers(request: Request) -> dict:
+    rows = _recount(await db.list_circuit_providers(), await _circuit_counts(request), "provider_id", "circuit_count")
+    return {"providers": await custom_list("circuit_provider", rows, request)}
 
 
 @router.get(f"{PREFIX}/providers/{{provider_id}}")
-async def get_provider(provider_id: int) -> dict:
+@scoped("object")
+async def get_provider(provider_id: int, request: Request) -> dict:
     provider = _found(await db.get_circuit_provider(provider_id), "Provider")
-    return {**provider, "networks": await db.list_provider_networks(provider_id)}
+    counts = await _circuit_counts(request)
+    networks = _recount(
+        await db.list_provider_networks(provider_id), counts, "provider_network_id", "termination_count"
+    )
+    provider = _recount([provider], counts, "provider_id", "circuit_count")[0]
+    return await with_custom_data("circuit_provider", {**provider, "networks": networks})
 
 
 @router.post(f"{PREFIX}/providers", status_code=201)
+@scoped("catalog")
 async def create_provider(body: ProviderBody, request: Request) -> dict:
+    await require_model_write(request)
     values = await _provider_values(_merged(None, body, db.CIRCUIT_PROVIDER_FIELDS))
     try:
         record = await db.create_circuit_provider(values)
@@ -200,7 +303,9 @@ async def create_provider(body: ProviderBody, request: Request) -> dict:
 
 
 @router.put(f"{PREFIX}/providers/{{provider_id}}")
+@scoped("catalog")
 async def update_provider(provider_id: int, body: ProviderBody, request: Request) -> dict:
+    await require_model_write(request)
     current = _found(await db.get_circuit_provider(provider_id), "Provider")
     values = await _provider_values(_merged(current, body, db.CIRCUIT_PROVIDER_FIELDS))
     try:
@@ -213,7 +318,9 @@ async def update_provider(provider_id: int, body: ProviderBody, request: Request
 
 
 @router.delete(f"{PREFIX}/providers/{{provider_id}}")
+@scoped("catalog")
 async def delete_provider(provider_id: int, request: Request) -> dict:
+    await require_model_write(request)
     record = _found(await db.get_circuit_provider(provider_id), "Provider")
     usage = await db.circuit_provider_usage(provider_id)
     if sum(usage.values()):
@@ -244,17 +351,25 @@ async def _network_values(raw: dict) -> dict:
 
 
 @router.get(f"{PREFIX}/provider-networks")
-async def list_provider_networks(provider_id: int | None = Query(default=None)) -> dict:
-    return {"provider_networks": await db.list_provider_networks(provider_id)}
+@scoped("list")
+async def list_provider_networks(request: Request, provider_id: int | None = Query(default=None)) -> dict:
+    rows = await db.list_provider_networks(provider_id)
+    return {
+        "provider_networks": _recount(rows, await _circuit_counts(request), "provider_network_id", "termination_count")
+    }
 
 
 @router.get(f"{PREFIX}/provider-networks/{{network_id}}")
-async def get_provider_network(network_id: int) -> dict:
-    return _found(await db.get_provider_network(network_id), "Provider network")
+@scoped("object")
+async def get_provider_network(network_id: int, request: Request) -> dict:
+    record = _found(await db.get_provider_network(network_id), "Provider network")
+    return _recount([record], await _circuit_counts(request), "provider_network_id", "termination_count")[0]
 
 
 @router.post(f"{PREFIX}/provider-networks", status_code=201)
+@scoped("catalog")
 async def create_provider_network(body: ProviderNetworkBody, request: Request) -> dict:
+    await require_model_write(request)
     errors = FieldErrors()
     if body.provider_id is None:
         errors.add("provider_id", "Choose a provider.")
@@ -274,7 +389,9 @@ async def create_provider_network(body: ProviderNetworkBody, request: Request) -
 
 
 @router.put(f"{PREFIX}/provider-networks/{{network_id}}")
+@scoped("catalog")
 async def update_provider_network(network_id: int, body: ProviderNetworkBody, request: Request) -> dict:
+    await require_model_write(request)
     current = _found(await db.get_provider_network(network_id), "Provider network")
     if body.provider_id is not None and body.provider_id != current["provider_id"]:
         raise HTTPException(
@@ -295,7 +412,9 @@ async def update_provider_network(network_id: int, body: ProviderNetworkBody, re
 
 
 @router.delete(f"{PREFIX}/provider-networks/{{network_id}}")
+@scoped("catalog")
 async def delete_provider_network(network_id: int, request: Request) -> dict:
+    await require_model_write(request)
     record = _found(await db.get_provider_network(network_id), "Provider network")
     used = await db.provider_network_usage(network_id)
     if used:
@@ -315,17 +434,23 @@ async def delete_provider_network(network_id: int, request: Request) -> dict:
 
 
 @router.get(f"{PREFIX}/circuit-types")
-async def list_circuit_types() -> dict:
-    return {"circuit_types": await db.list_circuit_types()}
+@scoped("list")
+async def list_circuit_types(request: Request) -> dict:
+    rows = await db.list_circuit_types()
+    return {"circuit_types": _recount(rows, await _circuit_counts(request), "circuit_type_id", "circuit_count")}
 
 
 @router.get(f"{PREFIX}/circuit-types/{{type_id}}")
-async def get_circuit_type(type_id: int) -> dict:
-    return _found(await db.get_circuit_type(type_id), "Circuit type")
+@scoped("object")
+async def get_circuit_type(type_id: int, request: Request) -> dict:
+    record = _found(await db.get_circuit_type(type_id), "Circuit type")
+    return _recount([record], await _circuit_counts(request), "circuit_type_id", "circuit_count")[0]
 
 
 @router.post(f"{PREFIX}/circuit-types", status_code=201)
+@scoped("catalog")
 async def create_circuit_type(body: CircuitTypeBody, request: Request) -> dict:
+    await require_model_write(request)
     values = await _network_values(_merged(None, body, ("name", "description")))
     try:
         record = await db.create_circuit_type(values)
@@ -336,7 +461,9 @@ async def create_circuit_type(body: CircuitTypeBody, request: Request) -> dict:
 
 
 @router.put(f"{PREFIX}/circuit-types/{{type_id}}")
+@scoped("catalog")
 async def update_circuit_type(type_id: int, body: CircuitTypeBody, request: Request) -> dict:
+    await require_model_write(request)
     current = _found(await db.get_circuit_type(type_id), "Circuit type")
     values = await _network_values(_merged(current, body, ("name", "description")))
     try:
@@ -349,7 +476,9 @@ async def update_circuit_type(type_id: int, body: CircuitTypeBody, request: Requ
 
 
 @router.delete(f"{PREFIX}/circuit-types/{{type_id}}")
+@scoped("catalog")
 async def delete_circuit_type(type_id: int, request: Request) -> dict:
+    await require_model_write(request)
     record = _found(await db.get_circuit_type(type_id), "Circuit type")
     used = await db.circuit_type_usage(type_id)
     if used:
@@ -516,7 +645,9 @@ async def _with_utilisation(circuits: list[dict]) -> list[dict]:
 
 
 @router.get(f"{PREFIX}/circuits")
+@scoped("list")
 async def list_circuits(
+    request: Request,
     provider_id: int | None = Query(default=None),
     circuit_type_id: int | None = Query(default=None),
     status: str | None = Query(default=None, max_length=40),
@@ -537,21 +668,26 @@ async def list_circuits(
         host_id=host_id,
         search=(q or "").strip() or None,
     )
-    return {"circuits": circuits}
+    circuits = await _readable_circuits(request, circuits)
+    return {"circuits": await custom_list("circuit", circuits, request)}
 
 
 @router.get(f"{PREFIX}/circuits/{{circuit_id}}")
-async def get_circuit(circuit_id: int) -> dict:
-    circuit = _found(await db.get_circuit(circuit_id), "Circuit")
-    return (await _with_utilisation([circuit]))[0]
+@scoped("object")
+async def get_circuit(circuit_id: int, request: Request) -> dict:
+    circuit = await _require_circuit(request, circuit_id)
+    return await with_custom_data("circuit", (await _with_utilisation([circuit]))[0])
 
 
 @router.post(f"{PREFIX}/circuits", status_code=201)
+@scoped("create")
 async def create_circuit(body: CircuitBody, request: Request) -> dict:
     errors = FieldErrors()
     values = await _circuit_values(_merged(None, body, db.CIRCUIT_FIELDS), errors)
     terminations = await _terminations_of(body.terminations or [], errors)
     _raise_if(errors)
+    await _check_new_terminations(request, list(terminations.values()))
+    await require_new_row(request, "circuit", _scope_keys(values["tenant_id"], list(terminations.values())))
     try:
         record = await db.create_circuit(values)
     except ValueError as exc:
@@ -564,13 +700,19 @@ async def create_circuit(body: CircuitBody, request: Request) -> dict:
 
 
 @router.put(f"{PREFIX}/circuits/{{circuit_id}}")
+@scoped("object")
 async def update_circuit(circuit_id: int, body: CircuitBody, request: Request) -> dict:
-    current = _found(await db.get_circuit(circuit_id), "Circuit")
+    current = await _require_circuit(request, circuit_id, write=True)
     errors = FieldErrors()
     values = await _circuit_values(_merged(current, body, db.CIRCUIT_FIELDS), errors)
     replace = "terminations" in body.model_fields_set
     terminations = await _terminations_of(body.terminations or [], errors) if replace else {}
     _raise_if(errors)
+    if replace or values["tenant_id"] != current.get("tenant_id"):
+        new_terms = list(terminations.values()) if replace else current["terminations"]
+        if replace:
+            await _check_new_terminations(request, new_terms)
+        await require_new_row(request, "circuit", _scope_keys(values["tenant_id"], new_terms))
     try:
         await db.update_circuit(circuit_id, values)
     except ValueError as exc:
@@ -582,8 +724,9 @@ async def update_circuit(circuit_id: int, body: CircuitBody, request: Request) -
 
 
 @router.delete(f"{PREFIX}/circuits/{{circuit_id}}")
+@scoped("object")
 async def delete_circuit(circuit_id: int, request: Request) -> dict:
-    record = _found(await db.get_circuit(circuit_id), "Circuit")
+    record = await _require_circuit(request, circuit_id, write=True)
     for term in record["terminations"]:
         await db.delete_circuit_termination(int(term["id"]))
     await db.delete_circuit(circuit_id)
@@ -599,10 +742,11 @@ def _side(raw: str) -> str:
 
 
 @router.put(f"{PREFIX}/circuits/{{circuit_id}}/terminations/{{side}}")
+@scoped("object")
 async def put_termination(circuit_id: int, side: str, body: TerminationBody, request: Request) -> dict:
     """Create or replace the circuit's ``side`` (A or Z) termination."""
     term_side = _side(side)
-    circuit = _found(await db.get_circuit(circuit_id), "Circuit")
+    circuit = await _require_circuit(request, circuit_id, write=True)
     existing = next((t for t in circuit["terminations"] if t["term_side"] == term_side), None)
     raw = body.model_dump(exclude_unset=True)
     if existing is not None:
@@ -610,6 +754,7 @@ async def put_termination(circuit_id: int, side: str, body: TerminationBody, req
     errors = FieldErrors()
     values = await _termination_values(raw, term_side, errors)
     _raise_if(errors)
+    await _check_new_terminations(request, [values])
     if existing is None:
         record = await db.create_circuit_termination(circuit_id, term_side, values)
     else:
@@ -619,9 +764,10 @@ async def put_termination(circuit_id: int, side: str, body: TerminationBody, req
 
 
 @router.delete(f"{PREFIX}/circuits/{{circuit_id}}/terminations/{{side}}")
+@scoped("object")
 async def delete_termination(circuit_id: int, side: str, request: Request) -> dict:
     term_side = _side(side)
-    circuit = _found(await db.get_circuit(circuit_id), "Circuit")
+    circuit = await _require_circuit(request, circuit_id, write=True)
     existing = _found(next((t for t in circuit["terminations"] if t["term_side"] == term_side), None), "Termination")
     await db.delete_circuit_termination(int(existing["id"]))
     await _audit_write(request, "termination_delete", f"circuit_id={circuit_id} cid={circuit['cid']} side={term_side}")
@@ -632,29 +778,32 @@ async def delete_termination(circuit_id: int, side: str, request: Request) -> di
 
 
 @router.get(f"{PREFIX}/hosts/{{host_id}}/circuits")
-async def host_circuits(host_id: int) -> dict:
+@scoped("host")
+async def host_circuits(host_id: int, request: Request) -> dict:
     """The circuits with a termination on the device, with utilisation."""
-    _found(await db.get_host(host_id), "Host")
-    circuits = await db.list_circuits(host_id=host_id)
+    await require_host(request, host_id)
+    circuits = await _readable_circuits(request, await db.list_circuits(host_id=host_id))
     return {"host_id": host_id, "circuits": await _with_utilisation(circuits)}
 
 
 @router.get(f"{PREFIX}/hosts/{{host_id}}/interfaces")
-async def host_interfaces(host_id: int) -> dict:
+@scoped("host")
+async def host_interfaces(host_id: int, request: Request) -> dict:
     """The interface names Plexus knows for the device (interface inventory,
     interface counters, cables), for the termination's interface picker."""
-    _found(await db.get_host(host_id), "Host")
+    await require_host(request, host_id)
     return {"host_id": host_id, "interfaces": await db.list_host_interface_names(host_id)}
 
 
 @router.get(f"{PREFIX}/choices")
-async def choices() -> dict:
+@scoped("list")
+async def choices(request: Request) -> dict:
     """What the circuit dialog's pickers offer: devices, sites and tenants
     (id and name only), so a user with the circuits feature alone can pick
-    them."""
-    hosts = await db.get_all_hosts()
-    sites = await db.list_geo_sites()
-    tenants = await db.list_tenants()
+    them; a scoped caller's own."""
+    hosts = (await request_scope(request)).filter_hosts(await db.get_all_hosts())
+    sites = await filter_rows("site", await db.list_geo_sites(), request)
+    tenants = await filter_rows("tenant", await db.list_tenants(), request)
     return {
         "hosts": [{"id": h["id"], "hostname": h["hostname"], "ip_address": h.get("ip_address") or ""} for h in hosts],
         "sites": sorted(

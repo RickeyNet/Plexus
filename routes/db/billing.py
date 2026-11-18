@@ -232,7 +232,7 @@ async def get_billing_period(period_id: int) -> dict | None:
     try:
         cursor = await db.execute(
             """SELECT bp.*, bc.name AS circuit_name, bc.customer,
-                      bc.if_name, h.hostname
+                      bc.if_name, bc.host_id, h.hostname
                FROM billing_periods bp
                JOIN billing_circuits bc ON bc.id = bp.circuit_id
                LEFT JOIN hosts h ON h.id = bc.host_id
@@ -250,11 +250,18 @@ async def list_billing_periods(
     customer: str | None = None,
     start_after: str | None = None,
     limit: int = 100,
+    host_ids: frozenset[int] | set[int] | None = None,
 ) -> list[dict]:
+    """Billing periods, newest first. ``host_ids`` (object scope): keep only
+    the periods of circuits on these hosts; ``None`` keeps every period."""
     db = await _dbcore.get_db(read_only=True)
     try:
         clauses: list[str] = []
         params: list = []
+        if host_ids is not None:
+            ids = sorted(int(h) for h in host_ids)
+            clauses.append(f"bc.host_id IN ({','.join('?' * len(ids))})" if ids else "1 = 0")
+            params.extend(ids)
         if circuit_id is not None:
             clauses.append("bp.circuit_id = ?")
             params.append(circuit_id)
@@ -268,7 +275,7 @@ async def list_billing_periods(
         params.append(limit)
         cursor = await db.execute(
             f"""SELECT bp.*, bc.name AS circuit_name, bc.customer,
-                       bc.if_name, h.hostname
+                       bc.if_name, bc.host_id, h.hostname
                 FROM billing_periods bp
                 JOIN billing_circuits bc ON bc.id = bp.circuit_id
                 LEFT JOIN hosts h ON h.id = bc.host_id

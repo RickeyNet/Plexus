@@ -32,7 +32,7 @@ from strawberry.types.graphql import OperationType
 from netcontrol.graphql_api import limits, settings as graphql_settings
 from netcontrol.graphql_api.context import GraphQLContext
 from netcontrol.graphql_api.schema import schema
-from netcontrol.object_scope import request_scope, scoped
+from netcontrol.object_scope import graphql_features, request_scope, scoped
 from netcontrol.routes.shared import _audit, _corr_id, _session_user, caller_features
 
 router = APIRouter()
@@ -69,9 +69,11 @@ async def graphql_query(request: Request) -> JSONResponse:
     if problems:
         return _errors(problems)
 
+    scope = await request_scope(request)
     context = GraphQLContext(
-        scope=await request_scope(request),
-        features=await caller_features(request),
+        scope=scope,
+        # A scoped caller keeps only the features whose resolvers filter by scope.
+        features=graphql_features(await caller_features(request), scope),
         max_limit=int(config["max_limit"]),
     )
     result = await schema.execute(

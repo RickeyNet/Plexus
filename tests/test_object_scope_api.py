@@ -145,10 +145,14 @@ def test_access_group_api_round_trip_validation_and_audit(admin, tree):
 def test_status_login_and_admin_user_payload(admin, tree):
     scoped = _scoped(admin, "east-ops", [{"inventory_group_id": tree["a1"], "can_write": True}])
     _, login = _login("east-ops")
-    expected = {"restricted": True, "write_group_ids": sorted([tree["a1"], tree["a11"]])}
+    expected = {"restricted": True, "write_group_ids": sorted([tree["a1"], tree["a11"]]), "read_only": False}
     assert login["object_scope"] == expected
     assert scoped.get("/api/auth/status").json()["object_scope"] == expected
-    assert admin.get("/api/auth/status").json()["object_scope"] == {"restricted": False, "write_group_ids": []}
+    assert admin.get("/api/auth/status").json()["object_scope"] == {
+        "restricted": False,
+        "write_group_ids": [],
+        "read_only": False,
+    }
 
     _access_group(admin, "everyone", None)
     users = {u["username"]: u for u in admin.get("/api/admin/users").json()}
@@ -159,19 +163,24 @@ def test_status_login_and_admin_user_payload(admin, tree):
 # ── Fail closed ──────────────────────────────────────────────────────────────
 
 
-def test_scoped_user_keeps_only_enforced_features(admin, tree):
+def test_scoped_user_keeps_every_enrolled_feature(admin, tree, monkeypatch):
+    from netcontrol.routes import admin as admin_routes, auth as auth_routes
+
     features = ["dashboard", "inventory", "inventory.write", "jobs", "ipam"]
-    scoped = _scoped(admin, "scoped-many", [{"inventory_group_id": tree["a"]}], features)
-    assert scoped.get("/api/auth/status").json()["feature_access"] == ["inventory", "inventory.write"]
-    for url in ("/api/jobs", "/api/dashboard", "/api/ipam/subnets", "/api/ipam/vrfs"):
-        assert scoped.get(url).status_code == 403, url
-    assert scoped.get("/api/inventory").status_code == 200
+    # A feature no module enrolls (a plugin's) stays closed to scoped users.
+    flags = [*auth_routes.FEATURE_FLAGS, "plugin-x"]
+    monkeypatch.setattr(auth_routes, "FEATURE_FLAGS", flags)
+    monkeypatch.setattr(admin_routes, "FEATURE_FLAGS", flags)
+    scoped = _scoped(admin, "scoped-many", [{"inventory_group_id": tree["a"]}], [*features, "plugin-x"])
+    assert scoped.get("/api/auth/status").json()["feature_access"] == sorted(features, key=flags.index)
+    for url in ("/api/jobs", "/api/dashboard", "/api/ipam/overview", "/api/ipam/vrfs", "/api/inventory"):
+        assert scoped.get(url).status_code == 200, url
 
     # The same features with access to all devices: unchanged.
     everyone = user_client(admin, "everyone-many", features=features)
     status = everyone.get("/api/auth/status").json()
     assert set(status["feature_access"]) == set(features)
-    assert status["object_scope"] == {"restricted": False, "write_group_ids": []}
+    assert status["object_scope"] == {"restricted": False, "write_group_ids": [], "read_only": False}
     assert everyone.get("/api/jobs").status_code == 200
     assert everyone.get("/api/dashboard").status_code == 200
 
@@ -450,11 +459,23 @@ def test_scoped_get_routes_answer_404_out_of_scope(admin, tree):
             params = set(re.findall(r"{(\w+)}", route.path))
             if not params & {"group_id", "host_id"}:
                 continue
-            url = route.path.replace("{group_id}", str(tree["b"])).replace("{host_id}", str(tree["hb"]))
+            if marker[1] in ("refused", "admin"):
+                continue  # 403 for every scoped caller (or admins only), whatever the id
+            # Other path parameters get a placeholder id: the host or group
+            # check must answer before the record is looked up.
+            other = re.sub(r"{(?!group_id}|host_id})\w+}", "1", route.path)
+            url = other.replace("{group_id}", str(tree["b"])).replace("{host_id}", str(tree["hb"]))
             resp = scoped.get(url)
             assert resp.status_code == 404, (url, resp.status_code, resp.text)
-            ok = route.path.replace("{group_id}", str(tree["a1"])).replace("{host_id}", str(tree["ha1"]))
-            assert scoped.get(ok).status_code == 200, ok
             driven.append(route.path)
+            # ":live" routes contact the device (not driven in scope);
+            # ":nodata" routes answer 404 for a host with nothing stored.
+            if marker[1].endswith(":live"):
+                continue
+            if other != route.path:
+                continue  # another id in the path: covered by the module's tests
+            ok = route.path.replace("{group_id}", str(tree["a1"])).replace("{host_id}", str(tree["ha1"]))
+            status = scoped.get(ok).status_code
+            assert status in ((200, 404) if marker[1].endswith(":nodata") else (200,)), (ok, status)
     assert len(driven) >= 6
     assert {"/api/intended-config/hosts/{host_id}", "/api/intended-config/hosts/{host_id}/variables"} <= set(driven)

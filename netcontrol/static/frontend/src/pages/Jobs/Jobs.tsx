@@ -7,17 +7,20 @@ import { PageHelp } from '@/components/PageHelp';
 import { TabBar } from '@/components/TabBar';
 import { resolveTab, visibleTabs } from '@/lib/tabGating';
 
+import { ApprovalsTab } from './ApprovalsTab';
 import { JobsTab } from './JobsTab';
 import { PlaybooksTab } from './PlaybooksTab';
 import { TemplatesTab } from './TemplatesTab';
 import { CredentialsTab } from './CredentialsTab';
 
-type Tab = 'assignments' | 'tasks' | 'instructions' | 'credentials';
+type Tab = 'assignments' | 'approvals' | 'tasks' | 'instructions' | 'credentials';
 
 // Each tab gates on the backend feature its API requires, so a user granted
 // only some Delegator features never lands on a tab whose data they can't load.
 const TABS: { key: Tab; label: string; path: string; feature: string }[] = [
   { key: 'assignments', label: 'Assignments', path: '/assignments', feature: 'jobs' },
+  // Jobs awaiting approval: only for holders of jobs.approve (and admins).
+  { key: 'approvals', label: 'Approvals', path: '/approvals', feature: 'jobs.approve' },
   { key: 'tasks', label: 'Tasks', path: '/tasks', feature: 'playbooks' },
   { key: 'instructions', label: 'Instructions', path: '/instructions', feature: 'templates' },
   { key: 'credentials', label: 'Credentials', path: '/credentials', feature: 'credentials' },
@@ -29,6 +32,10 @@ const TAB_HELP: Record<Tab, { title: string; text: string }> = {
   assignments: {
     title: 'Run & Track Jobs',
     text: 'Launch tasks against selected devices and watch progress live. Each row is one execution - open it to see streaming logs, per-host status, and the final outcome.',
+  },
+  approvals: {
+    title: 'Approve Held Jobs',
+    text: 'Jobs launched from a task that requires approval wait here until someone other than the requester approves or denies them. Approved jobs join the queue and run as usual; denied jobs never run.',
   },
   tasks: {
     title: 'Reusable Automation Tasks',
@@ -111,6 +118,7 @@ export function Jobs() {
       <PageHelp pageKey={`delegator.${tab}`} title={tabHelp.title} text={tabHelp.text} />
 
       {tab === 'assignments' && <JobsTab />}
+      {tab === 'approvals' && <ApprovalsTab />}
       {tab === 'tasks' && <PlaybooksTab />}
       {tab === 'instructions' && <TemplatesTab />}
       {tab === 'credentials' && <CredentialsTab />}

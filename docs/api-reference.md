@@ -307,6 +307,13 @@ A Template: `id`, `name`, `kind` (`device` or `snippet`), `device_type` (`""`: a
 | GET    | `/api/intended-config/hosts` | `?group_id=`, `?compliance=`, `?status=`. `{rows: [Row], counts: {hosts, generated, errors, compliant, non_compliant, unknown, no_template}}`; the counts cover every host whatever the filters |
 | GET    | `/api/intended-config/hosts/{host_id}` | The Row plus `config_text`, `lines: [{text, missing}]`, `extra: [{path, text}]` and `backup: {id, captured_at}` (null when not compared). `404` when the host has no intended configuration |
 | POST   | `/api/intended-config/generate` | `{host_ids?, group_id?}` (neither: every host). Renders and compares now: `{hosts, generated, changed, errors, no_template}` |
+| GET    | `/api/intended-config/hosts/{host_id}/remediation` | A Remediation: `host_id`, `hostname`, `ip_address`, `device_type`, `group_id`, `template_name`, `backup` (`{id, captured_at}` or null), `state` (`ok`, `unsupported`, `unavailable`), `reason`, `platform`, `commands` (indented, removals first in each block), `added`, `removed`, `ignored`, `notes`. Stores and pushes nothing |
+| POST   | `/api/intended-config/remediation` | Exactly one of `{host_ids}`, `{group_id}`, `{dynamic_group_id}` (at most 500 hosts): `{hosts: [Remediation], counts: {hosts, with_commands, unsupported, unavailable}}` |
+| GET    | `/api/intended-config/remediation-ignores` | *Admin.* `{"rules": [{id, kind, pattern, device_type, description, enabled, created_at, updated_at, updated_by}]}` |
+| POST   | `/api/intended-config/remediation-ignores` | *Admin.* `{kind, pattern, device_type?, description?, enabled?}`; `kind` is `exact`, `prefix` or `regex` (RE2: a lookaround or backreference is `400`). `201` with the rule |
+| PUT    | `/api/intended-config/remediation-ignores/{id}` | *Admin.* Full replace |
+| DELETE | `/api/intended-config/remediation-ignores/{id}` | *Admin.* `{"ok": true}` |
+| POST   | `/api/deployments/intended-remediation` | Needs `deployments` too. The targets as above plus `credential_id`, `name?`, `description?`: one deployment per host with commands (change type `intended-remediation`), `{deployments: [{id, host_id, hostname, status, requires_approval, approval_status, commands}], skipped: [{host_id, hostname, reason}]}` |
 
 ### Export templates
 Any signed-in user reads and renders the templates of the object types whose feature they hold (`host`: `inventory`; `prefix`, `ip_address`, `vlan`: `ipam`; `circuit`: `circuits`; `site`: `organization`); the rows marked *Admin* need an administrator. Writes and renders are audited (category `export_templates`). `400` for bad input or a template that fails, `404` for an unknown id or a type the caller does not read, `409` when the object type has a template of that name ignoring case. See [export-templates.md](export-templates.md).
@@ -363,6 +370,10 @@ resolved value. Audited as `secrets_providers`. See
 | POST   | `/api/jobs/launch`      | Launch a job (see below)   |
 | POST   | `/api/jobs/{id}/retry`  | Same job again; a live job needs the task's commit permission |
 | POST   | `/api/jobs/{id}/rerun`  | Same job, live; needs the task's commit permission |
+| POST   | `/api/jobs/{id}/cancel` | Cancel a job awaiting approval, queued or running |
+| GET    | `/api/jobs/approvals`   | Needs `jobs.approve`. Jobs in `pending_approval` the caller may decide, oldest first: within the caller's object scope (every target writable) and not launched by the caller. `limit` 1 to 500 (200). Same fields as `GET /api/jobs/{id}` |
+| POST   | `/api/jobs/{id}/approve` | Needs `jobs.approve`. `{comment?}` (at most 2000 characters). A job in `pending_approval` moves to `queued` and runs as usual: `{ok, job_id, status: "queued", approval_status: "approved"}`. `400` when the job is not awaiting approval, `403` for the job's own requester (admins included), `409` when another decision or a cancel won |
+| POST   | `/api/jobs/{id}/deny`   | Needs `jobs.approve`. `{comment?}`. The job ends in `denied` (terminal, never runs): `{ok, job_id, status: "denied", approval_status: "denied"}`; errors as for approve |
 | WS     | `/ws/jobs/{id}`         | Real-time event stream     |
 
 **Launch payload:**
@@ -387,6 +398,14 @@ task's run, or for a live run commit, permission refuses gets `403`. The job
 record keeps the inputs in `parameters`, secret inputs as `{{secret.NAME}}`
 references only, and the mode in `dry_run`.
 
+A task with `approval_required` (`GET`/`POST`/`PUT /api/playbooks`, admin
+only to change) launches, retries and re-runs jobs in status
+`pending_approval` (`{"job_id": 7, "status": "pending_approval"}`), which the
+queue never starts. A job row carries `approval_status` (`not_required`,
+`pending`, `approved`, `denied`), `approved_by` (who decided, for an approval
+or a denial), `approved_at` (UTC ISO 8601) and `approval_comment`. See
+[jobs.md](jobs.md#approvals).
+
 ### Integration availability mutes
 Mutes of the entities the integrations collect (Meraki, Cato, FMC, Panorama, Appgate, OPNsense, AWS, Azure, GCP). A muted entity is left off the Dashboard and raises no alert. See [meraki-topology.md](meraki-topology.md#muting).
 
@@ -409,7 +428,7 @@ Latency, jitter and loss reported by an integration for an entity (OPNsense gate
 
 `GET /api/availability/topology/summary` marks each entity with `muted` and `mute` (`id`, `scope`, `site`, `reason`, `created_by`, `created_at`, or null) and returns a `muted` total; its `up`, `degraded`, `down`, `unknown`, `avg_uptime_pct` and `total_outages` leave muted entities out. In `GET /api/dashboard`, `topology.entity_counts`, `by_provider` and `by_source` count a muted down or degraded entity under `muted`, and `problems` and `problem_count` leave it out.
 
-`GET /api/monitoring/hosts/{host_id}/vendor-status` (`monitoring` feature, follows the host's object scope) returns the newest vendor-specific state the poll read from the host: `kind` (`apc_ups` for an APC Smart-UPS), `status` and `polled_at` (UTC), or `kind` `""` and an empty `status` when there is none. For a UPS, `status` has `model`, `firmware` (as the UPS reports it), `firmware_version`, `serial`, `output_status` / `output_status_label`, `battery_status` / `battery_status_label`, `battery_capacity_pct`, `runtime_minutes`, `output_load_pct`, `battery_needs_replacing` and the card's `nmc_model`, `nmc_firmware`, `nmc_application`, `nmc_application_firmware`, `nmc_serial`, `nmc_hardware`. See [apc-ups.md](apc-ups.md).
+`GET /api/monitoring/hosts/{host_id}/vendor-status` (`monitoring` feature, follows the host's object scope) returns the newest vendor-specific state the poll read from the host: `kind` (`apc_ups` for an APC Smart-UPS), `status` and `polled_at` (UTC), or `kind` `""` and an empty `status` when there is none. For a UPS, `status` has `model`, `firmware` (as the UPS reports it), `firmware_version`, `serial`, `output_status` / `output_status_label`, `battery_status` / `battery_status_label`, `battery_capacity_pct`, `runtime_minutes`, `output_load_pct`, `battery_needs_replacing`, `input_voltage_v`, `input_frequency_hz`, `output_voltage_v`, `last_transfer_cause` / `last_transfer_cause_label`, `battery_temperature_c`, `probe_temperature_c` (each `null` when the UPS does not report it) and the card's `nmc_model`, `nmc_firmware`, `nmc_application`, `nmc_application_firmware`, `nmc_serial`, `nmc_hardware`. See [apc-ups.md](apc-ups.md).
 
 ### Meraki alerts
 Near-real-time Meraki alerts from the assurance-alert poll and the webhook receiver. See [meraki-alerts.md](meraki-alerts.md).
@@ -446,11 +465,11 @@ The recorded creates, updates and deletes of tracked objects, field by field; se
 
 ### GraphQL API
 
-Read-only queries across inventory and IPAM with nested relations; see [GraphQL API](graphql-api.md) for the schema, the per-field features and the limits.
+Read-only queries across inventory, IPAM, locations and tenancy, the device model, circuits, DCIM, virtualization, routing and hardware lifecycle with nested relations; see [GraphQL API](graphql-api.md) for the schema, the per-field features and the limits.
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| POST   | `/api/graphql` | `graphql` feature. `{"query", "variables", "operationName"}`; answers `{"data", "errors"}`. Queries only. Each field also needs the feature of its REST counterpart (`inventory`, `reports`, `ipam`, `config-backups`) and hosts and groups outside the caller's object scope are left out. `400` when the query cannot run (syntax, unknown field, mutation, depth, aliases, estimated cost, introspection while it is off, more than 20,000 characters); field errors answer `200` with the other fields. Session callers send `X-CSRF-Token` |
+| POST   | `/api/graphql` | `graphql` feature. `{"query", "variables", "operationName"}`; answers `{"data", "errors"}`. Queries only. Each field also needs the feature of its REST counterpart (`inventory`, `reports`, `ipam`, `config-backups`, `organization`, `circuits`, `dcim`, `virtualization`, `routing`, `lifecycle`) and hosts and groups outside the caller's object scope are left out. `400` when the query cannot run (syntax, unknown field, mutation, depth, aliases, estimated cost, introspection while it is off, more than 20,000 characters); field errors answer `200` with the other fields. Session callers send `X-CSRF-Token` |
 | GET    | `/api/graphql` | `graphql` feature. The GraphiQL page when the `graphiql` setting is on (own Content-Security-Policy, assets from unpkg.com with SRI), else `404`. Never runs a query |
 | GET    | `/api/admin/graphql/settings` | Admin. `graphiql`, `introspection`, `max_depth`, `max_aliases`, `max_complexity`, `max_limit` |
 | PUT    | `/api/admin/graphql/settings` | Admin, audited (`graphql` / `settings_update`). Any of `graphiql`, `introspection` (booleans), `max_depth` (2 to 20), `max_aliases` (0 to 200), `max_complexity` (100 to 1000000), `max_limit` (10 to 10000). Returns the merged settings; `422` on an unknown key or a value out of bounds |

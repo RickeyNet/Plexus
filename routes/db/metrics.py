@@ -12,6 +12,7 @@ import ipaddress
 import json
 import os
 import re
+from collections.abc import Iterable
 from datetime import UTC, datetime, timedelta
 
 import routes.database as _dbcore
@@ -22,6 +23,7 @@ from routes.database import (
     row_to_dict,
     rows_to_list,
 )
+from routes.db.inventory import group_ids_condition
 
 __all__ = [
     "create_metric_sample",
@@ -382,15 +384,20 @@ async def create_interface_ts_batch(rows: list[tuple]) -> int:
 async def get_top_interfaces_by_bandwidth(
     start: str,
     limit: int = 5,
+    *,
+    group_ids: Iterable[int] | None = None,
 ) -> list[dict]:
     """Return top-N interfaces network-wide by peak bandwidth over [start, now).
 
     Used by the dashboard bandwidth-trend panel to pick which interfaces to chart.
+    ``group_ids`` keeps the hosts of those inventory groups (object scope).
     """
+    scope_sql, scope_params = group_ids_condition("h.group_id", group_ids)
+    scope_where = f" AND {scope_sql}" if scope_sql else ""
     db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
-            """SELECT t.host_id,
+            f"""SELECT t.host_id,
                       t.if_index,
                       MAX(t.if_name) AS if_name,
                       MAX(t.if_speed_mbps) AS if_speed_mbps,
@@ -403,11 +410,11 @@ async def get_top_interfaces_by_bandwidth(
                FROM interface_ts t
                JOIN hosts h ON h.id = t.host_id
                WHERE t.sampled_at >= ?
-                 AND (t.in_rate_bps IS NOT NULL OR t.out_rate_bps IS NOT NULL)
+                 AND (t.in_rate_bps IS NOT NULL OR t.out_rate_bps IS NOT NULL){scope_where}
                GROUP BY t.host_id, t.if_index
                ORDER BY peak_bps DESC
                LIMIT ?""",
-            (start, limit),
+            (start, *scope_params, limit),
         )
         return rows_to_list(await cursor.fetchall())
     finally:
@@ -631,7 +638,11 @@ async def get_interface_error_events(
     severity: str | None = None,
     unresolved_only: bool = False,
     limit: int = 200,
+    *,
+    group_ids: Iterable[int] | None = None,
 ) -> list[dict]:
+    """Interface error events, newest first; ``group_ids`` keeps the events
+    of hosts in those inventory groups (object scope)."""
     db = await _dbcore.get_db(read_only=True)
     try:
         clauses: list[str] = []
@@ -639,6 +650,10 @@ async def get_interface_error_events(
         if host_id is not None:
             clauses.append("e.host_id = ?")
             params.append(host_id)
+        scope_sql, scope_params = group_ids_condition("h.group_id", group_ids)
+        if scope_sql:
+            clauses.append(scope_sql)
+            params.extend(scope_params)
         if severity:
             clauses.append("e.severity = ?")
             params.append(severity)
@@ -942,7 +957,12 @@ async def get_trap_syslog_events(
     host_id: int | None = None,
     severity: str | None = None,
     limit: int = 200,
+    *,
+    group_ids: Iterable[int] | None = None,
 ) -> list[dict]:
+    """Trap and syslog events, newest first; ``group_ids`` keeps the events
+    of hosts in those inventory groups (object scope: an event from an
+    unknown source is left out)."""
     db = await _dbcore.get_db(read_only=True)
     try:
         clauses: list[str] = []
@@ -953,6 +973,10 @@ async def get_trap_syslog_events(
         if host_id is not None:
             clauses.append("e.host_id = ?")
             params.append(host_id)
+        scope_sql, scope_params = group_ids_condition("h.group_id", group_ids)
+        if scope_sql:
+            clauses.append(scope_sql)
+            params.extend(scope_params)
         if severity:
             clauses.append("e.severity = ?")
             params.append(severity)
@@ -1093,7 +1117,8 @@ async def create_dashboard_panel(
         await db.close()
 
 
-async def update_dashboard_panel(panel_id: int, **kwargs) -> dict | None:
+async def update_dashboard_panel(dashboard_id: int, panel_id: int, **kwargs) -> dict | None:
+    """Update a panel of ``dashboard_id``; ``None`` when that dashboard has no such panel."""
     allowed = {"title", "chart_type", "metric_query_json", "grid_x", "grid_y", "grid_w", "grid_h", "options_json"}
     updates = {k: v for k, v in kwargs.items() if k in allowed and v is not None}
     if not updates:
@@ -1102,35 +1127,34 @@ async def update_dashboard_panel(panel_id: int, **kwargs) -> dict | None:
     sql, sql_params = _safe_dynamic_update("dashboard_panels", set_exprs, list(updates.values()), "id = ?", panel_id)
     db = await _dbcore.get_db()
     try:
+        cursor = await db.execute(
+            "SELECT id FROM dashboard_panels WHERE id = ? AND dashboard_id = ?", (panel_id, dashboard_id)
+        )
+        if not await cursor.fetchone():
+            return None
         await db.execute(sql, sql_params)
         cursor = await db.execute("SELECT * FROM dashboard_panels WHERE id = ?", (panel_id,))
         row = await cursor.fetchone()
-        if row:
-            # Update parent dashboard timestamp in same transaction
-            await db.execute(
-                "UPDATE dashboards SET updated_at = datetime('now') WHERE id = ?",
-                (dict(row)["dashboard_id"],),
-            )
+        # Update parent dashboard timestamp in same transaction
+        await db.execute("UPDATE dashboards SET updated_at = datetime('now') WHERE id = ?", (dashboard_id,))
         await db.commit()
         return dict(row) if row else None
     finally:
         await db.close()
 
 
-async def delete_dashboard_panel(panel_id: int) -> bool:
+async def delete_dashboard_panel(dashboard_id: int, panel_id: int) -> bool:
+    """Delete a panel of ``dashboard_id``; ``False`` when that dashboard has no such panel."""
     db = await _dbcore.get_db()
     try:
-        # Get dashboard_id first to update timestamp
-        cursor = await db.execute("SELECT dashboard_id FROM dashboard_panels WHERE id = ?", (panel_id,))
-        row = await cursor.fetchone()
-        cursor2 = await db.execute("DELETE FROM dashboard_panels WHERE id = ?", (panel_id,))
-        if row:
-            await db.execute(
-                "UPDATE dashboards SET updated_at = datetime('now') WHERE id = ?",
-                (dict(row)["dashboard_id"],),
-            )
+        cursor = await db.execute(
+            "DELETE FROM dashboard_panels WHERE id = ? AND dashboard_id = ?", (panel_id, dashboard_id)
+        )
+        deleted = cursor.rowcount > 0
+        if deleted:
+            await db.execute("UPDATE dashboards SET updated_at = datetime('now') WHERE id = ?", (dashboard_id,))
         await db.commit()
-        return cursor2.rowcount > 0
+        return deleted
     finally:
         await db.close()
 
@@ -1434,14 +1458,21 @@ async def get_availability_transitions(
     limit: int = 500,
     group_id: int | None = None,
     days: int | None = None,
+    *,
+    group_ids: Iterable[int] | None = None,
 ) -> list[dict]:
     """State transitions, newest first. ``group_id`` keeps the hosts of one
     inventory group and ``days`` the last N days, the same filters as
-    ``get_outage_history``."""
+    ``get_outage_history``; ``group_ids`` the hosts of those inventory
+    groups (object scope)."""
     db = await _dbcore.get_db(read_only=True)
     try:
         clauses = ["1=1"]
         params: list = []
+        scope_sql, scope_params = group_ids_condition("h.group_id", group_ids)
+        if scope_sql:
+            clauses.append(scope_sql)
+            params.extend(scope_params)
         if host_id is not None:
             clauses.append("a.host_id = ?")
             params.append(host_id)
@@ -1478,8 +1509,12 @@ async def get_availability_transitions(
 async def get_availability_summary(
     group_id: int | None = None,
     days: int = 30,
+    *,
+    group_ids: Iterable[int] | None = None,
 ) -> dict:
-    """Compute availability summary with outage counts and uptime % from transitions."""
+    """Compute availability summary with outage counts and uptime % from
+    transitions; ``group_ids`` keeps the hosts of those inventory groups
+    (object scope)."""
     db = await _dbcore.get_db()
     try:
         group_filter = ""
@@ -1487,6 +1522,10 @@ async def get_availability_summary(
         if group_id is not None:
             group_filter = "AND h.group_id = ?"
             params.append(group_id)
+        scope_sql, scope_params = group_ids_condition("h.group_id", group_ids)
+        if scope_sql:
+            group_filter += f" AND {scope_sql}"
+            params.extend(scope_params)
 
         # Get all hosts and their transitions in the window
         cursor = await db.execute(
@@ -1627,8 +1666,11 @@ async def get_outage_history(
     group_id: int | None = None,
     days: int = 30,
     limit: int = 200,
+    *,
+    group_ids: Iterable[int] | None = None,
 ) -> list[dict]:
-    """Get outage records (down transitions paired with recovery)."""
+    """Get outage records (down transitions paired with recovery);
+    ``group_ids`` keeps the hosts of those inventory groups (object scope)."""
     db = await _dbcore.get_db(read_only=True)
     try:
         group_filter = ""
@@ -1639,6 +1681,10 @@ async def get_outage_history(
         if group_id is not None:
             group_filter += " AND h.group_id = ?"
             params.append(group_id)
+        scope_sql, scope_params = group_ids_condition("h.group_id", group_ids)
+        if scope_sql:
+            group_filter += f" AND {scope_sql}"
+            params.extend(scope_params)
         params.append(limit)
 
         cursor = await db.execute(
@@ -1692,7 +1738,7 @@ async def get_interface_utilization_summary(
     db = await _dbcore.get_db()
     try:
         cursor = await db.execute(
-            """SELECT if_index, if_name, if_speed_mbps,
+            """SELECT if_index, MAX(if_name) AS if_name, MAX(if_speed_mbps) AS if_speed_mbps,
                       COUNT(*) AS sample_count,
                       AVG(in_rate_bps) AS avg_in_bps,
                       AVG(out_rate_bps) AS avg_out_bps,
@@ -1705,7 +1751,7 @@ async def get_interface_utilization_summary(
                  AND sampled_at >= datetime('now', '-' || ? || ' days')
                  AND in_rate_bps IS NOT NULL
                GROUP BY if_index
-               ORDER BY if_name""",
+               ORDER BY MAX(if_name)""",
             (host_id, days),
         )
         interfaces = rows_to_list(await cursor.fetchall())

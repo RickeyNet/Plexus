@@ -8,6 +8,9 @@ Provides:
   - Flow aggregation and summarization
   - Traffic analysis API endpoints (top talkers, applications, conversations)
   - Background collection and cleanup loops
+
+Object scope: a caller limited to selected inventory groups sees the flows
+and exporters of the hosts of those groups only.
 """
 
 from __future__ import annotations
@@ -22,6 +25,7 @@ import routes.database as db
 from fastapi import APIRouter, HTTPException, Query, Request
 
 import netcontrol.routes.state as state
+from netcontrol.object_scope import group_filter, readable_host_ids, require_host, scope_exempt, scoped
 from netcontrol.telemetry import configure_logging
 
 router = APIRouter()
@@ -961,26 +965,41 @@ async def flow_aggregation_cycle():
 # ═════════════════════════════════════════════════════════════════════════════
 
 
+async def _flow_scope(request: Request | None, host_id: int | None) -> dict:
+    """The ``group_ids`` keyword of the flow readers for the caller (``{}``
+    when unrestricted); 404 for a scoped caller's unreadable ``host_id``."""
+    scope_kwargs = await group_filter(request)
+    if scope_kwargs and host_id is not None:
+        await require_host(request, host_id)
+    return scope_kwargs
+
+
 @router.get("/api/flows/top-talkers")
+@scoped("list")
 async def api_top_talkers(
     host_id: int | None = Query(None),
     hours: int = Query(1, ge=1, le=168),
     direction: str = Query("src"),
     limit: int = Query(20, ge=1, le=100),
+    request: Request = None,  # type: ignore[assignment]
 ):
-    results = await db.get_flow_top_talkers(host_id, hours, direction, limit)
+    scope_kwargs = await _flow_scope(request, host_id)
+    results = await db.get_flow_top_talkers(host_id, hours, direction, limit, **scope_kwargs)
     for r in results:
         r["protocol_name"] = ""  # flows are aggregated, no single protocol
     return results
 
 
 @router.get("/api/flows/top-applications")
+@scoped("list")
 async def api_top_applications(
     host_id: int | None = Query(None),
     hours: int = Query(1, ge=1, le=168),
     limit: int = Query(20, ge=1, le=100),
+    request: Request = None,  # type: ignore[assignment]
 ):
-    results = await db.get_flow_top_applications(host_id, hours, limit)
+    scope_kwargs = await _flow_scope(request, host_id)
+    results = await db.get_flow_top_applications(host_id, hours, limit, **scope_kwargs)
     for r in results:
         port = r.get("port", 0)
         proto = r.get("protocol", 0)
@@ -990,24 +1009,31 @@ async def api_top_applications(
 
 
 @router.get("/api/flows/top-conversations")
+@scoped("list")
 async def api_top_conversations(
     host_id: int | None = Query(None),
     hours: int = Query(1, ge=1, le=168),
     limit: int = Query(20, ge=1, le=100),
+    request: Request = None,  # type: ignore[assignment]
 ):
-    return await db.get_flow_top_conversations(host_id, hours, limit)
+    scope_kwargs = await _flow_scope(request, host_id)
+    return await db.get_flow_top_conversations(host_id, hours, limit, **scope_kwargs)
 
 
 @router.get("/api/flows/timeline")
+@scoped("list")
 async def api_flow_timeline(
     host_id: int | None = Query(None),
     hours: int = Query(6, ge=1, le=168),
     bucket_minutes: int = Query(5, ge=1, le=60),
+    request: Request = None,  # type: ignore[assignment]
 ):
-    return await db.get_flow_timeline(host_id, hours, bucket_minutes)
+    scope_kwargs = await _flow_scope(request, host_id)
+    return await db.get_flow_timeline(host_id, hours, bucket_minutes, **scope_kwargs)
 
 
 @router.get("/api/flows/status")
+@scope_exempt("the collector's own settings and state: no host or inventory group data")
 async def api_flow_status():
     return {
         "enabled": FLOW_COLLECTOR_CONFIG.get("enabled", False),
@@ -1019,9 +1045,16 @@ async def api_flow_status():
 
 
 @router.get("/api/flows/exporters")
-async def api_flow_exporters():
-    """List devices that have exported flows, with per-protocol packet counters."""
+@scoped("list")
+async def api_flow_exporters(request: Request = None):  # type: ignore[assignment]
+    """List devices that have exported flows, with per-protocol packet
+    counters (a scoped caller: those that are hosts it can read, and the
+    cache size is their count)."""
     rows = await db.list_flow_exporters()
+    hosts = await readable_host_ids(request)
+    if hosts is not None:
+        rows = [row for row in rows if row.get("host_id") is not None and int(row["host_id"]) in hosts]
+        return {"exporters": rows, "cache_size": len(rows)}
     return {"exporters": rows, "cache_size": len(_exporter_cache)}
 
 

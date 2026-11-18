@@ -23,7 +23,11 @@ What is read (``<P>`` is ``/config/devices/entry[@name='localhost.localdomain']`
     ``tunnel/global-protect-gateway``, ``vsys`` and the template variables
   - per connected firewall on the map, through Panorama (``target=<serial>``):
     ``show interface all``, ``show routing route``, BGP peers, ``show vpn
-    ipsec-sa``, ``show vpn flow``, HA state and the GlobalProtect users
+    ipsec-sa``, ``show vpn flow``, HA state, the GlobalProtect users
+    connected now (``current-user``) and those who connected earlier and
+    logged out (``previous-user``, ``gp_previous_users``), so the map lists
+    every GlobalProtect user the firewalls know of, not only those connected
+    when the collection ran
 
 Failure policy: the login and the device list are required; everything else
 is best-effort and a failure is recorded in ``errors`` and surfaced in the
@@ -73,7 +77,8 @@ DEFAULT_OPTIONS: dict[str, Any] = {
     "include_nat": True,
     # IKE gateways and IPsec tunnels (and their state with the device state).
     "include_vpn": True,
-    # GlobalProtect gateways (and the connected users with the device state).
+    # GlobalProtect gateways (and the connected and previous users with the
+    # device state).
     "include_global_protect": True,
     # Operational state read through Panorama from each connected firewall.
     "include_device_state": True,
@@ -139,6 +144,11 @@ STATE_COMMANDS: tuple[tuple[str, str, str], ...] = (
     (
         "gp_users",
         "<show><global-protect-gateway><current-user/></global-protect-gateway></show>",
+        "include_global_protect",
+    ),
+    (
+        "gp_previous_users",
+        "<show><global-protect-gateway><previous-user/></global-protect-gateway></show>",
         "include_global_protect",
     ),
 )

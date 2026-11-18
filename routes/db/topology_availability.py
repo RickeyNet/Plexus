@@ -26,7 +26,7 @@ Timestamps are UTC ``YYYY-MM-DD HH:MM:SS`` text.
 from __future__ import annotations
 
 import json
-from collections.abc import Collection, Sequence
+from collections.abc import Collection, Iterable, Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -34,6 +34,7 @@ from netcontrol.integrations.availability import METRIC_KEYS
 
 import routes.database as _dbcore
 from routes.database import rows_to_list
+from routes.db.inventory import group_ids_condition
 from routes.db.monitoring import record_target_statuses
 
 __all__ = [
@@ -742,17 +743,25 @@ async def get_topology_availability_summary(
     days: int = 30,
     *,
     now: str | None = None,
+    host_ids: Iterable[int] | None = None,
 ) -> dict[str, Any]:
     """Per-entity uptime over the last ``days``, with current state, last
     change and outage count, plus the totals and the organizations /
     accounts tracked (unfiltered, for the filter). A muted entity carries
     its ``mute`` and is left out of the state counts, the average uptime
-    and the outage total (``muted`` counts it; ``entity_count`` still does)."""
+    and the outage total (``muted`` counts it; ``entity_count`` still does).
+    ``host_ids`` keeps only the entities matched to those inventory hosts,
+    for the entities, the totals and the organizations (object scope)."""
     window_start, now = _window(days, now)
     index = await load_topology_mute_index(provider, org_ref)
+    scope_sql, scope_params = group_ids_condition("host_id", host_ids)
     db = await _dbcore.get_db(read_only=True)
     try:
         clauses, params = _filters("s", provider, org_ref, entity_type)
+        state_sql, state_params = group_ids_condition("s.host_id", host_ids)
+        if state_sql:
+            clauses.append(state_sql)
+            params.extend(state_params)
         where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
         cursor = await db.execute(
             f"""SELECT s.* FROM topology_entity_state s {where}
@@ -763,8 +772,10 @@ async def get_topology_availability_summary(
         t_clauses, t_params = _filters("t", provider, org_ref, entity_type)
         before, inside = await _window_history(db, t_clauses, t_params, window_start)
         cursor = await db.execute(
-            """SELECT provider, org_ref, MAX(org_name) AS org_name, COUNT(*) AS entity_count
-               FROM topology_entity_state GROUP BY provider, org_ref ORDER BY provider, org_ref"""
+            f"""SELECT provider, org_ref, MAX(org_name) AS org_name, COUNT(*) AS entity_count
+               FROM topology_entity_state {"WHERE " + scope_sql if scope_sql else ""}
+               GROUP BY provider, org_ref ORDER BY provider, org_ref""",
+            scope_params,
         )
         orgs = rows_to_list(await cursor.fetchall())
     finally:
@@ -823,13 +834,19 @@ async def get_topology_outages(
     limit: int = 200,
     *,
     now: str | None = None,
+    host_ids: Iterable[int] | None = None,
 ) -> list[dict]:
     """The down intervals inside the last ``days``, newest first. An outage
-    still under way has no ``ended_at``."""
+    still under way has no ``ended_at``. ``host_ids`` keeps the entities
+    matched to those inventory hosts (object scope)."""
     window_start, now = _window(days, now)
     db = await _dbcore.get_db(read_only=True)
     try:
         clauses, params = _filters("s", provider, org_ref, entity_type, entity_id)
+        scope_sql, scope_params = group_ids_condition("s.host_id", host_ids)
+        if scope_sql:
+            clauses.append(scope_sql)
+            params.extend(scope_params)
         where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
         cursor = await db.execute(f"SELECT s.* FROM topology_entity_state s {where}", tuple(params))
         states = {_key(r): r for r in rows_to_list(await cursor.fetchall())}
@@ -865,10 +882,18 @@ async def get_topology_transitions(
     entity_id: str | None = None,
     days: int = 30,
     limit: int = 500,
+    *,
+    host_ids: Iterable[int] | None = None,
 ) -> list[dict]:
-    """State changes inside the last ``days``, newest first."""
+    """State changes inside the last ``days``, newest first; ``host_ids``
+    keeps the changes of entities matched to those inventory hosts (object
+    scope)."""
     window_start, _now_text = _window(days, None)
     clauses, params = _filters("t", provider, org_ref, entity_type, entity_id)
+    scope_sql, scope_params = group_ids_condition("t.host_id", host_ids)
+    if scope_sql:
+        clauses.append(scope_sql)
+        params.extend(scope_params)
     where = " AND ".join(["t.transition_at >= ?", *clauses])
     db = await _dbcore.get_db(read_only=True)
     try:

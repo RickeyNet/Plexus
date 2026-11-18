@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router';
 
 import {
   type Deployment,
@@ -29,6 +30,7 @@ import {
   canDelete,
   canExecute,
   canRollback,
+  deploymentIdFromSearch,
   executeConfirmOptions,
   filterDeployments,
   isApprovalBlocking,
@@ -57,7 +59,23 @@ export function Deployments() {
   const [query, setQuery] = useState('');
   const [status, setStatus] = useState('');
   const [showNew, setShowNew] = useState(false);
-  const [detailId, setDetailId] = useState<number | null>(null);
+  const [openId, setDetailId] = useState<number | null>(null);
+  // Other pages link to one deployment as `?deployment=<id>`: its detail is
+  // open while the parameter is in the URL, and closing it drops the parameter.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const detailId = openId ?? deploymentIdFromSearch(searchParams.toString());
+  const closeDetail = () => {
+    setDetailId(null);
+    if (!searchParams.has('deployment')) return;
+    setSearchParams(
+      (current) => {
+        const next = new URLSearchParams(current);
+        next.delete('deployment');
+        return next;
+      },
+      { replace: true },
+    );
+  };
   const [correlationId, setCorrelationId] = useState<number | null>(null);
   const [stream, setStream] = useState<JobStream | null>(null);
 
@@ -147,18 +165,18 @@ export function Deployments() {
       />
       <DeploymentDetailModal
         isOpen={detailId != null}
-        onClose={() => setDetailId(null)}
+        onClose={closeDetail}
         deploymentId={detailId}
         onExecuted={(r) => {
-          setDetailId(null);
+          closeDetail();
           startStream(r, 'Executing Deployment');
         }}
         onRolledBack={(r) => {
-          setDetailId(null);
+          closeDetail();
           startStream(r, 'Rolling Back Deployment');
         }}
         onShowCorrelation={(id) => {
-          setDetailId(null);
+          closeDetail();
           setCorrelationId(id);
         }}
       />

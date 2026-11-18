@@ -191,3 +191,34 @@ export function hostsFromGroups(
   }
   return [...byId.values()].sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
 }
+
+// ── Remediation ──────────────────────────────────────────────────────────────
+
+/** Where the Deployments tab opens one deployment's detail. */
+export function deploymentHref(id: number): string {
+  return `/change-management/deployments?deployment=${id}`;
+}
+
+/** "3 commands: 2 added, 1 removed" plus the ignored lines, when any. */
+export function remediationSummary(r: { commands: readonly string[]; added: number; removed: number; ignored: number }): string {
+  const n = r.commands.length;
+  const parts = [`${n.toLocaleString()} command${n === 1 ? '' : 's'}: ${r.added.toLocaleString()} added, ${r.removed.toLocaleString()} removed`];
+  if (r.ignored) parts.push(`${r.ignored.toLocaleString()} line${r.ignored === 1 ? '' : 's'} ignored by rules`);
+  return parts.join('; ');
+}
+
+/** The commands as text to copy, one per line, indentation kept. */
+export function commandsText(commands: readonly string[]): string {
+  return commands.length ? `${commands.join('\n')}\n` : '';
+}
+
+/** How a remediation ignore rule matches a line. */
+export const IGNORE_KINDS: { value: 'exact' | 'prefix' | 'regex'; label: string; help: string }[] = [
+  { value: 'exact', label: 'Exact line', help: 'The whole line, without its indentation' },
+  { value: 'prefix', label: 'Starts with', help: 'Lines that start with the text' },
+  { value: 'regex', label: 'Regular expression', help: 'RE2 syntax, case sensitive; no lookarounds or backreferences' },
+];
+
+export function ignoreKindLabel(kind: string): string {
+  return IGNORE_KINDS.find((k) => k.value === kind)?.label ?? kind;
+}

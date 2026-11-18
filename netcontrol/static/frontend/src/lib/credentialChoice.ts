@@ -11,14 +11,22 @@ export const SETTINGS_SERVICE_CREDENTIAL = "service";
  * The credential a read starts with: the service credential Settings names
  * (its id for an administrator, who sees the service list; the Settings
  * placeholder otherwise), else the first service credential, else the first
- * of the user's own. '' when there is none.
+ * of the user's own. '' when there is none. A `preferredId` (the credential
+ * an inventory group's discovery remembers) comes first when it is in the
+ * user's list (`serviceIds` or `ownIds`).
  */
 export function defaultCollectCredential(
   settingsId: number | null | undefined,
   serviceIds: number[],
   ownIds: number[],
   isAdmin: boolean,
+  preferredId?: number | null,
 ): string {
+  if (
+    preferredId != null &&
+    (serviceIds.includes(preferredId) || ownIds.includes(preferredId))
+  )
+    return String(preferredId);
   if (settingsId != null)
     return isAdmin ? String(settingsId) : SETTINGS_SERVICE_CREDENTIAL;
   if (isAdmin && serviceIds.length) return String(serviceIds[0]);

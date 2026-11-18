@@ -700,11 +700,21 @@ def _hq_state(*, active: bool) -> dict[str, Any]:
             _gp_user("dana.reyes", "MBP-DREYES", "10.252.0.12", "198.51.100.142", "Apple macOS 15.1"),
             _gp_user("sam.okafor", "LT-SOKAFOR", "10.252.1.7", "198.51.100.143", "Microsoft Windows 11 Pro"),
         ]
+        # Users who connected earlier and logged out: alex.kim has
+        # reconnected since; jordan.lee's firewall gave no UTC logout time.
+        state["gp_previous_users"] = [
+            _gp_previous_user(
+                "priya.nair", "LT-PNAIR", "192.0.2.41", "198.51.100.151", "Oct.08 17:40:05", "1791481205"
+            ),
+            _gp_previous_user("jordan.lee", "MBP-JLEE", "192.0.2.42", "203.0.113.152", "Oct.07 12:05:30", ""),
+            _gp_previous_user("alex.kim", "LT-AKIM", "192.0.2.43", "198.51.100.141", "Oct.06 19:15:00", "1791314100"),
+        ]
     else:
         state["bgp_peers"] = None
         state["ipsec_sa"] = None
         state["vpn_flow"] = {"num_ipsec": "0"}
         state["gp_users"] = None
+        state["gp_previous_users"] = None
     return state
 
 
@@ -723,6 +733,29 @@ def _gp_user(username: str, computer: str, virtual_ip: str, public_ip: str, clie
         "lifetime": "2592000",
         "app-version": "6.2.4-71",
     }
+
+
+def _gp_previous_user(
+    username: str, computer: str, virtual_ip: str, public_ip: str, logout: str, logout_utc: str
+) -> dict:
+    """One entry of ``show global-protect-gateway previous-user``."""
+    user = {
+        "domain": "corp",
+        "islocal": "no",
+        "username": username,
+        "computer": computer,
+        "client": "Microsoft Windows 11 Enterprise",
+        "vpn-type": "Device Level VPN",
+        "virtual-ip": virtual_ip,
+        "public-ip": public_ip,
+        "tunnel-type": "IPSec",
+        "login-time": "Oct.06 08:00:00",
+        "logout-time": logout,
+        "reason": "client logout.",
+    }
+    if logout_utc:
+        user["logout-time-utc"] = logout_utc
+    return user
 
 
 def _branch_state() -> dict[str, Any]:
@@ -769,6 +802,7 @@ def _branch_state() -> dict[str, Any]:
         "ha": {"enabled": "no"},
         "bgp_peers": None,
         "gp_users": None,
+        "gp_previous_users": None,
     }
 
 
@@ -795,6 +829,7 @@ def _aws_state() -> dict[str, Any]:
         "ha": {"enabled": "no"},
         "bgp_peers": None,
         "gp_users": None,
+        "gp_previous_users": None,
     }
 
 

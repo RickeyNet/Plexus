@@ -14,6 +14,7 @@ import { formatBackendDateTime } from '@/lib/datetime';
 import { useCanWriteGroup } from '@/lib/objectScope';
 
 import { extraParentText, generateSummary } from './intendedHelpers';
+import { RemediationSection } from './IntendedRemediation';
 import { writeControl } from './scopeGating';
 
 /**
@@ -58,7 +59,7 @@ export function ExtraLines({ extra }: { extra: IntendedExtraLine[] }) {
   );
 }
 
-/** A host's intended configuration: the text with missing lines marked, the extra lines, Copy and Regenerate. */
+/** A host's intended configuration: the text with missing lines marked, the extra lines, the remediation commands, Copy and Regenerate. */
 export function IntendedDetailModal({ hostId, onClose }: { hostId: number; onClose: () => void }) {
   const q = useIntendedHost(hostId);
   const generate = useGenerateIntended();
@@ -131,6 +132,7 @@ export function IntendedDetailModal({ hostId, onClose }: { hostId: number; onClo
           </div>
           <ExtraLines extra={d.extra} />
         </section>
+        <RemediationSection hostId={hostId} groupId={d.group_id} />
       </div>
     );
 

@@ -8,6 +8,11 @@ Provides API endpoints for:
 - Host Graphs (template instances applied to specific devices)
 - Graph Trees (hierarchical navigation)
 - Data Source Profiles (per-device poll configuration)
+
+Object scope: graph templates, host templates and graph trees are shared
+catalogues (every caller reads them, only unrestricted callers change them;
+a scoped caller sees only the tree nodes of their hosts and groups); host
+graphs and data source profiles follow their host.
 """
 
 from __future__ import annotations
@@ -16,6 +21,17 @@ import routes.database as db
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
+from netcontrol.object_scope import (
+    filter_rows,
+    readable_host_ids,
+    request_scope,
+    require_host,
+    require_model_write,
+    require_new_row,
+    require_row,
+    scope_exempt,
+    scoped,
+)
 from netcontrol.telemetry import configure_logging
 
 router = APIRouter()
@@ -173,6 +189,7 @@ class DataSourceProfileUpdate(BaseModel):
 
 
 @router.get("/api/graph-templates")
+@scope_exempt("shared template catalogue; no host data")
 async def list_graph_templates_api(
     category: str | None = Query(default=None),
     scope: str | None = Query(default=None),
@@ -183,6 +200,7 @@ async def list_graph_templates_api(
 
 
 @router.get("/api/graph-templates/{template_id}")
+@scope_exempt("shared template catalogue; no host data")
 async def get_graph_template_api(template_id: int):
     tpl = await db.get_graph_template(template_id)
     if not tpl:
@@ -191,7 +209,9 @@ async def get_graph_template_api(template_id: int):
 
 
 @router.post("/api/graph-templates", status_code=201)
+@scoped("catalog")
 async def create_graph_template_api(payload: GraphTemplateCreate, request: Request):
+    await require_model_write(request)
     user = getattr(request.state, "user", None) or {}
     created_by = user.get("username", "") if isinstance(user, dict) else ""
     tpl = await db.create_graph_template(
@@ -216,7 +236,9 @@ async def create_graph_template_api(payload: GraphTemplateCreate, request: Reque
 
 
 @router.put("/api/graph-templates/{template_id}")
-async def update_graph_template_api(template_id: int, payload: GraphTemplateUpdate):
+@scoped("catalog")
+async def update_graph_template_api(template_id: int, payload: GraphTemplateUpdate, request: Request):
+    await require_model_write(request)
     existing = await db.get_graph_template(template_id)
     if not existing:
         raise HTTPException(status_code=404, detail="Graph template not found")
@@ -227,7 +249,9 @@ async def update_graph_template_api(template_id: int, payload: GraphTemplateUpda
 
 
 @router.delete("/api/graph-templates/{template_id}")
-async def delete_graph_template_api(template_id: int):
+@scoped("catalog")
+async def delete_graph_template_api(template_id: int, request: Request):
+    await require_model_write(request)
     existing = await db.get_graph_template(template_id)
     if not existing:
         raise HTTPException(status_code=404, detail="Graph template not found")
@@ -264,7 +288,9 @@ async def _editable_template_item(template_id: int, item_id: int | None = None) 
 
 
 @router.post("/api/graph-templates/{template_id}/items", status_code=201)
-async def create_graph_template_item_api(template_id: int, payload: GraphTemplateItemCreate):
+@scoped("catalog")
+async def create_graph_template_item_api(template_id: int, payload: GraphTemplateItemCreate, request: Request):
+    await require_model_write(request)
     await _editable_template_item(template_id)
     item = await db.create_graph_template_item(
         template_id=template_id,
@@ -282,7 +308,11 @@ async def create_graph_template_item_api(template_id: int, payload: GraphTemplat
 
 
 @router.put("/api/graph-templates/{template_id}/items/{item_id}")
-async def update_graph_template_item_api(template_id: int, item_id: int, payload: GraphTemplateItemUpdate):
+@scoped("catalog")
+async def update_graph_template_item_api(
+    template_id: int, item_id: int, payload: GraphTemplateItemUpdate, request: Request
+):
+    await require_model_write(request)
     existing = await _editable_template_item(template_id, item_id)
     changes = payload.model_dump(exclude_none=True)
     if not changes:
@@ -294,7 +324,9 @@ async def update_graph_template_item_api(template_id: int, item_id: int, payload
 
 
 @router.delete("/api/graph-templates/{template_id}/items/{item_id}")
-async def delete_graph_template_item_api(template_id: int, item_id: int):
+@scoped("catalog")
+async def delete_graph_template_item_api(template_id: int, item_id: int, request: Request):
+    await require_model_write(request)
     await _editable_template_item(template_id, item_id)
     deleted = await db.delete_graph_template_item(item_id)
     if not deleted:
@@ -308,12 +340,14 @@ async def delete_graph_template_item_api(template_id: int, item_id: int):
 
 
 @router.get("/api/host-templates")
+@scope_exempt("shared template catalogue; no host data")
 async def list_host_templates_api():
     templates = await db.list_host_templates()
     return {"host_templates": templates}
 
 
 @router.get("/api/host-templates/{template_id}")
+@scope_exempt("shared template catalogue; no host data")
 async def get_host_template_api(template_id: int):
     tpl = await db.get_host_template(template_id)
     if not tpl:
@@ -322,7 +356,9 @@ async def get_host_template_api(template_id: int):
 
 
 @router.post("/api/host-templates", status_code=201)
+@scoped("catalog")
 async def create_host_template_api(payload: HostTemplateCreate, request: Request):
+    await require_model_write(request)
     user = getattr(request.state, "user", None) or {}
     created_by = user.get("username", "") if isinstance(user, dict) else ""
     tpl = await db.create_host_template(
@@ -338,7 +374,9 @@ async def create_host_template_api(payload: HostTemplateCreate, request: Request
 
 
 @router.put("/api/host-templates/{template_id}")
-async def update_host_template_api(template_id: int, payload: HostTemplateUpdate):
+@scoped("catalog")
+async def update_host_template_api(template_id: int, payload: HostTemplateUpdate, request: Request):
+    await require_model_write(request)
     existing = await db.get_host_template(template_id)
     if not existing:
         raise HTTPException(status_code=404, detail="Host template not found")
@@ -347,7 +385,9 @@ async def update_host_template_api(template_id: int, payload: HostTemplateUpdate
 
 
 @router.delete("/api/host-templates/{template_id}")
-async def delete_host_template_api(template_id: int):
+@scoped("catalog")
+async def delete_host_template_api(template_id: int, request: Request):
+    await require_model_write(request)
     deleted = await db.delete_host_template(template_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Host template not found")
@@ -358,7 +398,9 @@ async def delete_host_template_api(template_id: int):
 
 
 @router.post("/api/host-templates/{template_id}/graph-templates/{graph_template_id}", status_code=201)
-async def link_graph_to_host_template_api(template_id: int, graph_template_id: int):
+@scoped("catalog")
+async def link_graph_to_host_template_api(template_id: int, graph_template_id: int, request: Request):
+    await require_model_write(request)
     ht = await db.get_host_template(template_id)
     if not ht:
         raise HTTPException(status_code=404, detail="Host template not found")
@@ -370,7 +412,9 @@ async def link_graph_to_host_template_api(template_id: int, graph_template_id: i
 
 
 @router.delete("/api/host-templates/{template_id}/graph-templates/{graph_template_id}")
-async def unlink_graph_from_host_template_api(template_id: int, graph_template_id: int):
+@scoped("catalog")
+async def unlink_graph_from_host_template_api(template_id: int, graph_template_id: int, request: Request):
+    await require_model_write(request)
     deleted = await db.unlink_graph_template_from_host_template(template_id, graph_template_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Link not found")
@@ -383,7 +427,9 @@ async def unlink_graph_from_host_template_api(template_id: int, graph_template_i
 
 
 @router.get("/api/host-graphs")
+@scoped("list")
 async def list_host_graphs_api(
+    request: Request,
     host_id: int | None = Query(default=None),
     graph_template_id: int | None = Query(default=None),
     enabled_only: bool = Query(default=False),
@@ -393,19 +439,21 @@ async def list_host_graphs_api(
         graph_template_id=graph_template_id,
         enabled_only=enabled_only,
     )
-    return {"host_graphs": graphs}
+    return {"host_graphs": await filter_rows("host_record", graphs, request)}
 
 
 @router.get("/api/host-graphs/{host_graph_id}")
-async def get_host_graph_api(host_graph_id: int):
-    hg = await db.get_host_graph(host_graph_id)
-    if not hg:
-        raise HTTPException(status_code=404, detail="Host graph not found")
-    return hg
+@scoped("host_record")
+async def get_host_graph_api(host_graph_id: int, request: Request):
+    return await require_row(
+        request, "host_record", await db.get_host_graph(host_graph_id), not_found="Host graph not found"
+    )
 
 
 @router.post("/api/host-graphs", status_code=201)
-async def create_host_graph_api(payload: HostGraphCreate):
+@scoped("create")
+async def create_host_graph_api(payload: HostGraphCreate, request: Request):
+    await require_new_row(request, "host_record", {"host_id": payload.host_id})
     hg = await db.create_host_graph(
         host_id=payload.host_id,
         graph_template_id=payload.graph_template_id,
@@ -420,7 +468,11 @@ async def create_host_graph_api(payload: HostGraphCreate):
 
 
 @router.put("/api/host-graphs/{host_graph_id}")
-async def update_host_graph_api(host_graph_id: int, payload: HostGraphUpdate):
+@scoped("host_record")
+async def update_host_graph_api(host_graph_id: int, payload: HostGraphUpdate, request: Request):
+    await require_row(
+        request, "host_record", await db.get_host_graph(host_graph_id), write=True, not_found="Host graph not found"
+    )
     updated = await db.update_host_graph(host_graph_id, **payload.model_dump(exclude_none=True))
     if not updated:
         raise HTTPException(status_code=404, detail="Host graph not found")
@@ -428,7 +480,11 @@ async def update_host_graph_api(host_graph_id: int, payload: HostGraphUpdate):
 
 
 @router.delete("/api/host-graphs/{host_graph_id}")
-async def delete_host_graph_api(host_graph_id: int):
+@scoped("host_record")
+async def delete_host_graph_api(host_graph_id: int, request: Request):
+    await require_row(
+        request, "host_record", await db.get_host_graph(host_graph_id), write=True, not_found="Host graph not found"
+    )
     deleted = await db.delete_host_graph(host_graph_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Host graph not found")
@@ -436,8 +492,10 @@ async def delete_host_graph_api(host_graph_id: int):
 
 
 @router.post("/api/hosts/{host_id}/apply-graph-templates")
-async def apply_templates_to_host_api(host_id: int):
+@scoped("host")
+async def apply_templates_to_host_api(host_id: int, request: Request):
     """Auto-apply matching graph templates to a host based on its device type."""
+    await require_host(request, host_id, write=True)
     created = await db.apply_graph_templates_to_host(host_id)
     return {"created": len(created), "host_graphs": created}
 
@@ -448,21 +506,60 @@ async def apply_templates_to_host_api(host_id: int):
 
 
 @router.get("/api/graph-trees")
+@scope_exempt("shared graph tree list (names only, no nodes); no host data")
 async def list_graph_trees_api():
     trees = await db.list_graph_trees()
     return {"graph_trees": trees}
 
 
 @router.get("/api/graph-trees/{tree_id}")
-async def get_graph_tree_api(tree_id: int):
+@scoped("catalog")
+async def get_graph_tree_api(tree_id: int, request: Request):
     tree = await db.get_graph_tree(tree_id)
     if not tree:
         raise HTTPException(status_code=404, detail="Graph tree not found")
+    tree["nodes"] = await _visible_tree_nodes(request, tree.get("nodes", []))
     return tree
 
 
+async def _visible_tree_nodes(request: Request, nodes: list[dict]) -> list[dict]:
+    """For a scoped caller: the tree nodes left once nodes that name a host,
+    group or host graph outside their scope are dropped (with their
+    descendants). Every node for an unrestricted caller."""
+    scope = await request_scope(request)
+    if scope.unrestricted:
+        return nodes
+    hosts = await readable_host_ids(request) or frozenset()
+    graph_ids = {n["graph_id"] for n in nodes if n.get("graph_id") is not None}
+    graph_hosts = {g["id"]: g.get("host_id") for g in await db.list_host_graphs()} if graph_ids else {}
+    hidden: set[int] = set()
+    for node in nodes:
+        if (
+            (node.get("host_id") is not None and int(node["host_id"]) not in hosts)
+            or (node.get("group_id") is not None and not scope.can_read_group(node["group_id"]))
+            or (node.get("graph_id") is not None and graph_hosts.get(node["graph_id"]) not in hosts)
+        ):
+            hidden.add(int(node["id"]))
+    by_id = {int(n["id"]): n for n in nodes}
+
+    def under_hidden(node: dict) -> bool:
+        seen: set[int] = set()
+        cur: dict | None = node
+        while cur is not None and int(cur["id"]) not in seen:
+            if int(cur["id"]) in hidden:
+                return True
+            seen.add(int(cur["id"]))
+            parent = cur.get("parent_node_id")
+            cur = by_id.get(int(parent)) if parent is not None else None
+        return False
+
+    return [n for n in nodes if not under_hidden(n)]
+
+
 @router.post("/api/graph-trees", status_code=201)
+@scoped("catalog")
 async def create_graph_tree_api(payload: GraphTreeCreate, request: Request):
+    await require_model_write(request)
     user = getattr(request.state, "user", None) or {}
     created_by = user.get("username", "") if isinstance(user, dict) else ""
     tree = await db.create_graph_tree(
@@ -476,7 +573,9 @@ async def create_graph_tree_api(payload: GraphTreeCreate, request: Request):
 
 
 @router.put("/api/graph-trees/{tree_id}")
-async def update_graph_tree_api(tree_id: int, payload: GraphTreeUpdate):
+@scoped("catalog")
+async def update_graph_tree_api(tree_id: int, payload: GraphTreeUpdate, request: Request):
+    await require_model_write(request)
     existing = await db.get_graph_tree(tree_id)
     if not existing:
         raise HTTPException(status_code=404, detail="Graph tree not found")
@@ -485,7 +584,9 @@ async def update_graph_tree_api(tree_id: int, payload: GraphTreeUpdate):
 
 
 @router.delete("/api/graph-trees/{tree_id}")
-async def delete_graph_tree_api(tree_id: int):
+@scoped("catalog")
+async def delete_graph_tree_api(tree_id: int, request: Request):
+    await require_model_write(request)
     deleted = await db.delete_graph_tree(tree_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Graph tree not found")
@@ -522,7 +623,9 @@ def _check_node_parent(nodes: dict[int, dict], parent_id: int | None, node_id: i
 
 
 @router.post("/api/graph-trees/{tree_id}/nodes", status_code=201)
-async def create_graph_tree_node_api(tree_id: int, payload: GraphTreeNodeCreate):
+@scoped("catalog")
+async def create_graph_tree_node_api(tree_id: int, payload: GraphTreeNodeCreate, request: Request):
+    await require_model_write(request)
     _check_node_parent(await _tree_nodes(tree_id), payload.parent_node_id)
     node = await db.create_graph_tree_node(
         tree_id=tree_id,
@@ -538,7 +641,9 @@ async def create_graph_tree_node_api(tree_id: int, payload: GraphTreeNodeCreate)
 
 
 @router.put("/api/graph-trees/{tree_id}/nodes/{node_id}")
-async def update_graph_tree_node_api(tree_id: int, node_id: int, payload: GraphTreeNodeUpdate):
+@scoped("catalog")
+async def update_graph_tree_node_api(tree_id: int, node_id: int, payload: GraphTreeNodeUpdate, request: Request):
+    await require_model_write(request)
     nodes = await _tree_nodes(tree_id)
     if node_id not in nodes:
         raise HTTPException(status_code=404, detail="Tree node not found")
@@ -558,7 +663,9 @@ async def update_graph_tree_node_api(tree_id: int, node_id: int, payload: GraphT
 
 
 @router.delete("/api/graph-trees/{tree_id}/nodes/{node_id}")
-async def delete_graph_tree_node_api(tree_id: int, node_id: int):
+@scoped("catalog")
+async def delete_graph_tree_node_api(tree_id: int, node_id: int, request: Request):
+    await require_model_write(request)
     if node_id not in await _tree_nodes(tree_id):
         raise HTTPException(status_code=404, detail="Tree node not found")
     deleted = await db.delete_graph_tree_node(node_id)
@@ -573,23 +680,30 @@ async def delete_graph_tree_node_api(tree_id: int, node_id: int):
 
 
 @router.get("/api/data-source-profiles")
+@scoped("list")
 async def list_data_source_profiles_api(
+    request: Request,
     host_id: int | None = Query(default=None),
 ):
     profiles = await db.list_data_source_profiles(host_id=host_id)
-    return {"data_source_profiles": profiles}
+    return {"data_source_profiles": await filter_rows("host_record", profiles, request)}
 
 
 @router.get("/api/data-source-profiles/{profile_id}")
-async def get_data_source_profile_api(profile_id: int):
-    profile = await db.get_data_source_profile(profile_id)
-    if not profile:
-        raise HTTPException(status_code=404, detail="Data source profile not found")
-    return profile
+@scoped("host_record")
+async def get_data_source_profile_api(profile_id: int, request: Request):
+    return await require_row(
+        request,
+        "host_record",
+        await db.get_data_source_profile(profile_id),
+        not_found="Data source profile not found",
+    )
 
 
 @router.post("/api/data-source-profiles", status_code=201)
-async def create_data_source_profile_api(payload: DataSourceProfileCreate):
+@scoped("create")
+async def create_data_source_profile_api(payload: DataSourceProfileCreate, request: Request):
+    await require_new_row(request, "host_record", {"host_id": payload.host_id})
     profile = await db.create_data_source_profile(
         host_id=payload.host_id,
         profile_name=payload.profile_name,
@@ -601,7 +715,9 @@ async def create_data_source_profile_api(payload: DataSourceProfileCreate):
 
 
 @router.put("/api/data-source-profiles/{profile_id}")
-async def update_data_source_profile_api(profile_id: int, payload: DataSourceProfileUpdate):
+@scoped("host_record")
+async def update_data_source_profile_api(profile_id: int, payload: DataSourceProfileUpdate, request: Request):
+    await _writable_profile(request, profile_id)
     updated = await db.update_data_source_profile(profile_id, **payload.model_dump(exclude_none=True))
     if not updated:
         raise HTTPException(status_code=404, detail="Data source profile not found")
@@ -609,8 +725,20 @@ async def update_data_source_profile_api(profile_id: int, payload: DataSourcePro
 
 
 @router.delete("/api/data-source-profiles/{profile_id}")
-async def delete_data_source_profile_api(profile_id: int):
+@scoped("host_record")
+async def delete_data_source_profile_api(profile_id: int, request: Request):
+    await _writable_profile(request, profile_id)
     deleted = await db.delete_data_source_profile(profile_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Data source profile not found")
     return {"status": "deleted"}
+
+
+async def _writable_profile(request: Request, profile_id: int) -> None:
+    await require_row(
+        request,
+        "host_record",
+        await db.get_data_source_profile(profile_id),
+        write=True,
+        not_found="Data source profile not found",
+    )

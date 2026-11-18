@@ -12,6 +12,7 @@ Covers the pipeline with no network access:
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 
 import httpx
 import netcontrol.app as app_module
@@ -24,11 +25,14 @@ from netcontrol.integrations.cato.normalize import (
     POP_SITE_ID,
     USER_NODE_PREFIX,
     USERS_SITE_ID,
+    _Builder,
     build_snapshot,
 )
 from netcontrol.integrations.cato.sample import build_sample_raw
+from netcontrol.integrations.meraki.normalize import InventoryIndex
 from netcontrol.integrations.meraki.subnets import subnet_index, subnets_containing
 from netcontrol.integrations.meraki.unified import graph_to_snapshot, merge_meraki_into_graph, node_details
+from netcontrol.integrations.remote_users import DIRECTORY_KEY, SECTION_TITLE, apply_user_directory
 
 # ── Client ───────────────────────────────────────────────────────────────────
 
@@ -159,6 +163,9 @@ async def test_collect_account_falls_back_and_stays_best_effort():
             return httpx.Response(200, json={"data": {"site": {"bgpPeerList": {"bgpPeer": [], "total": 0}}}})
         if name in ("plexusSplitTunnel", "plexusGlobalIpRanges"):
             return httpx.Response(403)
+        # The registry of SDP users is refused: recorded, and the map still builds.
+        if variables["type"] == "vpnUser":
+            return httpx.Response(403)
         # entityLookup: the large page is refused, the default page size works.
         if variables["limit"] == 1000:
             return httpx.Response(200, json={"errors": [{"message": "limit too large"}]})
@@ -189,6 +196,7 @@ async def test_collect_account_falls_back_and_stays_best_effort():
         "accountSnapshot.sites (full detail)",
         "accountSnapshot.sites (WAN links)",
         "accountSnapshot.users",
+        "entityLookup vpnUser",
         "policy.splitTunnel",
         "object.globalIpRangeList",
     ]
@@ -198,8 +206,11 @@ async def test_collect_account_falls_back_and_stays_best_effort():
     assert progress[-1]["phase"] == "collected" and progress[-1]["calls_done"] == progress[-1]["calls_total"]
     assert raw["wan_firewall"] is None and raw["internet_firewall"] is None
     assert raw["bgp_peers"] == []
+    assert raw["vpn_users"] is None
     # The reduced snapshot still builds a map.
-    assert build_snapshot(raw)["summary"]["sites"] == 2
+    snapshot = build_snapshot(raw)
+    assert snapshot["summary"]["sites"] == 2
+    assert snapshot["remote_user_directory"] == {"node_id": CLOUD_NODE_ID, "users": []}
 
 
 @pytest.mark.asyncio
@@ -251,6 +262,14 @@ async def test_collect_account_falls_back_to_the_basic_user_query():
             return httpx.Response(200, json={"errors": [{"message": 'Cannot query field "recentConnections"'}]})
         if name == "plexusUsersBasic":
             return httpx.Response(200, json={"data": {"accountSnapshot": {"users": sample["users"]}}})
+        if name == "plexusLookup":
+            assert _operation(request)["variables"]["type"] == "vpnUser"
+            items = sample["vpn_users"]
+            return httpx.Response(200, json={"data": {"entityLookup": {"total": len(items), "items": items}}})
+        if name == "plexusUserDetails":
+            # The registered users not in the snapshot's list, asked for by ID.
+            assert _operation(request)["variables"]["userIDs"] == ["9006"]
+            return httpx.Response(200, json={"data": {"accountSnapshot": {"users": sample["vpn_user_details"]}}})
         if name == "plexusSplitTunnel":
             return _policy_response("splitTunnel", sample["split_tunnel"])
         if name == "plexusGlobalIpRanges":
@@ -272,9 +291,90 @@ async def test_collect_account_falls_back_to_the_basic_user_query():
         )
 
     # The Split Tunnel policy, and the global IP ranges its rules name, come with the users.
-    assert seen == ["plexusSites", "plexusUsers", "plexusUsersBasic", "plexusSplitTunnel", "plexusGlobalIpRanges"]
-    assert len(raw["users"]) == 4
+    # Every registered SDP user is read with the users.
+    assert seen == [
+        "plexusSites",
+        "plexusUsers",
+        "plexusUsersBasic",
+        "plexusLookup",
+        "plexusUserDetails",
+        "plexusSplitTunnel",
+        "plexusGlobalIpRanges",
+    ]
+    assert len(raw["users"]) == len(sample["users"])
+    assert raw["vpn_users"] == sample["vpn_users"]
+    assert raw["vpn_user_details"] == sample["vpn_user_details"]
     assert [e["path"] for e in raw["errors"]] == ["accountSnapshot.users (full detail)"]
+
+
+@pytest.mark.asyncio
+async def test_collect_account_reads_the_users_not_connected_by_id_in_pages():
+    sample = build_sample_raw()
+    # 250 registered users the snapshot does not list: three pages of 100.
+    extra = [{"entity": {"id": str(20000 + i), "name": f"User {i}", "type": "vpnUser"}} for i in range(250)]
+    asked: list[list[str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = _operation(request)
+        name = body["operationName"]
+        if name == "plexusSites":
+            return httpx.Response(200, json={"data": {"accountSnapshot": {"id": "42", "sites": sample["sites"]}}})
+        if name == "plexusUsers":
+            return httpx.Response(200, json={"data": {"accountSnapshot": {"users": sample["users"]}}})
+        if name == "plexusLookup":
+            items = sample["vpn_users"][:5] + extra
+            return httpx.Response(200, json={"data": {"entityLookup": {"total": len(items), "items": items}}})
+        if name == "plexusUserDetails":
+            assert "users(userIDs: $userIDs)" in body["query"] and body["variables"]["accountID"] == "42"
+            ids = body["variables"]["userIDs"]
+            asked.append(ids)
+            found = [{"id": i, "connectivityStatus": "disconnected", "deviceName": f"LT-{i}"} for i in ids]
+            return httpx.Response(200, json={"data": {"accountSnapshot": {"users": found}}})
+        if name == "plexusSplitTunnel":
+            return _policy_response("splitTunnel", sample["split_tunnel"])
+        items = sample["global_ip_ranges"]
+        return httpx.Response(200, json={"data": {"object": {"globalIpRangeList": {"items": items}}}})
+
+    progress: list[dict] = []
+    async with _client(handler) as client:
+        raw = await collect_account(client, "42", _USERS_ONLY, progress.append)
+    # The users the snapshot lists (connected or not) are not asked for again.
+    assert [len(page) for page in asked] == [100, 100, 50]
+    assert asked[0][0] == "20000" and "9005" not in sum(asked, [])
+    assert len(raw["vpn_user_details"]) == 250 and raw["errors"] == []
+    assert progress[-1]["calls_done"] == progress[-1]["calls_total"] == 5 + 3
+    # A user read by ID is a row of the directory, never a node.
+    snap = build_snapshot(raw)
+    entry = next(u for u in snap[DIRECTORY_KEY]["users"] if u["user_id"] == "20007")
+    assert (entry["name"], entry["status"], entry["device"]) == ("User 7", "disconnected", "LT-20007")
+    assert snap["summary"]["remote_users"] == 4
+    assert not any(n["id"].endswith("20007") for n in snap["nodes"])
+
+
+@pytest.mark.asyncio
+async def test_collect_account_lists_users_by_name_when_cato_refuses_them_by_id():
+    sample = build_sample_raw()
+    seen: list[str] = []
+    refused = httpx.Response(200, json={"errors": [{"message": 'Unknown argument "userIDs"'}]})
+    policy = {
+        "plexusSplitTunnel": lambda _q: _policy_response("splitTunnel", sample["split_tunnel"]),
+    }
+    others = _split_handler(sample, seen, policy)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if _operation(request)["operationName"] == "plexusUserDetails":
+            seen.append("plexusUserDetails")
+            return refused
+        return others(request)
+
+    progress: list[dict] = []
+    async with _client(handler) as client:
+        raw = await collect_account(client, "42", _USERS_ONLY, progress.append)
+    assert seen.count("plexusUserDetails") == 1 and raw["vpn_user_details"] is None
+    assert [e["path"] for e in raw["errors"]] == ["accountSnapshot.users (by ID)"]
+    assert progress[-1]["calls_done"] == progress[-1]["calls_total"] == 6
+    jordan = next(u for u in build_snapshot(raw)[DIRECTORY_KEY]["users"] if u["name"] == "Jordan Blake")
+    assert (jordan["status"], jordan["device"], jordan["email"]) == ("disconnected", "", "jordan.blake@example.com")
 
 
 def _policy_response(field: str, payload: dict) -> httpx.Response:
@@ -384,8 +484,8 @@ async def test_collect_account_falls_back_to_the_reduced_firewall_queries():
 
 
 def _split_handler(sample: dict, seen: list[str], split_tunnel: dict):
-    """The site and user lists and the global IP ranges, then
-    ``split_tunnel[operation]()`` for the Split Tunnel queries."""
+    """The site and user lists, the registry of SDP users and the global IP
+    ranges, then ``split_tunnel[operation]()`` for the Split Tunnel queries."""
 
     def handler(request: httpx.Request) -> httpx.Response:
         body = _operation(request)
@@ -395,6 +495,13 @@ def _split_handler(sample: dict, seen: list[str], split_tunnel: dict):
             return httpx.Response(200, json={"data": {"accountSnapshot": {"id": "42", "sites": sample["sites"]}}})
         if name == "plexusUsers":
             return httpx.Response(200, json={"data": {"accountSnapshot": {"users": sample["users"]}}})
+        if name == "plexusLookup":
+            items = sample["vpn_users"]
+            return httpx.Response(200, json={"data": {"entityLookup": {"total": len(items), "items": items}}})
+        if name == "plexusUserDetails":
+            # The registered users not in the snapshot's list, asked for by ID.
+            assert _operation(request)["variables"]["userIDs"] == ["9006"]
+            return httpx.Response(200, json={"data": {"accountSnapshot": {"users": sample["vpn_user_details"]}}})
         if name == "plexusGlobalIpRanges":
             items = sample["global_ip_ranges"]
             return httpx.Response(200, json={"data": {"object": {"globalIpRangeList": {"items": items}}}})
@@ -430,17 +537,24 @@ async def test_collect_account_reads_the_split_tunnel_policy_with_the_users():
     async with _client(_split_handler(sample, seen, {"plexusSplitTunnel": full})) as client:
         raw = await collect_account(client, "42", _USERS_ONLY, progress.append)
 
-    assert seen == ["plexusSites", "plexusUsers", "plexusSplitTunnel", "plexusGlobalIpRanges"]
+    assert seen == [
+        "plexusSites",
+        "plexusUsers",
+        "plexusLookup",
+        "plexusUserDetails",
+        "plexusSplitTunnel",
+        "plexusGlobalIpRanges",
+    ]
     assert raw["errors"] == [] and raw["split_tunnel"] == sample["split_tunnel"]
     assert raw["global_ip_ranges"] == sample["global_ip_ranges"]
-    assert progress[-1]["calls_done"] == progress[-1]["calls_total"] == 4
+    assert progress[-1]["calls_done"] == progress[-1]["calls_total"] == 6
     assert progress[-1]["split_tunnel_rules"] == 4
 
     # Without the users there is nothing for the policy to route: not asked for.
     seen.clear()
     async with _client(_split_handler(sample, seen, {})) as client:
         raw = await collect_account(client, "42", {**_USERS_ONLY, "include_users": False})
-    assert seen == ["plexusSites"] and raw["split_tunnel"] is None
+    assert seen == ["plexusSites"] and raw["split_tunnel"] is None and raw["vpn_users"] is None
 
 
 @pytest.mark.asyncio
@@ -456,7 +570,7 @@ async def test_collect_account_falls_back_to_the_reduced_split_tunnel_query():
     async with _client(_split_handler(sample, seen, answers)) as client:
         raw = await collect_account(client, "42", _USERS_ONLY)
 
-    assert seen[2:4] == ["plexusSplitTunnel", "plexusSplitTunnelBasic"]
+    assert seen[4:6] == ["plexusSplitTunnel", "plexusSplitTunnelBasic"]
     assert raw["split_tunnel"]["reduced"] is True and len(raw["split_tunnel"]["rules"]) == 4
     assert [e["path"] for e in raw["errors"]] == ["policy.splitTunnel (full detail)"]
 
@@ -471,7 +585,7 @@ async def test_collect_account_leaves_the_split_tunnel_policy_uncollected_when_c
     async with _client(_split_handler(sample, seen, answers)) as client:
         raw = await collect_account(client, "42", _USERS_ONLY)
 
-    assert raw["split_tunnel"] is None and len(raw["users"]) == 4
+    assert raw["split_tunnel"] is None and len(raw["users"]) == len(sample["users"])
     assert [e["path"] for e in raw["errors"]] == ["policy.splitTunnel (full detail)", "policy.splitTunnel"]
     users = [n for n in build_snapshot(raw)["nodes"] if n["kind"] == "user" and n["label"] != "Priya Nair"]
     assert users and all(n["forwarding"]["not_collected"] == ["Route table (Split Tunnel policy)"] for n in users)
@@ -497,9 +611,17 @@ async def test_collect_account_reads_the_client_reports_after_the_users():
     progress: list[dict] = []
     async with _client(handler) as client:
         raw = await collect_account(client, "42", options, progress.append)
-    assert seen == ["plexusSites", "plexusUsers", "plexusClientReports", "plexusSplitTunnel", "plexusGlobalIpRanges"]
+    assert seen == [
+        "plexusSites",
+        "plexusUsers",
+        "plexusLookup",
+        "plexusUserDetails",
+        "plexusClientReports",
+        "plexusSplitTunnel",
+        "plexusGlobalIpRanges",
+    ]
     assert raw["errors"] == [] and raw["client_reports"]["rows"] == [dana]
-    assert progress[-1]["calls_done"] == progress[-1]["calls_total"] == 5
+    assert progress[-1]["calls_done"] == progress[-1]["calls_total"] == 7
 
     # Refused (no View permission for events): not collected, and the rest still loads.
     answer = {"errors": [{"message": "Permission denied"}]}
@@ -508,7 +630,7 @@ async def test_collect_account_reads_the_client_reports_after_the_users():
         raw = await collect_account(client, "42", options, progress.append)
     assert raw["client_reports"] is None and raw["split_tunnel"] == sample["split_tunnel"]
     assert [e["path"] for e in raw["errors"]] == ["events (Client Connectivity Policy)"]
-    assert progress[-1]["calls_done"] == progress[-1]["calls_total"] == 5
+    assert progress[-1]["calls_done"] == progress[-1]["calls_total"] == 7
 
 
 _BGP_PEER = {
@@ -859,6 +981,110 @@ def test_remote_users_can_be_left_out():
     assert {s["name"] for s in snap["sites"] if s["id"].startswith(POP_SITE_ID)} == {"PoP Ashburn", "PoP New York"}
 
 
+def test_every_registered_user_is_in_the_directory_connected_or_not(snapshot):
+    directory = snapshot[DIRECTORY_KEY]
+    # The Cato Cloud lists every user, and is on the map with nobody connected too.
+    assert directory["node_id"] == CLOUD_NODE_ID
+    users = {u["name"]: u for u in directory["users"]}
+    assert sorted(users) == ["Dana Reyes", "Jordan Blake", "Lee Park", "Morgan Ellis", "Priya Nair", "Sam Okafor"]
+    dana = users["Dana Reyes"]
+    assert (dana["status"], dana["source"], dana["address"], dana["public_ip"]) == (
+        "connected",
+        "session",
+        "10.88.0.11",
+        "198.51.100.201",
+    )
+    assert dana["email"] == "dana.reyes@example.com" and dana["user_id"] == "9001"
+    # In the snapshot's users but not connected: no tunnel, so no address.
+    morgan = users["Morgan Ellis"]
+    assert (morgan["status"], morgan["source"], morgan["address"], morgan["public_ip"]) == (
+        "disconnected",
+        "registry",
+        "",
+        "",
+    )
+    assert morgan["last_seen"] == "2026-09-28T16:20:00Z" and morgan["email"] == "morgan.ellis@example.com"
+    # Listed only by the vpnUser registry.
+    jordan = users["Jordan Blake"]
+    assert (jordan["status"], jordan["source"], jordan["user_id"], jordan["email"]) == (
+        "disconnected",
+        "registry",
+        "9006",
+        "jordan.blake@example.com",
+    )
+    # Read by ID: the device and the last connection of a user not connected.
+    assert (jordan["device"], jordan["last_seen"]) == ("LT-JORDAN", "2026-09-12T09:05:00Z")
+    assert snapshot["summary"]["remote_users"] == 4 and snapshot["summary"]["registered_users"] == 6
+    assert ["Registered users", "6"] in _section(
+        next(n for n in snapshot["nodes"] if n["id"] == CLOUD_NODE_ID), "Cato Cloud"
+    )["rows"]
+
+
+def test_a_disconnected_user_has_no_node_address_or_subnet():
+    raw = build_sample_raw()
+    # A stale VPN address Cato still reports for a disconnected user.
+    morgan = next(u for u in raw["users"] if u["name"] == "Morgan Ellis")
+    morgan["internalIP"] = "192.0.2.77"
+    snap = build_snapshot(raw)
+    assert not any(n["id"] == f"{USER_NODE_PREFIX}9005" for n in snap["nodes"])
+    assert not any(e["cidr"].startswith("192.0.2.77") for e in subnet_index(snap))
+    builder = _Builder(raw, InventoryIndex())
+    builder.build_sites()
+    book = builder._address_book()["user"]
+    assert "9001" in book and "9005" not in book and "morgan ellis" not in book and "9006" not in book
+    entry = next(u for u in snap[DIRECTORY_KEY]["users"] if u["name"] == "Morgan Ellis")
+    assert entry["address"] == ""
+
+
+def test_the_directory_is_stored_as_the_clouds_all_users_table():
+    raw = build_sample_raw()
+    raw["users"] = [u for u in raw["users"] if u["connectivityStatus"] == "disconnected"]
+    snap = build_snapshot(raw)
+    # Nobody is connected: the Cloud still holds the table.
+    assert snap["summary"]["remote_users"] == 0
+    assert apply_user_directory(snap, None, now=datetime(2026, 10, 1, 13, 0, tzinfo=UTC)) == 6
+    cloud = next(n for n in snap["nodes"] if n["id"] == CLOUD_NODE_ID)
+    rows = _section(cloud, SECTION_TITLE)["rows"]
+    assert {r[0] for r in rows} == {
+        "Dana Reyes",
+        "Jordan Blake",
+        "Lee Park",
+        "Morgan Ellis",
+        "Priya Nair",
+        "Sam Okafor",
+    }
+    assert all(r[2] == "disconnected" for r in rows)
+
+
+def test_registry_users_are_listed_once_each():
+    raw = build_sample_raw()
+    raw["vpn_users"] += [
+        # The same user spelled with another ID but the same email.
+        {"entity": {"id": "x-9001", "name": "Dana Reyes"}, "helperFields": {"email": "dana.reyes@example.com"}},
+        # Two people of one name are both kept; a repeated ID is not.
+        {"entity": {"id": "9101", "name": "Alex Kim"}, "description": "alex.kim@example.com"},
+        {"entity": {"id": "9102", "name": "Alex Kim"}, "helperFields": {}},
+        {"entity": {"id": "9102", "name": "Alex Kim"}, "helperFields": {}},
+        {"entity": {}, "helperFields": {}},
+        "not an entity",
+    ]
+    users = build_snapshot(raw)[DIRECTORY_KEY]["users"]
+    assert [u["name"] for u in users].count("Dana Reyes") == 1
+    alex = [u for u in users if u["name"] == "Alex Kim"]
+    assert [(u["user_id"], u["email"]) for u in alex] == [("9101", "alex.kim@example.com"), ("9102", "")]
+
+
+def test_the_directory_is_left_out_without_the_users():
+    raw = build_sample_raw()
+    raw["options"] = {"include_users": False}
+    snap = build_snapshot(raw)
+    assert DIRECTORY_KEY not in snap and snap["summary"]["registered_users"] == 0
+    # Collected before the registry was read: the snapshot's users only.
+    raw = build_sample_raw()
+    raw.pop("vpn_users")
+    assert len(build_snapshot(raw)[DIRECTORY_KEY]["users"]) == 5
+
+
 def test_snapshot_ranges_are_deduplicated_per_site(snapshot):
     hq = next(s for s in snapshot["sites"] if s["name"] == "HQ-DataCenter")
     subnets = [r[0] for r in _section(hq, "Network ranges")["rows"]]
@@ -1071,12 +1297,18 @@ def test_api_cato_sample_is_merged_into_the_topology(api):
     vpc = next(s for s in subnets if s["cidr"] == "172.21.0.0/16")
     assert vpc["site_name"] == "AWS-us-east-1" and vpc["org_ref"] == org_ref
 
-    # A remote user is found by name, on their own node and their PoP.
+    # A remote user is found by name, on their own node, their PoP and the
+    # Cato Cloud's "All users" table.
     hits = api.get("/api/topology/search/deep?q=dana").json()["results"]
     assert sorted((h["org_ref"], h["node_id"]) for h in hits) == [
+        (org_ref, CLOUD_NODE_ID),
         (org_ref, f"{USER_NODE_PREFIX}9001"),
         (org_ref, "pop:New York"),
     ]
+    # A user who is not connected is found too, on the Cato Cloud.
+    for name in ("morgan", "jordan blake"):
+        hits = api.get(f"/api/topology/search/deep?q={name}").json()["results"]
+        assert [(h["org_ref"], h["node_id"]) for h in hits] == [(org_ref, CLOUD_NODE_ID)]
 
     # Both samples share the map and the HTML export.
     assert api.post("/api/sources/sample").status_code == 201

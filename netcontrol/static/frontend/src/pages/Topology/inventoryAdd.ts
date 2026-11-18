@@ -44,6 +44,16 @@ function nodeInstanceId(node: Pick<TopologyNode, 'instance' | 'meraki'>): string
   return AWS_INSTANCE_ID.test(id.trim()) ? id.trim() : '';
 }
 
+// Integration node kinds that are no device: a WAN uplink, a VPN peer or
+// server, a cloud or VPC, remote users. The map never shows one as an
+// inventory host, so a host made from it would leave it on the list.
+const NOT_A_DEVICE_KINDS = new Set(['wan', 'vpn_peer', 'vpn_server', 'cloud', 'users', 'user', 'vpc']);
+
+/** Whether a map node can be made an inventory host: a device that is not one yet, with an address. */
+export function canAddToInventory(node: Pick<TopologyNode, 'in_inventory' | 'ip' | 'meraki'>): boolean {
+  return !node.in_inventory && !!(node.ip ?? '').trim() && !NOT_A_DEVICE_KINDS.has(node.meraki?.kind ?? '');
+}
+
 /** The integrations whose own devices are cloud-managed and have no CLI. */
 const MANAGED_PROVIDERS = new Set(['meraki']);
 
@@ -173,7 +183,7 @@ export function buildInventoryAddRows(
   const byIp = new Map<string, InventoryAddRow>();
   for (const node of nodes) {
     const ip = (node.ip ?? '').trim();
-    if (node.in_inventory || !ip || byIp.has(ip)) continue;
+    if (!canAddToInventory(node) || byIp.has(ip)) continue;
     // Every snapshot device has source 'meraki'; the integration is meraki.provider.
     const managed = node.source === 'meraki' && MANAGED_PROVIDERS.has(node.meraki?.provider ?? 'meraki');
     if (managed && !includeManaged) continue;

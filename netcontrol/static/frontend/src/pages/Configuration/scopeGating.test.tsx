@@ -78,6 +78,10 @@ vi.mock('@/api/intendedConfig', async (importOriginal) => ({
   useIntendedHost: () => query(state.detail),
   useGenerateIntended: () => mutation,
 }));
+vi.mock('@/api/intendedRemediation', () => ({
+  useHostRemediation: () => ({ ...query(undefined), isPending: true }),
+  useCreateRemediationDeployments: () => mutation,
+}));
 vi.mock('@/components/DialogProvider-context', () => ({
   useDialogs: () => ({ confirm: async () => true, alert: async () => {} }),
 }));

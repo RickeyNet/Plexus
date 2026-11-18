@@ -136,7 +136,7 @@ function tierRank(node: TopologyNode): number {
   if (node.device_type && GATEWAY_TYPES.has(node.device_type)) return 0;
   if (kind === 'switch' || category === 'switch') return 1;
   if (kind === 'external' || (!node.in_inventory && node.source !== 'meraki')) return 4;
-  if (kind === 'wireless' || category === 'wireless' || category === 'phone') return 3;
+  if (kind === 'wireless' || category === 'wireless' || category === 'phone' || category === 'ups') return 3;
   return 2;
 }
 

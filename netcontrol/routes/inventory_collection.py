@@ -30,7 +30,8 @@ other integration.
     ``GET /api/sources/builds/{job_id}`` like every other source
   - ``inventory_source()`` is its entry in ``GET /api/topology/sources``
 
-Nothing here runs a configuration command.
+Nothing here runs a configuration command. A caller limited to selected
+inventory groups collects only hosts of groups it can change.
 """
 
 from __future__ import annotations
@@ -57,6 +58,7 @@ from netcontrol.drivers import (
 )
 from netcontrol.integrations.pathtrace.platforms import interface_addresses
 from netcontrol.integrations.pathtrace.route_tables import interface_key
+from netcontrol.object_scope import ObjectScope, request_scope, require_group, require_host_ids, scoped
 from netcontrol.routes import background_jobs
 from netcontrol.routes.device_config import store_device_config
 from netcontrol.routes.host_identity import interface_ip, is_placeholder_hostname
@@ -567,11 +569,21 @@ def _detail_text(last: dict[str, Any]) -> str:
     return f"{int(last.get('collected') or 0)} of {_count_text(last.get('hosts'), 'device')}: {parts}"
 
 
-async def inventory_source() -> dict[str, Any]:
-    """This collection as an entry of ``GET /api/topology/sources``."""
-    hosts = sum(1 for host in await db.get_all_hosts() if _collectable(host))
+async def inventory_source(scope: ObjectScope | None = None) -> dict[str, Any]:
+    """This collection as an entry of ``GET /api/topology/sources``. For a
+    scoped ``scope`` the devices are those of the groups it can change (what
+    it may collect), and the last run's counts, which cover other groups,
+    are left out."""
+    restricted = scope is not None and scope.restricted
+    hosts = sum(
+        1
+        for host in await db.get_all_hosts()
+        if _collectable(host) and (scope is None or scope.can_write_group(host.get("group_id")))
+    )
     last = await db.get_auth_setting(SETTING_KEY) or {}
     ran = bool(last.get("at"))
+    if restricted:
+        last = {key: last.get(key) for key in ("at", "status")}
     service = await service_credential()
     return _source(
         SOURCE_KEY,
@@ -580,10 +592,11 @@ async def inventory_source() -> dict[str, Any]:
         status=str(last.get("status") or "never") if ran else "never",
         last_collected_at=_utc_iso(last.get("at")) if ran else None,
         message=str(last.get("message") or "") if ran else "",
-        detail=_detail_text(last) if ran else f"{_count_text(hosts, 'device')} in inventory",
+        detail=_detail_text(last) if ran and not restricted else f"{_count_text(hosts, 'device')} in inventory",
         warning_count=int(last.get("errors") or 0) if ran else 0,
         collecting="job" in _running,
-        progress=background_jobs.job_progress(_running.get("job")),
+        # A run's progress names its hosts, which may be outside a scoped caller's groups.
+        progress=None if restricted else background_jobs.job_progress(_running.get("job")),
         can_collect=hosts > 0,
         # The service credential Settings names is the default; the dialog
         # lists the others for an administrator to pick.
@@ -601,23 +614,31 @@ class InventoryCollectRequest(BaseModel):
     credential_id: int | None = None
 
 
-async def _hosts_in_scope(body: InventoryCollectRequest) -> list[dict]:
+async def _hosts_in_scope(body: InventoryCollectRequest, request: Request | None = None) -> list[dict]:
+    """The collectable hosts the run covers. A scoped caller names only hosts
+    and groups it can read (others answer like unknown ids) and must be able
+    to change them (the run rewrites their stored tables); "every host" is
+    every host of its writable groups."""
+    scope = await request_scope(request)
     if body.host_ids is not None:
         wanted = sorted(set(body.host_ids))
-        hosts = await db.get_hosts_by_ids(wanted) if wanted else []
+        hosts = scope.filter_hosts(await db.get_hosts_by_ids(wanted) if wanted else [])
         unknown = sorted(set(wanted) - {int(h["id"]) for h in hosts})
         if unknown:
             raise HTTPException(status_code=400, detail=f"Unknown host ids: {', '.join(map(str, unknown[:20]))}")
+        await require_host_ids(request, [h["id"] for h in hosts], write=True)
     elif body.group_id is not None:
-        if await db.get_group(body.group_id) is None:
-            raise HTTPException(status_code=404, detail="Inventory group not found")
+        await require_group(request, body.group_id, write=True, not_found="Inventory group not found")
         hosts = await db.get_hosts_for_group(body.group_id)
     else:
         hosts = await db.get_all_hosts()
+        if scope.restricted:
+            hosts = [host for host in hosts if scope.can_write_group(host.get("group_id"))]
     return [host for host in hosts if _collectable(host)]
 
 
 @router.post("/api/topology/inventory/collect", status_code=202)
+@scoped("hosts")
 async def collect_inventory_api(request: Request, body: InventoryCollectRequest | None = None):
     """Read the route table, the running configuration and the VLAN, port,
     CDP/LLDP neighbor and MAC address tables of inventory hosts over SSH into
@@ -626,7 +647,7 @@ async def collect_inventory_api(request: Request, body: InventoryCollectRequest 
     part (``routes``, ``configs``, ``vlans``, ``interfaces``, ``neighbors``,
     ``macs``), the hosts it was read from."""
     body = body or InventoryCollectRequest()
-    hosts = await _hosts_in_scope(body)
+    hosts = await _hosts_in_scope(body, request)
     if not hosts:
         raise HTTPException(status_code=400, detail="No collectable inventory device is in scope")
     session = _get_session(request)

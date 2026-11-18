@@ -21,6 +21,10 @@ monitoring alert is acknowledged as ``auto-resolved``. Informational
 findings (data not collected, a rule that cannot be resolved) are listed,
 never alerted. Best-effort: a failure is logged and never fails the
 collection that triggered the run.
+
+Object scope: the findings are of Cato and cloud accounts, not inventory
+hosts: a caller limited to selected inventory groups sees none (their alerts
+on a matched host show in the monitoring alerts) and cannot run the check.
 """
 
 from __future__ import annotations
@@ -33,6 +37,7 @@ import routes.database as db
 from fastapi import APIRouter, Query, Request
 
 from netcontrol.integrations.cato import egress_check
+from netcontrol.object_scope import refuse_scoped, request_scope, scoped
 from netcontrol.routes import notification_channels
 from netcontrol.routes.shared import _audit, _get_session
 from netcontrol.telemetry import configure_logging
@@ -163,11 +168,16 @@ async def run_egress_check(trigger: str = "manual") -> dict[str, Any]:
 
 
 @router.get("/api/monitoring/cato-egress/findings")
+@scoped("list")
 async def list_cato_egress_findings_api(
+    request: Request,
     include_resolved: bool = Query(default=False),
     limit: int = Query(default=1000, ge=1, le=10000),
 ):
-    """The findings of the Cato egress vs cloud allow-list check."""
+    """The findings of the Cato egress vs cloud allow-list check (none for a
+    caller limited to selected inventory groups)."""
+    if (await request_scope(request)).restricted:
+        return {"findings": []}
     findings = await db.list_cato_egress_findings(include_resolved=include_resolved, limit=limit)
     for finding in findings:
         finding["kind_label"] = egress_check.KIND_LABELS.get(str(finding.get("kind")), str(finding.get("kind")))
@@ -175,8 +185,10 @@ async def list_cato_egress_findings_api(
 
 
 @router.post("/api/monitoring/cato-egress/run")
+@scoped("refused")
 async def run_cato_egress_check_api(request: Request):
-    """Run the check now."""
+    """Run the check now (every account: refused to a scoped caller)."""
+    await refuse_scoped(request)
     result = await run_egress_check("manual")
     session = _get_session(request)
     await _audit(

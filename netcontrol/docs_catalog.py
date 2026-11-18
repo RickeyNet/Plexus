@@ -44,6 +44,7 @@ PAGES: list[tuple[str, list[tuple[str, str]]]] = [
         "Sign-in and access",
         [
             ("Single-Sign-On-OIDC", "docs/sso-oidc.md"),
+            ("Single-Sign-On-SAML", "docs/sso-saml.md"),
             ("RADIUS-Login", "RADIUS_CONFIGURATION_GUIDE.md"),
             ("TACACS-Login", "TACACS_CONFIGURATION_GUIDE.md"),
             ("Object-Permissions", "docs/object-permissions.md"),

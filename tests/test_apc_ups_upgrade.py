@@ -15,7 +15,7 @@ import pytest
 from netcontrol.integrations.apc import upgrade as apc
 from netcontrol.routes import upgrades
 
-IDLE = "E000: Success\nStatus: No firmware update is in progress\n"
+IDLE = "E000: Success\nStatus: No firmware update in progress\n"  # as an NMC3 answers
 RUNNING = "E000: Success\nStatus: Updating UPS firmware (40%)\n"
 INSTALL_OK = "E000: Success\nFirmware update started\n"
 NO_ALARMS = "E000: Success\nAlarmCount: 0\n"

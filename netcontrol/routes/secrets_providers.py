@@ -4,8 +4,9 @@ Azure Key Vault (docs/secrets-providers.md).
 ``router`` is registered in ``app.py`` behind ``require_auth`` and
 ``require_feature_method("secrets-providers")``: read with
 ``secrets-providers``, change and test with ``secrets-providers.write``
-(admins have both). Not enrolled in object scope, so accounts limited to
-selected inventory groups never reach it.
+(admins have both). Object scope: providers are global configuration with
+no host data, so accounts limited to selected inventory groups may read
+them but never change or test them (403).
 
 A provider's own auth secrets (Vault token or AppRole secret id, AWS secret
 access key and session token, Azure client secret) are write-only: they are
@@ -30,6 +31,7 @@ import routes.database as db
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from netcontrol.object_scope import refuse_scoped, scope_exempt, scoped
 from netcontrol.routes.shared import _audit, _corr_id, _session_user
 from netcontrol.secrets_providers.base import SecretsProviderError, invalidate
 from netcontrol.secrets_providers.service import (
@@ -118,6 +120,7 @@ async def _audit_change(request: Request, action: str, detail: str) -> None:
 
 
 @router.get(API)
+@scope_exempt("global provider settings; no host, tenant or site data")
 async def list_providers():
     """Every provider (settings, which secrets are set, usage, SDK status)
     and the supported provider types."""
@@ -126,12 +129,15 @@ async def list_providers():
 
 
 @router.get(API + "/{provider_id}")
+@scope_exempt("global provider settings; no host, tenant or site data")
 async def get_provider(provider_id: int):
     return public_provider(await _provider(provider_id, with_secret=True))
 
 
 @router.post(API, status_code=201)
+@scoped("refused")
 async def create_provider(body: ProviderCreate, request: Request):
+    await refuse_scoped(request)
     name = _name(body.name)
     config, secret_enc = _prepared(body.provider_type, body.config, body.secrets)
     fields = {
@@ -158,7 +164,9 @@ async def create_provider(body: ProviderCreate, request: Request):
 
 
 @router.put(API + "/{provider_id}")
+@scoped("refused")
 async def update_provider(provider_id: int, body: ProviderUpdate, request: Request):
+    await refuse_scoped(request)
     row = await _provider(provider_id, with_secret=True)
     if body.provider_type is not None and body.provider_type != row["provider_type"]:
         raise HTTPException(400, "The provider type cannot change; create a new provider")
@@ -199,7 +207,9 @@ async def update_provider(provider_id: int, body: ProviderUpdate, request: Reque
 
 
 @router.delete(API + "/{provider_id}")
+@scoped("refused")
 async def delete_provider(provider_id: int, request: Request):
+    await refuse_scoped(request)
     row = await _provider(provider_id)
     try:
         await db.delete_secrets_provider(provider_id)
@@ -211,9 +221,11 @@ async def delete_provider(provider_id: int, request: Request):
 
 
 @router.post(API + "/{provider_id}/test")
+@scoped("refused")
 async def test_reference(provider_id: int, body: ReferenceTest, request: Request):
     """Resolve one reference without the cache. Success or failure only:
     the value is never returned or logged."""
+    await refuse_scoped(request)
     row = await _provider(provider_id)
     try:
         await resolve_reference(

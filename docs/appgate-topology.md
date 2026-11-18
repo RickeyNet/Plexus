@@ -121,11 +121,25 @@ peer version, counts, licence) and the tables of every appliance, site,
 policy, entitlement, condition, ringfence rule, IP pool and identity
 provider.
 
+The collective node also lists **All users**: every user the collective
+knows, connected now or not. The users connected when the collection ran
+are listed as *connected* with their tunnel address, public address and
+device; every other user with a device on-boarded to the collective (the
+Controller's list of registered devices) is listed as *disconnected*, with
+the device last seen and when (**Known from** *The source's user list*). A user with
+several devices is listed once. A user seen by an earlier collection who is
+in neither list stays listed as *disconnected* for 180 days after they were
+last seen. A user who is not connected has no tunnel address now, so it is
+not drawn on the map, has no subnet and cannot start a trace: the table is
+there so the search box finds them. The collective summary counts the
+**Registered users** (distinct users with an on-boarded device).
+
 ### Search and Path Mode
 
 The toolbar search covers everything collected: appliance names and
 addresses, site names and subnets, entitlement names, and users by name,
-device, tunnel address or public address.
+device, tunnel address or public address, and every user in **All users**,
+connected or not.
 
 In **Path Mode** a site's network ranges can be picked like any subnet. A
 connected user's tunnel address is in the subnet list as a network of its
@@ -175,6 +189,7 @@ own no subnet. The Software page lists every appliance under platform
 | Policies, entitlements, conditions, ringfence rules | `GET /policies`, `/entitlements`, `/conditions`, `/ringfence-rules` | Policies and entitlements |
 | IP pools, identity providers | `GET /ip-pools`, `GET /identity-providers` | always |
 | Connected users | `GET /stats/active-sessions/dn` (`/on-boarded-devices` on an older Controller) | Connected users |
+| Registered users (every device on-boarded, connected or not) | `GET /on-boarded-devices` (not read again on an older Controller, where it is the user list) | Connected users |
 | Per-user access: Gateways, tunnel address, entitlements, firewall rules | `GET /session-info/{dn}`, one call per user, 500 users at most | Per-user access details |
 
 **Only sites named like** limits the build to the sites whose name holds
@@ -191,7 +206,9 @@ Everything else is best-effort: if a call fails, the collection finishes as
 **partial**, the map is still built, and the failure with Appgate's own
 error message is listed under **Report** in the HTML map. On a Controller
 that has no active session list, the on-boarded devices are drawn instead,
-as *registered, connection unknown*.
+as *registered, connection unknown*, and **All users** lists them as
+*disconnected*. A failed read of the on-boarded devices leaves only the
+connected users in **All users**.
 
 Secrets are never stored: appliance certificates (`httpsP12`), SSH, SNMP
 and metrics exporter settings, log forwarder destinations, the credentials

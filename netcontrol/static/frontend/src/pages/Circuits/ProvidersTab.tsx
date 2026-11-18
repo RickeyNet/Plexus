@@ -20,6 +20,7 @@ import { Modal } from '@/components/Modal';
 import { ModalActions } from '@/components/ModalActions';
 import { NameInput } from '@/components/NameInput';
 import { QueryError } from '@/components/QueryError';
+import { ObjectDataPanel } from '@/components/ObjectDataPanel';
 import { CIRCUIT_COMMENTS_MAX, CIRCUIT_DESCRIPTION_MAX, CIRCUIT_NAME_MAX, CIRCUIT_TEXT_MAX } from '@/lib/circuits';
 import { clickableProps } from '@/lib/clickable';
 import { runSave } from '@/lib/recordSave';
@@ -209,6 +210,7 @@ function ProviderDetailPanel({ id, canWrite }: { id: number | null; canWrite: bo
           onClose={() => setEditing(null)}
         />
       )}
+      <ObjectDataPanel objectType="circuit_provider" objectId={p.id} />
     </div>
   );
 }

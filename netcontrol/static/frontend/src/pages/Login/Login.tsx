@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router';
 
-import { type SsoStatus, ssoErrorMessage, ssoLoginHref, useLogin, useRegister } from '@/api/auth';
+import { type SsoStatus, enabledSsoMethods, ssoErrorMessage, ssoLoginHref, useLogin, useRegister } from '@/api/auth';
 import { ApiError } from '@/api/client';
 import { StarfieldCanvas } from '@/components/StarfieldCanvas';
 
@@ -35,9 +35,10 @@ export function Login({ allowRegister = false, sso }: Props) {
   // maps to a fixed sentence and is then dropped from the address bar.
   const [ssoError, setSsoError] = useState<string | null>(() => ssoErrorMessage(location.search));
   const [showLocal, setShowLocal] = useState(false);
-  const oidc = sso?.oidc?.enabled ? sso.oidc : null;
-  const ssoFirst = !!oidc?.primary && !showLocal;
-  const ssoHref = ssoLoginHref(location.pathname, location.search);
+  const ssoMethods = enabledSsoMethods(sso);
+  const ssoFirst = ssoMethods.some((m) => m.primary) && !showLocal;
+  const ssoHref = (protocol: (typeof ssoMethods)[number]['protocol']) =>
+    ssoLoginHref(location.pathname, location.search, protocol);
 
   useEffect(() => {
     if (new URLSearchParams(location.search).has('sso_error')) {
@@ -99,12 +100,19 @@ export function Login({ allowRegister = false, sso }: Props) {
         <h1 className="login-title">Plexus</h1>
         <p className="login-subtitle">Network Automation Hub</p>
 
-        {mode === 'login' && ssoFirst && oidc ? (
+        {mode === 'login' && ssoFirst ? (
           <div className="login-sso">
             {ssoError && <div className="login-error" role="alert">{ssoError}</div>}
-            <a className="btn btn-primary login-btn" href={ssoHref}>
-              {oidc.label}
-            </a>
+            {ssoMethods.map((method, i) => (
+              <a
+                key={method.protocol}
+                className={`btn ${i === 0 ? 'btn-primary' : 'btn-secondary'} login-btn`}
+                href={ssoHref(method.protocol)}
+                style={i > 0 ? { marginTop: '0.75rem', display: 'block', textAlign: 'center' } : undefined}
+              >
+                {method.label}
+              </a>
+            ))}
             <div className="login-switch">
               <button
                 type="button"
@@ -156,15 +164,16 @@ export function Login({ allowRegister = false, sso }: Props) {
             <button type="submit" className="btn btn-primary login-btn" disabled={pending}>
               {pending ? 'Signing in…' : 'Sign In'}
             </button>
-            {oidc && (
+            {ssoMethods.map((method) => (
               <a
+                key={method.protocol}
                 className="btn btn-secondary login-btn"
-                href={ssoHref}
+                href={ssoHref(method.protocol)}
                 style={{ marginTop: '0.75rem', display: 'block', textAlign: 'center' }}
               >
-                {oidc.label}
+                {method.label}
               </a>
-            )}
+            ))}
           </form>
         ) : (
           <form onSubmit={onRegister}>

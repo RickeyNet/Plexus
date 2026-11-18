@@ -46,6 +46,7 @@ async def test_seeded_roles_and_statuses():
         "Server": "orange",
         "Switch": "teal",
         "Unknown": "gray",
+        "UPS": "yellow",
         "WLC": "purple",
         "Wireless": "purple",
     }
@@ -496,5 +497,6 @@ async def test_migration_up_runs_twice():
         await _migration.up(conn)
     finally:
         await conn.close()
-    assert len(await db.list_device_roles()) == 8
+    # The eight 0085 seeds and UPS (migration 0116).
+    assert len(await db.list_device_roles()) == 9
     assert [s["name"] for s in await db.list_lifecycle_statuses() if s["is_default"]] == ["Active"]

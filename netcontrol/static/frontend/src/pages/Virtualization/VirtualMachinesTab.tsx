@@ -22,6 +22,7 @@ import { useDialogs } from '@/components/DialogProvider-context';
 import { EmptyState } from '@/components/EmptyState';
 import { LoadingState } from '@/components/LoadingState';
 import { QueryError } from '@/components/QueryError';
+import { ObjectDataPanel } from '@/components/ObjectDataPanel';
 import { clickableProps } from '@/lib/clickable';
 import { idToSelect, selectToId } from '@/lib/deviceModel';
 import { usePendingKeys } from '@/lib/usePendingKeys';
@@ -341,6 +342,7 @@ export function VmDetailPanel({ id }: { id: number | null }) {
       )}
       <ChangelogPanel objectType="virtual_machine" objectId={vm.id} pageSize={10} />
       {editing && <VmInterfaceModal vmId={vm.id} iface={editing === 'new' ? null : editing} onClose={() => setEditing(null)} />}
+      <ObjectDataPanel objectType="virtual_machine" objectId={vm.id} />
     </div>
   );
 }

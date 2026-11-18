@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 
 import pytest
+from netcontrol import object_scope
 from netcontrol.routes import upgrades
 from starlette.requests import Request
 
@@ -130,6 +131,9 @@ async def test_cancel_campaign_devices_marks_selected_activate_devices(monkeypat
     monkeypatch.setattr(upgrades, "_running_campaigns", {})
 
     request = Request({"type": "http", "headers": []})
+    # The route checks object scope; this caller is unrestricted (as require_auth
+    # would resolve an admin).
+    request.state.object_scope = object_scope.UNRESTRICTED
     result = await upgrades.cancel_campaign_devices(
         1,
         upgrades.CampaignDeviceCancelRequest(device_ids=[10], phase="activate"),

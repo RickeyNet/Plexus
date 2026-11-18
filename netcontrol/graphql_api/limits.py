@@ -12,8 +12,12 @@ introspection. The depth and alias rules are strawberry's; the cost rule is
   query gives one, else the argument's default when it has a number, else
   ``UNBOUNDED_LIST_ESTIMATE``, and multiplies what is selected under it.
 
+* a field in ``FIELD_WEIGHTS`` costs its weight per object instead of 1
+  (rows that take extra reads to build, such as cables with both ends
+  described).
+
 So ``groups(limit: 100) { hosts(limit: 50) { id } }`` costs
-100 + 100 * 50 = 5,100.
+100 + 100 * 50 = 5,100, and ``cables(limit: 100) { id }`` costs 200.
 """
 
 from __future__ import annotations
@@ -50,6 +54,20 @@ from strawberry.extensions.query_depth_limiter import create_validator as depth_
 MAX_QUERY_CHARS = 20_000
 # What a list without a numeric ``limit`` is assumed to hold.
 UNBOUNDED_LIST_ESTIMATE = 10
+# ``Type.field`` -> what each object it resolves costs (default 1): cables
+# (both ends described), circuits (with their terminations) and support
+# contracts (with the hosts they cover).
+FIELD_WEIGHTS: dict[str, int] = {
+    "Query.cables": 2,
+    "Host.cables": 2,
+    "Query.circuits": 2,
+    "Site.circuits": 2,
+    "Tenant.circuits": 2,
+    "CircuitProvider.circuits": 2,
+    "CircuitType.circuits": 2,
+    "Query.supportContracts": 2,
+    "Host.supportContracts": 2,
+}
 
 
 class _OverBudget(Exception):
@@ -118,7 +136,7 @@ class _Estimator:
         if is_list_type(get_nullable_type(field.type)):
             limit_arg = field.args.get("limit")
             child = mult * _list_size(node, limit_arg.default_value if limit_arg else None, self.variables)
-        self._add(child)
+        self._add(child * FIELD_WEIGHTS.get(f"{parent.name}.{node.name.value}", 1))
         self.walk(node.selection_set, get_named_type(field.type), child, seen)
 
 

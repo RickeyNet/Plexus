@@ -13,6 +13,7 @@ a foreign key.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from typing import Any
 
 from netcontrol.dcim import CableGraph, endpoint_key, rack_power_summary, trace
@@ -283,17 +284,26 @@ async def _with_labels(rows: list[dict]) -> list[dict]:
 _CABLE_SELECT = "SELECT c.*, t.name AS tenant_name FROM cables c LEFT JOIN tenants t ON t.id = c.tenant_id"
 
 
-async def list_cables(filters: dict[str, Any] | None = None, q: str = "", limit: int = LIST_MAX) -> list[dict]:
+async def list_cables(
+    filters: dict[str, Any] | None = None, q: str = "", limit: int = LIST_MAX, host_ids: Iterable[int] | None = None
+) -> list[dict]:
     """Cables with both endpoints described (``a``, ``b``), filtered by
     ``host_id`` (either end), ``type``, ``status``, ``tenant_id``,
     ``endpoint_type`` (either end) and the text ``q`` (label,
-    description)."""
+    description). ``host_ids`` keeps the cables with either end on one of
+    those hosts, every one of them (no ``limit``)."""
     filters = filters or {}
     clauses: list[str] = []
     params: list[Any] = []
     if filters.get("host_id") is not None:
         clauses.append("(c.a_host_id = ? OR c.b_host_id = ?)")
         params.extend([int(filters["host_id"])] * 2)
+    if host_ids is not None:
+        ids = sorted({int(h) for h in host_ids})
+        if not ids:
+            return []
+        clauses.append(f"(c.a_host_id IN ({_marks(ids)}) OR c.b_host_id IN ({_marks(ids)}))")
+        params.extend(ids * 2)
     if filters.get("endpoint_type"):
         clauses.append("(c.a_type = ? OR c.b_type = ?)")
         params.extend([filters["endpoint_type"]] * 2)
@@ -305,10 +315,11 @@ async def list_cables(filters: dict[str, Any] | None = None, q: str = "", limit:
         clauses.append("(lower(c.label) LIKE ? OR lower(c.description) LIKE ?)")
         params.extend([f"%{q.lower()}%"] * 2)
     where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
-    rows = await _select(
-        f"{_CABLE_SELECT}{where} ORDER BY c.id LIMIT ?",  # nosec B608 - fixed clauses, placeholders only
-        (*params, max(1, min(int(limit), LIST_MAX))),
-    )
+    sql = f"{_CABLE_SELECT}{where} ORDER BY c.id"
+    if host_ids is None:
+        sql += " LIMIT ?"
+        params.append(max(1, min(int(limit), LIST_MAX)))
+    rows = await _select(sql, tuple(params))  # nosec B608 - fixed clauses, placeholders only
     return await _with_labels(rows)
 
 

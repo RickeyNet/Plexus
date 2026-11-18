@@ -208,6 +208,7 @@ export function RecordSection({
   onSelect,
   selectedId,
   extraActions,
+  canWrite: canWriteOverride,
 }: {
   kind: DcimKind;
   title: string;
@@ -220,8 +221,11 @@ export function RecordSection({
   onSelect?: (row: DcimRecord) => void;
   selectedId?: number | null;
   extraActions?: ReactNode;
+  /** Who may add, edit and delete; default: admins and `dcim.write`. */
+  canWrite?: boolean;
 }) {
-  const canWrite = useCanWriteDcim();
+  const canWriteDcim = useCanWriteDcim();
+  const canWrite = canWriteOverride ?? canWriteDcim;
   const [q, setQ] = useState('');
   const query = useDcimList(kind, { ...filters, q });
   const remove = useDeleteDcimRecord(kind);

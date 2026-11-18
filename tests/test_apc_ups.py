@@ -127,7 +127,7 @@ def test_a_ups_card_is_detected_with_the_card_firmware(sys_descr, nmc_version):
     assert _infer_vendor_os_from_text(sys_descr) == ("apc", "apc_ups", "apc-nmc")
     # The model is the UPS's, read by the poll: the sysDescr names only the card.
     assert _parse_model_and_version(sys_descr) == ("", nmc_version)
-    assert _infer_device_category("", sys_descr, "apc_ups") == ""
+    assert _infer_device_category("", sys_descr, "apc_ups") == "ups"
 
 
 def test_the_card_facts_are_parsed():
@@ -146,6 +146,82 @@ def test_the_card_facts_are_parsed():
 def test_a_pdu_card_is_apc_but_not_a_ups():
     assert _infer_vendor_os_from_text(PDU_DESCR)[:2] == ("apc", "unknown")
     assert _infer_vendor_os_from_text("Linux host1 5.15.0 #1 SMP x86_64") == ("unknown", "unknown", "unknown")
+
+
+def _fake_snmp_agent(monkeypatch, answers: dict[str, str]) -> list[tuple[str, ...]]:
+    """Stand in for pysnmp's GET in ``netcontrol.routes.snmp``: each GET
+    answers ``answers`` (OID -> value, a missing OID as noSuchObject) and
+    is recorded as its OID tuple."""
+    pytest.importorskip("pysnmp")
+    from netcontrol.routes import snmp as snmp_module
+
+    gets: list[tuple[str, ...]] = []
+
+    class _Engine:
+        def close_dispatcher(self):
+            pass
+
+    class _Transport:
+        @staticmethod
+        async def create(*_a, **_kw):
+            return object()
+
+    async def _get_cmd(_engine, _auth, _transport, _context, *oids):
+        gets.append(oids)
+        return None, 0, 0, [(oid, answers.get(oid, "No Such Object currently exists at this OID")) for oid in oids]
+
+    monkeypatch.setattr(snmp_module, "PYSMNP_AVAILABLE", True)
+    monkeypatch.setattr(snmp_module, "SnmpEngine", _Engine)
+    monkeypatch.setattr(snmp_module, "UdpTransportTarget", _Transport)
+    monkeypatch.setattr(snmp_module, "ObjectIdentity", lambda oid: oid)
+    monkeypatch.setattr(snmp_module, "ObjectType", lambda identity: identity)
+    monkeypatch.setattr(snmp_module, "get_cmd", _get_cmd)
+    return gets
+
+
+_V2C = {"enabled": True, "version": "2c", "community": "example"}
+
+
+async def test_discovery_reads_the_ups_model_and_serial(monkeypatch):
+    """The card has no ENTITY-MIB chassis row: the discovery GET reads the
+    UPS's model and serial from PowerNet-MIB."""
+    from netcontrol.routes.snmp import APC_UPS_MODEL_OID, APC_UPS_SERIAL_OID, _snmp_get
+
+    gets = _fake_snmp_agent(
+        monkeypatch,
+        {
+            "1.3.6.1.2.1.1.1.0": NMC3_DESCR,
+            "1.3.6.1.2.1.1.5.0": "ups-a",
+            f"{APC_UPS_MODEL_OID}.0": "Smart-UPS SRT 10000",
+            f"{APC_UPS_SERIAL_OID}.0": "AS0000000009",
+        },
+    )
+    result = await _snmp_get("192.0.2.60", 1.0, _V2C)
+    assert result is not None
+    assert (result["device_type"], result["device_category"]) == ("apc_ups", "ups")
+    assert (result["model"], result["serial_number"], result["software_version"]) == (
+        "Smart-UPS SRT 10000",
+        "AS0000000009",
+        "1.4.2.1",
+    )
+    assert gets[1] == (f"{APC_UPS_MODEL_OID}.0", f"{APC_UPS_SERIAL_OID}.0")
+
+
+async def test_discovery_of_a_ups_that_does_not_answer_powernet(monkeypatch):
+    from netcontrol.routes.snmp import _snmp_get
+
+    _fake_snmp_agent(monkeypatch, {"1.3.6.1.2.1.1.1.0": NMC2_DESCR})
+    result = await _snmp_get("192.0.2.61", 1.0, _V2C)
+    assert result is not None
+    assert (result["device_type"], result["model"], result["serial_number"]) == ("apc_ups", "", "")
+
+
+async def test_other_devices_are_not_asked_for_powernet(monkeypatch):
+    from netcontrol.routes.snmp import _snmp_get
+
+    gets = _fake_snmp_agent(monkeypatch, {"1.3.6.1.2.1.1.1.0": "Linux host1 5.15.0 #1 SMP x86_64"})
+    await _snmp_get("192.0.2.62", 1.0, _V2C)
+    assert len(gets) == 1
 
 
 # ── PowerNet-MIB state ───────────────────────────────────────────────────────
@@ -184,7 +260,7 @@ async def test_the_state_is_read_with_the_poll_walk():
         return rows.get(oid, {})
 
     status = await apc_snmp.read_ups_status(walk)
-    assert set(asked) == {*apc_snmp.UPS_OIDS.values(), apc_snmp.SYS_DESCR_OID}
+    assert set(asked) == {*apc_snmp.UPS_OIDS.values(), apc_snmp.SYS_DESCR_OID, apc_snmp.PROBE_TEMPERATURE_OID}
     assert status["output_status_label"] == "On battery"
     assert (status["battery_capacity_pct"], status["runtime_minutes"]) == (87, 23.5)
     assert status["nmc_firmware"] == "6.8.2"

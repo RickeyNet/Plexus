@@ -18,11 +18,13 @@ Timestamps are UTC ``YYYY-MM-DD HH:MM:SS`` text.
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import routes.database as _dbcore
 from routes.database import rows_to_list
+from routes.db.inventory import group_ids_condition
 
 __all__ = [
     "apply_meraki_alert_events",
@@ -102,9 +104,15 @@ def _merge_events(events: list[dict]) -> list[dict]:
 
 
 async def list_meraki_alerts(
-    *, include_resolved: bool = False, org_ref: int | None = None, limit: int = 500
+    *,
+    include_resolved: bool = False,
+    org_ref: int | None = None,
+    limit: int = 500,
+    host_ids: Iterable[int] | None = None,
 ) -> list[dict]:
-    """The alerts, open first, then the worst and the most recent first."""
+    """The alerts, open first, then the worst and the most recent first.
+    ``host_ids`` keeps the alerts raised on those inventory hosts (object
+    scope: an alert of a device with no inventory host is left out)."""
     clauses: list[str] = []
     params: list[Any] = []
     if not include_resolved:
@@ -112,6 +120,10 @@ async def list_meraki_alerts(
     if org_ref is not None:
         clauses.append("org_ref = ?")
         params.append(int(org_ref))
+    scope_sql, scope_params = group_ids_condition("host_id", host_ids)
+    if scope_sql:
+        clauses.append(scope_sql)
+        params.extend(scope_params)
     where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
     params.append(max(1, int(limit)))
     db = await _dbcore.get_db(read_only=True)

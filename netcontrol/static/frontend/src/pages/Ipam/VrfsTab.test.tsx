@@ -31,6 +31,8 @@ vi.mock('@/api/networkObjects', () => ({
   useUpdateVrf: () => mutation,
 }));
 vi.mock('@/api/auth', () => ({ useAuthStatus: () => ({ data: { role: state.role } }) }));
+// The shared tags / custom fields panel has its own tests.
+vi.mock('@/components/ObjectDataPanel', () => ({ ObjectDataPanel: () => null }));
 vi.mock('@/api/objectChanges', () => ({
   useObjectChanges: () => query({ data: { changes: [], total: 0, limit: 10, offset: 0, object_types: [] } }),
 }));

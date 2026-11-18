@@ -64,6 +64,7 @@ from netcontrol.integrations.meraki.normalize import (
     table_section,
 )
 from netcontrol.integrations.opnsense.collector import LEASE_BACKENDS, info_warning
+from netcontrol.integrations.remote_users import DIRECTORY_KEY, directory_entry
 from netcontrol.integrations.software.versions import canonical_version
 
 PROVIDER = "opnsense"
@@ -561,6 +562,8 @@ class _Builder:
         self.carp = raw.get("carp") if isinstance(raw.get("carp"), dict) else None
         self.wireguard = _dicts(raw.get("wireguard"))
         self.openvpn = _dicts(raw.get("openvpn"))
+        # The remote user directory: set once an OpenVPN server is found.
+        self.user_directory: dict[str, Any] | None = None
         self.audit = raw.get("audit") if isinstance(raw.get("audit"), dict) else None
         self.clients = raw.get("clients") if isinstance(raw.get("clients"), dict) else None
         self.nodes: dict[str, dict] = {}
@@ -1286,6 +1289,32 @@ class _Builder:
             )
             # Structural: the server's own status is tracked, not this link.
             self._edge(self.firewall_id, node["id"], "lan", label="OpenVPN server")
+            self._add_users(clients)
+
+    def _add_users(self, clients: list[dict]) -> None:
+        """The clients connected to an OpenVPN server, into the remote user
+        directory (see ``netcontrol.integrations.remote_users``). OPNsense
+        keeps no list of the users allowed to connect, so users who are not
+        connected come from earlier collections, carried forward on store.
+        The directory is listed on the firewall node, which every snapshot
+        draws and which spans every server instance."""
+        if self.user_directory is None:
+            self.user_directory = {"node_id": self.firewall_id, "users": []}
+        for client in clients:
+            name = _text(client.get("username")) or _text(client.get("common_name"))
+            common_name = _text(client.get("common_name"))
+            entry = directory_entry(
+                name=name,
+                connected=True,
+                source="session",
+                address=client.get("virtual_address"),
+                public_ip=_host_part(_text(client.get("real_address"))),
+                # The certificate a user connected with names their device
+                # when they log in with a username of their own.
+                device=common_name if common_name != name else "",
+            )
+            if entry is not None:
+                self.user_directory["users"].append(entry)
 
     def build_edge_sections(self) -> None:
         for edge in self.edges:
@@ -1427,4 +1456,5 @@ def build_snapshot(raw: dict, inventory: InventoryIndex | None = None) -> dict[s
         "sites": sites,
         "nodes": nodes,
         "edges": builder.edges,
+        **({DIRECTORY_KEY: builder.user_directory} if builder.user_directory is not None else {}),
     }

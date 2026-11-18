@@ -13,10 +13,12 @@ advisory) and ``software_settings`` (key/value).
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable
 from datetime import UTC, datetime
 
 import routes.database as _dbcore
 from routes.database import row_to_dict, rows_to_list
+from routes.db.inventory import group_ids_condition
 
 __all__ = [
     "list_hosts_for_software",
@@ -227,14 +229,25 @@ async def list_software_versions(platform: str = "", source: str = "", search: s
         await db.close()
 
 
-async def list_recent_version_changes(limit: int = 50) -> list[dict]:
-    """Devices whose version changed, most recent change first."""
+def _host_scope(group_ids: Iterable[int] | None, column: str = "host_id") -> tuple[str, tuple]:
+    """``" AND <condition>"`` keeping rows whose host ``column`` is a host of
+    the inventory groups ``group_ids`` (``("", ())`` for ``None``)."""
+    if group_ids is None:
+        return "", ()
+    scope_sql, scope_params = group_ids_condition("group_id", group_ids)
+    return f" AND {column} IN (SELECT id FROM hosts WHERE {scope_sql})", scope_params
+
+
+async def list_recent_version_changes(limit: int = 50, group_ids: Iterable[int] | None = None) -> list[dict]:
+    """Devices whose version changed, most recent change first; ``group_ids``:
+    only hosts of those inventory groups."""
+    scope_sql, scope_params = _host_scope(group_ids)
     db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             "SELECT device_key, name, platform, model, site, source, previous_version, version, changed_at "
-            "FROM software_versions WHERE changed_at <> '' ORDER BY changed_at DESC, name LIMIT ?",
-            (max(1, int(limit)),),
+            f"FROM software_versions WHERE changed_at <> ''{scope_sql} ORDER BY changed_at DESC, name LIMIT ?",
+            (*scope_params, max(1, int(limit))),
         )
         return rows_to_list(await cursor.fetchall())
     finally:
@@ -421,8 +434,26 @@ async def sync_software_alerts(matches: list[dict]) -> dict:
     return {"new": new, "reopened": reopened, "resolved": resolved, "open": len(seen)}
 
 
-async def list_software_alerts(include_resolved: bool = False, limit: int = 500) -> list[dict]:
-    """Alerts with their advisory and device, most severe and newest first."""
+async def list_software_alerts(
+    include_resolved: bool = False,
+    limit: int = 500,
+    *,
+    alert_id: int | None = None,
+    group_ids: Iterable[int] | None = None,
+) -> list[dict]:
+    """Alerts with their advisory and device, most severe and newest first.
+    ``alert_id``: that alert only; ``group_ids``: only those of hosts in
+    these inventory groups (before the limit)."""
+    clauses = [] if include_resolved else ["a.resolved_at = ''"]
+    params: list = []
+    if alert_id is not None:
+        clauses.append("a.id = ?")
+        params.append(int(alert_id))
+    scope_sql, scope_params = _host_scope(group_ids, "v.host_id")
+    if scope_sql:
+        clauses.append(scope_sql.removeprefix(" AND "))
+        params.extend(scope_params)
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
     db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
@@ -435,10 +466,10 @@ async def list_software_alerts(include_resolved: bool = False, limit: int = 500)
                 FROM software_alerts a
                 LEFT JOIN software_advisories adv ON adv.advisory_id = a.advisory_id
                 LEFT JOIN software_versions v ON v.device_key = a.device_key
-                {"" if include_resolved else "WHERE a.resolved_at = ''"}
+                {where}
                 ORDER BY {_SEVERITY_CASE.replace("severity", "a.severity")}, a.first_seen DESC, a.id DESC
                 LIMIT ?""",
-            (max(1, int(limit)),),
+            (*params, max(1, int(limit))),
         )
         alerts = rows_to_list(await cursor.fetchall())
     finally:
@@ -485,12 +516,18 @@ async def count_open_alerts_by_device() -> dict[str, dict]:
     return counts
 
 
-async def software_alert_summary() -> dict:
+async def software_alert_summary(group_ids: Iterable[int] | None = None) -> dict:
+    """Open alert counts; ``group_ids``: of the hosts in those inventory groups."""
+    host_sql, scope_params = _host_scope(group_ids)
+    scope_sql = (
+        f" AND device_key IN (SELECT device_key FROM software_versions WHERE 1 = 1{host_sql})" if host_sql else ""
+    )
     db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             "SELECT severity, COUNT(*) AS n, SUM(CASE WHEN acknowledged_at = '' THEN 1 ELSE 0 END) AS unacked "
-            "FROM software_alerts WHERE resolved_at = '' GROUP BY severity"
+            f"FROM software_alerts WHERE resolved_at = ''{scope_sql} GROUP BY severity",
+            scope_params,
         )
         rows = rows_to_list(await cursor.fetchall())
     finally:

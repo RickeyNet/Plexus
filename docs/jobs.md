@@ -12,12 +12,13 @@ them and run them from the UI.
 
 ## Where it is
 
-Open **Change > Delegator**. The page has four tabs. The UI uses its own
+Open **Change > Delegator**. The page has five tabs. The UI uses its own
 names for the core objects:
 
 | Tab | What it holds | Core concept | Feature you need |
 |---|---|---|---|
 | **Assignments** | Jobs: launch, watch and history | Job | `jobs` |
+| **Approvals** | Jobs waiting for your approval | Job | `jobs.approve` |
 | **Tasks** | Python and Ansible automation scripts | Playbook | `playbooks` |
 | **Instructions** | Blocks of CLI commands a task pushes | Template | `templates` |
 | **Credentials** | Device logins and secret variables | Credential | `credentials` |
@@ -45,6 +46,7 @@ On the **Tasks** tab, choose **+ New Task**.
 | Python Code / Ansible YAML | The script, in a code editor. A new task starts from an example. |
 | Run inputs | The typed fields the launch dialog asks for. See [Run inputs](#run-inputs). |
 | Who may run / Who may commit changes | Admins only. See [Run and commit permissions](#run-and-commit-permissions). |
+| Require approval before jobs run | Admins only to change. See [Approvals](#approvals). |
 
 Choose **Create**. Use **Edit** to change a task and the delete button to
 remove it. The search box filters by name, description, filename and tag.
@@ -111,6 +113,30 @@ Admins and API token callers are always allowed. The launch dialog greys out
 **Run and commit** for a user who may not commit. **Retry** of a live job
 and **Run Live** count as a commit. The check is made by the server when the
 job is launched; a refused launch answers `403`.
+
+### Approvals
+
+An admin can tick **Require approval before jobs run** on a task. Every job
+from that task (launched, retried, run live, or started from a ChatOps
+preset) then starts in status `pending_approval` instead of `queued`. The
+queue never starts it. The task list shows an **Approval required** badge.
+
+A user with the `jobs.approve` permission (an access group grants it; admins
+always have it) opens the **Approvals** tab. It lists the jobs waiting for
+them, oldest first, with the task, targets, mode (dry run or commit), inputs
+and requester. Type an optional comment and choose:
+
+- **Approve**: the job moves to `queued` and runs like any other job.
+- **Deny**: after you confirm, the job ends as `denied` and never runs. The
+  requester can **Retry** it, which asks for approval again.
+
+Nobody can approve or deny a job they launched, admins included (the same
+four-eyes rule as [deployments](deployments.md)). Your own jobs, and jobs
+with a target outside your object scope, are not listed. The decision, who
+made it, when and the comment are kept on the job, shown in the job window
+and written to the job log and the audit log (`job.approved`,
+`job.approval_denied`). A job waiting for approval can be cancelled by its
+requester or an admin. No notification is sent; check the **Approvals** tab.
 
 ## Managing instruction sets
 
@@ -192,11 +218,13 @@ The buttons at the bottom of the window:
 | Button | Shown when | What it does |
 |---|---|---|
 | **Copy Output** | There is output | Copies the log as text. |
-| **Cancel Job** | Queued or running | Stops the job after you confirm. |
-| **Retry** | Failed or cancelled | Starts a new job with the same task, targets, credential, instructions, inputs, priority and mode. Dependencies are not copied. |
+| **Cancel Job** | Awaiting approval, queued or running | Stops the job after you confirm. |
+| **Retry** | Failed, cancelled or denied | Starts a new job with the same task, targets, credential, instructions, inputs, priority and mode. Dependencies are not copied. A task that requires approval asks for it again. |
 | **Run Live** | A finished dry run | Starts the same new job as **Retry**, but live, after you confirm. |
 
-The job row has **Cancel** and **Retry** buttons too.
+The job row has **Cancel** and **Retry** buttons too. A job that needed
+approval shows an **Approval** block: waiting, or who approved or denied it,
+when, and the comment.
 
 ## Reading the job list
 
@@ -207,11 +235,13 @@ the jobs it waits for.
 
 | Status | Colour | Meaning |
 |---|---|---|
+| `pending_approval` | Amber | Waiting for approval (see [Approvals](#approvals)). It does not run until approved. |
 | `queued` | Grey | Waiting for a free slot or for its dependencies. |
 | `running` | Blue, with a live dot | Running now. |
 | `success` | Green | Finished without the failures below. |
 | `failed` | Red | A Python task raised an error or every host that reported failed. An Ansible task failed on any host. Or setup failed: no credential, a missing secret, no hosts. |
 | `cancelled` | Grey | Stopped by a user. |
+| `denied` | Red | Its approval was denied. It never ran. |
 
 When jobs are queued or running, a **Queue** panel above the list shows
 running jobs against the limit (for example `2/4 running`) and the queued
@@ -256,7 +286,7 @@ days** or **Last 30 days**.
   back the next time the task list loads.
 - **No scheduling.** Jobs start when you launch them. There is no job
   schedule.
-- **Retention.** Finished jobs (`success`, `failed`, `cancelled`) older
+- **Retention.** Finished jobs (`success`, `failed`, `cancelled`, `denied`) older
   than the retention period are deleted. The default and minimum is 30
   days. An admin sets it under **Settings > System > Job history**. The
   cleanup runs at startup and every 6 hours.
@@ -268,7 +298,8 @@ days** or **Last 30 days**.
 | See the job list, launch a Python task | `jobs` feature, plus `playbooks` to load the task list, and the task's run permission |
 | Commit changes (run live, Run Live, retry a live job) | The task's commit permission |
 | Launch an Ansible task | Admin |
-| Set a task's run and commit permissions | Admin |
+| Set a task's run and commit permissions, and whether it requires approval | Admin |
+| Approve or deny jobs (not your own) | `jobs.approve` (admins always) |
 | Open output, cancel, retry, run live | The user who launched the job, or an admin |
 | Create, edit and delete tasks | `playbooks` feature |
 | Create, edit and delete instruction sets | `templates` feature |
@@ -294,6 +325,9 @@ POST   /api/jobs/launch               (inputs, commit)
 POST   /api/jobs/{id}/cancel
 POST   /api/jobs/{id}/retry
 POST   /api/jobs/{id}/rerun           (same job, live)
+GET    /api/jobs/approvals            (jobs.approve)
+POST   /api/jobs/{id}/approve         (jobs.approve; {comment?})
+POST   /api/jobs/{id}/deny            (jobs.approve; {comment?})
 PATCH  /api/jobs/{id}/priority        (queued jobs only)
 WS     /ws/jobs/{id}
 ```

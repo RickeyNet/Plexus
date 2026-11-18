@@ -20,6 +20,7 @@ from typing import Any, Literal, get_args
 __all__ = [
     "CableStatus",
     "CableType",
+    "ConsolePortType",
     "EndpointType",
     "Face",
     "FeedLeg",
@@ -34,6 +35,7 @@ __all__ = [
     "RackWidth",
     "CABLE_STATUSES",
     "CABLE_TYPES",
+    "CONSOLE_PORT_TYPES",
     "DATA_ENDPOINTS",
     "ENDPOINT_TYPES",
     "FACES",
@@ -92,6 +94,8 @@ PortType = Literal[
     "other",
 ]
 PORT_TYPES: tuple[str, ...] = get_args(PortType)
+ConsolePortType = Literal["rj-45", "db-9", "usb-a", "usb-c", "usb-mini-b", "usb-micro-b", "other"]
+CONSOLE_PORT_TYPES: tuple[str, ...] = get_args(ConsolePortType)
 ModuleStatus = Literal["active", "planned", "staged", "offline", "failed", "decommissioning"]
 MODULE_STATUSES: tuple[str, ...] = get_args(ModuleStatus)
 FeedStatus = Literal["active", "planned", "offline", "failed"]

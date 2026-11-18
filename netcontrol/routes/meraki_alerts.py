@@ -31,6 +31,10 @@ loop or the webhook response.
 
 Plexus stays a read-only observer: the receiver is registered by hand in the
 Meraki dashboard, never through the API (see ``docs/meraki-alerts.md``).
+
+Object scope: a caller limited to selected inventory groups lists only the
+alerts raised on an inventory host it may read (an alert of a device with no
+inventory host is hidden from it).
 """
 
 from __future__ import annotations
@@ -54,6 +58,7 @@ from netcontrol.integrations.meraki import alerts as meraki_alerts
 from netcontrol.integrations.meraki.client import DEFAULT_BASE_URL, MerakiApiError, MerakiClient
 from netcontrol.integrations.meraki.enrich import load_inventory_index
 from netcontrol.integrations.meraki.normalize import InventoryIndex
+from netcontrol.object_scope import readable_host_ids, scoped
 from netcontrol.routes import notification_channels
 from netcontrol.routes.meraki_topology import PROVIDER_MERAKI, _is_demo, _require_admin_dep
 from netcontrol.routes.shared import _audit, _corr_id, _session_user, read_bounded_body
@@ -671,14 +676,18 @@ async def _settings_payload() -> dict[str, Any]:
 
 
 @router.get("/api/monitoring/meraki-alerts")
+@scoped("list")
 async def list_meraki_alerts_api(
+    request: Request = None,  # type: ignore[assignment]  # None: called directly (unrestricted)
     include_resolved: bool = Query(default=False),
     org_ref: int | None = Query(default=None),
     limit: int = Query(default=500, ge=1, le=5000),
 ):
     """The Meraki alerts from the poll and the webhook receiver; ``muted``
     marks the alerts of a muted device or network."""
-    rows = await db.list_meraki_alerts(include_resolved=include_resolved, org_ref=org_ref, limit=limit)
+    rows = await db.list_meraki_alerts(
+        include_resolved=include_resolved, org_ref=org_ref, limit=limit, host_ids=await readable_host_ids(request)
+    )
     mutes = await _mute_index(PROVIDER_MERAKI, org_ref) if rows else None
     for row in rows:
         row["muted"] = bool(mutes and _muted(row, mutes))

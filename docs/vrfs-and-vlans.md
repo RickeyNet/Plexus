@@ -38,6 +38,23 @@ A VRF record lists:
 A VRF that anything still uses cannot be deleted. The answer names what
 uses it.
 
+A VRF lives in one IPAM namespace (**Global** unless an admin moves it; see
+[IP address management](ipam.md#namespaces)). Its prefixes go to that
+namespace too. The name stays unique across namespaces: hosts and IPAM still
+name a VRF by its text.
+
+### Route targets
+
+A route target is a BGP extended community: `ASN:number` with a 2-byte ASN
+and a number up to 4294967295 (`65000:100`), a 4-byte ASN with a number up
+to 65535 (`4200000000:1`), or an IPv4 address with a number up to 65535
+(`192.0.2.1:100`). Leading zeros are dropped; each value exists once.
+
+The **Route targets** tab of the IPAM page lists them with how many VRFs
+import and export each. A VRF's detail shows the route targets it imports
+and exports; an admin picks them with **Edit route targets**. Deleting a
+route target takes it off every VRF.
+
 ## VLANs
 
 A VLAN record has a VLAN id (1 to 4094), an optional name and description,
@@ -46,6 +63,24 @@ site and the description can be edited. One site has one record per VLAN
 id, and so do VLANs of no site.
 
 Deleting a site deletes its VLAN records.
+
+### VLAN groups
+
+A VLAN group is a named pool of VLAN ids (the lowest and the highest, 1 to
+4094 by default), optionally scoped to one site or one region. A VLAN may be
+in one group:
+
+- its VLAN id must be inside the group's range, and appears once in the
+  group (two sites' VLAN 10 cannot both be in one group);
+- in a group scoped to a site, a VLAN of another site cannot join; in a
+  group scoped to a region, a VLAN of a site outside the region (or its
+  sub-regions) cannot join. A VLAN of no site fits any group.
+
+The **VLAN groups** tab lists the groups; selecting one shows its VLANs and
+the **next free VLAN id**, the lowest id of the range no VLAN of the group
+has. A group's range cannot shrink below its VLANs, and its scope cannot
+change to one its VLANs are outside. Deleting a group keeps its VLANs, in
+no group.
 
 ### Which record a device's VLAN belongs to
 
@@ -117,12 +152,13 @@ run the same read again with `POST /api/ipam/interface-addresses/rebuild`.
 
 | Action | Needs |
 |---|---|
-| See VRF and VLAN records | The IPAM feature |
-| Create, change or delete them, or rebuild interface addresses | Admin |
+| See VRF, VLAN, route target and VLAN group records | The IPAM feature |
+| Create, change or delete them, set a VRF's route targets, or rebuild interface addresses | Admin |
 | See a device's interface addresses | The Reports feature, like its interface inventory |
 
 Every change is written to the audit log under the `network_objects`
-category.
+category; route targets, a VRF's route targets and VLAN groups under
+`ipam_model`.
 
 ## API
 
@@ -133,10 +169,12 @@ Plexus API. Examples use invented data.
 
 ```
 GET    /api/ipam/vrfs
-POST   /api/ipam/vrfs            {name, rd?, description?}
+POST   /api/ipam/vrfs            {name, rd?, description?, namespace_id?}
 GET    /api/ipam/vrfs/{id}
-PUT    /api/ipam/vrfs/{id}       {rd?, description?}
+PUT    /api/ipam/vrfs/{id}       {rd?, description?, namespace_id?}
 DELETE /api/ipam/vrfs/{id}
+GET    /api/ipam/vrfs/{id}/route-targets
+PUT    /api/ipam/vrfs/{id}/route-targets   {import_ids: [...], export_ids: [...]}
 ```
 
 ```json
@@ -150,11 +188,15 @@ DELETE /api/ipam/vrfs/{id}
   "host_count": 4,
   "device_count": 2,
   "prefix_count": 5,
-  "address_count": 9
+  "address_count": 9,
+  "namespace_id": 1,
+  "namespace_name": "Global"
 }
 ```
 
-The list answers `{"vrfs": [...]}` by name. A detail adds `devices`
+The list answers `{"vrfs": [...]}` by name. A detail adds `route_targets`
+(`{"import": [...], "export": [...]}`, each `id`, `name`, `description`),
+`devices`
 (`host_id`, `hostname`, `interface_count`), `interfaces` (at most 2,000
 interface addresses, with `truncated` when there are more) and `prefixes`
 (`subnet`, and `source`: the IPAM source's provider, or `interface`).
@@ -169,10 +211,10 @@ Deleting a VRF that is in use gives `409`:
 ### VLANs
 
 ```
-GET    /api/ipam/vlans[?site_id=<id>|none][&vid=<n>]
-POST   /api/ipam/vlans           {vid, name?, site_id?, description?}
+GET    /api/ipam/vlans[?site_id=<id>|none][&vid=<n>][&vlan_group_id=<id>]
+POST   /api/ipam/vlans           {vid, name?, site_id?, description?, vlan_group_id?}
 GET    /api/ipam/vlans/{id}
-PUT    /api/ipam/vlans/{id}      {name?, site_id?, description?}
+PUT    /api/ipam/vlans/{id}      {name?, site_id?, description?, vlan_group_id?}
 DELETE /api/ipam/vlans/{id}
 ```
 
@@ -189,7 +231,9 @@ DELETE /api/ipam/vlans/{id}
   "device_count": 3,
   "interface_count": 41,
   "prefix_count": 1,
-  "name_mismatch": false
+  "name_mismatch": false,
+  "vlan_group_id": 4,
+  "vlan_group": { "id": 4, "name": "Campus" }
 }
 ```
 
@@ -211,6 +255,55 @@ another site. A `vid` key on `PUT` gives `422`. On `PUT`, leaving
 `site_id` out keeps the site and `null` moves the VLAN to no site. Deleting
 a VLAN that devices still carry is allowed; it is made again at their next
 collection.
+
+An unknown `vlan_group_id` gives `400`; a VLAN id outside the group's range,
+or a site outside its scope, `422`; a VLAN id the group has already `409`.
+On `PUT`, leaving `vlan_group_id` out keeps the group and `null` takes the
+VLAN out of it.
+
+### Route targets and VLAN groups
+
+```
+GET    /api/ipam/route-targets[?tenant_id=&vrf_id=&q=]
+POST   /api/ipam/route-targets           {name, tenant_id?, description?}
+GET    /api/ipam/route-targets/{id}
+PUT    /api/ipam/route-targets/{id}      {name?, tenant_id?, description?}
+DELETE /api/ipam/route-targets/{id}
+GET    /api/ipam/vlan-groups[?site_id=&region_id=&q=]
+POST   /api/ipam/vlan-groups             {name, min_vid?, max_vid?, site_id?, region_id?, description?}
+GET    /api/ipam/vlan-groups/{id}
+PUT    /api/ipam/vlan-groups/{id}        {name?, min_vid?, max_vid?, site_id?, region_id?, description?}
+DELETE /api/ipam/vlan-groups/{id}
+GET    /api/ipam/vlan-groups/{id}/next-vid
+```
+
+```json
+{ "id": 2, "name": "65000:100", "tenant_id": null, "tenant_name": null, "description": "Hub",
+  "import_vrf_count": 3, "export_vrf_count": 1 }
+```
+
+A route target detail adds `vrfs` (`vrf_id`, `name`, `direction`). A VLAN
+group answers `min_vid`, `max_vid`, `site_id`, `site_name`, `region_id`,
+`region_name` and `vlan_count`; its detail adds `vlans` (`id`, `vid`,
+`name`, `site_id`), `available` and `next_vid`. `next-vid` answers
+`{"vlan_group_id": 4, "vid": 103}` (`vid` null when the group is full). A
+route target that does not parse gives `422` naming `name`; a value taken
+`409`. A group scoped to both a site and a region, a range whose lowest id
+is above its highest, or a change that leaves a VLAN outside the group
+gives `422`.
+
+For an account limited to selected inventory groups (object scope), a
+route target is read when it is of one of the account's tenants or of no
+tenant; a VLAN group when its site, or a site of its region (and the
+regions under it), is one of the account's, or when it has no scope (a
+region with no site counts as no scope). Others give `404`, on the next
+free VLAN id too. A VRF's detail and `/vrfs/{id}/route-targets` leave out
+the route targets the account cannot read; a route target's detail lists
+only the VRFs it can read; a VLAN group's detail only its readable VLANs,
+while `available` and `next_vid` still count every VLAN of the group (an
+id another tenant holds is taken). Scope rules on the models
+`route_target` (tenant) and `vlan_group` (site) widen what an access group
+reads.
 
 ### Interface addresses
 

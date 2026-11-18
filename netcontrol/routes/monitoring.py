@@ -1,6 +1,12 @@
 """
 monitoring.py -- Real-time device monitoring, alerting, SLA dashboards,
 and background poll/escalation loops.
+
+Object scope: polls, alerts, SLA and availability rows follow their host;
+alert rules, suppressions and SLA targets follow the host or inventory group
+they target (a global one is read by everyone, changed only by unrestricted
+callers); topology (integration) entities are visible to a scoped caller
+only when matched to one of their inventory hosts.
 """
 
 from __future__ import annotations
@@ -22,7 +28,21 @@ import netcontrol.routes.state as state
 from netcontrol.drivers import supports_cli
 from netcontrol.integrations.apc import snmp as apc_snmp
 from netcontrol.integrations.availability import ENTITY_TYPES as TOPOLOGY_ENTITY_TYPES
-from netcontrol.object_scope import HOST_NOT_FOUND, require_object_host, scoped
+from netcontrol.object_scope import (
+    HOST_NOT_FOUND,
+    READ_ONLY_DETAIL,
+    ScopeModel,
+    filter_rows,
+    group_filter,
+    readable_host_ids,
+    refuse_scoped,
+    register_model,
+    request_scope,
+    require_new_row,
+    require_object_host,
+    require_row,
+    scoped,
+)
 from netcontrol.routes import topology_availability as topology_tracking
 from netcontrol.routes.icmp import ICMP_AVAILABLE, ping_host
 from netcontrol.routes.maintenance_windows import _parse_iso
@@ -47,6 +67,19 @@ from netcontrol.telemetry import configure_logging, increment_metric, redact_val
 router = APIRouter()
 admin_router = APIRouter()
 LOGGER = configure_logging("plexus.monitoring")
+
+# Alert rules, alert suppressions, SLA targets and baseline alert rules: a row
+# that targets a host or an inventory group follows it; a global row (neither)
+# is shared: every scoped caller reads it, only unrestricted callers change it.
+MONITORING_RULE = register_model(
+    ScopeModel(
+        "monitoring_rule",
+        {"host": "host_id", "group": "group_id"},
+        shared=True,
+        not_found="Rule not found",
+        description="Alert rules, suppressions, SLA targets and baseline rules (by target host or group)",
+    )
+)
 
 # Monotonic timestamp of the last retention cleanup. Retention is a set of
 # full-table DELETE scans, so we throttle it (see retention_interval_seconds)
@@ -826,15 +859,13 @@ async def _evaluate_alerts_for_poll(
         )
 
     # An APC UPS: on battery, battery low / failed / to replace, output off or
-    # on bypass. Each clears its open alert once the UPS reports it gone.
+    # on bypass, overload, battery temperature. Each clears its open alert
+    # once the UPS reports it gone (the UPS's traps use the same keys).
     ups_status = res.get("ups") or {}
     ups_checks = apc_snmp.ups_alert_checks(ups_status)
     built_in_checks.extend(ups_checks)
-    if ups_status:
-        raised = {chk["metric"] for chk in ups_checks}
-        for metric in apc_snmp.ALERT_METRICS:
-            if metric not in raised:
-                await db.resolve_monitoring_alerts(f"{host_id}:{metric}:status")
+    for metric in apc_snmp.ups_cleared_alerts(ups_status, ups_checks):
+        await db.resolve_monitoring_alerts(apc_snmp.alert_dedup_key(host_id, metric))
 
     # Fire built-in checks with dedup + suppression
     for chk in built_in_checks:
@@ -1117,8 +1148,9 @@ async def _store_ups_status(h: dict, ups: dict) -> None:
         await db.update_host_serial(h["id"], serial)
 
 
-async def _run_monitoring_poll_once(*, force: bool = False) -> dict:
-    """Run one monitoring poll cycle across all groups with SNMP enabled."""
+async def _run_monitoring_poll_once(*, force: bool = False, host_ids: frozenset[int] | None = None) -> dict:
+    """Run one monitoring poll cycle across all groups with SNMP enabled
+    (``host_ids``: only those hosts, for a caller limited by object scope)."""
     if not force and not state.MONITORING_CONFIG.get("enabled"):
         return {"enabled": False, "hosts_polled": 0, "alerts_created": 0, "errors": 0}
 
@@ -1146,6 +1178,8 @@ async def _run_monitoring_poll_once(*, force: bool = False) -> dict:
     targets: list[tuple[dict, dict | None, dict]] = []
     backed_off = 0
     for h, cred, snmp_cfg in await _build_poll_targets():
+        if host_ids is not None and int(h["id"]) not in host_ids:
+            continue
         if not force and _poll_backoff_should_skip(h["id"]):
             backed_off += 1
             continue
@@ -1213,6 +1247,15 @@ async def _run_monitoring_poll_once(*, force: bool = False) -> dict:
         "errors": errors,
         "backed_off": backed_off,
     }
+
+
+async def poll_host_now(host_id: int) -> dict:
+    """Poll one host now, outside the schedule, through the scheduled
+    cycle's code (an APC UPS after one of its SNMP traps). Nothing while
+    monitoring is off."""
+    if not state.MONITORING_CONFIG.get("enabled"):
+        return {"enabled": False, "hosts_polled": 0, "alerts_created": 0, "errors": 0}
+    return await _run_monitoring_poll_once(force=True, host_ids=frozenset({int(host_id)}))
 
 
 async def _monitoring_poll_loop() -> None:
@@ -1478,16 +1521,86 @@ async def _sla_rollup_loop() -> None:
             delay = 300
 
 
+# ── Scope helpers ─────────────────────────────────────────────────────────────
+
+_ALERT_NOT_FOUND = "Alert not found"
+_TARGET_NOT_FOUND = "Target not found"
+_ENTITY_NOT_FOUND = "No such tracked entity"
+_MUTE_NOT_FOUND = "Mute not found"
+
+
+async def _require_alert(request: Request, alert_id: int, *, write: bool = False) -> None:
+    """For a scoped caller: 404 unless the alert exists and its host is
+    readable, 403 on ``write`` unless writable. Nothing is read for an
+    unrestricted caller."""
+    if (await request_scope(request)).unrestricted:
+        return
+    alert = await db.get_monitoring_alert(alert_id)
+    await require_object_host(request, alert.get("host_id") if alert else None, write=write, not_found=_ALERT_NOT_FOUND)
+
+
+async def require_rule_change(request: Request, row: dict | None, changes: dict, *, not_found: str) -> dict:
+    """A change to a monitoring rule row (alert rule, suppression, SLA
+    target, baseline rule): 404 ``not_found`` when unknown or unreadable,
+    403 when not writable, and 403 when ``changes`` moves it to a host or
+    group the caller cannot write."""
+    row = await require_row(request, MONITORING_RULE.name, row, write=True, not_found=not_found)
+    moved = {k: changes[k] for k in ("host_id", "group_id") if k in changes}
+    if moved:
+        await require_new_row(request, MONITORING_RULE.name, {**row, **moved})
+    return row
+
+
+async def _require_sla_target(request: Request, target_id: int, *, write: bool = False) -> dict:
+    """The SLA target; a topology target (no host or group) is hidden from
+    a scoped caller like the topology entities it applies to."""
+    target = await db.get_sla_target(target_id)
+    if target and str(target.get("provider") or "").strip() and (await request_scope(request)).restricted:
+        target = None
+    return await require_row(request, MONITORING_RULE.name, target, write=write, not_found=_TARGET_NOT_FOUND)
+
+
+def _topology_key(row: dict) -> tuple[str, int, str, str]:
+    return (
+        str(row.get("provider") or ""),
+        int(row.get("org_ref") or 0),
+        str(row.get("entity_type") or ""),
+        str(row.get("entity_id") or ""),
+    )
+
+
+async def _topology_keys(request: Request, *, write: bool = False) -> set[tuple[str, int, str, str]] | None:
+    """``None`` for an unrestricted caller; else the keys of the tracked
+    topology entities matched to an inventory host the caller may read
+    (``write``: change). Entities with no inventory host are not in a
+    scoped caller's scope."""
+    hosts = await readable_host_ids(request, write=write)
+    if hosts is None:
+        return None
+    rows = await db.list_topology_entity_states() if hosts else []
+    return {_topology_key(r) for r in rows if r.get("host_id") is not None and int(r["host_id"]) in hosts}
+
+
+async def _filter_topology_rows(request: Request, rows: list[dict]) -> list[dict]:
+    keys = await _topology_keys(request)
+    if keys is None:
+        return rows
+    return [r for r in rows if _topology_key(r) in keys]
+
+
 # ── Monitoring Routes ─────────────────────────────────────────────────────────
 
 
 @router.get("/api/monitoring/summary")
-async def monitoring_summary(group_id: int | None = Query(default=None)):
-    return await db.get_monitoring_summary(group_id)
+@scoped("list")
+async def monitoring_summary(request: Request, group_id: int | None = Query(default=None)):
+    return await db.get_monitoring_summary(group_id, **await group_filter(request))
 
 
 @router.get("/api/monitoring/polls")
+@scoped("list")
 async def monitoring_polls(
+    request: Request,
     group_id: int | None = Query(default=None),
     limit: int = Query(default=200, ge=1, le=10000),
     include_details: bool = Query(default=False),
@@ -1497,11 +1610,13 @@ async def monitoring_polls(
     # of full blobs at once; the lean list view (default) keeps the full range.
     if include_details:
         limit = min(limit, 500)
-    return await db.get_latest_monitoring_polls(group_id, limit, include_details)
+    return await db.get_latest_monitoring_polls(group_id, limit, include_details, **await group_filter(request))
 
 
 @router.get("/api/monitoring/polls/{host_id}/history")
+@scoped("host")
 async def monitoring_poll_history(
+    request: Request,
     host_id: int,
     limit: int = Query(default=100, ge=1, le=10000),
     include_details: bool = Query(default=False),
@@ -1510,21 +1625,26 @@ async def monitoring_poll_history(
     # lean columns; the device-detail page opts in for the latest poll's blobs.
     if include_details:
         limit = min(limit, 500)
+    await require_object_host(request, host_id, not_found=HOST_NOT_FOUND)
     return await db.get_monitoring_poll_history(host_id, limit, include_details)
 
 
 @router.get("/api/monitoring/alerts")
+@scoped("list")
 async def monitoring_alerts(
+    request: Request,
     host_id: int | None = Query(default=None),
     acknowledged: bool | None = Query(default=None),
     severity: str | None = Query(default=None),
     limit: int = Query(default=200, ge=1, le=10000),
 ):
-    return await db.get_monitoring_alerts(host_id, acknowledged, severity, limit)
+    return await db.get_monitoring_alerts(host_id, acknowledged, severity, limit, **await group_filter(request))
 
 
 @router.post("/api/monitoring/alerts/{alert_id}/acknowledge")
+@scoped("alert")
 async def acknowledge_alert(alert_id: int, request: Request):
+    await _require_alert(request, alert_id, write=True)
     session = _get_session(request)
     user = session["user"] if session else ""
     await db.acknowledge_monitoring_alert(alert_id, user)
@@ -1535,11 +1655,13 @@ async def acknowledge_alert(alert_id: int, request: Request):
 
 
 @router.get("/api/monitoring/alerts/{alert_id}/correlation")
-async def get_alert_correlation(alert_id: int):
+@scoped("alert")
+async def get_alert_correlation(alert_id: int, request: Request):
     """Return deployments and drift events correlated to an alert."""
     alert = await db.get_monitoring_alert(alert_id)
     if not alert:
-        raise HTTPException(status_code=404, detail="Alert not found")
+        raise HTTPException(status_code=404, detail=_ALERT_NOT_FOUND)
+    await require_object_host(request, alert.get("host_id"), not_found=_ALERT_NOT_FOUND)
 
     alert_time = alert.get("created_at", "")
     host_id = alert.get("host_id")
@@ -1564,7 +1686,9 @@ async def get_alert_correlation(alert_id: int):
 
 
 @router.get("/api/monitoring/routes/{host_id}")
-async def monitoring_route_snapshots(host_id: int, limit: int = Query(default=50, ge=1, le=10000)):
+@scoped("host")
+async def monitoring_route_snapshots(request: Request, host_id: int, limit: int = Query(default=50, ge=1, le=10000)):
+    await require_object_host(request, host_id, not_found=HOST_NOT_FOUND)
     return await db.get_route_snapshots(host_id, limit)
 
 
@@ -1582,11 +1706,13 @@ async def monitoring_vendor_status(request: Request, host_id: int):
 
 
 @router.post("/api/monitoring/poll-now")
+@scoped("hosts")
 async def monitoring_poll_now(request: Request):
-    """Trigger an immediate monitoring poll across all groups."""
+    """Trigger an immediate monitoring poll across all groups (a caller
+    limited by object scope polls the hosts it may change)."""
     session = _get_session(request)
     user = session["user"] if session else ""
-    result = await _run_monitoring_poll_once(force=True)
+    result = await _run_monitoring_poll_once(force=True, host_ids=await readable_host_ids(request, write=True))
     await _audit(
         "monitoring",
         "poll.manual",
@@ -1598,10 +1724,13 @@ async def monitoring_poll_now(request: Request):
 
 
 @router.post("/api/monitoring/poll-now/stream")
+@scoped("hosts")
 async def monitoring_poll_now_stream(request: Request):
-    """Trigger a monitoring poll with SSE progress events."""
+    """Trigger a monitoring poll with SSE progress events (a caller limited
+    by object scope polls the hosts it may change)."""
     session = _get_session(request)
     user = session["user"] if session else ""
+    allowed_hosts = await readable_host_ids(request, write=True)
 
     async def _event_generator():
         # Same target building, persistence, and post-processing as the
@@ -1609,6 +1738,8 @@ async def monitoring_poll_now_stream(request: Request):
         # stream previously carried an inline copy that silently drifted
         # (it skipped interface-error metrics and baseline alerting).
         all_hosts = await _build_poll_targets()
+        if allowed_hosts is not None:
+            all_hosts = [t for t in all_hosts if int(t[0]["id"]) in allowed_hosts]
         alert_rules_cache = await db.get_alert_rules(enabled_only=True)
         suppressions_cache = await db.get_active_alert_suppressions()
 
@@ -1811,12 +1942,17 @@ def _validate_alert_rule_fields(body: dict) -> dict:
 
 
 @router.get("/api/monitoring/rules")
-async def list_alert_rules():
-    return await db.get_alert_rules()
+@scoped("list")
+async def list_alert_rules(request: Request):
+    return await filter_rows(MONITORING_RULE.name, await db.get_alert_rules(), request)
 
 
 @router.post("/api/monitoring/rules", status_code=201)
+@scoped("create")
 async def create_alert_rule_endpoint(body: dict, request: Request):
+    await require_new_row(
+        request, MONITORING_RULE.name, {"host_id": body.get("host_id"), "group_id": body.get("group_id")}
+    )
     session = _get_session(request)
     user = session["user"] if session else ""
     fields = _validate_alert_rule_fields(
@@ -1859,18 +1995,17 @@ async def create_alert_rule_endpoint(body: dict, request: Request):
 
 
 @router.get("/api/monitoring/rules/{rule_id}")
-async def get_alert_rule_endpoint(rule_id: int):
-    rule = await db.get_alert_rule(rule_id)
-    if not rule:
-        raise HTTPException(status_code=404, detail="Rule not found")
-    return rule
+@scoped("rule")
+async def get_alert_rule_endpoint(rule_id: int, request: Request):
+    return await require_row(
+        request, MONITORING_RULE.name, await db.get_alert_rule(rule_id), not_found="Rule not found"
+    )
 
 
 @router.put("/api/monitoring/rules/{rule_id}")
+@scoped("rule")
 async def update_alert_rule_endpoint(rule_id: int, body: dict, request: Request):
-    rule = await db.get_alert_rule(rule_id)
-    if not rule:
-        raise HTTPException(status_code=404, detail="Rule not found")
+    await require_rule_change(request, await db.get_alert_rule(rule_id), body, not_found="Rule not found")
     if "channel_ids" in body:
         body["channel_ids"] = _normalize_channel_ids(body.get("channel_ids"))
     await db.update_alert_rule(rule_id, **{**body, **_validate_alert_rule_fields(body)})
@@ -1886,10 +2021,9 @@ async def update_alert_rule_endpoint(rule_id: int, body: dict, request: Request)
 
 
 @router.delete("/api/monitoring/rules/{rule_id}")
+@scoped("rule")
 async def delete_alert_rule_endpoint(rule_id: int, request: Request):
-    rule = await db.get_alert_rule(rule_id)
-    if not rule:
-        raise HTTPException(status_code=404, detail="Rule not found")
+    rule = await require_rule_change(request, await db.get_alert_rule(rule_id), {}, not_found="Rule not found")
     await db.delete_alert_rule(rule_id)
     session = _get_session(request)
     await _audit(
@@ -1906,12 +2040,17 @@ async def delete_alert_rule_endpoint(rule_id: int, request: Request):
 
 
 @router.get("/api/monitoring/suppressions")
-async def list_alert_suppressions(active_only: bool = Query(default=False)):
-    return await db.get_alert_suppressions(active_only)
+@scoped("list")
+async def list_alert_suppressions(request: Request, active_only: bool = Query(default=False)):
+    return await filter_rows(MONITORING_RULE.name, await db.get_alert_suppressions(active_only), request)
 
 
 @router.post("/api/monitoring/suppressions", status_code=201)
+@scoped("create")
 async def create_alert_suppression_endpoint(body: dict, request: Request):
+    await require_new_row(
+        request, MONITORING_RULE.name, {"host_id": body.get("host_id"), "group_id": body.get("group_id")}
+    )
     session = _get_session(request)
     user = session["user"] if session else ""
     if not body.get("ends_at"):
@@ -1947,7 +2086,11 @@ async def create_alert_suppression_endpoint(body: dict, request: Request):
 
 
 @router.delete("/api/monitoring/suppressions/{suppression_id}")
+@scoped("rule")
 async def delete_alert_suppression_endpoint(suppression_id: int, request: Request):
+    if (await request_scope(request)).restricted:
+        found = next((s for s in await db.get_alert_suppressions() if int(s["id"]) == suppression_id), None)
+        await require_rule_change(request, found, {}, not_found="Suppression not found")
     await db.delete_alert_suppression(suppression_id)
     session = _get_session(request)
     await _audit(
@@ -1964,7 +2107,11 @@ async def delete_alert_suppression_endpoint(suppression_id: int, request: Reques
 
 
 @router.post("/api/monitoring/alerts/bulk-acknowledge")
+@scoped("hosts")
 async def bulk_acknowledge_alerts_endpoint(body: dict, request: Request):
+    """Acknowledge many alerts; a caller limited by object scope acknowledges
+    only the alerts of hosts it may change (the others are skipped and not
+    counted)."""
     alert_ids = body.get("alert_ids", [])
     if not alert_ids:
         raise HTTPException(status_code=400, detail="alert_ids required")
@@ -1972,7 +2119,7 @@ async def bulk_acknowledge_alerts_endpoint(body: dict, request: Request):
         raise HTTPException(status_code=400, detail="alert_ids must be a list of at most 1000 IDs")
     session = _get_session(request)
     user = session["user"] if session else ""
-    count = await db.bulk_acknowledge_alerts(alert_ids, user)
+    count = await db.bulk_acknowledge_alerts(alert_ids, user, host_ids=await readable_host_ids(request, write=True))
     await _audit(
         "monitoring",
         "alerts.bulk_acknowledged",
@@ -1992,15 +2139,19 @@ _TOPOLOGY_ENTITY_RE = rf"^({'|'.join(TOPOLOGY_ENTITY_TYPES)})$"
 
 
 @router.get("/api/sla/summary")
+@scoped("list")
 async def sla_summary(
+    request: Request,
     group_id: int | None = Query(default=None),
     days: int = Query(default=30, ge=1, le=365),
 ):
-    return await db.get_sla_summary(group_id, days)
+    return await db.get_sla_summary(group_id, days, **await group_filter(request))
 
 
 @router.get("/api/sla/compliance")
+@scoped("list")
 async def sla_compliance(
+    request: Request,
     group_id: int | None = Query(default=None),
     host_id: int | None = Query(default=None),
     target_id: int | None = Query(default=None),
@@ -2016,14 +2167,19 @@ async def sla_compliance(
     applies to (filtered by ``provider``, ``org_ref``, ``entity_type``,
     ``entity_id``), worst first."""
     if scope == "topology":
-        return await db.get_topology_sla_compliance(
+        rows = await db.get_topology_sla_compliance(
             provider=provider, org_ref=org_ref, entity_type=entity_type, entity_id=entity_id, target_id=target_id
         )
-    return await db.get_sla_compliance(group_id=group_id, host_id=host_id, target_id=target_id)
+        return await _filter_topology_rows(request, rows)
+    return await db.get_sla_compliance(
+        group_id=group_id, host_id=host_id, target_id=target_id, **await group_filter(request)
+    )
 
 
 @router.get("/api/sla/compliance/history")
+@scoped("list")
 async def sla_compliance_history(
+    request: Request,
     target_id: int | None = Query(default=None),
     host_id: int | None = Query(default=None),
     limit: int = Query(default=100, ge=1, le=1000),
@@ -2035,23 +2191,35 @@ async def sla_compliance_history(
     """SLA status changes, newest first (``scope=topology``: of the targets
     of topology entities)."""
     if scope == "topology":
-        return await db.get_topology_sla_compliance_history(
+        rows = await db.get_topology_sla_compliance_history(
             target_id=target_id, provider=provider, org_ref=org_ref, entity_id=entity_id, limit=limit
         )
-    return await db.get_sla_compliance_history(target_id=target_id, host_id=host_id, limit=limit)
+        return await _filter_topology_rows(request, rows)
+    return await db.get_sla_compliance_history(
+        target_id=target_id, host_id=host_id, limit=limit, **await group_filter(request)
+    )
 
 
 @router.get("/api/sla/host/{host_id}")
-async def sla_host_detail(host_id: int, days: int = Query(default=30, ge=1, le=365)):
+@scoped("host")
+async def sla_host_detail(request: Request, host_id: int, days: int = Query(default=30, ge=1, le=365)):
+    await require_object_host(request, host_id, not_found=HOST_NOT_FOUND)
     return await db.get_sla_host_detail(host_id, days)
 
 
 @router.get("/api/sla/targets")
+@scoped("list")
 async def sla_targets_list(
+    request: Request,
     host_id: int | None = Query(default=None),
     group_id: int | None = Query(default=None),
 ):
-    return await db.get_sla_targets(host_id, group_id)
+    targets = await db.get_sla_targets(host_id, group_id)
+    if (await request_scope(request)).unrestricted:
+        return targets
+    # Topology targets apply to integration entities, not inventory hosts.
+    targets = [t for t in targets if not str(t.get("provider") or "").strip()]
+    return await filter_rows(MONITORING_RULE.name, targets, request)
 
 
 def _validate_sla_target_fields(body: dict) -> dict:
@@ -2114,7 +2282,11 @@ def _validate_sla_target_scope(body: dict) -> dict:
 
 
 @router.post("/api/sla/targets", status_code=201)
+@scoped("create")
 async def sla_target_create(body: dict, request: Request):
+    await require_new_row(
+        request, MONITORING_RULE.name, {"host_id": body.get("host_id"), "group_id": body.get("group_id")}
+    )
     session = _get_session(request)
     user = session["user"] if session else ""
     if not body.get("name") or not body.get("metric"):
@@ -2145,10 +2317,11 @@ async def sla_target_create(body: dict, request: Request):
 
 
 @router.put("/api/sla/targets/{target_id}")
+@scoped("rule")
 async def sla_target_update(target_id: int, body: dict, request: Request):
-    target = await db.get_sla_target(target_id)
-    if not target:
-        raise HTTPException(status_code=404, detail="Target not found")
+    target = await require_rule_change(
+        request, await _require_sla_target(request, target_id), body, not_found=_TARGET_NOT_FOUND
+    )
     fields = _validate_sla_target_fields(body)
     merged = {**target, **body, **fields}
     if str(merged.get("provider") or "").strip() and (
@@ -2168,10 +2341,9 @@ async def sla_target_update(target_id: int, body: dict, request: Request):
 
 
 @router.delete("/api/sla/targets/{target_id}")
+@scoped("rule")
 async def sla_target_delete(target_id: int, request: Request):
-    target = await db.get_sla_target(target_id)
-    if not target:
-        raise HTTPException(status_code=404, detail="Target not found")
+    target = await _require_sla_target(request, target_id, write=True)
     await db.delete_sla_target(target_id)
     session = _get_session(request)
     await _audit(
@@ -2188,15 +2360,19 @@ async def sla_target_delete(target_id: int, request: Request):
 
 
 @router.get("/api/availability/summary")
+@scoped("list")
 async def availability_summary_api(
+    request: Request,
     group_id: int | None = Query(default=None),
     days: int = Query(default=30),
 ):
-    return await db.get_availability_summary(group_id, days)
+    return await db.get_availability_summary(group_id, days, **await group_filter(request))
 
 
 @router.get("/api/availability/transitions")
+@scoped("list")
 async def availability_transitions_api(
+    request: Request,
     host_id: int | None = Query(default=None),
     group_id: int | None = Query(default=None),
     entity_type: str | None = Query(default=None),
@@ -2214,12 +2390,15 @@ async def availability_transitions_api(
             limit=limit,
             group_id=group_id,
             days=days,
+            **await group_filter(request),
         )
     }
 
 
 @router.get("/api/availability/outages")
+@scoped("list")
 async def availability_outages_api(
+    request: Request,
     host_id: int | None = Query(default=None),
     group_id: int | None = Query(default=None),
     days: int = Query(default=30, ge=1, le=365),
@@ -2231,12 +2410,15 @@ async def availability_outages_api(
             group_id=group_id,
             days=days,
             limit=limit,
+            **await group_filter(request),
         )
     }
 
 
 @router.get("/api/availability/topology/summary")
+@scoped("list")
 async def topology_availability_summary_api(
+    request: Request,
     provider: str | None = Query(default=None, pattern=_TOPOLOGY_PROVIDER_RE),
     org_ref: int | None = Query(default=None),
     entity_type: str | None = Query(default=None, pattern=_TOPOLOGY_ENTITY_RE),
@@ -2248,7 +2430,9 @@ async def topology_availability_summary_api(
     reports (``null`` when none: only OPNsense gateways today) and
     ``sla_status``, the worst latest status of the SLA targets that apply
     to it (``null`` when none)."""
-    summary = await db.get_topology_availability_summary(provider, org_ref, entity_type, days)
+    summary = await db.get_topology_availability_summary(
+        provider, org_ref, entity_type, days, host_ids=await readable_host_ids(request)
+    )
     metrics = await db.get_topology_entity_metric_values(
         days, provider=provider, org_ref=org_ref, entity_type=entity_type
     )
@@ -2268,7 +2452,9 @@ async def topology_availability_summary_api(
 
 
 @router.get("/api/availability/topology/metrics")
+@scoped("entity")
 async def topology_availability_metrics_api(
+    request: Request,
     provider: str = Query(pattern=_TOPOLOGY_PROVIDER_RE),
     org_ref: int = Query(),
     entity_type: str = Query(pattern=_TOPOLOGY_ENTITY_RE),
@@ -2280,11 +2466,16 @@ async def topology_availability_metrics_api(
     OPNsense gateway uplink): the raw samples still retained, one row per
     day from the daily rollups (which outlive the raw retention), and the
     window means."""
+    keys = await _topology_keys(request)
+    if keys is not None and (provider, org_ref, entity_type, entity_id) not in keys:
+        raise HTTPException(status_code=404, detail=_ENTITY_NOT_FOUND)
     return await db.get_topology_entity_metric_history(provider, org_ref, entity_type, entity_id, days, limit=limit)
 
 
 @router.get("/api/availability/topology/transitions")
+@scoped("list")
 async def topology_availability_transitions_api(
+    request: Request,
     provider: str | None = Query(default=None, pattern=_TOPOLOGY_PROVIDER_RE),
     org_ref: int | None = Query(default=None),
     entity_type: str | None = Query(default=None, pattern=_TOPOLOGY_ENTITY_RE),
@@ -2300,12 +2491,15 @@ async def topology_availability_transitions_api(
             entity_id=entity_id,
             days=days,
             limit=limit,
+            host_ids=await readable_host_ids(request),
         )
     }
 
 
 @router.get("/api/availability/topology/outages")
+@scoped("list")
 async def topology_availability_outages_api(
+    request: Request,
     provider: str | None = Query(default=None, pattern=_TOPOLOGY_PROVIDER_RE),
     org_ref: int | None = Query(default=None),
     entity_type: str | None = Query(default=None, pattern=_TOPOLOGY_ENTITY_RE),
@@ -2321,6 +2515,7 @@ async def topology_availability_outages_api(
             entity_id=entity_id,
             days=days,
             limit=limit,
+            host_ids=await readable_host_ids(request),
         )
     }
 
@@ -2346,15 +2541,37 @@ def _mute_audit_detail(mute: dict) -> str:
     return f"{mute['provider']}:{mute['org_ref']} {mute['scope']} {mute['entity_type']}:{target}"
 
 
+async def _require_mute_entity(request: Request, mute: dict, *, not_found: str) -> None:
+    """For a scoped caller: a mute of one entity matched to an inventory
+    host it may read (else 404 ``not_found``) and change (else 403); a site
+    mute covers entities beyond any inventory group and is refused."""
+    keys = await _topology_keys(request)
+    if keys is None:
+        return
+    if mute.get("scope") != "entity":
+        await refuse_scoped(request)
+    key = _topology_key(mute)
+    if key not in keys:
+        raise HTTPException(status_code=404, detail=not_found)
+    if key not in (await _topology_keys(request, write=True) or set()):
+        raise HTTPException(status_code=403, detail=READ_ONLY_DETAIL)
+
+
 @router.get("/api/availability/topology/mutes")
-async def list_topology_mutes_api():
-    return {"mutes": await db.list_topology_mutes()}
+@scoped("list")
+async def list_topology_mutes_api(request: Request):
+    mutes = await db.list_topology_mutes()
+    if (await request_scope(request)).restricted:
+        mutes = [m for m in await _filter_topology_rows(request, mutes) if m.get("scope") == "entity"]
+    return {"mutes": mutes}
 
 
 @router.post("/api/availability/topology/mutes", status_code=201)
+@scoped("entity")
 async def create_topology_mute_api(body: TopologyMuteCreate, request: Request):
     """Mute one tracked entity, or every entity at one site, of one source.
     Its open alerts are acknowledged as ``muted``."""
+    await _require_mute_entity(request, body.model_dump(), not_found=_ENTITY_NOT_FOUND)
     reason = body.reason.strip()
     if not 1 <= len(reason) <= _MUTE_REASON_MAX:
         raise HTTPException(status_code=400, detail=f"A reason of 1 to {_MUTE_REASON_MAX} characters is required")
@@ -2393,12 +2610,18 @@ async def create_topology_mute_api(body: TopologyMuteCreate, request: Request):
 
 
 @router.delete("/api/availability/topology/mutes/{mute_id}")
+@scoped("entity")
 async def delete_topology_mute_api(mute_id: int, request: Request):
     """Unmute. Nothing is raised retroactively: an alert swallowed while
     muted counts as raised."""
     mute = await db.get_topology_mute(mute_id)
+    if mute is not None and (await request_scope(request)).restricted:
+        if mute.get("scope") != "entity":
+            mute = None
+        else:
+            await _require_mute_entity(request, mute, not_found=_MUTE_NOT_FOUND)
     if mute is None or not await db.delete_topology_mute(mute_id):
-        raise HTTPException(status_code=404, detail="Mute not found")
+        raise HTTPException(status_code=404, detail=_MUTE_NOT_FOUND)
     await _audit(
         "monitoring",
         "topology.unmuted",
@@ -2413,10 +2636,13 @@ async def delete_topology_mute_api(mute_id: int, request: Request):
 
 
 @router.get("/api/interfaces/{host_id}/summary")
+@scoped("host")
 async def interface_utilization_summary_api(
+    request: Request,
     host_id: int,
     days: int = Query(default=1, ge=1, le=365),
 ):
+    await require_object_host(request, host_id, not_found=HOST_NOT_FOUND)
     return {
         "host_id": host_id,
         "interfaces": await db.get_interface_utilization_summary(host_id, days),
@@ -2424,11 +2650,14 @@ async def interface_utilization_summary_api(
 
 
 @router.get("/api/interfaces/{host_id}/port/{if_index}")
+@scoped("host")
 async def port_detail_api(
+    request: Request,
     host_id: int,
     if_index: int,
     start: str | None = Query(default=None),
     end: str | None = Query(default=None),
     limit: int = Query(default=5000, ge=1, le=50000),
 ):
+    await require_object_host(request, host_id, not_found=HOST_NOT_FOUND)
     return await db.get_port_detail_ts(host_id, if_index, start, end, limit)

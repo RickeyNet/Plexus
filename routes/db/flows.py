@@ -12,6 +12,7 @@ import ipaddress
 import json
 import os
 import re
+from collections.abc import Iterable
 from datetime import UTC, datetime, timedelta
 
 import routes.database as _dbcore
@@ -22,6 +23,7 @@ from routes.database import (
     row_to_dict,
     rows_to_list,
 )
+from routes.db.inventory import group_ids_condition
 
 __all__ = [
     "create_flow_records_batch",
@@ -69,9 +71,25 @@ async def create_flow_records_batch(rows: list[tuple]) -> int:
         await db.close()
 
 
+def _with_host_scope(where: str, params: list, group_ids: Iterable[int] | None) -> str:
+    """``where`` keeping only the records of exporters that are hosts of the
+    inventory groups ``group_ids`` (``None``: unchanged); appends the
+    parameters to ``params``."""
+    if group_ids is None:
+        return where
+    scope_sql, scope_params = group_ids_condition("group_id", group_ids)
+    params.extend(scope_params)
+    return f"{where} AND host_id IN (SELECT id FROM hosts WHERE {scope_sql})"
+
+
 async def get_flow_top_talkers(
-    host_id: int | None = None, hours: int = 1, direction: str = "src", limit: int = 20
+    host_id: int | None = None,
+    hours: int = 1,
+    direction: str = "src",
+    limit: int = 20,
+    group_ids: Iterable[int] | None = None,
 ) -> list[dict]:
+    """``group_ids``: over the flows of exporters in those inventory groups."""
     db = await _dbcore.get_db(read_only=True)
     try:
         col = "src_ip" if direction == "src" else "dst_ip"
@@ -80,6 +98,7 @@ async def get_flow_top_talkers(
         if host_id is not None:
             where += " AND host_id = ?"
             params.append(host_id)
+        where = _with_host_scope(where, params, group_ids)
         params.append(limit)
         cursor = await db.execute(
             f"""SELECT {col} as ip, SUM(bytes) as total_bytes, SUM(packets) as total_packets,
@@ -93,7 +112,10 @@ async def get_flow_top_talkers(
         await db.close()
 
 
-async def get_flow_top_applications(host_id: int | None = None, hours: int = 1, limit: int = 20) -> list[dict]:
+async def get_flow_top_applications(
+    host_id: int | None = None, hours: int = 1, limit: int = 20, group_ids: Iterable[int] | None = None
+) -> list[dict]:
+    """``group_ids``: over the flows of exporters in those inventory groups."""
     db = await _dbcore.get_db(read_only=True)
     try:
         where = "WHERE received_at >= datetime('now', ? || ' hours')"
@@ -101,6 +123,7 @@ async def get_flow_top_applications(host_id: int | None = None, hours: int = 1, 
         if host_id is not None:
             where += " AND host_id = ?"
             params.append(host_id)
+        where = _with_host_scope(where, params, group_ids)
         params.append(limit)
         cursor = await db.execute(
             f"""SELECT dst_port as port, protocol, SUM(bytes) as total_bytes,
@@ -114,7 +137,10 @@ async def get_flow_top_applications(host_id: int | None = None, hours: int = 1, 
         await db.close()
 
 
-async def get_flow_top_conversations(host_id: int | None = None, hours: int = 1, limit: int = 20) -> list[dict]:
+async def get_flow_top_conversations(
+    host_id: int | None = None, hours: int = 1, limit: int = 20, group_ids: Iterable[int] | None = None
+) -> list[dict]:
+    """``group_ids``: over the flows of exporters in those inventory groups."""
     db = await _dbcore.get_db(read_only=True)
     try:
         where = "WHERE received_at >= datetime('now', ? || ' hours')"
@@ -122,6 +148,7 @@ async def get_flow_top_conversations(host_id: int | None = None, hours: int = 1,
         if host_id is not None:
             where += " AND host_id = ?"
             params.append(host_id)
+        where = _with_host_scope(where, params, group_ids)
         params.append(limit)
         cursor = await db.execute(
             f"""SELECT src_ip, dst_ip, SUM(bytes) as total_bytes,
@@ -135,8 +162,11 @@ async def get_flow_top_conversations(host_id: int | None = None, hours: int = 1,
         await db.close()
 
 
-async def get_flow_timeline(host_id: int | None = None, hours: int = 6, bucket_minutes: int = 5) -> list[dict]:
-    """Aggregate flow data into time buckets."""
+async def get_flow_timeline(
+    host_id: int | None = None, hours: int = 6, bucket_minutes: int = 5, group_ids: Iterable[int] | None = None
+) -> list[dict]:
+    """Aggregate flow data into time buckets; ``group_ids``: over the flows
+    of exporters in those inventory groups."""
     # Validate bucket_minutes to prevent SQL injection via f-string
     bucket_minutes = max(1, min(int(bucket_minutes), 60))
     db = await _dbcore.get_db(read_only=True)
@@ -146,6 +176,7 @@ async def get_flow_timeline(host_id: int | None = None, hours: int = 6, bucket_m
         if host_id is not None:
             where += " AND host_id = ?"
             params.append(host_id)
+        where = _with_host_scope(where, params, group_ids)
         bucket_expr = _minute_bucket_expr("received_at", bucket_minutes)
         cursor = await db.execute(
             f"""SELECT

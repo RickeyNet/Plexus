@@ -321,6 +321,7 @@ CREATE TABLE IF NOT EXISTS inventory_groups (
     description TEXT    DEFAULT '',
     environment TEXT    DEFAULT NULL,
     created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+    discovery_credential_id INTEGER DEFAULT NULL,
     parent_id   INTEGER DEFAULT NULL
 );
 
@@ -2962,6 +2963,7 @@ from routes.db.cato_egress import *  # noqa: E402,F403
 from routes.db.chatops import *  # noqa: E402,F403
 from routes.db.circuits import *  # noqa: E402,F403
 from routes.db.cloud import *  # noqa: E402,F403
+from routes.db.component_templates import *  # noqa: E402,F403
 from routes.db.credentials import *  # noqa: E402,F403
 from routes.db.custom_fields import *  # noqa: E402,F403
 from routes.db.dcim import *  # noqa: E402,F403
@@ -2977,6 +2979,7 @@ from routes.db.hardware_lifecycle import *  # noqa: E402,F403
 from routes.db.intended_config import *  # noqa: E402,F403
 from routes.db.inventory import *  # noqa: E402,F403
 from routes.db.ipam import *  # noqa: E402,F403
+from routes.db.ipam_model import *  # noqa: E402,F403
 from routes.db.jobs import *  # noqa: E402,F403
 from routes.db.lab import *  # noqa: E402,F403
 from routes.db.mac_tracking import *  # noqa: E402,F403
@@ -2993,6 +2996,7 @@ from routes.db.organization import *  # noqa: E402,F403
 from routes.db.playbooks import *  # noqa: E402,F403
 from routes.db.reporting import *  # noqa: E402,F403
 from routes.db.routing import *  # noqa: E402,F403
+from routes.db.saml import *  # noqa: E402,F403
 from routes.db.secrets_providers import *  # noqa: E402,F403
 from routes.db.software import *  # noqa: E402,F403
 from routes.db.tool_history import *  # noqa: E402,F403

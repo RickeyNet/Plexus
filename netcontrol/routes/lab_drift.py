@@ -22,6 +22,10 @@ Status values written to lab_drift_runs:
   - missing_source  - lab device has no source_host_id, or no production
                       snapshot exists yet for that host
   - error           - diff/eval blew up; never raised, only persisted
+
+Object scope: a twin follows the inventory host it was cloned from
+(``netcontrol.routes.lab.require_lab_device``); a twin of a host outside a
+scoped caller's read scope, and its drift runs, answer 404.
 """
 
 from __future__ import annotations
@@ -33,9 +37,11 @@ import routes.database as db
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
+from netcontrol.object_scope import scoped
 from netcontrol.routes.lab import (
     _resolve_session_user,
     _user_can_access_env,
+    require_lab_device,
 )
 from netcontrol.routes.shared import (
     _audit,
@@ -243,6 +249,7 @@ async def _get_device_or_403(device_id: int, request: Request) -> tuple[dict, di
     device = await db.get_lab_device(device_id)
     if not device:
         raise HTTPException(status_code=404, detail="Lab device not found")
+    await require_lab_device(request, device)
     env = await db.get_lab_environment(device["environment_id"])
     session, _, role = await _resolve_session_user(request)
     if not _user_can_access_env(env or {}, session, role):
@@ -251,6 +258,7 @@ async def _get_device_or_403(device_id: int, request: Request) -> tuple[dict, di
 
 
 @router.post("/api/lab/devices/{device_id}/drift/check")
+@scoped("lab_device")
 async def drift_check_endpoint(device_id: int, request: Request):
     """Run an on-demand drift check against the source host's latest snapshot."""
     device, session = await _get_device_or_403(device_id, request)
@@ -267,12 +275,14 @@ async def drift_check_endpoint(device_id: int, request: Request):
 
 
 @router.get("/api/lab/devices/{device_id}/drift/runs")
+@scoped("lab_device")
 async def list_drift_runs_endpoint(device_id: int, request: Request, limit: int = 50):
     device, _ = await _get_device_or_403(device_id, request)
     return await db.list_lab_drift_runs(device["id"], limit=max(1, min(500, limit)))
 
 
 @router.get("/api/lab/devices/{device_id}/drift/latest")
+@scoped("lab_device")
 async def latest_drift_run_endpoint(device_id: int, request: Request):
     device, _ = await _get_device_or_403(device_id, request)
     latest = await db.get_latest_lab_drift_run(device["id"])
@@ -280,12 +290,14 @@ async def latest_drift_run_endpoint(device_id: int, request: Request):
 
 
 @router.get("/api/lab/drift/runs/{run_id}")
+@scoped("lab_device")
 async def get_drift_run_endpoint(run_id: int, request: Request):
     run = await db.get_lab_drift_run(run_id)
     if not run:
         raise HTTPException(status_code=404, detail="Drift run not found")
     # Authorize via the lab device → environment chain.
     device = await db.get_lab_device(run["lab_device_id"])
+    await require_lab_device(request, device, not_found="Drift run not found")
     env = await db.get_lab_environment(device["environment_id"]) if device else None
     session, _, role = await _resolve_session_user(request)
     if not _user_can_access_env(env or {}, session, role):

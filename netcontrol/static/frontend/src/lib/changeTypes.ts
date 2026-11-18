@@ -5,6 +5,7 @@ const CHANGE_TYPE_LABELS: Record<string, string> = {
   policy: 'Policy / ACL',
   route: 'Route',
   nat: 'NAT',
+  'intended-remediation': 'Intended remediation',
 };
 
 /** Display text for a stored change type; unknown values pass through, missing is "-". */

@@ -29,8 +29,10 @@ billing works on an interface with a customer and a commit rate for the
 | Add, change or delete them | `circuits` and `circuits.write` (admins have both) |
 
 Grant the features to an access group in Settings.
-Accounts limited to selected inventory groups do not get the circuits
-feature (the circuits pages are not filtered by inventory group).
+Accounts limited to selected inventory groups see the circuits of their
+tenants and those terminating on their devices or sites; providers,
+provider networks and circuit types are read only for them (see
+[object-level permissions](object-permissions.md)).
 
 Every change is written to the audit log under the `circuits` category and
 to the change log (`circuit_provider`, `provider_network`, `circuit_type`,

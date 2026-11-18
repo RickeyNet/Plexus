@@ -1,6 +1,14 @@
 """
 reporting.py -- Report generation and CSV export for availability,
 compliance, and interface utilization data.
+
+Object scope (``router``): a report definition or run reaches the scope
+through the ``group_id``/``host_id`` of its parameters (models
+``report_definition`` and ``report_run``; one with neither covers the whole
+estate and is for unrestricted callers only). A scoped caller generates and
+exports only reports for an inventory group or host they may read (the
+network documentation topology then shows only their hosts as inventory
+nodes); IPAM reports are refused for them (403).
 """
 
 from __future__ import annotations
@@ -21,13 +29,29 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 
+from netcontrol.object_scope import (
+    SCOPED_REFUSED_DETAIL,
+    ScopeModel,
+    filter_rows,
+    readable_host_ids,
+    refuse_scoped,
+    register_model,
+    request_scope,
+    require_group,
+    require_host,
+    require_new_row,
+    require_row,
+    scope_exempt,
+    scoped,
+)
 from netcontrol.routes.shared import _audit, _corr_id, _get_session
 from netcontrol.telemetry import configure_logging, increment_metric, redact_value
 
 router = APIRouter()
 # Custom OID profiles configure what the SNMP poller collects, so they are
 # gated on `monitoring` (app.py) rather than `reports`; the UI shows them on
-# the Monitoring page.
+# the Monitoring page. They are fleet-wide (no host data): every caller reads
+# them, a caller limited to selected inventory groups cannot change them.
 oid_profiles_router = APIRouter()
 LOGGER = configure_logging("plexus.reporting")
 
@@ -42,6 +66,86 @@ REPORT_SCHEDULER_MAX_RUNS_PER_CYCLE = max(1, min(50, int(os.getenv("APP_REPORT_S
 REPORT_RUN_RETENTION_DAYS = max(7, int(os.getenv("APP_REPORT_RUN_RETENTION_DAYS", "120")))
 
 
+# Report definitions and runs reach the object scope through the group and
+# host of their parameters (``scope_group_id``/``scope_host_id``, set by
+# ``_scope_keys``); one with neither covers the whole estate.
+register_model(
+    ScopeModel(
+        "report_definition",
+        {"group": "scope_group_id", "host": "scope_host_id"},
+        not_found="Report not found",
+        description="Report definitions (by the inventory group or host they report on)",
+    )
+)
+register_model(
+    ScopeModel(
+        "report_run",
+        {"group": "scope_group_id", "host": "scope_host_id"},
+        not_found="Report run not found",
+        description="Report runs (by the inventory group or host they report on)",
+    )
+)
+_IPAM_REPORT_TYPES = frozenset({"ipam_utilization", "ipam_forecast", "ipam_history"})
+_SCOPED_REPORT_DETAIL = "Pick an inventory group or host in your scope for this report"
+
+
+def _int_or_none(value) -> int | None:
+    try:
+        return int(value) if value not in (None, "") else None
+    except TypeError, ValueError:
+        return None
+
+
+def _scope_keys(row: dict | None) -> dict | None:
+    """``row`` (a report definition or run) with ``scope_group_id`` and
+    ``scope_host_id`` from its parameters."""
+    return None if row is None else _with_scope_keys(row)
+
+
+def _with_scope_keys(row: dict) -> dict:
+    params = _parse_report_params(row.get("parameters_json"))
+    row["scope_group_id"] = _int_or_none(params.get("group_id"))
+    row["scope_host_id"] = _int_or_none(params.get("host_id"))
+    return row
+
+
+def _strip_scope_keys(row: dict) -> dict:
+    row.pop("scope_group_id", None)
+    row.pop("scope_host_id", None)
+    return row
+
+
+async def _report_scope(request: Request, report_type: str, params: dict) -> frozenset[int] | None:
+    """For a scoped caller: 403 for an IPAM report or one with neither a
+    group nor a host, 404 when its group or host is outside their read
+    scope; else their readable host ids. ``None`` (no filter) for an
+    unrestricted caller."""
+    if (await request_scope(request)).unrestricted:
+        return None
+    if str(report_type or "").strip().lower() in _IPAM_REPORT_TYPES:
+        raise HTTPException(status_code=403, detail=SCOPED_REFUSED_DETAIL)
+    group_id, host_id = params.get("group_id"), params.get("host_id")
+    if group_id in (None, "") and host_id in (None, ""):
+        raise HTTPException(status_code=403, detail=_SCOPED_REPORT_DETAIL)
+    if group_id not in (None, ""):
+        gid = _int_or_none(group_id)
+        if gid is None:
+            raise HTTPException(status_code=404, detail="Group not found")
+        await require_group(request, gid)
+    if host_id not in (None, ""):
+        hid = _int_or_none(host_id)
+        if hid is None:
+            raise HTTPException(status_code=404, detail="Host not found")
+        await require_host(request, hid)
+    return await readable_host_ids(request)
+
+
+async def _report_run(request: Request, run_id: int) -> dict:
+    """The report run; 404 when unknown or outside the caller's read scope."""
+    run = await require_row(request, "report_run", _scope_keys(await db.get_report_run(run_id)))
+    return _strip_scope_keys(run)
+
+
 class ReportDefinitionCreate(BaseModel):
     name: str
     report_type: str = "availability"
@@ -53,12 +157,22 @@ class ReportDefinitionCreate(BaseModel):
 
 
 @router.get("/api/reports")
-async def list_reports():
-    return {"reports": await db.list_report_definitions()}
+@scoped("list")
+async def list_reports(request: Request):
+    reports = await db.list_report_definitions()
+    if (await request_scope(request)).unrestricted:
+        return {"reports": reports}
+    visible = await filter_rows("report_definition", [_with_scope_keys(r) for r in reports], request)
+    return {"reports": [_strip_scope_keys(r) for r in visible]}
 
 
 @router.post("/api/reports", status_code=201)
+@scoped("create")
 async def create_report(payload: ReportDefinitionCreate, request: Request):
+    if (await request_scope(request)).restricted:
+        params = _parse_report_params(payload.parameters_json)
+        await _report_scope(request, payload.report_type, params)
+        await require_new_row(request, "report_definition", _scope_keys({"parameters_json": params}) or {})
     user = getattr(request.state, "user", None) or {}
     owner = user.get("username", "") if isinstance(user, dict) else ""
     report = await db.create_report_definition(
@@ -73,7 +187,12 @@ async def create_report(payload: ReportDefinitionCreate, request: Request):
 
 
 @router.delete("/api/reports/{report_id}")
-async def delete_report(report_id: int):
+@scoped("report_definition")
+async def delete_report(report_id: int, request: Request):
+    if (await request_scope(request)).restricted:
+        await require_row(
+            request, "report_definition", _scope_keys(await db.get_report_definition(report_id)), write=True
+        )
     deleted = await db.delete_report_definition(report_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Report not found")
@@ -81,11 +200,28 @@ async def delete_report(report_id: int):
 
 
 @router.get("/api/reports/runs")
+@scoped("list")
 async def list_report_runs(
+    request: Request,
     report_id: int | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=1000),
 ):
-    return {"runs": await db.get_report_runs(report_id, limit)}
+    if (await request_scope(request)).unrestricted:
+        return {"runs": await db.get_report_runs(report_id, limit)}
+    return {"runs": await db.get_report_runs(report_id, limit, run_ids=await _visible_report_run_ids(request))}
+
+
+async def _visible_report_run_ids(request: Request) -> set[int]:
+    """The ids of the report runs a scoped caller may read (by the group
+    and host of each run's parameters; a light read of every run)."""
+    conn = await db.get_db(read_only=True)
+    try:
+        cursor = await conn.execute("SELECT id, parameters_json FROM report_runs")
+        rows = [{"id": r[0], "parameters_json": r[1]} for r in await cursor.fetchall()]
+    finally:
+        await conn.close()
+    visible = await filter_rows("report_run", [_with_scope_keys(r) for r in rows], request)
+    return {int(r["id"]) for r in visible}
 
 
 # ── Report Generation ────────────────────────────────────────────────────────
@@ -211,8 +347,10 @@ async def _persist_report_artifacts(
     report_type: str,
     rows: list[dict],
     params: dict,
+    visible_hosts: frozenset[int] | None = None,
 ) -> list[dict]:
-    """Persist generated artifacts for a report run."""
+    """Persist generated artifacts for a report run (``visible_hosts``:
+    the hosts a scoped caller may read, for the topology)."""
     artifacts: list[dict] = []
     prefix = _scheduled_filename_prefix(report_type)
 
@@ -246,7 +384,7 @@ async def _persist_report_artifacts(
 
     if report_type == "network_documentation":
         group_id = params.get("group_id")
-        graph = await _build_network_doc_topology(group_id)
+        graph = await _build_network_doc_topology(group_id, visible_hosts=visible_hosts)
         svg = _render_network_doc_svg(graph, group_id)
         drawio_xml = _render_network_doc_drawio(graph, group_id)
         pdf_bytes = _render_network_doc_pdf(rows, group_id=group_id)
@@ -291,6 +429,7 @@ async def _execute_report_run(
     params: dict,
     persist_artifacts: bool = False,
     include_rows: bool = True,
+    visible_hosts: frozenset[int] | None = None,
 ) -> dict:
     """Execute one report run, persist run status/results, and optionally artifacts."""
     run = await db.create_report_run(
@@ -312,6 +451,7 @@ async def _execute_report_run(
                 report_type=report_type,
                 rows=rows,
                 params=params,
+                visible_hosts=visible_hosts,
             )
 
         response = {
@@ -419,9 +559,16 @@ async def _report_scheduler_loop() -> None:
             await asyncio.sleep(REPORT_SCHEDULER_POLL_SECONDS)
 
 
-async def _build_network_doc_topology(group_id: int | None = None) -> dict:
-    """Build lightweight topology graph data for documentation export."""
+async def _build_network_doc_topology(
+    group_id: int | None = None, *, visible_hosts: frozenset[int] | None = None
+) -> dict:
+    """Build lightweight topology graph data for documentation export.
+    ``visible_hosts`` (object scope): only these hosts are inventory nodes;
+    links of other hosts are left out and a neighbour outside the set shows
+    as an external device. ``None``: every host."""
     links = await db.get_topology_links(group_id)
+    if visible_hosts is not None:
+        links = [ln for ln in links if ln.get("source_host_id") and int(ln["source_host_id"]) in visible_hosts]
 
     nodes_by_id: dict[str | int, dict] = {}
     edges: list[dict] = []
@@ -430,6 +577,8 @@ async def _build_network_doc_topology(group_id: int | None = None) -> dict:
     target_host_ids = {int(link["target_host_id"]) for link in links if link.get("target_host_id")}
     all_host_ids = source_host_ids | target_host_ids
 
+    if visible_hosts is not None:
+        all_host_ids &= visible_hosts
     hosts = await db.get_hosts_by_ids(list(all_host_ids)) if all_host_ids else []
     host_ids = {int(h["id"]) for h in hosts}
 
@@ -927,6 +1076,7 @@ def _render_network_doc_pdf(rows: list[dict], group_id: int | None = None) -> by
 
 
 @router.post("/api/reports/generate")
+@scoped("report")
 async def generate_report(body: dict, request: Request):
     """Generate a report and return results as JSON."""
     report_type = str(body.get("report_type", "availability")).strip().lower()
@@ -934,6 +1084,11 @@ async def generate_report(body: dict, request: Request):
     if not isinstance(params, dict):
         params = {}
     persist_artifacts = bool(body.get("persist_artifacts", report_type == "network_documentation"))
+    visible_hosts = await _report_scope(request, report_type, params)
+    if visible_hosts is not None and body.get("report_id") is not None:
+        report_id = _int_or_none(body.get("report_id"))
+        definition = await db.get_report_definition(report_id) if report_id is not None else None
+        await require_row(request, "report_definition", _scope_keys(definition))
 
     return await _execute_report_run(
         report_id=body.get("report_id"),
@@ -941,6 +1096,7 @@ async def generate_report(body: dict, request: Request):
         params=params,
         persist_artifacts=persist_artifacts,
         include_rows=True,
+        visible_hosts=visible_hosts,
     )
 
 
@@ -972,50 +1128,65 @@ def _csv_download_response(csv_data: str, file_name: str) -> Response:
 
 
 @router.get("/api/reports/export/availability")
+@scoped("report")
 async def export_availability_csv(
+    request: Request,
     group_id: int | None = Query(default=None),
     days: int = Query(default=30),
 ):
+    await _report_scope(request, "availability", {"group_id": group_id})
     rows = await db.generate_availability_report_data(group_id, days)
     csv_data = _rows_to_csv(rows)
     return _csv_download_response(csv_data, "availability_report.csv")
 
 
 @router.get("/api/reports/export/compliance")
+@scoped("report")
 async def export_compliance_csv(
+    request: Request,
     group_id: int | None = Query(default=None),
 ):
+    await _report_scope(request, "compliance", {"group_id": group_id})
     rows = await db.generate_compliance_report_data(group_id)
     csv_data = _rows_to_csv(rows)
     return _csv_download_response(csv_data, "compliance_report.csv")
 
 
 @router.get("/api/reports/export/interface")
+@scoped("report")
 async def export_interface_csv(
+    request: Request,
     host_id: int | None = Query(default=None),
     group_id: int | None = Query(default=None),
     days: int = Query(default=1),
 ):
+    await _report_scope(request, "interface", {"group_id": group_id, "host_id": host_id})
     rows = await db.generate_interface_report_data(host_id, group_id, days)
     csv_data = _rows_to_csv(rows)
     return _csv_download_response(csv_data, "interface_report.csv")
 
 
 @router.get("/api/reports/export/network_documentation")
+@scoped("report")
 async def export_network_documentation_csv(
+    request: Request,
     group_id: int | None = Query(default=None),
 ):
+    await _report_scope(request, "network_documentation", {"group_id": group_id})
     rows = await db.generate_network_documentation_report_data(group_id)
     csv_data = _rows_to_csv(rows)
     return _csv_download_response(csv_data, "network_documentation_report.csv")
 
 
 @router.get("/api/reports/export/network_documentation.svg")
+@scoped("report")
 async def export_network_documentation_svg(
     group_id: int | None = Query(default=None),
+    request: Request = None,  # type: ignore[assignment]
 ):
+    visible_hosts = await _report_scope(request, "network_documentation", {"group_id": group_id})
     try:
-        graph = await _build_network_doc_topology(group_id)
+        graph = await _build_network_doc_topology(group_id, visible_hosts=visible_hosts)
         svg = _render_network_doc_svg(graph, group_id)
         payload = svg.encode("utf-8")
         return Response(
@@ -1032,11 +1203,14 @@ async def export_network_documentation_svg(
 
 
 @router.get("/api/reports/export/network_documentation.drawio")
+@scoped("report")
 async def export_network_documentation_drawio(
     group_id: int | None = Query(default=None),
+    request: Request = None,  # type: ignore[assignment]
 ):
+    visible_hosts = await _report_scope(request, "network_documentation", {"group_id": group_id})
     try:
-        graph = await _build_network_doc_topology(group_id)
+        graph = await _build_network_doc_topology(group_id, visible_hosts=visible_hosts)
         drawio_xml = _render_network_doc_drawio(graph, group_id)
         payload = drawio_xml.encode("utf-8")
         return Response(
@@ -1053,9 +1227,12 @@ async def export_network_documentation_drawio(
 
 
 @router.get("/api/reports/export/network_documentation.pdf")
+@scoped("report")
 async def export_network_documentation_pdf(
     group_id: int | None = Query(default=None),
+    request: Request = None,  # type: ignore[assignment]
 ):
+    await _report_scope(request, "network_documentation", {"group_id": group_id})
     try:
         rows = await db.generate_network_documentation_report_data(group_id)
         pdf_bytes = _render_network_doc_pdf(rows, group_id=group_id)
@@ -1100,19 +1277,25 @@ def _render_tabular_pdf(title: str, rows: list[dict]) -> bytes:
 
 
 @router.get("/api/reports/export/ipam_utilization")
+@scoped("refused")
 async def export_ipam_utilization_csv(
+    request: Request,
     vrf_name: str | None = Query(default=None),
     threshold_pct: float = Query(default=0.0),
 ):
+    await _report_scope(request, "ipam_utilization", {})
     rows = await db.generate_ipam_utilization_report_data(vrf_name=vrf_name, threshold_pct=threshold_pct)
     return _csv_download_response(_rows_to_csv(rows), "ipam_utilization_report.csv")
 
 
 @router.get("/api/reports/export/ipam_utilization.pdf")
+@scoped("refused")
 async def export_ipam_utilization_pdf(
+    request: Request,
     vrf_name: str | None = Query(default=None),
     threshold_pct: float = Query(default=0.0),
 ):
+    await _report_scope(request, "ipam_utilization", {})
     rows = await db.generate_ipam_utilization_report_data(vrf_name=vrf_name, threshold_pct=threshold_pct)
     pdf_bytes = _render_tabular_pdf("Plexus IPAM Subnet Utilization", rows)
     return Response(
@@ -1126,12 +1309,15 @@ async def export_ipam_utilization_pdf(
 
 
 @router.get("/api/reports/export/ipam_forecast")
+@scoped("refused")
 async def export_ipam_forecast_csv(
+    request: Request,
     vrf_name: str | None = Query(default=None),
     lookback_days: int = Query(default=30),
     target_pct: float = Query(default=90.0),
     min_points: int = Query(default=2),
 ):
+    await _report_scope(request, "ipam_forecast", {})
     rows = await db.generate_ipam_forecast_report_data(
         vrf_name=vrf_name,
         lookback_days=lookback_days,
@@ -1142,12 +1328,15 @@ async def export_ipam_forecast_csv(
 
 
 @router.get("/api/reports/export/ipam_forecast.pdf")
+@scoped("refused")
 async def export_ipam_forecast_pdf(
+    request: Request,
     vrf_name: str | None = Query(default=None),
     lookback_days: int = Query(default=30),
     target_pct: float = Query(default=90.0),
     min_points: int = Query(default=2),
 ):
+    await _report_scope(request, "ipam_forecast", {})
     rows = await db.generate_ipam_forecast_report_data(
         vrf_name=vrf_name,
         lookback_days=lookback_days,
@@ -1166,13 +1355,16 @@ async def export_ipam_forecast_pdf(
 
 
 @router.get("/api/reports/export/ipam_history")
+@scoped("refused")
 async def export_ipam_history_csv(
+    request: Request,
     address: str | None = Query(default=None),
     hostname: str | None = Query(default=None),
     vrf_name: str | None = Query(default=None),
     days: int = Query(default=90),
     limit: int = Query(default=1000, ge=1, le=10000),
 ):
+    await _report_scope(request, "ipam_history", {})
     rows = await db.generate_ipam_history_report_data(
         address=address,
         hostname=hostname,
@@ -1184,30 +1376,32 @@ async def export_ipam_history_csv(
 
 
 @router.get("/api/reports/runs/{run_id}")
-async def get_report_run_detail(run_id: int):
-    run = await db.get_report_run(run_id)
-    if not run:
-        raise HTTPException(status_code=404, detail="Report run not found")
-    return run
+@scoped("report_run")
+async def get_report_run_detail(run_id: int, request: Request):
+    return await _report_run(request, run_id)
 
 
 @router.get("/api/reports/runs/{run_id}/artifacts")
+@scoped("report_run")
 async def list_report_run_artifacts(
     run_id: int,
     limit: int = Query(default=20, ge=1, le=200),
+    request: Request = None,  # type: ignore[assignment]
 ):
-    run = await db.get_report_run(run_id)
-    if not run:
-        raise HTTPException(status_code=404, detail="Report run not found")
+    await _report_run(request, run_id)
     artifacts = await db.get_report_artifacts(run_id, limit=limit)
     return {"artifacts": artifacts}
 
 
 @router.get("/api/reports/artifacts/{artifact_id}")
-async def download_report_artifact(artifact_id: int):
+@scoped("report_run")
+async def download_report_artifact(artifact_id: int, request: Request = None):  # type: ignore[assignment]
     artifact = await db.get_report_artifact(artifact_id)
     if not artifact:
         raise HTTPException(status_code=404, detail="Report artifact not found")
+    if (await request_scope(request)).restricted:
+        run = _scope_keys(await db.get_report_run(int(artifact["run_id"])))
+        await require_row(request, "report_run", run, not_found="Report artifact not found")
     file_name = str(artifact.get("file_name") or f"artifact_{artifact_id}.txt").strip()
     safe_name = os.path.basename(file_name) or f"artifact_{artifact_id}.txt"
     media_type = str(artifact.get("media_type") or "application/octet-stream")
@@ -1231,11 +1425,10 @@ async def download_report_artifact(artifact_id: int):
 
 
 @router.get("/api/reports/runs/{run_id}/csv")
-async def export_report_run_csv(run_id: int):
+@scoped("report_run")
+async def export_report_run_csv(run_id: int, request: Request):
     """Export a previously-generated report run as CSV."""
-    run = await db.get_report_run(run_id)
-    if not run:
-        raise HTTPException(status_code=404, detail="Report run not found")
+    run = await _report_run(request, run_id)
 
     artifacts = await db.get_report_artifacts(run_id, limit=50)
     csv_artifact = next((a for a in artifacts if str(a.get("artifact_type")) == "csv"), None)
@@ -1292,11 +1485,13 @@ class OidProfileUpdate(BaseModel):
 
 
 @oid_profiles_router.get("/api/oid-profiles")
+@scope_exempt("fleet-wide SNMP OID profile catalogue; holds no host data")
 async def list_oid_profiles(vendor: str | None = Query(default=None)):
     return {"profiles": await db.get_custom_oid_profiles(vendor)}
 
 
 @oid_profiles_router.get("/api/oid-profiles/{profile_id}")
+@scope_exempt("fleet-wide SNMP OID profile catalogue; holds no host data")
 async def get_oid_profile(profile_id: int):
     profile = await db.get_custom_oid_profile(profile_id)
     if not profile:
@@ -1305,7 +1500,9 @@ async def get_oid_profile(profile_id: int):
 
 
 @oid_profiles_router.post("/api/oid-profiles", status_code=201)
+@scoped("refused")
 async def create_oid_profile(payload: OidProfileCreate, request: Request):
+    await refuse_scoped(request)
     user = getattr(request.state, "user", None) or {}
     owner = user.get("username", "") if isinstance(user, dict) else ""
     profile = await db.create_custom_oid_profile(
@@ -1321,7 +1518,9 @@ async def create_oid_profile(payload: OidProfileCreate, request: Request):
 
 
 @oid_profiles_router.put("/api/oid-profiles/{profile_id}")
-async def update_oid_profile(profile_id: int, payload: OidProfileUpdate):
+@scoped("refused")
+async def update_oid_profile(profile_id: int, payload: OidProfileUpdate, request: Request):
+    await refuse_scoped(request)
     updated = await db.update_custom_oid_profile(
         profile_id,
         name=payload.name,
@@ -1337,7 +1536,9 @@ async def update_oid_profile(profile_id: int, payload: OidProfileUpdate):
 
 
 @oid_profiles_router.delete("/api/oid-profiles/{profile_id}")
-async def delete_oid_profile(profile_id: int):
+@scoped("refused")
+async def delete_oid_profile(profile_id: int, request: Request):
+    await refuse_scoped(request)
     deleted = await db.delete_custom_oid_profile(profile_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="OID profile not found")

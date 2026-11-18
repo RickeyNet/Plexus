@@ -100,6 +100,12 @@ TYPE_FEATURES: dict[str, str] = {
     "bgp_peering": "routing",
     "hardware_notice": "lifecycle",
     "support_contract": "lifecycle",
+    "namespace": "ipam",
+    "route_target": "ipam",
+    "vlan_group": "ipam",
+    "rir": "ipam",
+    "aggregate": "ipam",
+    "console_port": "dcim",
 }
 # Types whose rows carry the inventory group they belong to; the only ones a
 # caller limited to selected groups may see.
@@ -112,6 +118,7 @@ _LABEL_FIELDS: dict[str, tuple[str, ...]] = {
     "module": ("bay",),
     "rack_reservation": ("description", "id"),
     "group": ("name",),
+    "device_type": ("model",),
     "prefix": ("subnet",),
     "ip_address": ("address",),
     "vrf": ("name",),
@@ -121,6 +128,7 @@ _LABEL_FIELDS: dict[str, tuple[str, ...]] = {
     "bgp_peering": ("remote_address",),
     "hardware_notice": ("part_number", "id"),
     "support_contract": ("contract_id",),
+    "aggregate": ("prefix",),
 }
 
 _prune_task: asyncio.Task | None = None

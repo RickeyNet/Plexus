@@ -14,6 +14,7 @@ It is on the Configuration page, **Intended** tab
 | **Template** | Jinja2 text. A `device` template is rendered for the hosts its scope matches; a `snippet` is only included by other templates |
 | **Config context** | A JSON object scoped to devices. All the contexts that match a host are merged into one `context` variable |
 | **Intended configuration** | One per host that has a matching template: the rendered text, whether it rendered, and its comparison with the host's newest backup |
+| **Remediation** | The commands that make the device match its intended configuration, pushed through a deployment |
 
 ## Templates
 
@@ -221,10 +222,113 @@ A failed render stores the error (with the template name and line when
 Jinja gives one) and no text; the preview shows the same error before you
 save.
 
+## Remediation
+
+The detail of a device (click its row on the Devices view) shows, under the
+missing and extra lines, the **Remediation**: the configuration commands that
+make the device match its intended configuration, worked out from the same
+comparison. **Copy commands** copies them; **Create deployment** plans a
+deployment that pushes them (see [Pushing a remediation](#pushing-a-remediation)).
+
+- A **missing** line is added under its parent lines; a missing parent
+  brings its children with it.
+- An **extra** line is removed with the platform's negation (`no <line>`;
+  an extra `no <line>` is removed by `<line>`). Removing a parent removes
+  its block, so its children get no commands of their own. As in the
+  comparison, top-level lines that are only on the device are never
+  removed.
+- In each block the removals come first, then the additions, and a parent
+  always comes before its children. Each command is indented one space per
+  level under its parent lines; a parent is repeated only when the next
+  command is in another block (these CLIs go back to the parent mode by
+  themselves for a parent-level command).
+- When an extra line's removal is exactly an addition in the same block
+  (`no shutdown` on the device, `shutdown` intended), only the addition is
+  sent.
+
+For example, intended:
+
+```
+interface GigabitEthernet0/1
+ description uplink
+router bgp 65000
+ neighbor 192.0.2.1 remote-as 65001
+```
+
+against a backup with `description old-link` under the interface and an
+extra `neighbor 192.0.2.9 remote-as 65009` under `router bgp 65000`:
+
+```
+interface GigabitEthernet0/1
+ no description old-link
+ description uplink
+router bgp 65000
+ no neighbor 192.0.2.9 remote-as 65009
+```
+
+**Platforms.** Remediation is worked out only for drivers with an indented,
+`no`-negated CLI; any other driver is reported as *not supported* rather
+than given commands that could be wrong.
+
+| Driver | Platform | Top-level lines skipped (besides `Building configuration`, `Current configuration`, `end`...) |
+|---|---|---|
+| `cisco_ios` | Cisco IOS | `version` |
+| `cisco_xe` | Cisco IOS-XE | `version` |
+| `cisco_nxos`, `cisco_nxos_ssh` | Cisco NX-OS | `version`, `boot nxos` |
+| `arista_eos` | Arista EOS | |
+| `aruba_aoscx` | Aruba AOS-CX | |
+| `cisco_asa` | Cisco ASA | `:` lines, `ASA Version`, `Cryptochecksum` |
+
+**Banners** (`banner motd ^C ... ^C` and the like) are left out on both
+sides and never remediated; when they differ the remediation says so.
+
+**No remediation** is given (*unavailable*, with the reason) when the host
+has no intended configuration, its template failed to render, or there is no
+backup to compare with. The backup used is the one the stored comparison
+used, so the commands always match the diff shown.
+
+### Ignore rules
+
+Admins add lines remediation should leave alone on the **Ignore rules** view
+of the Intended tab (lines a device writes itself, such as certificates,
+generated keys or counters). A rule matches a line by its text without the
+indentation:
+
+| Match | A line matches when |
+|---|---|
+| Exact line | It is the pattern |
+| Starts with | It starts with the pattern |
+| Regular expression | The pattern is found in it (RE2, case sensitive, linear time: no lookarounds or backreferences, refused when saved) |
+
+A rule applies to every driver or to one. A matching line is dropped, with
+its whole block, from both the intended text and the backup before the
+commands are worked out, and the remediation says how many lines the rules
+dropped. Rules change remediation only: compliance and the missing and extra
+lines are unchanged. They are stored in `intended_remediation_ignores`
+(migration 0108).
+
+### Pushing a remediation
+
+**Create deployment** (or `POST /api/deployments/intended-remediation` for
+hosts, an inventory group or a dynamic group) plans one deployment per host
+whose remediation has commands, on the existing Deployments path
+(**Change management > Deployments**), with change type
+`intended-remediation`. Nothing is pushed yet: the deployment captures a
+pre-change snapshot, needs approval when its group is a production group,
+respects maintenance windows, and can be rolled back, like any other.
+Hosts with nothing to push, an unsupported driver, no comparison or no
+inventory group are skipped with the reason. The link in the result opens
+the new deployment.
+
+The credential picked signs in to the device when the deployment runs (your
+own credential, or a service credential for an admin).
+
 ## What it does not do
 
-- It never changes a device: nothing here opens a device session, pushes or
-  remediates.
+- It never changes a device by itself: remediation only plans deployments,
+  which run through Deployments with their approval and rollback.
+- Remediation covers indented, `no`-negated CLIs only (see the table above);
+  no Junos, FortiOS, PAN-OS or IOS-XR commands, and no banner changes.
 - No secret variables (`{{secret.NAME}}`) and no encryption of context data.
 - One current intended configuration per host; no history.
 - No alerts or notifications on non-compliance, and it is not used as the
@@ -233,8 +337,12 @@ save.
 
 ## Permissions and audit
 
-Reading templates, contexts, results and variables, and **Generate**, need
-the `config-drift` feature. Creating, changing and deleting templates and
-contexts, and the template preview, are admin only. Template and context
+Reading templates, contexts, results, variables and remediation commands,
+and **Generate**, need the `config-drift` feature. **Create deployment**
+needs `deployments` too, and write access to every host (a user limited to
+selected inventory groups). Creating, changing and deleting templates,
+contexts and remediation ignore rules, and the template preview, are admin
+only. Ignore rule changes are audited as `config` / `intended_ignore_*`,
+deployment creation as `deployments` / `deployment.intended_remediation`. Template and context
 changes and generation runs are written to the audit log (category
 `config`). The API is in [api-reference.md](api-reference.md#intended-configuration).

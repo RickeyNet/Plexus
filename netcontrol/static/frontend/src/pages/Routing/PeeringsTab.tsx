@@ -16,6 +16,7 @@ import { useDialogs } from '@/components/DialogProvider-context';
 import { EmptyState } from '@/components/EmptyState';
 import { LoadingState } from '@/components/LoadingState';
 import { QueryError } from '@/components/QueryError';
+import { ObjectDataPanel } from '@/components/ObjectDataPanel';
 import { clickableProps } from '@/lib/clickable';
 import { PEERING_STATUSES, formatAsn, parseAsn, statusLabel } from '@/lib/routing';
 import { usePendingKeys } from '@/lib/usePendingKeys';
@@ -303,6 +304,7 @@ function PeeringDetailPanel({ id }: { id: number }) {
         ))}
       </dl>
       <ChangelogPanel objectType="bgp_peering" objectId={p.id} pageSize={10} />
+      <ObjectDataPanel objectType="bgp_peering" objectId={p.id} />
     </div>
   );
 }

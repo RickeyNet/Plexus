@@ -91,7 +91,30 @@ protocol, vendor, OS and `sysDescr` the device returned, or "SNMP Failed".
 | **Use SNMP discovery first** | On | Try SNMP with the group's profile before the TCP probe. |
 | **Fall back to ICMP ping** | On | Ping addresses that answer neither SNMP nor TCP. |
 | **Read model/serial/version over SSH** | On | Log in and read `show version` from devices that answered SNMP or TCP 22. |
-| **SSH Credential** | The service credential | The credential used for `show version`. |
+| **SSH Credential** | The group's remembered credential, else the service credential | The credential used for `show version`. It is remembered for the target group (see below). |
+
+### The group remembers its SSH credential
+
+The credential a scan or sync of a group runs with is remembered for that
+group. The next **Discovery Scan** or **Sync** of the group preselects it,
+so devices with their own login (an APC UPS card, for example) keep being
+read with it. It is preselected only when it is in your credential list
+(your own credentials, or the service credentials an admin sees); otherwise
+the service credential is preselected and the help under the list says the
+group remembers one you cannot use.
+
+- **Change it**: pick another credential and run the scan or sync.
+- **Forget it**: pick the Plexus service credential (the Settings default)
+  and run, or call `DELETE /api/inventory/{group_id}/discovery/credential`.
+- A scan or sync sent with no `credential_id` (an API call, an older client)
+  uses the group's credential when you may use it, else the service
+  credential. The result's `ssh_enrichment.credential_source` says which
+  (`group` or `service`), and `ssh_enrichment.note` says why the group's
+  credential was not used. It never fails for that reason.
+- A deleted credential is forgotten; deleting the group deletes what it
+  remembers.
+- Changes are written to the audit log (`inventory`,
+  `group.discovery_credential`), with the credential ids only.
 
 ## Sync a group
 
@@ -102,10 +125,13 @@ pick list.
 2. **CIDR Targets** is filled in with the group's host addresses. Keep it to
    check the existing hosts, or change it to scan other ranges. If you clear
    it, Plexus uses the group's host addresses.
-3. Tick **Remove hosts not found in this scan** only if hosts that do not
+3. **SSH Credential** preselects the credential the group remembers from
+   its last scan or sync (see
+   [The group remembers its SSH credential](#the-group-remembers-its-ssh-credential)).
+4. Tick **Remove hosts not found in this scan** only if hosts that do not
    answer should be deleted. Plexus asks you to confirm and names the group
    and its host count.
-4. Select **Run Sync**. The result shows **Added**, **Updated** and
+5. Select **Run Sync**. The result shows **Added**, **Updated** and
    **Removed**.
 
 ## How a probe works
@@ -123,6 +149,21 @@ each device that answered SNMP or TCP 22. A platform read this way replaces
 the guess from SNMP or the banner. Results marked `(SSH)` in the list come
 from `show version`. A login failure does not stop the scan; the error shows
 on that device and in a summary under the results.
+
+Two cases skip or soften the login:
+
+- A device SNMP identified as a platform without a command line Plexus drives
+  (an APC Smart-UPS card, an Aruba Instant On or Netgear smart switch, an
+  ICMP-only host) is not logged into: SNMP already gave its facts, and a
+  Cisco-style session would only fail on it.
+- When the credential has an enable secret and the device has no Cisco-style
+  enable mode, discovery reads `show version` in user mode instead of failing
+  the login.
+- A device of unknown platform that answers `show version` with an APC
+  Network Management Card status code (`E101: Command Not Found`) is asked
+  `upsabout`; a card with a UPS behind it is added as an **APC Smart-UPS
+  (NMC)** with its model and serial (`docs/apc-ups.md`). A PDU or transfer
+  switch card stays unknown.
 
 ## What discovery fills in on a host
 
@@ -167,8 +208,11 @@ deletions count as **Removed**.
   sent to external IPAM sources that have push on. See
   [IP address management](ipam.md#external-ipam-sources).
 - **Scheduled discovery** can run a sync per group on a timer. It is off by
-  default, runs every 15 minutes when on (1 minute to 24 hours), and uses
-  only the Plexus service credential. It is set through the API only (see
+  default, runs every 15 minutes when on (1 minute to 24 hours), and signs
+  in with the group's remembered credential only when that is a service
+  credential: a scheduled run has no user to check a personal credential
+  against, so a group that remembers a personal credential is read with
+  the Plexus service credential. It is set through the API only (see
   below).
 - **Deleting an SNMP profile** unassigns it from every group and host that
   uses it; those hosts go back to their group's settings.
@@ -183,6 +227,8 @@ deletions count as **Removed**.
 | See SNMP profiles | The `inventory` feature |
 | Create, change or delete SNMP profiles | Admin |
 | Use a stored credential for SSH | Access to that credential (your own, or any as admin) |
+| See which credential a group remembers | The `inventory` feature and read access to the group |
+| Forget a group's credential | The `inventory` feature and write access to the group |
 | Set scheduled discovery | Admin |
 
 Scans that write to the inventory are written to the audit log under the
@@ -201,6 +247,8 @@ POST /api/inventory/{group_id}/discovery/onboard
 POST /api/inventory/{group_id}/discovery/sync
 POST /api/inventory/{group_id}/snmp-discovery-profile/test
 GET  /api/inventory/discovery/ssh-defaults
+GET  /api/inventory/{group_id}/discovery/ssh-defaults
+DELETE /api/inventory/{group_id}/discovery/credential
 GET  /api/admin/snmp-profiles
 PUT  /api/inventory/{group_id}/snmp-profile-assignment
 POST /api/hosts/snmp-profile
@@ -230,6 +278,13 @@ POST /api/inventory/3/discovery/scan
 ```json
 { "job_id": "8c1d2e", "status": "running", "group_id": 3, "total_targets": 254 }
 ```
+
+Add `"credential_id": 12` to sign in with a stored credential you may use;
+it becomes the group's remembered credential. Without it the group's
+remembered credential is used, else the service credential; send
+`"use_service_credential": true` to use the service credential and make the
+group forget its own. `GET /api/inventory/{group_id}/discovery/ssh-defaults`
+returns the service defaults plus `group_credential_id` (null when none).
 
 Poll the job until it is no longer `running`. Its `result.discovered_hosts`
 can be sent to the onboard endpoint as `{"discovered_hosts": [...]}`.

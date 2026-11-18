@@ -13,6 +13,10 @@ Sites are written through ``/api/geo/sites`` (``netcontrol.routes.
 geolocation``), which takes the region, status, facility, time zone and
 tenant too. Rules live in ``netcontrol.organization``, storage in
 ``routes.db.organization``. See docs/locations-and-tenancy.md.
+
+Object scope: regions and tenant groups are shared (every scoped caller
+reads them); a scoped caller reads the sites and tenants of their scope,
+and every count covers those sites, tenants and hosts only.
 """
 
 from __future__ import annotations
@@ -21,6 +25,14 @@ import routes.database as db
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
+from netcontrol.object_scope import (
+    filter_rows,
+    readable_host_ids,
+    request_scope,
+    require_row,
+    scope_exempt,
+    scoped,
+)
 from netcontrol.organization import (
     COMMENTS_MAX,
     DESCRIPTION_MAX,
@@ -29,6 +41,7 @@ from netcontrol.organization import (
     clean_name,
     clean_text,
 )
+from netcontrol.routes.custom_fields import custom_list, with_custom_data
 from netcontrol.routes.shared import _audit, _corr_id, _session_user
 
 router = APIRouter()
@@ -142,29 +155,69 @@ _NODE_TEXT = {"name": NAME_MAX, "description": DESCRIPTION_MAX}
 _TENANT_TEXT = {"name": NAME_MAX, "description": DESCRIPTION_MAX, "comments": COMMENTS_MAX}
 
 
+# ── Object scope ─────────────────────────────────────────────────────────────
+
+
+async def readable_site_ids(request: Request) -> list[int] | None:
+    """The sites the caller may read (``None``: unrestricted, every site)."""
+    if (await request_scope(request)).unrestricted:
+        return None
+    return [int(s["id"]) for s in await filter_rows("site", await db.list_geo_sites(), request)]
+
+
+async def _readable_tenant_ids(request: Request) -> list[int] | None:
+    """The tenants the caller may read (``None``: unrestricted, every tenant)."""
+    if (await request_scope(request)).unrestricted:
+        return None
+    return [int(t["id"]) for t in await filter_rows("tenant", await db.list_tenants(), request)]
+
+
+async def _scoped_host_counts(request: Request, sites: list[dict]) -> list[dict]:
+    """``sites`` with ``host_count`` counting only the caller's hosts
+    (unchanged for an unrestricted caller)."""
+    host_ids = await readable_host_ids(request)
+    if host_ids is None:
+        return sites
+    per_site: dict[int, int] = {}
+    for host in await db.get_hosts_by_ids(sorted(host_ids)):
+        if host.get("site_id") is not None:
+            per_site[int(host["site_id"])] = per_site.get(int(host["site_id"]), 0) + 1
+    return [{**s, "host_count": per_site.get(int(s["id"]), 0)} for s in sites]
+
+
 # ── Regions and the location tree ────────────────────────────────────────────
 
 
 @router.get(f"{PREFIX}/regions")
-async def list_regions() -> dict:
-    return {"regions": await db.list_regions()}
+@scoped("list")
+async def list_regions(request: Request) -> dict:
+    rows = await db.list_regions(site_ids=await readable_site_ids(request))
+    return {"regions": await custom_list("region", rows, request)}
 
 
 @router.get(f"{PREFIX}/regions/{{region_id}}")
-async def get_region(region_id: int) -> dict:
-    return _found(await db.get_region(region_id), "Region")
+@scoped("object")
+async def get_region(region_id: int, request: Request) -> dict:
+    record = await db.get_region(region_id, site_ids=await readable_site_ids(request))
+    return await with_custom_data("region", await require_row(request, "region", record, not_found="Region not found"))
 
 
 @router.get(f"{PREFIX}/locations")
-async def location_tree() -> dict:
+@scoped("list")
+async def location_tree(request: Request) -> dict:
     """Regions > sites > floors, with host counts (see ``get_location_tree``)."""
-    return await db.get_location_tree()
+    host_ids = await readable_host_ids(request)
+    if host_ids is None:
+        return await db.get_location_tree()
+    return await db.get_location_tree(site_ids=await readable_site_ids(request), host_ids=host_ids)
 
 
 @router.get(f"{PREFIX}/sites")
-async def list_sites() -> dict:
+@scoped("list")
+async def list_sites(request: Request) -> dict:
     """Every site with its region, tenant, status, facility, time zone and counts."""
-    return {"sites": await db.list_geo_sites()}
+    sites = await _scoped_host_counts(request, await filter_rows("site", await db.list_geo_sites(), request))
+    return {"sites": await custom_list("site", sites, request)}
 
 
 @admin_router.post(f"{PREFIX}/regions", status_code=201)
@@ -216,13 +269,15 @@ async def delete_region(region_id: int, request: Request) -> dict:
 
 
 @router.get(f"{PREFIX}/tenant-groups")
-async def list_tenant_groups() -> dict:
-    return {"tenant_groups": await db.list_tenant_groups()}
+@scoped("list")
+async def list_tenant_groups(request: Request) -> dict:
+    return {"tenant_groups": await db.list_tenant_groups(tenant_ids=await _readable_tenant_ids(request))}
 
 
 @router.get(f"{PREFIX}/tenant-groups/{{group_id}}")
-async def get_tenant_group(group_id: int) -> dict:
-    return _found(await db.get_tenant_group(group_id), "Tenant group")
+@scope_exempt("tenant groups are shared reference data (group_id is a tenant group); tenant counts are scoped")
+async def get_tenant_group(group_id: int, request: Request) -> dict:
+    return _found(await db.get_tenant_group(group_id, tenant_ids=await _readable_tenant_ids(request)), "Tenant group")
 
 
 @admin_router.post(f"{PREFIX}/tenant-groups", status_code=201)
@@ -282,19 +337,22 @@ async def _check_group(group_id: int | None) -> None:
 
 
 @router.get(f"{PREFIX}/tenants")
-async def list_tenants(group_id: int | None = Query(default=None, ge=1)) -> dict:
+@scoped("list")
+async def list_tenants(request: Request, group_id: int | None = Query(default=None, ge=1)) -> dict:
     """Every tenant; ``group_id`` keeps those of the group and its descendants."""
     groups = await db.tenant_group_subtree_ids([group_id]) if group_id is not None else None
-    return {"tenants": await db.list_tenants(group_ids=groups)}
+    rows = await filter_rows("tenant", await db.list_tenants(group_ids=groups), request)
+    return {"tenants": await custom_list("tenant", rows, request)}
 
 
 @router.get(f"{PREFIX}/tenants/{{tenant_id}}")
-async def get_tenant(tenant_id: int) -> dict:
+@scoped("object")
+async def get_tenant(tenant_id: int, request: Request) -> dict:
     """The tenant with ``counts``: how many rows it owns per kind (hosts,
     prefixes, ip_addresses, vlans, vrfs, sites, and every later table with a
     ``tenant_id`` column)."""
-    record = _found(await db.get_tenant(tenant_id), "Tenant")
-    return {**record, "counts": await db.tenant_usage(tenant_id)}
+    record = await require_row(request, "tenant", await db.get_tenant(tenant_id), not_found="Tenant not found")
+    return await with_custom_data("tenant", {**record, "counts": await db.tenant_usage(tenant_id)})
 
 
 @admin_router.post(f"{PREFIX}/tenants", status_code=201)

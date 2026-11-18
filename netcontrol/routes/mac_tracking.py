@@ -6,6 +6,11 @@ Provides:
   - SNMP-based ARP table collection (ipNetToMediaTable)
   - MAC/ARP search and history API endpoints
   - Background collection loop integration
+
+Object scope: a caller limited to selected inventory groups sees the MAC/ARP
+entries, history and move events of the hosts of those groups (a move's
+switch outside them is not named) and no Meraki clients; it collects from,
+and acknowledges the moves of, the hosts it can change.
 """
 
 from __future__ import annotations
@@ -22,6 +27,16 @@ from pydantic import BaseModel
 
 import netcontrol.routes.state as state
 from netcontrol.integrations.meraki.clients import search_entry as _meraki_search_entry
+from netcontrol.object_scope import (
+    can_access,
+    group_filter,
+    readable_host_ids,
+    refuse_scoped,
+    request_scope,
+    require_host,
+    require_row,
+    scoped,
+)
 from netcontrol.routes import background_jobs
 from netcontrol.routes.shared import _audit, _corr_id, _get_session, supervise_task
 from netcontrol.routes.snmp import _build_snmp_auth, _snmp_str, _snmp_walk
@@ -1076,7 +1091,12 @@ async def collect_interface_inventory(
 
 
 @router.get("/api/mac-tracking/search")
-async def search_mac(query: str = Query(""), limit: int = Query(5000, ge=1, le=50000)):
+@scoped("list")
+async def search_mac(
+    query: str = Query(""),
+    limit: int = Query(5000, ge=1, le=50000),
+    request: Request = None,  # type: ignore[assignment]
+):
     """Search across MAC/ARP tables by MAC address, IP, or port name.
 
     Covers the forwarding tables of inventory hosts and the clients of Meraki
@@ -1086,8 +1106,13 @@ async def search_mac(query: str = Query(""), limit: int = Query(5000, ge=1, le=5
     limit is high enough to show the full table for typical deployments so
     the list doesn't silently truncate; the cap only guards pathological
     sizes.
+
+    A scoped caller searches the entries of its hosts (no Meraki clients).
     """
-    rows = await db.search_mac_tracking(query, limit)
+    scope_kwargs = await group_filter(request)
+    rows = await db.search_mac_tracking(query, limit, **scope_kwargs)
+    if scope_kwargs:
+        return rows
     meraki = [_meraki_search_entry(c) for c in await db.search_meraki_clients(query, limit)]
     if not meraki:
         return rows
@@ -1097,13 +1122,18 @@ async def search_mac(query: str = Query(""), limit: int = Query(5000, ge=1, le=5
 
 
 @router.get("/api/mac-tracking/stats")
-async def mac_tracking_stats():
+@scoped("list")
+async def mac_tracking_stats(request: Request = None):  # type: ignore[assignment]
     """Header counts: total rows, unique MACs, switches reporting, freshness.
 
     Meraki clients count towards the totals; ``switches_reporting`` stays the
-    number of inventory hosts, with Meraki reported separately.
+    number of inventory hosts, with Meraki reported separately. A scoped
+    caller's counts cover its hosts (no Meraki clients).
     """
-    stats = await db.get_mac_tracking_stats()
+    scope_kwargs = await group_filter(request)
+    stats = await db.get_mac_tracking_stats(**scope_kwargs)
+    if scope_kwargs:
+        return {**stats, "meraki_clients": 0, "meraki_devices": 0}
     meraki = await db.get_meraki_client_stats()
     stats["meraki_clients"] = meraki["entries"]
     stats["meraki_devices"] = meraki["devices"]
@@ -1115,7 +1145,8 @@ async def mac_tracking_stats():
 
 
 @router.get("/api/mac-tracking/by-host")
-async def mac_tracking_by_host():
+@scoped("list")
+async def mac_tracking_by_host(request: Request = None):  # type: ignore[assignment]
     """Per-host collection rollup. Silent hosts (mac_count == 0) sort first.
 
     Each row is enriched with ``snmp_enabled`` resolved from the host's own
@@ -1125,7 +1156,7 @@ async def mac_tracking_by_host():
     """
     from netcontrol.routes.state import _hosts_with_snmp_config
 
-    rows = await db.get_mac_collection_by_host()
+    rows = (await request_scope(request)).filter_hosts(await db.get_mac_collection_by_host())
     for row in rows:
         row["snmp_enabled"] = False
     try:
@@ -1137,22 +1168,34 @@ async def mac_tracking_by_host():
 
 
 @router.get("/api/mac-tracking/host/{host_id}")
-async def get_host_mac_arp(host_id: int):
+@scoped("host")
+async def get_host_mac_arp(host_id: int, request: Request = None):  # type: ignore[assignment]
     """Get MAC and ARP tables for a specific device."""
+    if (await request_scope(request)).restricted:
+        await require_host(request, host_id)
     macs = await db.get_mac_table_for_host(host_id)
     arps = await db.get_arp_table_for_host(host_id)
     return {"mac_table": macs, "arp_table": arps}
 
 
 @router.get("/api/mac-tracking/history/{mac_address:path}")
-async def get_mac_movement_history(mac_address: str, limit: int = Query(100, ge=1, le=500)):
-    """Get port movement history for a specific MAC address."""
-    return await db.get_mac_history(mac_address, limit)
+@scoped("list")
+async def get_mac_movement_history(
+    mac_address: str,
+    limit: int = Query(100, ge=1, le=500),
+    request: Request = None,  # type: ignore[assignment]
+):
+    """Get port movement history for a specific MAC address (a scoped
+    caller: where its hosts saw it)."""
+    return await db.get_mac_history(mac_address, limit, **await group_filter(request))
 
 
 @router.get("/api/mac-tracking/port/{host_id}/{port_name:path}")
-async def get_port_macs(host_id: int, port_name: str):
+@scoped("host")
+async def get_port_macs(host_id: int, port_name: str, request: Request = None):  # type: ignore[assignment]
     """Get all MACs learned on a specific port."""
+    if (await request_scope(request)).restricted:
+        await require_host(request, host_id)
     return await db.get_macs_on_port(host_id, port_name)
 
 
@@ -1164,16 +1207,22 @@ _full_collection_running = False
 
 
 @router.post("/api/mac-tracking/collect")
-async def trigger_mac_collection(host_id: int | None = Query(None)):
+@scoped("hosts")
+async def trigger_mac_collection(
+    host_id: int | None = Query(None),
+    request: Request = None,  # type: ignore[assignment]
+):
     """Trigger immediate MAC/ARP collection.
     If host_id is provided, collect from that host only.
-    Otherwise, collect from all hosts with SNMP enabled.
+    Otherwise, collect from all hosts with SNMP enabled (a scoped caller:
+    those of the inventory groups it can change).
     """
     global _full_collection_running
     from netcontrol.routes.state import _hosts_with_snmp_config, _resolve_host_snmp_config
 
+    scope = await request_scope(request)
     if host_id is not None:
-        host = await db.get_host(host_id)
+        host = await require_host(request, host_id, write=True) if scope.restricted else await db.get_host(host_id)
         if not host:
             raise HTTPException(404, "Host not found")
         snmp_cfg = _resolve_host_snmp_config(host)
@@ -1200,6 +1249,8 @@ async def trigger_mac_collection(host_id: int | None = Query(None)):
         # group (one slow group no longer stalls the rest).
         targets: list[tuple[dict, dict]] = []
         for group in await db.get_all_groups():
+            if not scope.can_write_group(group["id"]):
+                continue
             hosts = await db.get_hosts_for_group(group["id"])
             targets.extend(_hosts_with_snmp_config(hosts, group["id"]))
     except Exception:
@@ -1299,6 +1350,7 @@ async def _run_fleet_collection_job(job_id: str, targets: list[tuple[dict, dict]
 
 
 @router.get("/api/mac-tracking/collect/jobs/{job_id}")
+@scoped("job")
 async def get_mac_collection_job(job_id: str):
     """Poll a fleet-collection job. Result carries the same aggregate payload
     the endpoint used to return inline (macs_found, arps_found,
@@ -1310,8 +1362,14 @@ async def get_mac_collection_job(job_id: str):
 
 
 @router.post("/api/mac-tracking/cleanup")
-async def cleanup_stale_entries(days: int = Query(30, ge=1)):
-    """Remove MAC entries not seen in the specified number of days."""
+@scoped("refused")
+async def cleanup_stale_entries(
+    days: int = Query(30, ge=1),
+    request: Request = None,  # type: ignore[assignment]
+):
+    """Remove MAC entries not seen in the specified number of days (every
+    host's: refused to a scoped caller)."""
+    await refuse_scoped(request)
     removed = await db.cleanup_stale_mac_entries(days)
     removed += await db.cleanup_stale_meraki_clients(days)
     return {"removed": removed}
@@ -1326,35 +1384,81 @@ class MacMoveBulkAckRequest(BaseModel):
     event_ids: list[int] = []
 
 
+_MOVE_NOT_FOUND = "Move event not found"
+_MOVE_SIDES = ("from", "to")
+
+
+def _move_row(event: dict) -> dict:
+    """A move event as a ``host_set`` row: its two switches."""
+    return {**event, "host_ids": [event.get(f"{side}_host_id") for side in _MOVE_SIDES]}
+
+
+async def _require_move(request: Request | None, event_id: int, *, write: bool = False) -> None:
+    """For a scoped caller: 404 unless a switch of the move event is
+    readable, 403 on ``write`` unless one is writable."""
+    if (await request_scope(request)).unrestricted:
+        return
+    rows = await db.get_mac_move_events(limit=1, event_id=event_id)
+    await require_row(request, "host_set", _move_row(rows[0]) if rows else None, write=write, not_found=_MOVE_NOT_FOUND)
+
+
+def _mask_moves(events: list[dict], hosts: frozenset[int]) -> list[dict]:
+    """The events with the side whose switch is outside ``hosts`` unnamed."""
+    for event in events:
+        for side in _MOVE_SIDES:
+            if event.get(f"{side}_host_id") is not None and int(event[f"{side}_host_id"]) not in hosts:
+                event.update({f"{side}_host_id": None, f"{side}_hostname": None, f"{side}_port": ""})
+    return events
+
+
 @router.get("/api/mac-tracking/moves")
+@scoped("list")
 async def list_mac_move_events(
     status: str = Query("", pattern="^(open|acknowledged)?$"),
     host_id: int | None = Query(None),
     limit: int = Query(200, ge=1, le=1000),
+    request: Request = None,  # type: ignore[assignment]
 ):
     """List MAC move events (newest first).
 
     Optionally filter by status, and by a switch "involved" in the move
-    (matches either the from- or to-side host).
+    (matches either the from- or to-side host). A scoped caller gets the
+    moves with a switch it can read; the other switch is not named.
     """
-    return await db.get_mac_move_events(status, limit, host_id=host_id)
+    hosts = await readable_host_ids(request)
+    if hosts is None:
+        return await db.get_mac_move_events(status, limit, host_id=host_id)
+    if host_id is not None:
+        await require_host(request, host_id)
+    scope_kwargs: dict[str, Any] = await group_filter(request)
+    events = await db.get_mac_move_events(status, limit, host_id=host_id, **scope_kwargs)
+    return _mask_moves(events, hosts)
 
 
 @router.get("/api/mac-tracking/moves/summary")
-async def mac_move_event_summary():
+@scoped("list")
+async def mac_move_event_summary(request: Request = None):  # type: ignore[assignment]
     """Open / acknowledged / total counts for the summary cards."""
-    return await db.get_mac_move_event_summary()
+    return await db.get_mac_move_event_summary(**await group_filter(request))
 
 
 @router.get("/api/mac-tracking/moves/{event_id}/history")
-async def mac_move_event_history(event_id: int, limit: int = Query(500, ge=1, le=1000)):
+@scoped("event")
+async def mac_move_event_history(
+    event_id: int,
+    limit: int = Query(500, ge=1, le=1000),
+    request: Request = None,  # type: ignore[assignment]
+):
     """Lifecycle timeline (detected, acknowledged) for one move event."""
+    await _require_move(request, event_id)
     return await db.get_mac_move_event_history(event_id, limit)
 
 
 @router.post("/api/mac-tracking/moves/{event_id}/acknowledge")
+@scoped("event")
 async def acknowledge_mac_move_event(event_id: int, request: Request):
     """Acknowledge a single open move event."""
+    await _require_move(request, event_id, write=True)
     session = _get_session(request)
     user = session["user"] if session else ""
     ok = await db.acknowledge_mac_move_event(event_id, actor=user)
@@ -1371,13 +1475,21 @@ async def acknowledge_mac_move_event(event_id: int, request: Request):
 
 
 @router.post("/api/mac-tracking/moves/acknowledge-all")
+@scoped("events")
 async def acknowledge_all_mac_move_events(body: MacMoveBulkAckRequest, request: Request):
-    """Acknowledge every open move event (or a specific list of ids)."""
+    """Acknowledge every open move event (or a specific list of ids). A
+    scoped caller acknowledges those with a switch it can change; other ids
+    are skipped like unknown ones."""
     session = _get_session(request)
     user = session["user"] if session else ""
+    restricted = (await request_scope(request)).restricted
     if body.event_ids:
         acked = 0
         for eid in body.event_ids:
+            if restricted:
+                rows = await db.get_mac_move_events(limit=1, event_id=eid)
+                if not rows or not await can_access(request, "host_set", _move_row(rows[0]), write=True):
+                    continue
             if await db.acknowledge_mac_move_event(eid, actor=user):
                 acked += 1
         await _audit(
@@ -1388,7 +1500,7 @@ async def acknowledge_all_mac_move_events(body: MacMoveBulkAckRequest, request: 
             correlation_id=_corr_id(request),
         )
         return {"ok": True, "acknowledged": acked}
-    acked = await db.acknowledge_open_mac_move_events(actor=user)
+    acked = await db.acknowledge_open_mac_move_events(actor=user, **await group_filter(request, write=True))
     await _audit(
         "mac-tracking",
         "move.acknowledged_all",

@@ -5,6 +5,10 @@ listings, and correlation against discovered inventory. Servers of a
 collection-fed provider (``opnsense``: created by an OPNsense firewall's
 topology collection) are listed, edited and deleted like the others but
 cannot be created or synced here.
+
+Object scope: a DHCP server belongs to no inventory group, tenant or site
+(scope model ``dhcp_server``), so a scoped caller sees no server, scope or
+lease; every write is admin only.
 """
 
 from __future__ import annotations
@@ -15,6 +19,15 @@ import routes.database as db
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
+from netcontrol.object_scope import (
+    ScopeModel,
+    filter_rows,
+    register_model,
+    request_scope,
+    require_row,
+    scope_exempt,
+    scoped,
+)
 from netcontrol.routes.dhcp_adapters import (
     DhcpAdapterError,
     collect_dhcp_snapshot,
@@ -29,6 +42,29 @@ _require_admin = None
 
 # Scope-exhaustion threshold: alert when free/total drops below this.
 SCOPE_EXHAUSTION_PCT = 90.0
+
+# A DHCP server (and its scopes and leases) names no inventory group, tenant
+# or site: rows with no key are for unrestricted callers only.
+register_model(
+    ScopeModel("dhcp_server", {}, not_found="not_found", description="DHCP servers with their scopes and leases")
+)
+
+
+async def _visible_server_ids(request: Request) -> set[int] | None:
+    """The DHCP servers the caller may read (``None``: every server)."""
+    if (await request_scope(request)).unrestricted:
+        return None
+    rows = await db.list_dhcp_servers()
+    visible = await filter_rows("dhcp_server", rows, request)
+    if len(visible) == len(rows):
+        return None
+    return {int(r["id"]) for r in visible}
+
+
+def _of_servers(rows: list[dict], server_ids: set[int] | None) -> list[dict]:
+    if server_ids is None:
+        return rows
+    return [r for r in rows if r.get("server_id") is not None and int(r["server_id"]) in server_ids]
 
 
 class DhcpServerCreate(BaseModel):
@@ -109,17 +145,20 @@ def _serialize_lease(row: dict) -> dict:
 
 
 @router.get("/api/dhcp/providers")
+@scope_exempt("the DHCP provider catalogue: no host or inventory group data")
 async def list_dhcp_providers_api():
     return {"providers": get_dhcp_provider_catalog()}
 
 
 @router.get("/api/dhcp/servers")
-async def list_dhcp_servers_api():
+@scoped("list")
+async def list_dhcp_servers_api(request: Request):
     rows = await db.list_dhcp_servers()
-    return {"servers": rows}
+    return {"servers": await filter_rows("dhcp_server", rows, request)}
 
 
 @router.post("/api/dhcp/servers")
+@scoped("admin")
 async def create_dhcp_server_api(
     body: DhcpServerCreate,
     request: Request,
@@ -157,14 +196,16 @@ async def create_dhcp_server_api(
 
 
 @router.get("/api/dhcp/servers/{server_id}")
-async def get_dhcp_server_api(server_id: int):
+@scoped("object")
+async def get_dhcp_server_api(server_id: int, request: Request):
     row = await db.get_dhcp_server(server_id)
     if not row:
         raise HTTPException(status_code=404, detail="not_found")
-    return row
+    return await require_row(request, "dhcp_server", row)
 
 
 @router.patch("/api/dhcp/servers/{server_id}")
+@scoped("admin")
 async def update_dhcp_server_api(
     server_id: int,
     body: DhcpServerUpdate,
@@ -197,6 +238,7 @@ async def update_dhcp_server_api(
 
 
 @router.delete("/api/dhcp/servers/{server_id}")
+@scoped("admin")
 async def delete_dhcp_server_api(
     server_id: int,
     request: Request,
@@ -250,6 +292,7 @@ async def sync_dhcp_server(server_id: int, *, triggered_by: str = "manual") -> d
 
 
 @router.post("/api/dhcp/servers/{server_id}/sync")
+@scoped("admin")
 async def sync_dhcp_server_api(
     server_id: int,
     request: Request,
@@ -268,11 +311,13 @@ async def sync_dhcp_server_api(
 
 
 @router.get("/api/dhcp/scopes")
+@scoped("list")
 async def list_dhcp_scopes_api(
+    request: Request,
     server_id: int | None = Query(default=None),
     only_exhausted: bool = Query(default=False),
 ):
-    rows = await db.list_dhcp_scopes(server_id=server_id)
+    rows = _of_servers(await db.list_dhcp_scopes(server_id=server_id), await _visible_server_ids(request))
     scopes = [_serialize_scope(r) for r in rows]
     if only_exhausted:
         scopes = [s for s in scopes if s["exhausted"]]
@@ -280,12 +325,20 @@ async def list_dhcp_scopes_api(
 
 
 @router.get("/api/dhcp/leases")
+@scoped("list")
 async def list_dhcp_leases_api(
+    request: Request,
     server_id: int | None = Query(default=None),
     scope_subnet: str | None = Query(default=None),
     limit: int = Query(default=500, ge=1, le=5000),
 ):
-    rows = await db.list_dhcp_leases(server_id=server_id, scope_subnet=scope_subnet, limit=limit)
+    visible = await _visible_server_ids(request)
+    rows = (
+        []
+        if visible is not None and not visible
+        else await db.list_dhcp_leases(server_id=server_id, scope_subnet=scope_subnet, limit=limit)
+    )
+    rows = _of_servers(rows, visible)
     return {"leases": [_serialize_lease(r) for r in rows]}
 
 
@@ -331,7 +384,9 @@ async def _correlate_leases_to_inventory(leases: list[dict]) -> dict:
 
 
 @router.get("/api/dhcp/correlation")
+@scoped("list")
 async def dhcp_correlation_api(
+    request: Request,
     server_id: int | None = Query(default=None),
     limit: int = Query(default=1000, ge=1, le=5000),
 ):
@@ -341,8 +396,9 @@ async def dhcp_correlation_api(
     ``unknown`` (lease IP not seen by Plexus discovery - potential rogue
     devices).
     """
-    rows = await db.list_dhcp_leases(server_id=server_id, limit=limit)
-    classified = await _correlate_leases_to_inventory(rows)
+    visible = await _visible_server_ids(request)
+    rows = [] if visible is not None and not visible else await db.list_dhcp_leases(server_id=server_id, limit=limit)
+    classified = await _correlate_leases_to_inventory(_of_servers(rows, visible))
     return {
         "totals": {
             "known": len(classified["known"]),
@@ -353,9 +409,10 @@ async def dhcp_correlation_api(
 
 
 @router.get("/api/dhcp/exhaustion")
-async def dhcp_exhaustion_api():
+@scoped("list")
+async def dhcp_exhaustion_api(request: Request):
     """List scopes whose utilization meets or exceeds the exhaustion threshold."""
-    rows = await db.list_dhcp_scopes()
+    rows = _of_servers(await db.list_dhcp_scopes(), await _visible_server_ids(request))
     scopes = [_serialize_scope(r) for r in rows]
     exhausted = [s for s in scopes if s["exhausted"]]
     near = [s for s in scopes if not s["exhausted"] and s["utilization_pct"] >= (SCOPE_EXHAUSTION_PCT - 10.0)]

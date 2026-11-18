@@ -6,6 +6,9 @@ Provides API endpoints for:
   - Per-port error time-series (for charting)
   - Error spike events with root-cause correlation details
   - Event acknowledgement and resolution
+
+Object scope: error summaries, series and events follow their host; an
+event with no inventory host is visible to unrestricted callers only.
 """
 
 from __future__ import annotations
@@ -15,11 +18,22 @@ import json
 import routes.database as db
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
+from netcontrol.object_scope import HOST_NOT_FOUND, group_filter, require_object_host, scoped
 from netcontrol.routes.shared import _audit, _corr_id, _get_session
 from netcontrol.telemetry import configure_logging
 
 router = APIRouter()
 LOGGER = configure_logging("plexus.interface_errors")
+
+_EVENT_NOT_FOUND = "Event not found"
+
+
+async def _require_event(request: Request, event_id: int, *, write: bool = False) -> dict | None:
+    """The event (``None`` when unknown); 404 for a scoped caller when it is
+    unknown or its host is unreadable, 403 on ``write`` when not writable."""
+    event = await db.get_interface_error_event(event_id)
+    await require_object_host(request, event.get("host_id") if event else None, write=write, not_found=_EVENT_NOT_FOUND)
+    return event
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -28,7 +42,9 @@ LOGGER = configure_logging("plexus.interface_errors")
 
 
 @router.get("/api/interfaces/{host_id}/errors")
+@scoped("host")
 async def interface_error_summary(
+    request: Request,
     host_id: int,
     days: int = Query(default=1, ge=1, le=365),
 ):
@@ -37,6 +53,7 @@ async def interface_error_summary(
     Returns aggregated error rates per interface with sample counts,
     averages, and peak values.
     """
+    await require_object_host(request, host_id, not_found=HOST_NOT_FOUND)
     summary = await db.get_interface_error_summary(host_id, days)
 
     # Group by interface
@@ -74,7 +91,9 @@ async def interface_error_summary(
 
 
 @router.get("/api/interfaces/{host_id}/port/{if_index}/errors")
+@scoped("host")
 async def interface_error_detail(
+    request: Request,
     host_id: int,
     if_index: int,
     start: str | None = Query(default=None),
@@ -82,6 +101,7 @@ async def interface_error_detail(
     limit: int = Query(default=5000, ge=1, le=50000),
 ):
     """Detailed error/discard time-series for a single interface."""
+    await require_object_host(request, host_id, not_found=HOST_NOT_FOUND)
     samples = await db.get_interface_error_trending(
         host_id,
         if_index=if_index,
@@ -125,7 +145,9 @@ async def interface_error_detail(
 
 
 @router.get("/api/interface-error-events")
+@scoped("list")
 async def list_error_events(
+    request: Request,
     host_id: int | None = Query(default=None),
     severity: str | None = Query(default=None),
     unresolved_only: bool = Query(default=False),
@@ -137,15 +159,17 @@ async def list_error_events(
         severity=severity,
         unresolved_only=unresolved_only,
         limit=limit,
+        **await group_filter(request),
     )
 
 
 @router.get("/api/interface-error-events/{event_id}")
-async def get_error_event(event_id: int):
+@scoped("event")
+async def get_error_event(event_id: int, request: Request):
     """Get a single error event with full correlation details."""
-    event = await db.get_interface_error_event(event_id)
+    event = await _require_event(request, event_id)
     if not event:
-        raise HTTPException(status_code=404, detail="Event not found")
+        raise HTTPException(status_code=404, detail=_EVENT_NOT_FOUND)
 
     # Parse correlation_details JSON for the response
     try:
@@ -157,8 +181,10 @@ async def get_error_event(event_id: int):
 
 
 @router.post("/api/interface-error-events/{event_id}/acknowledge")
+@scoped("event")
 async def acknowledge_error_event(event_id: int, request: Request):
     """Acknowledge an interface error event."""
+    await _require_event(request, event_id, write=True)
     session = _get_session(request)
     user = session["user"] if session else ""
     success = await db.acknowledge_interface_error_event(event_id, user)
@@ -175,8 +201,10 @@ async def acknowledge_error_event(event_id: int, request: Request):
 
 
 @router.post("/api/interface-error-events/{event_id}/resolve")
+@scoped("event")
 async def resolve_error_event(event_id: int, request: Request):
     """Mark an interface error event as resolved."""
+    await _require_event(request, event_id, write=True)
     session = _get_session(request)
     user = session["user"] if session else ""
     success = await db.resolve_interface_error_event(event_id)

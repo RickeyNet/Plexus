@@ -1,5 +1,9 @@
 """
 playbooks.py -- Playbook CRUD routes and file management.
+
+Object scope: playbooks are a shared catalogue (no host or group): accounts
+limited to selected inventory groups read them and run them through jobs
+(which check the targets); only unrestricted callers change them.
 """
 
 from __future__ import annotations
@@ -14,6 +18,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from netcontrol import job_inputs
+from netcontrol.object_scope import require_model_write, scope_exempt, scoped
 from netcontrol.routes.git_sources import reject_git_owned
 from netcontrol.routes.shared import _audit, _corr_id, _get_session, require_owner_or_admin
 from netcontrol.telemetry import configure_logging
@@ -40,6 +45,9 @@ class PlaybookCreate(BaseModel):
     input_schema: list | None = None
     # Who may run / commit the job; admin only to set.
     permissions: dict | None = None
+    # Jobs from this playbook wait for approval (jobs.approve) before they
+    # are queued; admin only to change.
+    approval_required: bool | None = None
 
 
 class PlaybookUpdate(BaseModel):
@@ -51,6 +59,7 @@ class PlaybookUpdate(BaseModel):
     type: str | None = None
     input_schema: list | None = None
     permissions: dict | None = None
+    approval_required: bool | None = None
 
 
 class InputSchemaBody(BaseModel):
@@ -250,6 +259,17 @@ async def _clean_permissions(raw: dict | None, request: Request | None) -> dict 
     return permissions
 
 
+async def _clean_approval_required(wanted: bool | None, current: bool, request: Request | None) -> bool | None:
+    """The ``approval_required`` to store, or ``None`` to leave it. Changing
+    it needs an admin, like the run and commit permissions: a user who could
+    clear it could run the job without approval."""
+    if wanted is None or bool(wanted) == bool(current):
+        return None
+    if request is not None:
+        await require_owner_or_admin(request, None)
+    return bool(wanted)
+
+
 async def _caller(request: Request | None) -> tuple[str, list[int]] | None:
     if request is None:
         return None
@@ -260,6 +280,7 @@ async def _caller(request: Request | None) -> tuple[str, list[int]] | None:
 
 
 @router.get("/api/playbooks/{playbook_id}")
+@scope_exempt("shared playbook catalogue: no host or inventory group data")
 async def get_playbook(playbook_id: int, request: Request = None):
     playbook = await db.get_playbook(playbook_id)
     if not playbook:
@@ -300,6 +321,7 @@ async def get_playbook(playbook_id: int, request: Request = None):
 
 
 @router.get("/api/playbooks")
+@scope_exempt("shared playbook catalogue: no host or inventory group data")
 async def list_playbooks(request: Request = None):
     await sync_playbooks_from_registry()
     playbooks = await db.get_all_playbooks()
@@ -308,6 +330,7 @@ async def list_playbooks(request: Request = None):
 
 
 @router.get("/api/playbooks/{playbook_id}/input-schema")
+@scope_exempt("shared playbook catalogue: no host or inventory group data")
 async def get_playbook_input_schema(playbook_id: int, request: Request = None):
     """The run-dialog form: typed fields, dry-run support and whether the
     caller may run and commit this playbook."""
@@ -327,12 +350,14 @@ async def get_playbook_input_schema(playbook_id: int, request: Request = None):
 
 
 @router.put("/api/playbooks/{playbook_id}/input-schema")
+@scoped("catalog")
 async def put_playbook_input_schema(playbook_id: int, body: InputSchemaBody, request: Request = None):
     """Replace the stored input schema. ``[]`` falls back to the schema the
     Python class declares in code."""
     playbook = await db.get_playbook(playbook_id)
     if not playbook:
         raise HTTPException(404, "Playbook not found")
+    await require_model_write(request)
     schema = _clean_schema(body.schema_) or []
     await db.update_playbook(playbook_id, input_schema=schema)
     session = _get_session(request) if request else None
@@ -347,11 +372,13 @@ async def put_playbook_input_schema(playbook_id: int, body: InputSchemaBody, req
 
 
 @router.put("/api/playbooks/{playbook_id}/permissions")
+@scoped("catalog")
 async def put_playbook_permissions(playbook_id: int, body: PermissionsBody, request: Request = None):
     """Replace who may run and commit the playbook (admin only)."""
     playbook = await db.get_playbook(playbook_id)
     if not playbook:
         raise HTTPException(404, "Playbook not found")
+    await require_model_write(request)
     permissions = await _clean_permissions({"run": body.run, "commit": body.commit}, request) or {}
     await db.update_playbook(playbook_id, permissions=permissions)
     session = _get_session(request) if request else None
@@ -366,7 +393,9 @@ async def put_playbook_permissions(playbook_id: int, body: PermissionsBody, requ
 
 
 @router.post("/api/playbooks", status_code=201)
+@scoped("catalog")
 async def create_playbook(body: PlaybookCreate, request: Request = None):
+    await require_model_write(request)
     pb_type = body.type if body.type in ("python", "ansible") else "python"
     try:
         if pb_type == "ansible":
@@ -377,6 +406,7 @@ async def create_playbook(body: PlaybookCreate, request: Request = None):
         raise HTTPException(status_code=400, detail=str(exc))
     input_schema = _clean_schema(body.input_schema)
     permissions = await _clean_permissions(body.permissions, request)
+    approval_required = await _clean_approval_required(body.approval_required, False, request)
     if pb_type == "python" and body.content:
         write_playbook_file(filename, body.content)
     pid = await db.create_playbook(
@@ -388,23 +418,26 @@ async def create_playbook(body: PlaybookCreate, request: Request = None):
         type=pb_type,
         input_schema=input_schema,
         permissions=permissions,
+        approval_required=bool(approval_required),
     )
     session = _get_session(request) if request else None
     await _audit(
         "config",
         "playbook.create",
         user=session["user"] if session else "",
-        detail=f"created {pb_type} playbook '{body.name}'",
+        detail=f"created {pb_type} playbook '{body.name}'" + (" approval_required=1" if approval_required else ""),
         correlation_id=_corr_id(request),
     )
     return {"id": pid}
 
 
 @router.put("/api/playbooks/{playbook_id}")
+@scoped("catalog")
 async def update_playbook(playbook_id: int, body: PlaybookUpdate, request: Request = None):
     playbook = await db.get_playbook(playbook_id)
     if not playbook:
         raise HTTPException(404, "Playbook not found")
+    await require_model_write(request)
     if any(v is not None for v in (body.name, body.filename, body.description, body.tags, body.content, body.type)):
         # A Git source's playbook changes in its repository; inputs and permissions stay editable.
         reject_git_owned(playbook, "playbook")
@@ -420,6 +453,9 @@ async def update_playbook(playbook_id: int, body: PlaybookUpdate, request: Reque
             raise HTTPException(status_code=400, detail=str(exc))
     input_schema = _clean_schema(body.input_schema)
     permissions = await _clean_permissions(body.permissions, request)
+    approval_required = await _clean_approval_required(
+        body.approval_required, bool(playbook.get("approval_required")), request
+    )
     if pb_type == "python" and body.content is not None:
         target_filename = update_filename or playbook["filename"]
         write_playbook_file(target_filename, body.content)
@@ -433,23 +469,27 @@ async def update_playbook(playbook_id: int, body: PlaybookUpdate, request: Reque
         type=body.type,
         input_schema=input_schema,
         permissions=permissions,
+        approval_required=approval_required,
     )
     session = _get_session(request) if request else None
     await _audit(
         "config",
         "playbook.update",
         user=session["user"] if session else "",
-        detail=f"updated playbook {playbook_id}",
+        detail=f"updated playbook {playbook_id}"
+        + (f" approval_required={int(approval_required)}" if approval_required is not None else ""),
         correlation_id=_corr_id(request),
     )
     return {"ok": True}
 
 
 @router.delete("/api/playbooks/{playbook_id}")
+@scoped("catalog")
 async def delete_playbook(playbook_id: int, request: Request = None):
     playbook = await db.get_playbook(playbook_id)
     if not playbook:
         raise HTTPException(404, "Playbook not found")
+    await require_model_write(request)
     reject_git_owned(playbook, "playbook")
     await db.delete_playbook(playbook_id)
     session = _get_session(request) if request else None

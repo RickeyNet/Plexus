@@ -23,8 +23,11 @@ from routes.db.inventory import _tree_ordered
 import netcontrol.routes.state as state
 from netcontrol.bulk_import import host_csv_header, host_csv_row, host_export_records
 from netcontrol.data_validation import enforce as enforce_validation_rules, pick as rule_values
-from netcontrol.drivers import DriverCapabilityError, GenericDriver, get_driver
+from netcontrol.device_categories import DEVICE_CATEGORIES
+from netcontrol.drivers import DriverCapabilityError, GenericDriver, get_driver, supports_cli
 from netcontrol.drivers.show_version import ShowVersionFacts, parse_show_version
+from netcontrol.integrations.apc import nmc_cli
+from netcontrol.integrations.apc.firmware import DEVICE_TYPE as APC_UPS_DEVICE_TYPE
 from netcontrol.integrations.meraki.enrich import load_inventory_index
 from netcontrol.integrations.software.versions import classify_host
 from netcontrol.object_scope import (
@@ -263,8 +266,13 @@ class DiscoveryScanRequest(BaseModel):
     # Read model, serial, software version, hostname and the OS (device
     # type) over SSH ``show version`` from every host that answers.
     use_ssh: bool = True
-    # A stored credential the caller may use; none: the Plexus service credential.
+    # A stored credential the caller may use (remembered for the group);
+    # none: the credential the group remembers, else the Plexus service
+    # credential (see _resolve_discovery_ssh).
     credential_id: int | None = None
+    # Without credential_id: sign in with the Plexus service credential even
+    # when the group remembers another, and make the group forget it.
+    use_service_credential: bool = False
 
     model_config = ConfigDict(extra="forbid")
 
@@ -462,13 +470,29 @@ _SSH_SESSION_TYPES = frozenset(
 )
 
 
-async def _resolve_discovery_ssh(body: DiscoveryScanRequest, session: dict | None) -> tuple[dict | None, dict]:
+async def _resolve_discovery_ssh(
+    body: DiscoveryScanRequest,
+    session: dict | None,
+    *,
+    group: dict | None = None,
+    unattended: bool = False,
+    correlation_id: str = "",
+) -> tuple[dict | None, dict]:
     """The credential discovery reads ``show version`` with, and the base of
     the ``ssh_enrichment`` summary reported with the result.
 
-    An explicit ``credential_id`` must pass the usual access check (403/404
-    on failure). Without one the Plexus service credential is used; when
-    none is set, SSH enrichment is skipped (and says why) but the scan runs.
+    In order:
+
+    1. An explicit ``credential_id``: it must pass the usual access check
+       (403/404 on failure) and is remembered for ``group``.
+    2. Unless ``use_service_credential`` (which makes ``group`` forget its
+       credential), the credential ``group`` remembers, when the caller may
+       use it. ``unattended`` (the scheduled sync, no user session) uses it
+       only when it is a service credential. A remembered credential that
+       cannot be used falls back to step 3 with a ``note``, never an error;
+       one deleted since counts as none.
+    3. The Plexus service credential; when none is set, SSH enrichment is
+       skipped (and says why) but the scan runs.
     """
     if not body.use_ssh:
         return None, {
@@ -476,13 +500,25 @@ async def _resolve_discovery_ssh(body: DiscoveryScanRequest, session: dict | Non
             "credential": None,
             "credential_source": None,
             "skipped_reason": "Reading show version over SSH is turned off",
+            "note": "",
         }
+    note = ""
+    credential: dict | None = None
     if body.credential_id is not None:
         credential = await require_credential_access(body.credential_id, session=session, allow_service=True)
         source = "explicit"
+        if group is not None and not unattended:
+            await _remember_group_credential(group, credential, session, correlation_id)
     else:
-        credential = await service_credential()
-        source = "service"
+        if group is not None and body.use_service_credential:
+            if not unattended:
+                await _remember_group_credential(group, None, session, correlation_id)
+        elif group is not None:
+            credential, note = await _group_credential(group, session, unattended=unattended)
+        source = "group"
+        if credential is None:
+            credential = await service_credential()
+            source = "service"
         if credential is None:
             return None, {
                 "enabled": True,
@@ -492,9 +528,70 @@ async def _resolve_discovery_ssh(body: DiscoveryScanRequest, session: dict | Non
                     "No Plexus service credential is set: pick a credential or set one in Settings "
                     "to read model, serial and version over SSH"
                 ),
+                "note": note,
             }
     name = str(credential.get("name") or "").strip() or f"credential {credential.get('id')}"
-    return credential, {"enabled": True, "credential": name, "credential_source": source, "skipped_reason": ""}
+    return credential, {
+        "enabled": True,
+        "credential": name,
+        "credential_source": source,
+        "skipped_reason": "",
+        "note": note,
+    }
+
+
+async def _group_credential(group: dict, session: dict | None, *, unattended: bool) -> tuple[dict | None, str]:
+    """The credential ``group`` remembers for discovery, if the caller may use
+    it, and a note when one is remembered but cannot be used."""
+    remembered = group.get("discovery_credential_id")
+    if remembered is None:
+        return None, ""
+    if unattended:
+        # No user to check a personal credential against: service only.
+        credential = await db.get_credential_raw(int(remembered))
+        if credential is None:
+            return None, ""
+        if not credential.get("is_service"):
+            return None, (
+                "The group remembers a personal credential; the scheduled sync signs in only "
+                "with service credentials, so the Plexus service credential is used"
+            )
+        return credential, ""
+    try:
+        return await require_credential_access(int(remembered), session=session, allow_service=True), ""
+    except HTTPException as exc:
+        if exc.status_code == 404:
+            return None, ""  # deleted since: as if none were remembered
+        return None, (
+            f"The credential this group remembers cannot be used ({exc.detail}); "
+            "the Plexus service credential is used instead"
+        )
+
+
+async def _remember_group_credential(
+    group: dict, credential: dict | None, session: dict | None, correlation_id: str = ""
+) -> None:
+    """Remember ``credential`` as the one ``group``'s discovery signs in with.
+    ``None`` or the Plexus service credential is the default: the group
+    forgets its credential. Audited when it changes."""
+    new_id: int | None = None
+    if credential is not None:
+        service = await service_credential()
+        if service is None or int(service["id"]) != int(credential["id"]):
+            new_id = int(credential["id"])
+    old_id = group.get("discovery_credential_id")
+    if old_id == new_id:
+        return
+    group_id = int(group["id"])
+    await db.set_group_discovery_credential(group_id, new_id)
+    group["discovery_credential_id"] = new_id
+    await _audit(
+        "inventory",
+        "group.discovery_credential",
+        user=session["user"] if session and session.get("user") else "api-token",
+        detail=f"group_id={group_id} credential_id={new_id or 'service'} previous={old_id or 'service'}",
+        correlation_id=correlation_id,
+    )
 
 
 def _ssh_enrichment_summary(base: dict, discovered: list[dict]) -> dict:
@@ -564,6 +661,11 @@ async def _enrich_with_show_version(host: dict, credential: dict) -> None:
     # TCP 22 answered, or SNMP answered (which does not probe port 22).
     if protocol != "ssh" and not protocol.startswith("snmp"):
         return
+    # SNMP identified a platform with no command line Plexus can drive (an APC
+    # UPS card, an Instant On switch): its facts came from SNMP, and a Cisco
+    # session would only fail on it (``enable`` and ``show version``).
+    if not supports_cli(host.get("device_type")):
+        return
     session_type = _ssh_session_type(host.get("device_type"))
     target = {"ip_address": host["ip_address"], "device_type": session_type}
     try:
@@ -574,6 +676,9 @@ async def _enrich_with_show_version(host: dict, credential: dict) -> None:
                     credential,
                     _show_version_command(session_type),
                     autodetect=False,
+                    # The OS is not known yet: a device that has no Cisco-style
+                    # enable mode still answers show version in user mode.
+                    enable_optional=True,
                     **_DISCOVERY_SSH_CONNECT_OPTIONS,
                 ),
                 timeout=DISCOVERY_SSH_TIMEOUT_SECONDS,
@@ -588,11 +693,48 @@ async def _enrich_with_show_version(host: dict, credential: dict) -> None:
             "error": f"{type(exc).__name__}: {detail[0][:200]}" if detail else type(exc).__name__,
         }
         return
-    facts = parse_show_version(output if isinstance(output, str) else "")
+    text = output if isinstance(output, str) else ""
+    facts = parse_show_version(text)
+    if facts.empty and nmc_cli.status_line(text) is not None:
+        # An APC Network Management Card answers an unknown command with an
+        # NMC status code ("E101: Command Not Found"): ask it what UPS it is.
+        facts = await _read_apc_card_facts(target, credential)
     if facts.empty:
         discovery["ssh"] = {"ok": False, "error": "show version output named no model, version or OS"}
         return
     _apply_show_version_facts(host, facts)
+
+
+async def _read_apc_card_facts(target: dict, credential: dict) -> ShowVersionFacts:
+    """``upsabout`` from an APC Network Management Card, as the facts a
+    ``show version`` would give: a card with a UPS behind it (a UPS ID or
+    model) is an ``apc_ups``; anything else (a PDU or transfer switch card,
+    a failed read) gives no facts. The card's own firmware, the host's
+    software version for this type, comes from the SNMP poll later."""
+    try:
+        async with state.device_op_semaphore():
+            output = await asyncio.wait_for(
+                _run_show_command(
+                    target,
+                    credential,
+                    "upsabout",
+                    autodetect=False,
+                    enable_optional=True,
+                    **_DISCOVERY_SSH_CONNECT_OPTIONS,
+                ),
+                timeout=DISCOVERY_SSH_TIMEOUT_SECONDS,
+            )
+    except Exception as exc:
+        LOGGER.debug("discovery: upsabout failed on %s: %s", target.get("ip_address"), type(exc).__name__)
+        return ShowVersionFacts()
+    about = nmc_cli.parse_upsabout(output if isinstance(output, str) else "")
+    if nmc_cli.command_error(output) or not (about.ups_id or about.model):
+        return ShowVersionFacts()
+    return ShowVersionFacts(
+        os_device_type=APC_UPS_DEVICE_TYPE,
+        model=about.model or None,
+        serial_number=about.serial or None,
+    )
 
 
 async def _scan_target(
@@ -1035,8 +1177,10 @@ async def _run_discovery_sync_once() -> dict:
                     "remove_absent": profile.get("remove_absent", False),
                 }
             )
-            # Unattended: only the Plexus service credential (never a user's).
-            credential, _ = await _resolve_discovery_ssh(body, None)
+            # Unattended: the group's remembered credential when it is a
+            # service credential, else the Plexus service credential (never
+            # a user's personal credential: there is no session to check).
+            credential, _ = await _resolve_discovery_ssh(body, None, group=group, unattended=True)
             _, discovered = await _discover_hosts(body, group_id=group_id, credential=credential)
             result = await _sync_group_hosts(group_id, discovered, remove_absent=body.remove_absent)
             synced_groups += 1
@@ -1796,7 +1940,7 @@ async def update_host(host_id: int, body: HostUpdate, request: Request):
     return {"ok": True}
 
 
-_VALID_CATEGORIES = {"router", "switch", "firewall", "wireless", "wlc", "phone", "server", ""}
+_VALID_CATEGORIES = {*DEVICE_CATEGORIES, ""}
 
 
 @router.patch("/api/hosts/{host_id}/category")
@@ -2010,6 +2154,28 @@ async def discovery_ssh_defaults():
     }
 
 
+@router.get("/api/inventory/{group_id}/discovery/ssh-defaults")
+@scoped("group")
+async def group_discovery_ssh_defaults(group_id: int, request: Request):
+    """The service defaults plus ``group_credential_id``: the credential the
+    group's discovery remembers (null: none, or deleted since)."""
+    group = await require_group(request, group_id)
+    remembered = group.get("discovery_credential_id")
+    if remembered is not None and not await db.get_credential_raw(int(remembered), resolve_external=False):
+        remembered = None
+    return {**await discovery_ssh_defaults(), "group_credential_id": remembered}
+
+
+@router.delete("/api/inventory/{group_id}/discovery/credential")
+@scoped("group")
+async def forget_group_discovery_credential(group_id: int, request: Request):
+    """Forget the group's remembered discovery credential: scans and syncs
+    with no credential go back to the Plexus service credential."""
+    group = await require_group(request, group_id, write=True)
+    await _remember_group_credential(group, None, _get_session(request), _corr_id(request))
+    return {"ok": True, "group_credential_id": None}
+
+
 @router.post("/api/inventory/{group_id}/discovery/scan", status_code=202)
 @scoped("group")
 async def discovery_scan(group_id: int, body: DiscoveryScanRequest, request: Request):
@@ -2021,12 +2187,14 @@ async def discovery_scan(group_id: int, body: DiscoveryScanRequest, request: Req
     progress and the result (same payload shape the inline response had).
     The SSE variant at .../discovery/scan/stream is unchanged.
     """
-    await require_group(request, group_id, write=True)
+    group = await require_group(request, group_id, write=True)
     try:
         targets = _expand_scan_targets(body.cidrs, body.max_hosts)
     except ValueError as exc:
         raise HTTPException(400, str(exc))
-    credential, ssh_base = await _resolve_discovery_ssh(body, _get_session(request))
+    credential, ssh_base = await _resolve_discovery_ssh(
+        body, _get_session(request), group=group, correlation_id=_corr_id(request)
+    )
 
     job = background_jobs.create_job(
         "discovery-scan",
@@ -2107,7 +2275,7 @@ async def get_discovery_scan_job(job_id: str, request: Request = None):
 @scoped("group")
 async def discovery_scan_stream(group_id: int, body: DiscoveryScanRequest, request: Request):
     """SSE streaming scan -- yields per-host results as they complete."""
-    await require_group(request, group_id, write=True)
+    group = await require_group(request, group_id, write=True)
 
     try:
         targets = _expand_scan_targets(body.cidrs, body.max_hosts)
@@ -2116,7 +2284,9 @@ async def discovery_scan_stream(group_id: int, body: DiscoveryScanRequest, reque
     total = len(targets)
     semaphore = asyncio.Semaphore(max(1, state.DISCOVERY_MAX_CONCURRENT_PROBES))
     snmp_cfg = state._resolve_snmp_discovery_config(group_id)
-    credential, ssh_base = await _resolve_discovery_ssh(body, _get_session(request))
+    credential, ssh_base = await _resolve_discovery_ssh(
+        body, _get_session(request), group=group, correlation_id=_corr_id(request)
+    )
 
     async def _scan_one(ip_address: str) -> tuple[str, dict | None]:
         return ip_address, await _scan_target(ip_address, body, snmp_cfg, semaphore, credential)
@@ -2224,7 +2394,7 @@ async def _snmp_test(target_ip: str, snmp_config: dict) -> dict:
 @router.post("/api/inventory/{group_id}/discovery/sync")
 @scoped("group")
 async def discovery_sync(group_id: int, body: DiscoverySyncRequest, request: Request):
-    await require_group(request, group_id, write=True)
+    group = await require_group(request, group_id, write=True)
 
     # If no CIDRs provided, auto-populate from the group's existing host IPs
     if not body.cidrs:
@@ -2235,7 +2405,7 @@ async def discovery_sync(group_id: int, body: DiscoverySyncRequest, request: Req
         body.cidrs = host_ips
 
     session = _get_session(request)
-    credential, ssh_base = await _resolve_discovery_ssh(body, session)
+    credential, ssh_base = await _resolve_discovery_ssh(body, session, group=group, correlation_id=_corr_id(request))
     scanned_count, discovered = await _discover_hosts(body, group_id=group_id, credential=credential)
     sync_result = await _sync_group_hosts(group_id, discovered, remove_absent=body.remove_absent)
     audit_user = session["user"] if session else "api-token"
@@ -2266,7 +2436,7 @@ async def discovery_sync_stream(group_id: int, body: DiscoverySyncRequest, reque
     """SSE streaming sync -- yields per-host probe progress, then a final
     'done' event carrying the add/update/remove counts. Mirrors
     discovery_scan_stream so the frontend can reuse its progress UI."""
-    await require_group(request, group_id, write=True)
+    group = await require_group(request, group_id, write=True)
 
     # If no CIDRs provided, auto-populate from the group's existing host IPs
     # (same behaviour as the non-streaming /discovery/sync endpoint).
@@ -2285,7 +2455,7 @@ async def discovery_sync_stream(group_id: int, body: DiscoverySyncRequest, reque
     semaphore = asyncio.Semaphore(max(1, state.DISCOVERY_MAX_CONCURRENT_PROBES))
     snmp_cfg = state._resolve_snmp_discovery_config(group_id)
     session = _get_session(request)
-    credential, ssh_base = await _resolve_discovery_ssh(body, session)
+    credential, ssh_base = await _resolve_discovery_ssh(body, session, group=group, correlation_id=_corr_id(request))
 
     async def _scan_one(ip_address: str) -> tuple[str, dict | None]:
         return ip_address, await _scan_target(ip_address, body, snmp_cfg, semaphore, credential)

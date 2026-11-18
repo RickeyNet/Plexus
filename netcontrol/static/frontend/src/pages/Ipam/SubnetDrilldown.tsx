@@ -31,6 +31,7 @@ import { TagChips } from '@/components/TagChips';
 import { TenantSelect } from '@/components/TenantSelect';
 import { applicableFields, formatCustomValue } from '@/lib/customData';
 import { formatCount } from '@/lib/formatCount';
+import { aggregateUsageLabel } from '@/lib/ipamModel';
 import { addressRoleLabel, describeCarriers, formatInterfaceAddress, interfacesByAddress } from '@/lib/networkObjects';
 import { serverFieldErrors } from '@/lib/serverFieldErrors';
 import { saveCustomDataDraft, useCustomDataDraft } from '@/lib/useCustomDataDraft';
@@ -87,6 +88,12 @@ export function SubnetDrilldown({ subnet, vrf, detail, isLoading, loadError, onR
           {formatCount(summary.total_addresses)} total addresses ·{' '}
           {formatCount(summary.usable_address_count)} usable
         </div>
+        {detail.aggregate && (
+          <div className="text-muted" style={{ fontSize: '0.9em' }}>
+            In aggregate {detail.aggregate.prefix}
+            {detail.aggregate.rir_name ? ` (${detail.aggregate.rir_name})` : ''}, {aggregateUsageLabel(detail.aggregate)} used
+          </div>
+        )}
       </div>
       <StatGrid compact minTileWidth={120}>
         <StatTile label="Available" value={formatCount(summary.available_address_count)} />

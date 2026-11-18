@@ -18,9 +18,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 import netcontrol.routes.state as state
-from netcontrol import oidc
+from netcontrol import oidc, saml
 from netcontrol.object_scope import scope_for_user
-from netcontrol.routes.auth import _oidc_redirect_uri
+from netcontrol.routes.auth import _oidc_redirect_uri, saml_acs_url, saml_sp_entity_id
 from netcontrol.routes.shared import _audit, _corr_id, _get_session, _session_user
 from netcontrol.routes.state import _env_flag
 from netcontrol.telemetry import configure_logging, configure_syslog_logging, syslog_logging_enabled
@@ -196,6 +196,38 @@ class OidcConfigRequest(BaseModel):
     ca_cert_file: str = ""
 
 
+class SamlConfigRequest(BaseModel):
+    enabled: bool = False
+    idp_entity_id: str = ""
+    idp_sso_url: str = ""
+    # PEM (or the bare base64 of metadata); at most 5, for a rollover.
+    idp_certs: list[str] = []
+    idp_metadata_url: str = ""
+    sp_entity_id: str = ""
+    acs_url: str = ""
+    ca_cert_file: str = ""
+    username_attribute: str = ""
+    email_attribute: str = ""
+    display_name_attribute: str = ""
+    groups_attribute: str = "groups"
+    admin_groups: list[str] = []
+    default_role: str = "user"
+    default_group_ids: list[int] = []
+    sync_groups: bool = False
+    group_mappings: list[OidcGroupMappingRequest] = []
+    button_label: str = "Sign in with SAML"
+    primary: bool = False
+
+
+class SamlMetadataRequest(BaseModel):
+    # Pasted metadata XML, or a URL to fetch it from (one of the two).
+    xml: str = Field(default="", max_length=1_000_000)
+    url: str = ""
+    # Picks one IdP from an EntitiesDescriptor.
+    entity_id: str = ""
+    ca_cert_file: str | None = None
+
+
 class AuthConfigRequest(BaseModel):
     provider: str = "local"
     default_credential_id: int | None = None
@@ -210,6 +242,8 @@ class AuthConfigRequest(BaseModel):
     ldap: LdapConfigRequest = LdapConfigRequest()
     # Omitted = keep the saved OIDC settings (older clients do not send it).
     oidc: OidcConfigRequest | None = None
+    # Omitted = keep the saved SAML settings (older clients do not send it).
+    saml: SamlConfigRequest | None = None
 
 
 class OidcTestRequest(BaseModel):
@@ -752,6 +786,18 @@ def _redact_auth_config(cfg: dict) -> dict:
     return redacted
 
 
+def _check_sso_common(submitted: dict, protocol: str) -> None:
+    """The limits every single sign-on block shares (group mappings, label)."""
+    if len(submitted.get("group_mappings") or []) > state.OIDC_MAX_GROUP_MAPPINGS:
+        raise HTTPException(
+            status_code=400, detail=f"At most {state.OIDC_MAX_GROUP_MAPPINGS} {protocol} group mappings are allowed"
+        )
+    if len(str(submitted.get("button_label") or "").strip()) > state.OIDC_BUTTON_LABEL_MAX:
+        raise HTTPException(
+            status_code=400, detail=f"The SSO button label is limited to {state.OIDC_BUTTON_LABEL_MAX} characters"
+        )
+
+
 def _oidc_config_to_store(submitted: dict) -> dict:
     """Validate a submitted OIDC block and turn its client secret into the
     stored ciphertext (mask = keep the saved one, empty = public client)."""
@@ -765,14 +811,7 @@ def _oidc_config_to_store(submitted: dict) -> dict:
     redirect_uri = str(submitted.get("redirect_uri") or "").strip()
     if redirect_uri and not oidc.is_allowed_url(redirect_uri):
         raise HTTPException(status_code=400, detail="OIDC redirect URI must be an https URL")
-    if len(submitted.get("group_mappings") or []) > state.OIDC_MAX_GROUP_MAPPINGS:
-        raise HTTPException(
-            status_code=400, detail=f"At most {state.OIDC_MAX_GROUP_MAPPINGS} OIDC group mappings are allowed"
-        )
-    if len(str(submitted.get("button_label") or "").strip()) > state.OIDC_BUTTON_LABEL_MAX:
-        raise HTTPException(
-            status_code=400, detail=f"The SSO button label is limited to {state.OIDC_BUTTON_LABEL_MAX} characters"
-        )
+    _check_sso_common(submitted, "OIDC")
     out = dict(submitted)
     secret = str(out.pop("client_secret", "") or "")
     if secret == _SECRET_MASK:
@@ -784,6 +823,39 @@ def _oidc_config_to_store(submitted: dict) -> dict:
     else:
         out["client_secret_enc"] = ""
     return out
+
+
+def _saml_config_to_store(submitted: dict) -> dict:
+    """Validate a submitted SAML block; certificates are stored as PEM."""
+    out = dict(submitted)
+    raw_certs = [str(c) for c in submitted.get("idp_certs") or [] if str(c).strip()]
+    if len(raw_certs) > state.SAML_MAX_CERTS:
+        raise HTTPException(status_code=400, detail=f"At most {state.SAML_MAX_CERTS} IdP certificates are allowed")
+    try:
+        out["idp_certs"] = list(dict.fromkeys(saml.normalize_cert(c) for c in raw_certs))
+    except saml.SamlError as exc:
+        raise HTTPException(status_code=400, detail=exc.step) from exc
+    for key, label in (
+        ("idp_sso_url", "SAML IdP SSO URL"),
+        ("idp_metadata_url", "SAML IdP metadata URL"),
+        ("acs_url", "SAML ACS URL"),
+    ):
+        value = str(submitted.get(key) or "").strip()
+        if value and not saml.is_allowed_url(value):
+            raise HTTPException(status_code=400, detail=f"{label} must be an https URL")
+    if submitted.get("enabled"):
+        if not str(submitted.get("idp_entity_id") or "").strip():
+            raise HTTPException(status_code=400, detail="SAML IdP entity ID is required")
+        if not str(submitted.get("idp_sso_url") or "").strip():
+            raise HTTPException(status_code=400, detail="SAML IdP SSO URL is required")
+        if not out["idp_certs"]:
+            raise HTTPException(status_code=400, detail="At least one SAML IdP signing certificate is required")
+    _check_sso_common(submitted, "SAML")
+    return out
+
+
+def _saml_cert_summary(pems: list[str]) -> list[dict]:
+    return [{"fingerprint": saml.cert_fingerprint(p), "not_after": saml.cert_not_after(p)} for p in pems]
 
 
 @router.get("/api/admin/auth-config")
@@ -808,6 +880,11 @@ async def admin_update_auth_config(body: AuthConfigRequest):
         data["oidc"] = dict(state.AUTH_CONFIG.get("oidc") or {})
     else:
         data["oidc"] = _oidc_config_to_store(submitted_oidc)
+    submitted_saml = data.pop("saml", None)
+    if submitted_saml is None:
+        data["saml"] = dict(state.AUTH_CONFIG.get("saml") or {})
+    else:
+        data["saml"] = _saml_config_to_store(submitted_saml)
     state.AUTH_CONFIG = state._sanitize_auth_config(data)
     await db.set_auth_setting("auth_config", state.AUTH_CONFIG)
     return _redact_auth_config(state.AUTH_CONFIG)
@@ -845,6 +922,55 @@ async def admin_test_oidc(request: Request, body: OidcTestRequest | None = None)
         algorithms=list(meta.algorithms),
         key_count=key_count,
         error="" if key_count else "the JWKS holds no usable signing key",
+    )
+    return result
+
+
+@router.get("/api/admin/auth-config/saml/sp")
+async def admin_saml_sp_info(request: Request):
+    """The SP entity ID, ACS URL and metadata URL to register at the IdP,
+    and the saved IdP certificates' fingerprints and expiry dates."""
+    cfg = state.AUTH_CONFIG.get("saml") or {}
+    try:
+        certs = _saml_cert_summary(list(cfg.get("idp_certs") or []))
+    except saml.SamlError:
+        certs = []
+    sp_entity_id = saml_sp_entity_id(request, cfg)
+    acs = saml_acs_url(request, cfg)
+    metadata_url = acs[: -len(saml.ACS_PATH)] + saml.METADATA_PATH if acs.endswith(saml.ACS_PATH) else ""
+    return {"sp_entity_id": sp_entity_id, "acs_url": acs, "metadata_url": metadata_url, "certs": certs}
+
+
+# Tests replace this with an httpx.MockTransport (None = the network).
+SAML_METADATA_TRANSPORT = None
+
+
+@router.post("/api/admin/auth-config/saml/metadata")
+async def admin_saml_import_metadata(body: SamlMetadataRequest):
+    """Read IdP metadata (pasted XML, else fetched from ``url``) and answer
+    the entity ID, SSO URL and signing certificates it holds. Nothing is
+    saved: the settings form fills itself from the answer."""
+    cfg = state.AUTH_CONFIG.get("saml") or {}
+    url = body.url.strip()
+    ca = (body.ca_cert_file if body.ca_cert_file is not None else str(cfg.get("ca_cert_file") or "")).strip()
+    result: dict = {"ok": False, "idp_entity_id": "", "idp_sso_url": "", "idp_certs": [], "certs": [], "error": ""}
+    try:
+        if body.xml.strip():
+            xml = body.xml
+        elif url:
+            xml = await saml.fetch_metadata(url, ca, transport=SAML_METADATA_TRANSPORT)
+        else:
+            raise saml.SamlError("provider", "paste the IdP metadata XML or give its URL")
+        meta = saml.parse_idp_metadata(xml, body.entity_id.strip())
+    except saml.SamlError as exc:
+        result["error"] = exc.step
+        return result
+    result.update(
+        ok=True,
+        idp_entity_id=meta.entity_id,
+        idp_sso_url=meta.sso_url,
+        idp_certs=list(meta.certs),
+        certs=_saml_cert_summary(list(meta.certs)),
     )
     return result
 

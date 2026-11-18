@@ -1,8 +1,14 @@
-"""ipam.py -- Lightweight IPAM overview, drilldown, and external sync routes."""
+"""ipam.py -- Lightweight IPAM overview, drilldown, and external sync routes.
+
+Object scope: a scoped caller sees the subnets of the hosts in their
+inventory groups and the prefixes and IP addresses of their tenants
+(``subnet_scope``); every write here is admin only.
+"""
 
 from __future__ import annotations
 
 import ipaddress
+from collections.abc import Iterable
 
 import routes.database as db
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -10,6 +16,14 @@ from pydantic import BaseModel, ConfigDict, Field
 
 import netcontrol.routes.state as state
 from netcontrol.data_validation import enforce as enforce_validation_rules
+from netcontrol.object_scope import (
+    filter_rows,
+    readable_host_ids,
+    request_scope,
+    scope_exempt,
+    scoped,
+    sql_condition,
+)
 from netcontrol.routes.custom_fields import attach_custom_data, matching_keys
 from netcontrol.routes.device_model import check_device_values
 from netcontrol.routes.ipam_adapters import (
@@ -18,6 +32,7 @@ from netcontrol.routes.ipam_adapters import (
     get_ipam_provider_catalog,
     normalize_ipam_provider,
 )
+from netcontrol.routes.ipam_model import resolve_prefix_namespace
 from netcontrol.routes.ipam_push import push_inventory_host_allocation
 from netcontrol.routes.ipam_reconciliation import (
     VALID_RESOLUTIONS,
@@ -77,6 +92,8 @@ class IpamPrefixCreate(BaseModel):
     vrf: str = ""
     notes: str = ""
     tenant_id: int | None = None
+    # The namespace (migration 0110); none: the VRF's, else Global.
+    namespace_id: int | None = None
 
 
 class IpamAllocationCreate(BaseModel):
@@ -144,6 +161,80 @@ def _serialize_source(row: dict) -> dict:
     }
 
 
+# ── Object scope ─────────────────────────────────────────────────────────────
+
+
+async def overview_filters(request: Request) -> dict:
+    """Keyword arguments of ``db.get_ipam_overview`` (and, without
+    ``prefix_scope``, of ``db.get_ipam_subnet_detail``) for the caller's
+    object scope: ``{}`` for an unrestricted caller, else the hosts of the
+    readable inventory groups and the prefixes and IP addresses of the
+    readable tenants."""
+    scope = await request_scope(request)
+    if scope.unrestricted:
+        return {}
+    return {
+        "group_ids": scope.read_groups,
+        "prefix_scope": await sql_condition("ipam_prefix", request, alias="p"),
+        "allocation_scope": await sql_condition("ipam_allocation", request, alias="a"),
+    }
+
+
+class SubnetScope:
+    """The subnets (with their VRF) of the IPAM overview a scoped caller
+    sees: those of the hosts in their inventory groups and of the prefixes
+    in their scope. Cloud and topology subnets are not in it."""
+
+    def __init__(self, subnets: Iterable[dict]) -> None:
+        self.pairs: set[tuple[str, str]] = set()
+        self.networks: list[tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, str]] = []
+        for row in subnets:
+            try:
+                net = ipaddress.ip_network(str(row.get("subnet") or "").strip(), strict=False)
+            except ValueError:
+                continue
+            vrf = str(row.get("vrf_name") or "").strip()
+            self.pairs.add((str(net), vrf))
+            self.networks.append((net, vrf))
+        self.subnets: set[str] = {sn for sn, _ in self.pairs}
+
+    def has_subnet(self, subnet: str, vrf: str | None = None) -> bool:
+        """``subnet`` (any VRF when ``vrf`` is ``None``) is in scope."""
+        try:
+            key = str(ipaddress.ip_network(str(subnet).strip(), strict=False))
+        except ValueError:
+            return False
+        return key in self.subnets if vrf is None else (key, vrf.strip()) in self.pairs
+
+    def has_address(self, address: str, vrf: str | None = None) -> bool:
+        """``address`` lies in a subnet in scope (of ``vrf`` when given)."""
+        try:
+            addr = ipaddress.ip_address(str(address).strip().split("/")[0])
+        except ValueError:
+            return False
+        want = None if vrf is None else vrf.strip()
+        return any(
+            net.version == addr.version and addr in net and (want is None or v == want) for net, v in self.networks
+        )
+
+
+async def subnet_scope(request: Request) -> SubnetScope | None:
+    """The subnets a scoped caller sees (``None``: unrestricted, every
+    subnet), read once per request."""
+    scope = await request_scope(request)
+    if scope.unrestricted:
+        return None
+    state_obj = getattr(request, "state", None)
+    cached = getattr(state_obj, "ipam_subnet_scope", None)
+    if isinstance(cached, SubnetScope):
+        return cached
+    overview = await db.get_ipam_overview(include_cloud=False, include_external=True, **await overview_filters(request))
+    view = SubnetScope(overview.get("subnets", []))
+    if state_obj is not None:
+        state_obj.ipam_subnet_scope = view
+    return view
+
+
 def _subnet_key(row: dict) -> str:
     """The custom-data key of an overview or detail row (no data for a row
     whose subnet does not parse)."""
@@ -154,6 +245,7 @@ def _subnet_key(row: dict) -> str:
 
 
 @router.get("/api/ipam/overview")
+@scoped("list")
 async def ipam_overview_api(
     request: Request,
     group_id: int | None = Query(default=None),
@@ -172,11 +264,16 @@ async def ipam_overview_api(
     if group_id is not None and group_id <= 0:
         raise HTTPException(status_code=400, detail="Invalid inventory group id")
     keys = await matching_keys("prefix", request.query_params)
+    filters = await overview_filters(request)
+    if filters:
+        # Cloud and topology subnets belong to no inventory group or tenant.
+        include_cloud = include_topology = False
     overview = await db.get_ipam_overview(
         group_id=group_id,
         include_cloud=include_cloud,
         include_external=include_external,
         topology_subnets=await topology_subnets() if include_topology else None,
+        **filters,
     )
     subnets = overview.get("subnets", [])
     if keys is not None:
@@ -187,7 +284,12 @@ async def ipam_overview_api(
 
 
 @router.get("/api/ipam/address/{ip}")
-async def ipam_address_context_api(ip: str, vrf: str | None = Query(default=None)):
+@scoped("list")
+async def ipam_address_context_api(
+    ip: str,
+    vrf: str | None = Query(default=None),
+    request: Request = None,  # type: ignore[assignment]  # ChatOps calls it directly (unrestricted)
+):
     """Return the best-matching subnet, utilization, and conflict status for a given IP.
 
     When `vrf` is provided, prefer subnets in that VRF and only flag a conflict
@@ -204,7 +306,7 @@ async def ipam_address_context_api(ip: str, vrf: str | None = Query(default=None
 
     target_vrf = (vrf or "").strip()
 
-    overview = await db.get_ipam_overview(include_cloud=False, include_external=True)
+    overview = await db.get_ipam_overview(include_cloud=False, include_external=True, **await overview_filters(request))
     subnets = overview.get("subnets", [])
 
     best: dict | None = None
@@ -246,12 +348,16 @@ async def ipam_address_context_api(ip: str, vrf: str | None = Query(default=None
         "is_conflict": conflict_entry is not None,
         "conflict_groups": conflict_entry.get("groups", []) if conflict_entry else [],
         "conflict_vrf": (conflict_entry.get("vrf_name") if conflict_entry else None),
-        "interfaces": await db.find_interface_addresses(ip, target_vrf or None),
+        "interfaces": await db.find_interface_addresses(
+            ip, target_vrf or None, host_ids=await readable_host_ids(request)
+        ),
     }
 
 
 @router.get("/api/ipam/subnets/{subnet:path}")
+@scoped("subnet")
 async def ipam_subnet_detail_api(
+    request: Request,
     subnet: str,
     group_id: int | None = Query(default=None),
     include_cloud: bool = Query(default=True),
@@ -264,29 +370,42 @@ async def ipam_subnet_detail_api(
     is given; at most ``SUBNET_INTERFACES_LIMIT``)."""
     if group_id is not None and group_id <= 0:
         raise HTTPException(status_code=400, detail="Invalid inventory group id")
+    # A scoped caller reads a subnet of their scope like anyone else, and any
+    # other like one nothing is known of.
+    filters = await overview_filters(request)
+    filters.pop("prefix_scope", None)
+    view = await subnet_scope(request)
+    if view is not None and not view.has_subnet(subnet):
+        filters.update(group_ids=frozenset(), allocation_scope=("1 = 0", ()), reservations=False)
     try:
         detail = await db.get_ipam_subnet_detail(
             subnet,
             group_id=group_id,
             include_cloud=include_cloud,
             include_external=include_external,
+            **filters,
         )
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid subnet") from None
+    detail["prefixes"] = await filter_rows("ipam_prefix", detail.get("prefixes", []), request)
     await attach_custom_data("prefix", [detail], lambda row: _subnet_key({"subnet": row["subnet"], "vrf_name": vrf}))
     detail["interfaces"] = await db.find_interface_addresses_in_subnet(
-        subnet, vrf.strip() or None, SUBNET_INTERFACES_LIMIT
+        subnet, vrf.strip() or None, SUBNET_INTERFACES_LIMIT, host_ids=await readable_host_ids(request)
     )
+    # The aggregate (migration 0110) that holds the subnet, with its usage.
+    detail["aggregate"] = await db.aggregate_for_subnet(subnet)
     return detail
 
 
 @router.get("/api/ipam/providers")
+@scope_exempt("the IPAM provider catalogue: no host or inventory group data")
 async def ipam_providers_api():
     providers = get_ipam_provider_catalog()
     return {"providers": providers, "count": len(providers)}
 
 
 @router.get("/api/ipam/sources")
+@scope_exempt("IPAM sources are shared, admin-managed integrations: no host or inventory group data")
 async def ipam_sources_api(
     provider: str | None = Query(default=None),
     enabled_only: bool = Query(default=False),
@@ -300,6 +419,7 @@ async def ipam_sources_api(
 
 
 @router.post("/api/ipam/sources", status_code=201, dependencies=[Depends(_require_admin_dep)])
+@scoped("admin")
 async def create_ipam_source_api(body: IpamSourceCreate, request: Request):
     try:
         provider = normalize_ipam_provider(body.provider)
@@ -332,6 +452,7 @@ async def create_ipam_source_api(body: IpamSourceCreate, request: Request):
 
 
 @router.put("/api/ipam/sources/{source_id}", dependencies=[Depends(_require_admin_dep)])
+@scoped("admin")
 async def update_ipam_source_api(source_id: int, body: IpamSourceUpdate, request: Request):
     existing = await db.get_ipam_source(source_id)
     if not existing:
@@ -357,6 +478,7 @@ async def update_ipam_source_api(source_id: int, body: IpamSourceUpdate, request
 
 
 @router.delete("/api/ipam/sources/{source_id}", dependencies=[Depends(_require_admin_dep)])
+@scoped("admin")
 async def delete_ipam_source_api(source_id: int, request: Request):
     existing = await db.get_ipam_source(source_id)
     if not existing:
@@ -378,6 +500,7 @@ async def delete_ipam_source_api(source_id: int, request: Request):
 
 
 @router.post("/api/ipam/sources/{source_id}/validate", dependencies=[Depends(_require_admin_dep)])
+@scoped("admin")
 async def validate_ipam_source_api(source_id: int):
     source = await db.get_ipam_source(source_id)
     if not source:
@@ -393,6 +516,7 @@ async def validate_ipam_source_api(source_id: int):
 
 
 @router.post("/api/ipam/sources/{source_id}/sync", dependencies=[Depends(_require_admin_dep)])
+@scoped("admin")
 async def sync_ipam_source_api(source_id: int, request: Request):
     source = await db.get_ipam_source(source_id)
     if not source:
@@ -435,15 +559,20 @@ async def sync_ipam_source_api(source_id: int, request: Request):
 
 
 @router.get("/api/ipam/subnets/{subnet:path}/reservations")
-async def ipam_reservations_api(subnet: str):
+@scoped("subnet")
+async def ipam_reservations_api(request: Request, subnet: str):
     try:
         rows = await db.list_ipam_reservations(subnet)
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid subnet") from None
+    view = await subnet_scope(request)
+    if view is not None and not view.has_subnet(subnet):
+        rows = []
     return {"reservations": rows, "count": len(rows)}
 
 
 @router.post("/api/ipam/subnets/{subnet:path}/reservations", dependencies=[Depends(_require_admin_dep)])
+@scoped("admin")
 async def create_ipam_reservation_api(subnet: str, body: IpamReservationCreate, request: Request):
     session = _get_session(request) or {}
     try:
@@ -469,6 +598,7 @@ async def create_ipam_reservation_api(subnet: str, body: IpamReservationCreate, 
 
 
 @router.delete("/api/ipam/reservations/{reservation_id}", dependencies=[Depends(_require_admin_dep)])
+@scoped("admin")
 async def delete_ipam_reservation_api(reservation_id: int, request: Request):
     deleted = await db.delete_ipam_reservation(reservation_id)
     if not deleted:
@@ -485,11 +615,13 @@ async def delete_ipam_reservation_api(reservation_id: int, request: Request):
 
 
 @router.get("/api/ipam/sync-config")
+@scope_exempt("the global IPAM sync schedule: no host or inventory group data")
 async def get_ipam_sync_config_api():
     return {"config": dict(state.IPAM_SYNC_CONFIG)}
 
 
 @router.put("/api/ipam/sync-config", dependencies=[Depends(_require_admin_dep)])
+@scoped("admin")
 async def update_ipam_sync_config_api(body: IpamSyncConfigUpdate, request: Request):
     updates = body.model_dump(exclude_none=True)
     cfg = dict(state.IPAM_SYNC_CONFIG)
@@ -518,20 +650,25 @@ async def update_ipam_sync_config_api(body: IpamSyncConfigUpdate, request: Reque
 
 
 @router.post("/api/ipam/prefixes", status_code=201, dependencies=[Depends(_require_admin_dep)])
+@scoped("admin")
 async def create_ipam_prefix_api(body: IpamPrefixCreate, request: Request):
     """Define a subnet in the built-in Plexus IPAM source."""
     try:
         import ipaddress as _ip
 
-        _ip.ip_network(body.subnet, strict=False)
+        subnet_key = str(_ip.ip_network(body.subnet, strict=False))
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid subnet CIDR") from None
     await enforce_validation_rules(
         "prefix", {"subnet": body.subnet, "vrf": body.vrf, "description": body.description, "notes": body.notes}
     )
     await check_device_values({"tenant_id": body.tenant_id})
+    namespace_id = await resolve_prefix_namespace(body.namespace_id, body.vrf)
 
     builtin = await db.get_or_create_builtin_ipam_source()
+    # Unique per namespace and VRF (migration 0110).
+    if await db.find_namespace_prefix(namespace_id, body.vrf, subnet_key, builtin["id"]) is not None:
+        raise HTTPException(status_code=409, detail="Subnet already defined in this namespace and VRF")
     prefix = await db.create_ipam_prefix(
         source_id=builtin["id"],
         subnet=body.subnet,
@@ -539,6 +676,7 @@ async def create_ipam_prefix_api(body: IpamPrefixCreate, request: Request):
         vrf=body.vrf,
         notes=body.notes,
         tenant_id=body.tenant_id,
+        namespace_id=namespace_id,
     )
     if not prefix:
         raise HTTPException(status_code=409, detail="Subnet already defined")
@@ -554,6 +692,7 @@ async def create_ipam_prefix_api(body: IpamPrefixCreate, request: Request):
 
 
 @router.delete("/api/ipam/prefixes/{prefix_id}", dependencies=[Depends(_require_admin_dep)])
+@scoped("admin")
 async def delete_ipam_prefix_api(prefix_id: int, request: Request):
     """Remove a locally-defined subnet prefix."""
     deleted = await db.delete_ipam_prefix(prefix_id)
@@ -575,6 +714,7 @@ async def delete_ipam_prefix_api(prefix_id: int, request: Request):
     status_code=201,
     dependencies=[Depends(_require_admin_dep)],
 )
+@scoped("admin")
 async def create_ipam_allocation_api(subnet: str, body: IpamAllocationCreate, request: Request):
     """Manually assign an IP address within a subnet."""
     try:
@@ -615,6 +755,7 @@ async def create_ipam_allocation_api(subnet: str, body: IpamAllocationCreate, re
 
 
 @router.patch("/api/ipam/prefixes/{prefix_id}", dependencies=[Depends(_require_admin_dep)])
+@scoped("admin")
 async def set_ipam_prefix_tenant_api(prefix_id: int, body: IpamTenantSet, request: Request):
     """Set or clear the tenant of a prefix (of any source)."""
     await check_device_values({"tenant_id": body.tenant_id})
@@ -632,6 +773,7 @@ async def set_ipam_prefix_tenant_api(prefix_id: int, body: IpamTenantSet, reques
 
 
 @router.patch("/api/ipam/allocations/{allocation_id}", dependencies=[Depends(_require_admin_dep)])
+@scoped("admin")
 async def set_ipam_allocation_tenant_api(allocation_id: int, body: IpamTenantSet, request: Request):
     """Set or clear the tenant of an IP allocation (of any source)."""
     await check_device_values({"tenant_id": body.tenant_id})
@@ -649,6 +791,7 @@ async def set_ipam_allocation_tenant_api(allocation_id: int, body: IpamTenantSet
 
 
 @router.delete("/api/ipam/allocations/{allocation_id}", dependencies=[Depends(_require_admin_dep)])
+@scoped("admin")
 async def delete_ipam_allocation_api(allocation_id: int, request: Request):
     """Remove a manually-defined IP allocation."""
     deleted = await db.delete_ipam_allocation(allocation_id)
@@ -674,6 +817,7 @@ async def delete_ipam_allocation_api(allocation_id: int, request: Request):
     "/api/ipam/sources/{source_id}/reconcile",
     dependencies=[Depends(_require_admin_dep)],
 )
+@scoped("admin")
 async def reconcile_ipam_source_api(source_id: int, request: Request):
     """Run a reconciliation pass for an external IPAM source."""
     session = _get_session(request) or {}
@@ -695,6 +839,7 @@ async def reconcile_ipam_source_api(source_id: int, request: Request):
 
 
 @router.get("/api/ipam/reconciliation/runs")
+@scope_exempt("reconciliation runs of the shared IPAM sources: counts only, no host or address data")
 async def list_reconciliation_runs_api(
     source_id: int | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=500),
@@ -704,7 +849,9 @@ async def list_reconciliation_runs_api(
 
 
 @router.get("/api/ipam/reconciliation/diffs")
+@scoped("list")
 async def list_reconciliation_diffs_api(
+    request: Request,
     source_id: int | None = Query(default=None),
     run_id: int | None = Query(default=None),
     open_only: bool = Query(default=True),
@@ -716,6 +863,9 @@ async def list_reconciliation_diffs_api(
         open_only=open_only,
         limit=limit,
     )
+    view = await subnet_scope(request)
+    if view is not None:
+        diffs = [d for d in diffs if view.has_address(str(d.get("address") or ""))]
     return {"diffs": diffs, "count": len(diffs)}
 
 
@@ -723,6 +873,7 @@ async def list_reconciliation_diffs_api(
     "/api/ipam/reconciliation/diffs/{diff_id}/resolve",
     dependencies=[Depends(_require_admin_dep)],
 )
+@scoped("admin")
 async def resolve_reconciliation_diff_api(
     diff_id: int,
     body: IpamReconciliationResolve,
@@ -763,6 +914,7 @@ async def resolve_reconciliation_diff_api(
     status_code=201,
     dependencies=[Depends(_require_admin_dep)],
 )
+@scoped("admin")
 async def allocate_ip_api(body: IpamAllocateRequest, request: Request):
     """Reserve the next available IP in a subnet.
 
@@ -814,6 +966,7 @@ async def allocate_ip_api(body: IpamAllocateRequest, request: Request):
     "/api/ipam/allocate/{allocation_id}/commit",
     dependencies=[Depends(_require_admin_dep)],
 )
+@scoped("admin")
 async def commit_allocation_api(allocation_id: int, request: Request):
     """Promote a pending allocation into the built-in (or original) IPAM source."""
     pending = await db.get_pending_allocation(allocation_id)
@@ -862,6 +1015,7 @@ async def commit_allocation_api(allocation_id: int, request: Request):
     "/api/ipam/allocate/{allocation_id}/release",
     dependencies=[Depends(_require_admin_dep)],
 )
+@scoped("admin")
 async def release_allocation_api(allocation_id: int, request: Request):
     """Release a pending allocation (rollback). Idempotent on already-released rows."""
     pending = await db.get_pending_allocation(allocation_id)
@@ -886,12 +1040,22 @@ async def release_allocation_api(allocation_id: int, request: Request):
 
 
 @router.get("/api/ipam/allocate/pending")
+@scoped("list")
 async def list_pending_allocations_api(
+    request: Request,
     state: str | None = Query(default=None),
     include_expired: bool = Query(default=False),
     limit: int = Query(default=200, ge=1, le=1000),
 ):
-    rows = await db.list_pending_allocations(state=state, include_expired=include_expired, limit=limit)
+    view = await subnet_scope(request)
+    rows = await db.list_pending_allocations(
+        state=state,
+        include_expired=include_expired,
+        limit=limit,
+        **({} if view is None else {"subnets": view.subnets}),
+    )
+    if view is not None:
+        rows = [r for r in rows if view.has_subnet(str(r.get("subnet") or ""), str(r.get("vrf_name") or ""))]
     return {"allocations": rows, "count": len(rows)}
 
 
@@ -901,7 +1065,9 @@ async def list_pending_allocations_api(
 
 
 @router.get("/api/ipam/history/{address}")
+@scoped("address")
 async def get_ip_history_api(
+    request: Request,
     address: str,
     vrf: str = Query(default=""),
     limit: int = Query(default=100, ge=1, le=1000),
@@ -911,12 +1077,19 @@ async def get_ip_history_api(
         ipaddress.ip_address(address)
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid IP address") from None
-    rows = await db.get_ip_history(address, vrf_name=vrf, limit=limit)
+    view = await subnet_scope(request)
+    rows = (
+        []
+        if view is not None and not view.has_address(address, vrf)
+        else await db.get_ip_history(address, vrf_name=vrf, limit=limit)
+    )
     return {"address": address, "vrf": vrf, "history": rows, "count": len(rows)}
 
 
 @router.get("/api/ipam/history/{address}/at")
+@scoped("address")
 async def get_ip_owner_at_api(
+    request: Request,
     address: str,
     when: str = Query(..., description="ISO-8601 timestamp"),
     vrf: str = Query(default=""),
@@ -926,19 +1099,30 @@ async def get_ip_owner_at_api(
         ipaddress.ip_address(address)
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid IP address") from None
-    row = await db.find_ip_owner_at(address, when, vrf_name=vrf)
+    view = await subnet_scope(request)
+    row = (
+        None
+        if view is not None and not view.has_address(address, vrf)
+        else await db.find_ip_owner_at(address, when, vrf_name=vrf)
+    )
     return {"address": address, "vrf": vrf, "when": when, "owner": row}
 
 
 @router.get("/api/ipam/history/host/{hostname}")
-async def get_history_for_hostname_api(hostname: str, limit: int = Query(default=200, ge=1, le=2000)):
+@scoped("list")
+async def get_history_for_hostname_api(request: Request, hostname: str, limit: int = Query(default=200, ge=1, le=2000)):
     """All IPs ever associated with a hostname."""
     rows = await db.list_ip_history_for_hostname(hostname, limit=limit)
+    view = await subnet_scope(request)
+    if view is not None:
+        rows = [r for r in rows if view.has_address(str(r.get("address") or ""), str(r.get("vrf_name") or ""))]
     return {"hostname": hostname, "history": rows, "count": len(rows)}
 
 
 @router.get("/api/ipam/utilization")
+@scoped("list")
 async def list_subnet_utilization_api(
+    request: Request,
     subnet: str | None = Query(default=None),
     vrf: str | None = Query(default=None),
     since: str | None = Query(default=None),
@@ -946,7 +1130,17 @@ async def list_subnet_utilization_api(
     limit: int = Query(default=500, ge=1, le=5000),
 ):
     """Time-series subnet utilization snapshots, newest first."""
-    rows = await db.list_subnet_utilization(subnet=subnet, vrf_name=vrf, since=since, until=until, limit=limit)
+    view = await subnet_scope(request)
+    rows = await db.list_subnet_utilization(
+        subnet=subnet,
+        vrf_name=vrf,
+        since=since,
+        until=until,
+        limit=limit,
+        **({} if view is None else {"subnets": view.subnets}),
+    )
+    if view is not None:
+        rows = [r for r in rows if view.has_subnet(str(r.get("subnet") or ""), str(r.get("vrf_name") or ""))]
     return {"snapshots": rows, "count": len(rows)}
 
 
@@ -955,6 +1149,7 @@ async def list_subnet_utilization_api(
     status_code=201,
     dependencies=[Depends(_require_admin_dep)],
 )
+@scoped("admin")
 async def snapshot_utilization_api(
     request: Request,
     subnet: str | None = Query(default=None),

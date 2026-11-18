@@ -150,6 +150,36 @@ def _range(site: str, interface: str, name: str, subnet: str, vlan: str = "") ->
     }
 
 
+def _email(name: str) -> str:
+    return f"{name.lower().replace(' ', '.')}@example.com"
+
+
+def _disconnected_user(ident: str, name: str, last_connected: str) -> dict:
+    """A user of ``accountSnapshot.users`` who is not connected now."""
+    return {
+        "id": ident,
+        "name": name,
+        "connectivityStatus": "disconnected",
+        "operationalStatus": "active",
+        "deviceName": f"LT-{name.split()[0].upper()}",
+        "lastConnected": last_connected,
+        "popName": None,
+        "remoteIP": None,
+        "internalIP": None,
+        "info": {"name": name, "status": "active", "email": _email(name), "origin": "LDAP", "authMethod": "SSO"},
+        "recentConnections": [],
+    }
+
+
+def _vpn_user(ident: str, name: str) -> dict:
+    """A ``vpnUser`` entity, as ``entityLookup`` returns it."""
+    return {
+        "entity": {"id": ident, "name": name, "type": "vpnUser"},
+        "description": "",
+        "helperFields": {"email": _email(name)},
+    }
+
+
 def _user(ident: str, name: str, pop: str, vpn_ip: str, public_ip: str, os_type: str, *, office: bool = False) -> dict:
     return {
         "id": ident,
@@ -177,7 +207,7 @@ def _user(ident: str, name: str, pop: str, vpn_ip: str, public_ip: str, os_type:
         "info": {
             "name": name,
             "status": "active",
-            "email": f"{name.lower().replace(' ', '.')}@example.com",
+            "email": _email(name),
             "phoneNumber": "",
             "origin": "LDAP",
             "authMethod": "SSO",
@@ -1022,15 +1052,24 @@ def build_sample_raw() -> dict[str, Any]:
         _user("9002", "Sam Okafor", "Ashburn", "10.88.0.12", "198.51.100.12", "OS_MAC"),
         _user("9003", "Priya Nair", "Ashburn", "10.88.0.13", "198.51.100.10", "OS_WINDOWS", office=True),
         _user("9004", "Lee Park", "New York", "10.88.0.14", "198.51.100.204", "OS_WINDOWS"),
+        # Registered but not connected now: no tunnel, so no node and no
+        # address; only a row of the Cato Cloud's "All users" table.
+        _disconnected_user("9005", "Morgan Ellis", "2026-09-28T16:20:00Z"),
     ]
+    # Every registered SDP user (``entityLookup`` of type ``vpnUser``),
+    # connected or not: Jordan Blake is listed only here.
+    vpn_users = [_vpn_user(u["id"], u["name"]) for u in users] + [_vpn_user("9006", "Jordan Blake")]
     wan_firewall, internet_firewall = _firewalls()
     return {
         "account": {"id": "sample", "name": "Sample Cato Account"},
         "timestamp": "2026-10-01T13:00:00Z",
         "sites": sites,
         "users": users,
+        "vpn_users": vpn_users,
+        # What Cato returns by ID for the registered users not in ``users``.
+        "vpn_user_details": [_disconnected_user("9006", "Jordan Blake", "2026-09-12T09:05:00Z")],
         # The latest Client Connectivity Policy report of each user device.
-        "client_reports": _client_reports(users),
+        "client_reports": _client_reports(users[:4]),
         "ranges": ranges,
         "interfaces": interfaces,
         # Read, and no site has a BGP peer: the routes are the ranges.

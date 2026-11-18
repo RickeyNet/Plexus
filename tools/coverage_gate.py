@@ -24,6 +24,9 @@ DEFAULT_RULES = {
     # Measured by tests/test_job_inputs.py (93%); do not lower it to land
     # a change.
     "netcontrol/job_inputs.py": 90.0,
+    # The shared four-eyes approval rules (jobs and deployments). Measured
+    # by tests/test_job_approvals.py (100%); do not lower it to land a change.
+    "netcontrol/approvals.py": 95.0,
     # AI access (MCP): the token check, the dispatcher every call goes
     # through and the secret masking. Floors sit a few points under what
     # tests/test_mcp_*.py measure; do not lower them to land a change.
@@ -169,6 +172,11 @@ DEFAULT_RULES = {
     "netcontrol/integrations/apc/firmware.py": 95.0,
     "netcontrol/integrations/apc/nmc_cli.py": 92.0,
     "netcontrol/integrations/apc/upgrade.py": 80.0,
+    # APC Smart-UPS monitoring: the PowerNet-MIB readings and alerts, and the
+    # trap decoding / host match / alert / re-poll path. Measured by
+    # tests/test_apc_ups*.py (100%, 100%); do not lower them to land a change.
+    "netcontrol/integrations/apc/snmp.py": 95.0,
+    "netcontrol/integrations/apc/traps.py": 95.0,
 }
 
 

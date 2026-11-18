@@ -14,6 +14,12 @@ The observed side is read, never polled: the ``topology_links`` rows with
 ``protocol = 'bgp'`` that SNMP neighbor discovery stores. A device whose
 neighbors were never discovered is ``no_data``, not ``missing``. See
 ``docs/routing.md``.
+
+Object scope: autonomous systems are shared when untenanted (read by every
+scoped caller, changed by unrestricted callers only) and otherwise follow
+their tenant; routing instances, peer groups and peerings follow their
+device (``routing_instance``). A scoped caller's lists, counts, compliance
+and suggestions cover their devices only.
 """
 
 from __future__ import annotations
@@ -29,6 +35,17 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from netcontrol.custom_fields import CustomFieldError, clean_text
 from netcontrol.network_objects import DESCRIPTION_MAX, clean_description
+from netcontrol.object_scope import (
+    filter_rows,
+    readable_host_ids,
+    request_scope,
+    require_host,
+    require_model_write,
+    require_new_row,
+    require_row,
+    scoped,
+)
+from netcontrol.routes.custom_fields import custom_list, with_custom_data
 from netcontrol.routes.shared import _audit, _corr_id, _session_user
 from netcontrol.routing import (
     COMPLIANCE_STATES,
@@ -235,25 +252,89 @@ async def _check_host(fields: _Fields, field: str, host_id: int | None) -> dict 
     return host
 
 
+# ── Object scope ─────────────────────────────────────────────────────────────
+
+
+async def _hide_unreadable_host(request: Request, fields: _Fields, field: str, host_id: int | None) -> None:
+    """For a scoped caller, a device they cannot read is reported like an
+    unknown one (``_check_host``'s message)."""
+    readable = await readable_host_ids(request)
+    if readable is not None and host_id is not None and int(host_id) not in readable and field not in fields.errors:
+        fields.add(field, "No device has this id.")
+
+
+async def _instance_for_write(request: Request, fields: _Fields, instance_id: int) -> None:
+    """The routing instance a peer group or peering is created in: unknown
+    or unreadable -> the field error an unknown id gets; readable but not
+    writable -> 403 (once the other fields are valid)."""
+    instance = await db.get_routing_instance(instance_id)
+    if instance is None or not await filter_rows("routing_instance", [instance], request):
+        fields.add("routing_instance_id", "No routing instance has this id.")
+
+
+async def _require_instance_write(request: Request, instance_id: int) -> None:
+    await require_row(
+        request,
+        "routing_instance",
+        await db.get_routing_instance(instance_id),
+        write=True,
+        not_found="Routing instance not found",
+    )
+
+
+async def _scoped_as_counts(request: Request, rows: list[dict]) -> list[dict]:
+    """Autonomous systems with ``instance_count`` and ``peering_count``
+    counting only the caller's routing instances and peerings (unchanged
+    for an unrestricted caller)."""
+    if (await request_scope(request)).unrestricted:
+        return rows
+    instances: dict[int, int] = {}
+    for instance in await filter_rows("routing_instance", await db.list_routing_instances(), request):
+        key = int(instance["autonomous_system_id"])
+        instances[key] = instances.get(key, 0) + 1
+    peerings: dict[int, int] = {}
+    for peering in await filter_rows("routing_instance", await db.list_bgp_peerings(), request):
+        if peering.get("remote_asn_id") is not None:
+            key = int(peering["remote_asn_id"])
+            peerings[key] = peerings.get(key, 0) + 1
+    return [
+        {**r, "instance_count": instances.get(int(r["id"]), 0), "peering_count": peerings.get(int(r["id"]), 0)}
+        for r in rows
+    ]
+
+
 # ── Autonomous systems ───────────────────────────────────────────────────────
 
 
 @router.get(f"{PREFIX}/autonomous-systems")
+@scoped("list")
 async def list_autonomous_systems(
+    request: Request,
     tenant_id: int | None = Query(default=None),
     search: str | None = Query(default=None, max_length=_SEARCH_MAX),
 ) -> dict:
-    return {"autonomous_systems": await db.list_autonomous_systems(tenant_id=tenant_id, search=_search(search))}
+    rows = await db.list_autonomous_systems(tenant_id=tenant_id, search=_search(search))
+    rows = await _scoped_as_counts(request, await filter_rows("autonomous_system", rows, request))
+    return {"autonomous_systems": await custom_list("autonomous_system", rows, request)}
 
 
 @router.get(f"{PREFIX}/autonomous-systems/{{as_id}}")
-async def get_autonomous_system(as_id: int) -> dict:
-    record = _found(await db.get_autonomous_system(as_id), "Autonomous system")
-    return {
-        **record,
-        "routing_instances": await db.list_routing_instances(asn=record["asn"]),
-        "peerings": await db.list_bgp_peerings(asn=record["asn"]),
-    }
+@scoped("object")
+async def get_autonomous_system(as_id: int, request: Request) -> dict:
+    record = await require_row(
+        request, "autonomous_system", await db.get_autonomous_system(as_id), not_found="Autonomous system not found"
+    )
+    record = (await _scoped_as_counts(request, [record]))[0]
+    return await with_custom_data(
+        "autonomous_system",
+        {
+            **record,
+            "routing_instances": await filter_rows(
+                "routing_instance", await db.list_routing_instances(asn=record["asn"]), request
+            ),
+            "peerings": await filter_rows("routing_instance", await db.list_bgp_peerings(asn=record["asn"]), request),
+        },
+    )
 
 
 async def _as_values(body: AutonomousSystemCreate | AutonomousSystemUpdate, fields: _Fields, partial: bool) -> dict:
@@ -273,11 +354,13 @@ async def _as_values(body: AutonomousSystemCreate | AutonomousSystemUpdate, fiel
 
 
 @router.post(f"{PREFIX}/autonomous-systems", status_code=201)
+@scoped("create")
 async def create_autonomous_system(body: AutonomousSystemCreate, request: Request) -> dict:
     fields = _Fields()
     asn = fields.run("asn", lambda: clean_asn(body.asn))
     values = await _as_values(body, fields, partial=False)
     fields.raise_if_any()
+    await require_new_row(request, "autonomous_system", {"tenant_id": values.get("tenant_id")})
     try:
         record = await db.create_autonomous_system(asn=asn, user=_session_user(request), **values)
     except ValueError as exc:
@@ -287,11 +370,20 @@ async def create_autonomous_system(body: AutonomousSystemCreate, request: Reques
 
 
 @router.put(f"{PREFIX}/autonomous-systems/{{as_id}}")
+@scoped("object")
 async def update_autonomous_system(as_id: int, body: AutonomousSystemUpdate, request: Request) -> dict:
-    current = _found(await db.get_autonomous_system(as_id), "Autonomous system")
+    current = await require_row(
+        request,
+        "autonomous_system",
+        await db.get_autonomous_system(as_id),
+        write=True,
+        not_found="Autonomous system not found",
+    )
     fields = _Fields()
     values = await _as_values(body, fields, partial=True)
     fields.raise_if_any()
+    if "tenant_id" in values and values["tenant_id"] != current.get("tenant_id"):
+        await require_new_row(request, "autonomous_system", {"tenant_id": values["tenant_id"]})
     record = _found(
         await db.update_autonomous_system(as_id, values=values, user=_session_user(request)), "Autonomous system"
     )
@@ -300,8 +392,15 @@ async def update_autonomous_system(as_id: int, body: AutonomousSystemUpdate, req
 
 
 @router.delete(f"{PREFIX}/autonomous-systems/{{as_id}}")
+@scoped("object")
 async def delete_autonomous_system(as_id: int, request: Request) -> dict:
-    record = _found(await db.get_autonomous_system(as_id), "Autonomous system")
+    record = await require_row(
+        request,
+        "autonomous_system",
+        await db.get_autonomous_system(as_id),
+        write=True,
+        not_found="Autonomous system not found",
+    )
     usage = await db.autonomous_system_usage(as_id)
     blocking = usage["routing_instances"] + usage["bgp_peerings"]
     if blocking:
@@ -326,27 +425,34 @@ async def delete_autonomous_system(as_id: int, request: Request) -> dict:
 
 
 @router.get(f"{PREFIX}/instances")
+@scoped("list")
 async def list_routing_instances(
+    request: Request,
     host_id: int | None = Query(default=None),
     asn: str | None = Query(default=None, max_length=20),
     status: str | None = Query(default=None, max_length=20),
     tenant_id: int | None = Query(default=None),
     search: str | None = Query(default=None, max_length=_SEARCH_MAX),
 ) -> dict:
-    return {
-        "routing_instances": await db.list_routing_instances(
-            host_id=host_id,
-            asn=_asn_filter(asn),
-            status=_status_filter(status, INSTANCE_STATUSES),
-            tenant_id=tenant_id,
-            search=_search(search),
-        )
-    }
+    rows = await db.list_routing_instances(
+        host_id=host_id,
+        asn=_asn_filter(asn),
+        status=_status_filter(status, INSTANCE_STATUSES),
+        tenant_id=tenant_id,
+        search=_search(search),
+    )
+    return {"routing_instances": await filter_rows("routing_instance", rows, request)}
 
 
 @router.get(f"{PREFIX}/instances/{{instance_id}}")
-async def get_routing_instance(instance_id: int) -> dict:
-    record = _found(await db.get_routing_instance(instance_id), "Routing instance")
+@scoped("object")
+async def get_routing_instance(instance_id: int, request: Request) -> dict:
+    record = await require_row(
+        request,
+        "routing_instance",
+        await db.get_routing_instance(instance_id),
+        not_found="Routing instance not found",
+    )
     return {
         **record,
         "peer_groups": await db.list_bgp_peer_groups(routing_instance_id=instance_id),
@@ -379,11 +485,15 @@ async def _instance_values(body: InstanceBody, fields: _Fields, partial: bool) -
 
 
 @router.post(f"{PREFIX}/instances", status_code=201)
+@scoped("host")
 async def create_routing_instance(body: InstanceCreate, request: Request) -> dict:
     fields = _Fields()
     await _check_host(fields, "host_id", body.host_id)
+    await _hide_unreadable_host(request, fields, "host_id", body.host_id)
     values = await _instance_values(body, fields, partial=False)
     fields.raise_if_any()
+    if (await request_scope(request)).restricted:
+        await require_host(request, body.host_id, write=True)
     try:
         record = await db.create_routing_instance(host_id=body.host_id, values=values, user=_session_user(request))
     except ValueError as exc:
@@ -395,8 +505,9 @@ async def create_routing_instance(body: InstanceCreate, request: Request) -> dic
 
 
 @router.put(f"{PREFIX}/instances/{{instance_id}}")
+@scoped("object")
 async def update_routing_instance(instance_id: int, body: InstanceBody, request: Request) -> dict:
-    _found(await db.get_routing_instance(instance_id), "Routing instance")
+    await _require_instance_write(request, instance_id)
     fields = _Fields()
     values = await _instance_values(body, fields, partial=True)
     fields.raise_if_any()
@@ -410,8 +521,15 @@ async def update_routing_instance(instance_id: int, body: InstanceBody, request:
 
 
 @router.delete(f"{PREFIX}/instances/{{instance_id}}")
+@scoped("object")
 async def delete_routing_instance(instance_id: int, request: Request) -> dict:
-    record = _found(await db.get_routing_instance(instance_id), "Routing instance")
+    record = await require_row(
+        request,
+        "routing_instance",
+        await db.get_routing_instance(instance_id),
+        write=True,
+        not_found="Routing instance not found",
+    )
     await db.delete_routing_instance(instance_id)
     await _audit_write(
         request,
@@ -425,21 +543,25 @@ async def delete_routing_instance(instance_id: int, request: Request) -> dict:
 
 
 @router.get(f"{PREFIX}/peer-groups")
+@scoped("list")
 async def list_bgp_peer_groups(
+    request: Request,
     routing_instance_id: int | None = Query(default=None),
     host_id: int | None = Query(default=None),
     search: str | None = Query(default=None, max_length=_SEARCH_MAX),
 ) -> dict:
-    return {
-        "peer_groups": await db.list_bgp_peer_groups(
-            routing_instance_id=routing_instance_id, host_id=host_id, search=_search(search)
-        )
-    }
+    rows = await db.list_bgp_peer_groups(
+        routing_instance_id=routing_instance_id, host_id=host_id, search=_search(search)
+    )
+    return {"peer_groups": await filter_rows("routing_instance", rows, request)}
 
 
 @router.get(f"{PREFIX}/peer-groups/{{group_id}}")
-async def get_bgp_peer_group(group_id: int) -> dict:
-    return _found(await db.get_bgp_peer_group(group_id), "Peer group")
+@scoped("object:nodata")
+async def get_bgp_peer_group(group_id: int, request: Request) -> dict:
+    return await require_row(
+        request, "routing_instance", await db.get_bgp_peer_group(group_id), not_found="Peer group not found"
+    )
 
 
 async def _group_values(body: PeerGroupBody, fields: _Fields, partial: bool) -> dict:
@@ -459,12 +581,13 @@ async def _group_values(body: PeerGroupBody, fields: _Fields, partial: bool) -> 
 
 
 @router.post(f"{PREFIX}/peer-groups", status_code=201)
+@scoped("object")
 async def create_bgp_peer_group(body: PeerGroupCreate, request: Request) -> dict:
     fields = _Fields()
-    if await db.get_routing_instance(body.routing_instance_id) is None:
-        fields.add("routing_instance_id", "No routing instance has this id.")
+    await _instance_for_write(request, fields, body.routing_instance_id)
     values = await _group_values(body, fields, partial=False)
     fields.raise_if_any()
+    await _require_instance_write(request, body.routing_instance_id)
     try:
         record = await db.create_bgp_peer_group(
             routing_instance_id=body.routing_instance_id, values=values, user=_session_user(request)
@@ -476,8 +599,11 @@ async def create_bgp_peer_group(body: PeerGroupCreate, request: Request) -> dict
 
 
 @router.put(f"{PREFIX}/peer-groups/{{group_id}}")
+@scoped("object")
 async def update_bgp_peer_group(group_id: int, body: PeerGroupBody, request: Request) -> dict:
-    _found(await db.get_bgp_peer_group(group_id), "Peer group")
+    await require_row(
+        request, "routing_instance", await db.get_bgp_peer_group(group_id), write=True, not_found="Peer group not found"
+    )
     fields = _Fields()
     values = await _group_values(body, fields, partial=True)
     fields.raise_if_any()
@@ -491,8 +617,11 @@ async def update_bgp_peer_group(group_id: int, body: PeerGroupBody, request: Req
 
 
 @router.delete(f"{PREFIX}/peer-groups/{{group_id}}")
+@scoped("object")
 async def delete_bgp_peer_group(group_id: int, request: Request) -> dict:
-    record = _found(await db.get_bgp_peer_group(group_id), "Peer group")
+    record = await require_row(
+        request, "routing_instance", await db.get_bgp_peer_group(group_id), write=True, not_found="Peer group not found"
+    )
     await db.delete_bgp_peer_group(group_id)
     await _audit_write(request, "bgp_peer_group_delete", f"id={group_id} name={record['name']}")
     return {"ok": True}
@@ -502,7 +631,9 @@ async def delete_bgp_peer_group(group_id: int, request: Request) -> dict:
 
 
 @router.get(f"{PREFIX}/peerings")
+@scoped("list")
 async def list_bgp_peerings(
+    request: Request,
     host_id: int | None = Query(default=None),
     routing_instance_id: int | None = Query(default=None),
     asn: str | None = Query(default=None, max_length=20),
@@ -510,24 +641,30 @@ async def list_bgp_peerings(
     tenant_id: int | None = Query(default=None),
     search: str | None = Query(default=None, max_length=_SEARCH_MAX),
 ) -> dict:
-    return {
-        "peerings": await db.list_bgp_peerings(
-            host_id=host_id,
-            routing_instance_id=routing_instance_id,
-            asn=_asn_filter(asn),
-            status=_status_filter(status, PEERING_STATUSES),
-            tenant_id=tenant_id,
-            search=_search(search),
-        )
-    }
+    rows = await db.list_bgp_peerings(
+        host_id=host_id,
+        routing_instance_id=routing_instance_id,
+        asn=_asn_filter(asn),
+        status=_status_filter(status, PEERING_STATUSES),
+        tenant_id=tenant_id,
+        search=_search(search),
+    )
+    rows = await filter_rows("routing_instance", rows, request)
+    return {"peerings": await custom_list("bgp_peering", rows, request)}
 
 
 @router.get(f"{PREFIX}/peerings/{{peering_id}}")
-async def get_bgp_peering(peering_id: int) -> dict:
-    return _found(await db.get_bgp_peering(peering_id), "BGP peering")
+@scoped("object")
+async def get_bgp_peering(peering_id: int, request: Request) -> dict:
+    record = await require_row(
+        request, "routing_instance", await db.get_bgp_peering(peering_id), not_found="BGP peering not found"
+    )
+    return await with_custom_data("bgp_peering", record)
 
 
-async def _peering_values(body: PeeringBody, fields: _Fields, instance_id: int, current: dict | None) -> dict:
+async def _peering_values(
+    body: PeeringBody, fields: _Fields, instance_id: int, current: dict | None, request: Request | None = None
+) -> dict:
     """The validated columns of a create (``current`` None) or an update
     (only the keys sent). The addresses are checked as a pair, with the
     stored one standing in for a key not sent."""
@@ -560,6 +697,8 @@ async def _peering_values(body: PeeringBody, fields: _Fields, instance_id: int, 
         values["peer_group_id"] = body.peer_group_id
     if not partial or "remote_host_id" in sent:
         await _check_host(fields, "remote_host_id", body.remote_host_id)
+        if request is not None:
+            await _hide_unreadable_host(request, fields, "remote_host_id", body.remote_host_id)
         values["remote_host_id"] = body.remote_host_id
     if not partial or "status" in sent:
         values["status"] = fields.run("status", lambda: clean_status(body.status or "active", PEERING_STATUSES))
@@ -575,12 +714,13 @@ async def _peering_values(body: PeeringBody, fields: _Fields, instance_id: int, 
 
 
 @router.post(f"{PREFIX}/peerings", status_code=201)
+@scoped("object")
 async def create_bgp_peering(body: PeeringCreate, request: Request) -> dict:
     fields = _Fields()
-    if await db.get_routing_instance(body.routing_instance_id) is None:
-        fields.add("routing_instance_id", "No routing instance has this id.")
-    values = await _peering_values(body, fields, body.routing_instance_id, None)
+    await _instance_for_write(request, fields, body.routing_instance_id)
+    values = await _peering_values(body, fields, body.routing_instance_id, None, request)
     fields.raise_if_any()
+    await _require_instance_write(request, body.routing_instance_id)
     try:
         record = await db.create_bgp_peering(
             routing_instance_id=body.routing_instance_id, values=values, user=_session_user(request)
@@ -596,10 +736,13 @@ async def create_bgp_peering(body: PeeringCreate, request: Request) -> dict:
 
 
 @router.put(f"{PREFIX}/peerings/{{peering_id}}")
+@scoped("object")
 async def update_bgp_peering(peering_id: int, body: PeeringBody, request: Request) -> dict:
-    current = _found(await db.get_bgp_peering(peering_id), "BGP peering")
+    current = await require_row(
+        request, "routing_instance", await db.get_bgp_peering(peering_id), write=True, not_found="BGP peering not found"
+    )
     fields = _Fields()
-    values = await _peering_values(body, fields, current["routing_instance_id"], current)
+    values = await _peering_values(body, fields, current["routing_instance_id"], current, request)
     fields.raise_if_any()
     try:
         record = await db.update_bgp_peering(peering_id, values=values, user=_session_user(request))
@@ -611,8 +754,11 @@ async def update_bgp_peering(peering_id: int, body: PeeringBody, request: Reques
 
 
 @router.delete(f"{PREFIX}/peerings/{{peering_id}}")
+@scoped("object")
 async def delete_bgp_peering(peering_id: int, request: Request) -> dict:
-    record = _found(await db.get_bgp_peering(peering_id), "BGP peering")
+    record = await require_row(
+        request, "routing_instance", await db.get_bgp_peering(peering_id), write=True, not_found="BGP peering not found"
+    )
     await db.delete_bgp_peering(peering_id)
     await _audit_write(request, "bgp_peering_delete", f"id={peering_id} remote={record['remote_address']}")
     return {"ok": True}
@@ -639,19 +785,20 @@ async def _observed(host_ids: list[int]) -> list[dict]:
     return neighbors
 
 
-async def compliance_report(host_id: int | None = None) -> dict:
+async def compliance_report(host_id: int | None = None, host_ids: frozenset[int] | None = None) -> dict:
     """Every intended peering against the observed neighbors: one row per
     peering (and per unexpected neighbor), the counts per state and per
     device. ``host_id``: one device, whose unexpected neighbors are reported
     even when it has no routing instance; otherwise every device with a
-    routing instance."""
+    routing instance (of ``host_ids`` when given: object scope)."""
     if host_id is not None:
         host = _found(await db.get_host(host_id), "Host")
         hosts: list[dict[str, Any]] = [{"id": int(host["id"]), "hostname": host.get("hostname") or ""}]
     else:
         seen: dict[int, str] = {}
         for instance in await db.list_routing_instances():
-            seen.setdefault(instance["host_id"], instance["hostname"])
+            if host_ids is None or int(instance["host_id"]) in host_ids:
+                seen.setdefault(instance["host_id"], instance["hostname"])
         hosts = [{"id": hid, "hostname": name} for hid, name in seen.items()]
     ids = [int(h["id"]) for h in hosts]
     peerings = await db.list_bgp_peerings(host_ids=ids)
@@ -674,7 +821,9 @@ async def compliance_report(host_id: int | None = None) -> dict:
 
 
 @router.get(f"{PREFIX}/compliance")
+@scoped("list")
 async def compliance(
+    request: Request,
     host_id: int | None = Query(default=None),
     state: str | None = Query(default=None, max_length=20),
 ) -> dict:
@@ -682,7 +831,9 @@ async def compliance(
     whole)."""
     if state and state not in COMPLIANCE_STATES:
         raise HTTPException(status_code=400, detail=f"state must be one of {', '.join(COMPLIANCE_STATES)}")
-    report = await compliance_report(host_id)
+    if host_id is not None:
+        await require_host(request, host_id)
+    report = await compliance_report(host_id, await readable_host_ids(request))
     if state:
         report["rows"] = [r for r in report["rows"] if r["state"] == state]
     return report
@@ -698,12 +849,14 @@ async def _unclaimed_neighbors(host_id: int) -> list[dict]:
 
 
 @router.get(f"{PREFIX}/suggestions")
-async def suggestions(host_id: int = Query()) -> dict:
+@scoped("host")
+async def suggestions(request: Request, host_id: int = Query()) -> dict:
     """What to record for a device from its observed neighbors: the
     neighbors without a peering, the AS numbers they name (and whether a
     record exists), and a ``default`` instance when the device has none.
     Nothing is created here."""
-    host = _found(await db.get_host(host_id), "Host")
+    host = await require_host(request, host_id)
+    readable = await readable_host_ids(request)
     discovered = await db.hosts_with_neighbor_discovery([host_id])
     neighbors = await _unclaimed_neighbors(host_id)
     instances = await db.list_routing_instances(host_id=host_id)
@@ -714,6 +867,8 @@ async def suggestions(host_id: int = Query()) -> dict:
             existing = await db.get_autonomous_system_by_asn(n["remote_asn"])
             asns[n["remote_asn"]] = existing["id"] if existing else None
         peer_host = await db.find_host_by_ip(n["remote_address"])
+        if peer_host and readable is not None and int(peer_host["id"]) not in readable:
+            peer_host = None  # a device outside the caller's scope is not named
         peerings.append(
             {
                 "remote_address": n["remote_address"],
@@ -750,13 +905,14 @@ async def _ensure_as(asn: int, user: str, created: list[dict]) -> int:
 
 
 @router.post(f"{PREFIX}/suggestions/accept", status_code=201)
+@scoped("host")
 async def accept_suggestions(body: SuggestionAccept, request: Request) -> dict:
     """Create the selected suggestions. Each peering's remote address must
     be an observed neighbor of the device without a peering; its status is
     ``planned`` or ``active``. Everything is checked before anything is
     created."""
     fields = _Fields()
-    host = _found(await db.get_host(body.host_id), "Host")
+    host = await require_host(request, body.host_id, write=True)
     user = _session_user(request)
     instance: dict | None = None
     if body.routing_instance_id is not None:
@@ -790,10 +946,17 @@ async def accept_suggestions(body: SuggestionAccept, request: Request) -> dict:
         asn = fields.run(f"{key}.remote_asn", bind(clean_asn, raw_asn, "Remote ASN"))
         status = fields.run(f"{key}.status", bind(clean_status, item.status, ("planned", "active")))
         await _check_host(fields, f"{key}.remote_host_id", item.remote_host_id)
+        await _hide_unreadable_host(request, fields, f"{key}.remote_host_id", item.remote_host_id)
         chosen.append({"remote_address": address, "asn": asn, "status": status, "remote_host_id": item.remote_host_id})
     if not body.peerings and instance is not None:
         fields.add("peerings", "Select at least one suggestion.")
     fields.raise_if_any()
+    if (await request_scope(request)).restricted:
+        # Autonomous systems are shared: a scoped caller uses existing ones only.
+        wanted = [p["asn"] for p in chosen] + ([new_instance["asn"]] if instance is None else [])
+        for asn in wanted:
+            if await db.get_autonomous_system_by_asn(asn) is None:
+                await require_model_write(request)
 
     created_as: list[dict] = []
     created_instance = None

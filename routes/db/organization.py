@@ -246,17 +246,35 @@ def _with_totals(nodes: list[dict], own_key: str, total_key: str) -> list[dict]:
     return nodes
 
 
-async def list_regions() -> list[dict]:
+async def _counts_by(table: str, column: str, ids: Iterable[int]) -> dict[int, int]:
+    """``column value -> rows`` of the rows of ``table`` (fixed names) whose
+    id is in ``ids``."""
+    wanted = sorted({int(i) for i in ids})
+    if not wanted:
+        return {}
+    rows = await _select(
+        f"SELECT {column} AS k, COUNT(*) AS n FROM {table} WHERE id IN ({_marks(wanted)}) GROUP BY {column}",  # nosec B608 - fixed names, placeholders only
+        tuple(wanted),
+    )
+    return {int(r["k"]): int(r["n"]) for r in rows if r["k"] is not None}
+
+
+async def list_regions(*, site_ids: Iterable[int] | None = None) -> list[dict]:
     """Every region in tree order (siblings by name), each with ``path``,
     ``depth``, ``site_count`` (its own sites), ``total_site_count`` (with
-    its descendants') and ``child_count``."""
+    its descendants') and ``child_count``. ``site_ids`` (object scope;
+    ``None``: all) counts only those sites."""
     rows = await _select(_REGION_SELECT + " ORDER BY lower(r.name), r.id")
     nodes = [{**_node(r), "site_count": int(r["site_count"]), "child_count": int(r["child_count"])} for r in rows]
+    if site_ids is not None:
+        own = await _counts_by("geo_sites", "region_id", site_ids)
+        for node in nodes:
+            node["site_count"] = own.get(node["id"], 0)
     return _with_totals(_tree_ordered(nodes), "site_count", "total_site_count")
 
 
-async def get_region(region_id: int) -> dict | None:
-    for region in await list_regions():
+async def get_region(region_id: int, *, site_ids: Iterable[int] | None = None) -> dict | None:
+    for region in await list_regions(site_ids=site_ids):
         if region["id"] == int(region_id):
             return region
     return None
@@ -309,16 +327,21 @@ _GROUP_SELECT = """
 """
 
 
-async def list_tenant_groups() -> list[dict]:
+async def list_tenant_groups(*, tenant_ids: Iterable[int] | None = None) -> list[dict]:
     """Every tenant group in tree order with ``path``, ``depth``,
-    ``tenant_count``, ``total_tenant_count`` and ``child_count``."""
+    ``tenant_count``, ``total_tenant_count`` and ``child_count``.
+    ``tenant_ids`` (object scope; ``None``: all) counts only those tenants."""
     rows = await _select(_GROUP_SELECT + " ORDER BY lower(g.name), g.id")
     nodes = [{**_node(r), "tenant_count": int(r["tenant_count"]), "child_count": int(r["child_count"])} for r in rows]
+    if tenant_ids is not None:
+        own = await _counts_by("tenants", "group_id", tenant_ids)
+        for node in nodes:
+            node["tenant_count"] = own.get(node["id"], 0)
     return _with_totals(_tree_ordered(nodes), "tenant_count", "total_tenant_count")
 
 
-async def get_tenant_group(group_id: int) -> dict | None:
-    for group in await list_tenant_groups():
+async def get_tenant_group(group_id: int, *, tenant_ids: Iterable[int] | None = None) -> dict | None:
+    for group in await list_tenant_groups(tenant_ids=tenant_ids):
         if group["id"] == int(group_id):
             return group
     return None
@@ -486,25 +509,45 @@ async def set_allocation_tenant(allocation_id: int, tenant_id: int | None) -> bo
 # ── Location tree ────────────────────────────────────────────────────────────
 
 
-async def get_location_tree() -> dict:
+def _ids_in(column: str, ids: Iterable[int] | None) -> tuple[str, tuple[int, ...]]:
+    """`` AND column IN (ids)`` and its parameters (``("", ())`` for
+    ``None``; an empty set matches nothing). ``column`` is fixed."""
+    if ids is None:
+        return "", ()
+    wanted = tuple(sorted({int(i) for i in ids}))
+    if not wanted:
+        return " AND 1 = 0", ()
+    return f" AND {column} IN ({_marks(wanted)})", wanted
+
+
+async def get_location_tree(*, site_ids: Iterable[int] | None = None, host_ids: Iterable[int] | None = None) -> dict:
     """Regions > sites > floors, with host counts.
 
     ``regions``: the top-level regions, each with ``children`` (regions),
     ``sites`` (its own) and ``host_count`` (hosts of its sites and its
     descendants' sites). ``unassigned_sites``: sites in no region. A site
     carries ``host_count`` (hosts whose site it is), its status, facility,
-    time zone, tenant and ``floors`` (``placed_device_count`` each)."""
-    regions = await list_regions()
+    time zone, tenant and ``floors`` (``placed_device_count`` each).
+
+    Object scope (``None``: all): ``site_ids`` keeps those sites,
+    ``host_ids`` counts (and counts as placed) only those hosts."""
+    regions = await list_regions(site_ids=site_ids)
+    site_sql, site_params = _ids_in("s.id", site_ids)
+    host_sql, host_params = _ids_in("h.id", host_ids)
+    placed_sql, _ = _ids_in("p.host_id", host_ids)
     sites = await _select(
-        """SELECT s.id, s.name, s.region_id, s.status, s.facility, s.time_zone, s.tenant_id, t.name AS tenant_name,
-                  (SELECT COUNT(*) FROM hosts h WHERE h.site_id = s.id) AS host_count
+        f"""SELECT s.id, s.name, s.region_id, s.status, s.facility, s.time_zone, s.tenant_id, t.name AS tenant_name,
+                  (SELECT COUNT(*) FROM hosts h WHERE h.site_id = s.id{host_sql}) AS host_count
            FROM geo_sites s LEFT JOIN tenants t ON t.id = s.tenant_id
-           ORDER BY lower(s.name), s.id"""
+           WHERE 1 = 1{site_sql}
+           ORDER BY lower(s.name), s.id""",  # nosec B608 - fixed clauses, placeholders only
+        (*host_params, *site_params),
     )
     floors = await _select(
-        """SELECT f.id, f.site_id, f.name, f.floor_number,
-                  (SELECT COUNT(*) FROM geo_placements p WHERE p.floor_id = f.id) AS placed_device_count
-           FROM geo_floors f ORDER BY f.floor_number, f.name, f.id"""
+        f"""SELECT f.id, f.site_id, f.name, f.floor_number,
+                  (SELECT COUNT(*) FROM geo_placements p WHERE p.floor_id = f.id{placed_sql}) AS placed_device_count
+           FROM geo_floors f ORDER BY f.floor_number, f.name, f.id""",  # nosec B608 - fixed clauses, placeholders only
+        host_params,
     )
     floors_of: dict[int, list[dict]] = {}
     for f in floors:

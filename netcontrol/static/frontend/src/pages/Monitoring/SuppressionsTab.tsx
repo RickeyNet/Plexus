@@ -223,6 +223,9 @@ function CreateSuppressionModal({ isOpen, onClose }: { isOpen: boolean; onClose:
             <option value="ups_on_battery">UPS On Battery</option>
             <option value="ups_battery">UPS Battery</option>
             <option value="ups_output">UPS Output Off / Bypass</option>
+            <option value="ups_overload">UPS Overload</option>
+            <option value="ups_battery_temperature">UPS Battery Temperature</option>
+            <option value="ups_communication">UPS Communication Lost</option>
           </select>
         </div>
         <div className="form-group">

@@ -127,6 +127,9 @@ function PlaybookRow({
           <Badge tone={isAnsible ? 'info' : 'primary'}>{isAnsible ? 'Ansible' : 'Python'}</Badge>
           <span style={{ fontWeight: 600 }}>{pb.name}</span>
           <GitOwnedBadge record={pb} />
+          {pb.approval_required && (
+            <Badge tone="warning" title="Jobs from this task wait for approval before they run">Approval required</Badge>
+          )}
           {tags.map((tag) => (
             <span key={tag} className="badge badge-secondary">{tag}</span>
           ))}

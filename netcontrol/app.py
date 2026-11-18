@@ -42,6 +42,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from netcontrol.integrations.cisco_fdm.collector import fdm_poll_loop
 from netcontrol.mcp.server import build_mcp_app
+from netcontrol.object_scope import request_scope
 from netcontrol.plugins import registry as plugin_registry
 from netcontrol.routes import notification_channels, object_changes, siem_forwarder, webhooks
 from netcontrol.routes.admin import (
@@ -240,6 +241,7 @@ from netcontrol.routes.inventory import (
 from netcontrol.routes.inventory_collection import router as inventory_collection_router
 from netcontrol.routes.ipam import init_ipam, router as ipam_router
 from netcontrol.routes.ipam_adapters import IpamAdapterError, collect_ipam_snapshot
+from netcontrol.routes.ipam_model import admin_router as ipam_model_admin_router, router as ipam_model_router
 from netcontrol.routes.jobs import (
     _MAX_CONCURRENT_JOBS as _jobs_MAX_CONCURRENT_JOBS,
     _job_semaphore as _jobs_job_semaphore,
@@ -332,6 +334,7 @@ from netcontrol.routes.risk_analysis import (
     router as risk_analysis_router,
 )
 from netcontrol.routes.routing import router as routing_router
+from netcontrol.routes.scope_rules import router as scope_rules_router
 from netcontrol.routes.secret_variables import router as secret_variables_router
 from netcontrol.routes.secrets_providers import router as secrets_providers_router
 from netcontrol.routes.snmp import (
@@ -370,6 +373,7 @@ from netcontrol.routes.virtualization import (
     admin_router as virtualization_admin_router,
     router as virtualization_router,
 )
+from netcontrol.scoped_dashboard import scoped_dashboard_data
 from netcontrol.sync.runner import sync_jobs_loop
 
 # Ensure project root is on path for imports
@@ -821,6 +825,10 @@ PUBLIC_PATHS = {
     "/api/version",
     "/favicon.ico",
 }
+
+# The SAML assertion consumer service: the IdP's cross-site POST carries no
+# CSRF token; the signed response and the saml_tx cookie authenticate it.
+SAML_ACS_PATH = "/api/auth/saml/acs"
 
 # Inbound webhook receivers: no session and no CSRF (the sender can do
 # neither; each authenticates its body itself). Unlike PUBLIC_PATHS they stay
@@ -1973,8 +1981,13 @@ async def csrf_protection_middleware(request: Request, call_next):
     because they are not susceptible to cross-site request forgery.
     """
     if request.method in _CSRF_PROTECTED_METHODS and request.url.path.startswith("/api/"):
-        # Skip CSRF check for public paths (login, register, etc.)
-        if request.url.path not in PUBLIC_PATHS and request.url.path not in WEBHOOK_PATHS:
+        # Skip CSRF check for public paths (login, register, etc.) and the
+        # SAML ACS (the IdP's signed POST, bound to the saml_tx cookie).
+        if (
+            request.url.path not in PUBLIC_PATHS
+            and request.url.path not in WEBHOOK_PATHS
+            and request.url.path != SAML_ACS_PATH
+        ):
             # Only enforce when using cookie-based auth (no API-token header)
             api_token = _extract_api_token(request)
             using_api_token = bool(APP_API_TOKEN and api_token and secrets.compare_digest(api_token, APP_API_TOKEN))
@@ -2333,6 +2346,11 @@ async def _dashboard_data() -> dict:
 
 @app.get("/api/dashboard", dependencies=[Depends(require_auth), Depends(require_feature("dashboard"))])
 async def dashboard(request: Request):
+    scope = await request_scope(request)
+    if scope.restricted:
+        # Limited to selected inventory groups: computed over its scope, uncached.
+        session = _get_session(request) or {}
+        return await scoped_dashboard_data(scope, str(session.get("user") or ""))
     # The cache is shared by every user, so the per-user gate applies after it.
     data = await _dashboard_data()
     if await _has_feature(request, _DASHBOARD_TOPOLOGY_FEATURE):
@@ -2446,6 +2464,10 @@ app.include_router(
     dependencies=[Depends(require_auth), Depends(require_feature("ipam"))],
 )
 app.include_router(network_objects_admin_router, dependencies=[Depends(require_admin)])
+# Namespaces, route targets, VLAN groups, RIRs and aggregates: gated like the
+# VRF and VLAN records, and likewise ahead of the IPAM router.
+app.include_router(ipam_model_router, dependencies=[Depends(require_auth), Depends(require_feature("ipam"))])
+app.include_router(ipam_model_admin_router, dependencies=[Depends(require_admin)])
 # Regions, the location tree, tenant groups and tenants: read with the
 # organization feature, managed by admins.
 app.include_router(
@@ -2635,6 +2657,8 @@ app.include_router(
     mcp_tokens_router,
     dependencies=[Depends(require_admin)],
 )
+# Object scope rules of access groups (per model, by tenant or site), admin-only.
+app.include_router(scope_rules_router, dependencies=[Depends(require_admin)])
 # Read-only GraphQL API: the query endpoint (and GraphiQL when enabled) for
 # holders of the graphql feature, each field also checking the feature and
 # object scope of its REST counterpart; its settings are admin-only.

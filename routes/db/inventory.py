@@ -16,6 +16,8 @@ from collections.abc import Iterable
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from netcontrol.device_categories import device_type_category
+
 import routes.database as _dbcore
 from routes.database import (
     _LOGGER,
@@ -40,6 +42,7 @@ __all__ = [
     "create_group",
     "update_group",
     "delete_group",
+    "set_group_discovery_credential",
     "get_or_create_group_path",
     "find_top_level_group",
     "GROUP_PATH_SEPARATOR",
@@ -494,6 +497,24 @@ async def find_top_level_group(name: str) -> dict | None:
         await db.close()
 
 
+async def set_group_discovery_credential(group_id: int, credential_id: int | None) -> None:
+    """Remember the SSH credential the group's discovery signs in with
+    (``None``: forget it, the Plexus service credential is the default).
+    The column is cleared when the credential is deleted (migration 0117)."""
+    db = await _dbcore.get_db()
+    try:
+        await db.execute(
+            "UPDATE inventory_groups SET discovery_credential_id = ? WHERE id = ?",
+            (credential_id, group_id),
+        )
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        raise
+    finally:
+        await db.close()
+
+
 @tracks_changes("group", "delete", id_arg="group_id")
 async def delete_group(group_id: int):
     """Delete a group, its hosts and the jobs that targeted it. Raises
@@ -568,11 +589,22 @@ async def get_all_hosts() -> list[dict]:
         await db.close()
 
 
-async def find_host_by_ip(ip_address: str) -> dict | None:
+async def find_host_by_ip(ip_address: str, include_aliases: bool = False) -> dict | None:
+    """The host whose primary IP is ``ip_address``; with ``include_aliases``,
+    else the host that has it as a recorded interface IP (host_ip_aliases)."""
     db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute("SELECT * FROM hosts WHERE ip_address = ? LIMIT 1", (ip_address,))
         row = await cursor.fetchone()
+        if row is None and include_aliases:
+            cursor = await db.execute(
+                """SELECT h.* FROM host_ip_aliases a
+                   JOIN hosts h ON h.id = a.host_id
+                   WHERE a.ip_address = ?
+                   ORDER BY h.id LIMIT 1""",
+                (ip_address,),
+            )
+            row = await cursor.fetchone()
         return dict(row) if row else None
     finally:
         await db.close()
@@ -715,13 +747,15 @@ async def add_host(
     snmp_profile_id: str = "",
 ) -> int:
     """Insert a host. It gets the default lifecycle status (none when no
-    status is the default)."""
+    status is the default) and the category its device type implies (an
+    ``apc_ups`` host is a ``ups``), and the role of that name."""
+    category = device_type_category(device_type)
     db = await _dbcore.get_db()
     try:
         cursor = await db.execute(
             "INSERT INTO hosts (group_id, hostname, ip_address, device_type, vrf_name, vlan_id, aws_instance_id,"
-            " snmp_profile_id, lifecycle_status_id)"
-            " VALUES (?,?,?,?,?,?,?,?,(SELECT id FROM host_statuses WHERE is_default = 1 ORDER BY id LIMIT 1))",
+            " snmp_profile_id, device_category, lifecycle_status_id)"
+            " VALUES (?,?,?,?,?,?,?,?,?,(SELECT id FROM host_statuses WHERE is_default = 1 ORDER BY id LIMIT 1))",
             (
                 group_id,
                 hostname,
@@ -731,6 +765,7 @@ async def add_host(
                 str(vlan_id or ""),
                 (aws_instance_id or "").strip(),
                 (snmp_profile_id or "").strip(),
+                category,
             ),
         )
         await db.commit()
@@ -741,6 +776,8 @@ async def add_host(
         raise
     finally:
         await db.close()
+    if category:
+        await link_host_hardware(new_id, category=category)
     if vrf_name:
         await ensure_vrfs([vrf_name], "manual")
     if ip_address:

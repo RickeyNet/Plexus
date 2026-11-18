@@ -215,6 +215,17 @@ SKU: SMT1500I
 Firmware Revision: UPS 09.3 (ID18)
 """
 
+# The layout a user confirmed on an SRT card (values invented): the status
+# line first, no ID line, the UPS ID only inside the firmware revision, and
+# empty fields left blank.
+UPSABOUT_SRT_CONFIRMED = """E000: Success
+Model: Smart-UPS SRT 6000
+Serial Number:
+Firmware Revision: UPS 11.7 (ID1022)
+Manufacture Date:
+Apparent Power Rating: 6000 VA
+"""
+
 ABOUT_NMC2 = """apc>about
 E000: Success
 Hardware Factory
@@ -256,6 +267,14 @@ def test_parse_upsabout():
     assert (fallback.ups_id, fallback.version) == ("18", "9.3")
 
 
+def test_parse_upsabout_confirmed_srt_layout():
+    about = nmc_cli.parse_upsabout(UPSABOUT_SRT_CONFIRMED)
+    assert (about.ups_id, about.version) == ("1022", "11.7")
+    assert about.model == "Smart-UPS SRT 6000"
+    assert about.serial == ""
+    assert nmc_cli.command_error(UPSABOUT_SRT_CONFIRMED) is None
+
+
 def test_parse_about():
     nmc2 = nmc_cli.parse_about(ABOUT_NMC2)
     assert (nmc2.generation, nmc2.app_name, nmc2.app_version, nmc2.model_number) == (
@@ -283,6 +302,28 @@ def test_parse_about():
 )
 def test_parse_alarm_count(output, count):
     assert nmc_cli.parse_alarm_count(output) == count
+
+
+def test_parse_about_confirmed_embedded_nmc3():
+    # The layout a user confirmed on an embedded NMC3 (values invented): no
+    # AP964x model number, blank fields, the application module named "su".
+    about = nmc_cli.parse_about(
+        "Hardware Factory\n---------------\nModel Number: 0N-0000\nSerial Number: \nHardware Revision: 3\n"
+        "Manufacture Date: \nMAC Address: \nManagement Uptime: \n\n"
+        "Application Module\n---------------\nName: su\nVersion: v2.0.0.5\nDate: Jan 01 2021\nTime: 10:00:00\n"
+    )
+    assert (about.generation, about.app_name, about.app_version) == ("nmc3", "su", "2.0.0.5")
+
+
+@pytest.mark.parametrize(
+    "idle_text",
+    [
+        "No firmware update is in progress",  # the Schneider FAQ wording
+        "No firmware update in progress",  # confirmed on an NMC3 (su v2.0)
+    ],
+)
+def test_parse_update_status_idle_wordings(idle_text):
+    assert nmc_cli.parse_update_status(f"E000: Success\nStatus: {idle_text}\n").state == "idle"
 
 
 def test_parse_update_status():

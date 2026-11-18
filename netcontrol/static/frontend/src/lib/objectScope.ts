@@ -64,6 +64,9 @@ export function canWriteHost(
 export interface ObjectScopeAccess {
   /** The account is limited to selected inventory groups. */
   restricted: boolean;
+  /** Restricted with no writable grant or scope rule: every write control
+   * is hidden or disabled (``canWriteFeature`` already answers false). */
+  readOnly: boolean;
   canWriteGroup: (groupId: number | null | undefined) => boolean;
   /** The given groups the account may change. */
   writableGroups: <T extends { id: number }>(groups: T[]) => T[];
@@ -75,6 +78,7 @@ export function useObjectScope(): ObjectScopeAccess {
   const scope = data?.object_scope;
   return {
     restricted: Boolean(scope?.restricted),
+    readOnly: Boolean(scope?.restricted && scope.read_only),
     canWriteGroup: (groupId) => canWriteGroup(scope, groupId),
     writableGroups: (groups) => writableGroups(scope, groups),
   };

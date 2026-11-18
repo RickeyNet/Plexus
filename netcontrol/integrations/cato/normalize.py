@@ -20,6 +20,11 @@ How a Cato account maps onto the map:
     a "Remote users" box, linked to the backbone); its details say where it
     connects from (public IP, ISP, location, office) and what it is
     connected to in Cato (PoP, VPN IP)
+  - every SDP user Cato knows, connected or not (the snapshot's users and
+    the ``vpnUser`` registry), is a row of the Cato Cloud's "All users"
+    table (``remote_users``), so the map search finds a user who is not
+    connected now. A disconnected user has no tunnel address: it is no node,
+    no address-book entry and no subnet, only a row
 
 Forwarding data (``node["forwarding"]``, see
 ``netcontrol.integrations.meraki.forwarding``): a site's device holds its
@@ -131,6 +136,7 @@ from netcontrol.integrations.meraki.normalize import (
 )
 from netcontrol.integrations.meraki.subnets import _cidr
 from netcontrol.integrations.pathtrace import apps as trace_apps
+from netcontrol.integrations.remote_users import DIRECTORY_KEY, directory_entry
 
 CLOUD_SITE_ID = "__cato_cloud__"
 CLOUD_NODE_ID = "cato:cloud"
@@ -169,6 +175,81 @@ def _user_name(user: dict) -> Any:
 
 def _user_sort_key(user: dict) -> str:
     return _text(_user_name(user)).lower()
+
+
+def _is_connected(user: dict) -> bool:
+    """Whether a user of ``accountSnapshot.users`` is connected now."""
+    return _text(user.get("connectivityStatus")).lower() != "disconnected"
+
+
+def _connected_users(raw: dict) -> list[dict]:
+    return [u for u in raw.get("users") or [] if isinstance(u, dict) and _is_connected(u)]
+
+
+def _email(value: Any) -> str:
+    text = _text(value)
+    return text if "@" in text else ""
+
+
+def user_directory(raw: dict) -> list[dict[str, Any]]:
+    """Every SDP user the collection saw, for the "All users" directory
+    (``remote_users``): the snapshot's users (connected ones with their VPN
+    and public address) and the users only the ``vpnUser`` registry lists,
+    with the email, device and last connection Cato returned for them by ID
+    (``vpn_user_details``). A disconnected user carries no address: it has
+    no tunnel now."""
+    found: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    registry_ids: set[str] = set()
+
+    def keys(entry: dict[str, Any]) -> set[str]:
+        # Any of ID, email or name: the registry may not spell a user's
+        # identity the way the snapshot does.
+        return {f"{field}:{entry[field].lower()}" for field in ("user_id", "email", "name") if entry[field]}
+
+    for user in raw.get("users") or []:
+        if not isinstance(user, dict):
+            continue
+        info = _obj(user.get("info"))
+        connected = _is_connected(user)
+        entry = directory_entry(
+            name=_user_name(user),
+            email=info.get("email"),
+            user_id=user.get("id"),
+            connected=connected,
+            source="session" if connected else "registry",
+            address=user.get("internalIP") if connected else "",
+            public_ip=_public_ip(user) if connected else "",
+            device=user.get("deviceName"),
+            last_seen="" if connected else user.get("lastConnected"),
+        )
+        if entry is not None:
+            found.append(entry)
+            seen |= keys(entry)
+    details = {_text(d.get("id")): d for d in raw.get("vpn_user_details") or [] if isinstance(d, dict)}
+    for item in raw.get("vpn_users") or []:
+        if not isinstance(item, dict):
+            continue
+        entity = _obj(item.get("entity"))
+        helper = _obj(item.get("helperFields"))
+        detail = details.get(_text(entity.get("id")), {})
+        entry = directory_entry(
+            name=entity.get("name") or _user_name(detail),
+            email=_email(_obj(detail.get("info")).get("email"))
+            or _email(helper.get("email"))
+            or _email(item.get("description")),
+            user_id=entity.get("id"),
+            connected=False,
+            source="registry",
+            device=detail.get("deviceName"),
+            last_seen=detail.get("lastConnected") or helper.get("lastConnected"),
+        )
+        # Two registry users may share a name: only their IDs tell them apart.
+        if entry is None or keys(entry) & seen or (entry["user_id"] and entry["user_id"] in registry_ids):
+            continue
+        found.append(entry)
+        registry_ids.add(entry["user_id"])
+    return found
 
 
 def _pop_site_id(pop: str) -> str:
@@ -1645,6 +1726,9 @@ class _Builder:
         # The boxes of the Cato cloud: one per PoP, and the users with no PoP.
         self.cloud_boxes: list[dict] = []
         self.range_count = 0
+        # Every SDP user, connected or not, when the users were asked for.
+        self.include_users = bool((raw.get("options") or {}).get("include_users", True))
+        self.directory = user_directory(raw) if self.include_users else []
         # PoP name -> [site name, device label, state] rows.
         self._pop_sites: dict[str, list[list[str]]] = {}
         self._cloud_sites: list[list[str]] = []
@@ -2100,11 +2184,8 @@ class _Builder:
     # ── The Cato cloud: PoPs, backbone, remote users ───────────────────────
 
     def build_cloud(self) -> None:
-        users = [u for u in self.raw.get("users") or [] if isinstance(u, dict)]
-        include_users = bool((self.raw.get("options") or {}).get("include_users", True))
-        connected = sorted(
-            (u for u in users if _text(u.get("connectivityStatus")).lower() != "disconnected"), key=_user_sort_key
-        )
+        include_users = self.include_users
+        connected = sorted(_connected_users(self.raw), key=_user_sort_key)
         users_by_pop: dict[str, list[dict]] = {}
         for user in connected:
             pop = _text(user.get("popName"))
@@ -2166,6 +2247,7 @@ class _Builder:
                     ("Sites", len(self.sites_raw)),
                     ("PoPs in use", len(pop_rows)),
                     ("Remote users connected", len(connected) if include_users else ""),
+                    ("Registered users", len(self.directory) if include_users else ""),
                     ("Split Tunnel policy", self._split_state() if include_users else ""),
                     (
                         "Policies not collected",
@@ -2751,11 +2833,7 @@ class _Builder:
                 add("networkInterface", [entity_id], [r[0] for r in self._ranges.get(site_id, []) if r[2] == iface])
         # Cato does not list floating ranges; one may share a name with a range.
         book["floatingSubnet"] = book["siteNetworkSubnet"]
-        connected = [
-            u
-            for u in self.raw.get("users") or []
-            if isinstance(u, dict) and _text(u.get("connectivityStatus")).lower() != "disconnected"
-        ]
+        connected = _connected_users(self.raw)
         for user in connected:
             address = canonical(user.get("internalIP"))
             add("user", [_text(user.get("id")), _text(_user_name(user)).lower()], [address] if address else [])
@@ -2965,8 +3043,7 @@ def build_snapshot(raw: dict, inventory: InventoryIndex | None = None) -> dict[s
         edge_counts[edge["kind"]] = edge_counts.get(edge["kind"], 0) + 1
 
     account = raw.get("account") or {}
-    users = [u for u in raw.get("users") or [] if isinstance(u, dict)]
-    return {
+    snapshot: dict[str, Any] = {
         "schema": SCHEMA_VERSION,
         "provider": "cato",
         "generated_at": datetime.now(UTC).isoformat(timespec="seconds"),
@@ -2986,7 +3063,8 @@ def build_snapshot(raw: dict, inventory: InventoryIndex | None = None) -> dict[s
             "vpn_tunnels": edge_counts.get("vpn", 0) + edge_counts.get("vpn3p", 0),
             "wan_uplinks": edge_counts.get("uplink", 0),
             "vlans": builder.range_count,
-            "remote_users": sum(1 for u in users if _text(u.get("connectivityStatus")).lower() != "disconnected"),
+            "remote_users": len(_connected_users(raw)),
+            "registered_users": len(builder.directory),
         },
         "collection": {
             "sources": ["Cato Networks API"],
@@ -3000,3 +3078,8 @@ def build_snapshot(raw: dict, inventory: InventoryIndex | None = None) -> dict[s
         # What a path trace asked about an application knows of it.
         "applications": applications_of(raw),
     }
+    if builder.include_users:
+        # Every user, connected or not, for the Cloud's "All users" table,
+        # which the store step writes (``remote_users.apply_user_directory``).
+        snapshot[DIRECTORY_KEY] = {"node_id": CLOUD_NODE_ID, "users": builder.directory}
+    return snapshot

@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import type { CSSProperties, ReactNode } from 'react';
 
 import type { MonitoringPoll } from '@/api/deviceDetail';
 import { formatBackendDateTime } from '@/lib/datetime';
@@ -69,6 +69,10 @@ export function DeviceInfoBar({ poll, hostId }: { poll: MonitoringPoll | null; h
   );
 }
 
+// Badges never wrap by default; the longer liveness labels must, or they
+// spill into the next grid cell.
+const WRAP: CSSProperties = { whiteSpace: 'normal' };
+
 function LivenessPill({ poll }: { poll: MonitoringPoll }) {
   // icmp_alive may arrive as 0/1 (older rows) or true/false - normalise
   // both. `null/undefined` means ICMP didn't run
@@ -85,7 +89,7 @@ function LivenessPill({ poll }: { poll: MonitoringPoll }) {
   }
   if (icmpUp && snmpOk) {
     return (
-      <span className="badge badge-success">
+      <span className="badge badge-success" style={WRAP}>
         Healthy{poll.icmp_rtt_ms != null ? ` (${poll.icmp_rtt_ms.toFixed(1)}ms)` : ''}
       </span>
     );
@@ -94,18 +98,33 @@ function LivenessPill({ poll }: { poll: MonitoringPoll }) {
     return (
       <span
         className="badge badge-warning"
+        style={WRAP}
         title="Host responds to ICMP but the SNMP/SSH poll did not return data - credentials, ACL, or engine-ID problem."
       >
         ICMP up, SNMP/SSH not responding
       </span>
     );
   }
-  return <span className="badge badge-danger">Unreachable (no ICMP reply)</span>;
+  return (
+    <span className="badge badge-danger" style={WRAP}>
+      Unreachable (no ICMP reply)
+    </span>
+  );
 }
+
+// A grid cell: content keeps its own width (no stretched badges) and may
+// shrink below its min-content, so long values wrap instead of overflowing.
+const CELL: CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  alignItems: 'flex-start',
+  minWidth: 0,
+  overflowWrap: 'anywhere',
+};
 
 export function Item({ label, value }: { label: string; value: string }) {
   return (
-    <div style={{ display: 'flex', flexDirection: 'column' }}>
+    <div style={CELL}>
       <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>{label}</span>
       <span>{value}</span>
     </div>
@@ -114,7 +133,7 @@ export function Item({ label, value }: { label: string; value: string }) {
 
 export function ItemNode({ label, node }: { label: string; node: ReactNode }) {
   return (
-    <div style={{ display: 'flex', flexDirection: 'column' }}>
+    <div style={CELL}>
       <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>{label}</span>
       {node}
     </div>

@@ -20,6 +20,11 @@ How an Appgate collective maps onto the map:
     "Appgate clients" box, with one ``Appgate tunnel`` to each Gateway it
     has a tunnel to (from its per-user access details; without them, to the
     collective node)
+  - every user the collective knows - connected now, or with a device
+    on-boarded to it but not connected - is listed in the user directory
+    (``remote_users``) on the collective node, so the map search finds a
+    user who was not connected when the collection ran; a user who is not
+    connected has no tunnel address, so no node, subnet or path-trace source
   - there is no internet node: what an Appgate Client sends outside its
     entitlements leaves the device directly (split tunnel), and what a
     Gateway sends on leaves by its own interfaces
@@ -52,6 +57,7 @@ from netcontrol.integrations.meraki.normalize import (
     kv_section,
     table_section,
 )
+from netcontrol.integrations.remote_users import DIRECTORY_KEY, directory_entry, user_key
 
 COLLECTIVE_SITE_ID = "__appgate_sdp__"
 COLLECTIVE_NODE_ID = "appgate:collective"
@@ -270,6 +276,9 @@ class _Builder:
         self.ip_pools = _dicts(raw.get("ip_pools"))
         self.identity_providers = _dicts(raw.get("identity_providers"))
         self.session_details_collected = isinstance(raw.get("session_details"), dict)
+        # Every device on-boarded to the collective, connected or not.
+        self.onboarded_collected = isinstance(raw.get("onboarded_devices"), list)
+        self.onboarded = _dicts(raw.get("onboarded_devices"))
 
         self.nodes: dict[str, dict] = {}
         self.edges: list[dict] = []
@@ -285,6 +294,13 @@ class _Builder:
         self.users: list[dict] = []
         # Edge id -> (user record, gateway node id), for the tunnel details.
         self._tunnel_of_edge: dict[str, tuple[dict, str]] = {}
+        # The user directory (``remote_users``): every user known, and how
+        # many distinct users have a device on-boarded.
+        self.directory: dict[str, Any] | None = None
+        self.registered_users = 0
+        # Whether a registry was read: the on-boarded devices, or the
+        # sessions of an older Controller (which are its on-boarded devices).
+        self.registry_read = self.onboarded_collected
 
     # ── Graph primitives ───────────────────────────────────────────────────
 
@@ -761,9 +777,12 @@ class _Builder:
         ]
 
     def build_users(self) -> None:
-        if not isinstance(self.raw.get("sessions"), list):
+        sessions_listed = isinstance(self.raw.get("sessions"), list)
+        if sessions_listed:
+            self.users = self._user_records()
+        self.build_directory()
+        if not sessions_listed:
             return
-        self.users = self._user_records()
         used: set[str] = set()
         for index, record in enumerate(self.users):
             node_id = f"{USER_NODE_PREFIX}{record['device'] or record['dn'] or index}"
@@ -798,6 +817,10 @@ class _Builder:
                 [
                     ("Connected now", "" if registered else len(self.users)),
                     ("Registered devices (connection unknown)", len(self.users) if registered else ""),
+                    (
+                        "Registered users",
+                        self.registered_users if self.registry_read else "",
+                    ),
                     ("With access details", with_details if self.session_details_collected else "Not read"),
                     ("Skipped (over the cap)", self.raw.get("sessions_skipped") or ""),
                     ("Source", "Users connected with the Appgate Client when the collection ran"),
@@ -932,6 +955,68 @@ class _Builder:
         )
         return node
 
+    # ── The user directory ─────────────────────────────────────────────────
+
+    @staticmethod
+    def _identity(username: str, provider: str, fallback: str = "") -> dict[str, str]:
+        """How the directory names a user: the user name, as the email when
+        it is one, and the identity provider with the user name as the ID
+        (the same user signs in through one provider from every device)."""
+        return {
+            "name": username,
+            "email": username if "@" in username else "",
+            "user_id": f"{provider}/{username}" if provider and username else username or fallback,
+        }
+
+    def build_directory(self) -> None:
+        """Every user the collective knows (see ``remote_users``): the users
+        connected now, then those with a device on-boarded who are not, each
+        once (a user's newest device). Run by ``build_users`` once the
+        connected users are known. Listed on the collective node, which
+        always exists."""
+        sessions_listed = isinstance(self.raw.get("sessions"), list)
+        if not sessions_listed and not self.onboarded_collected:
+            return
+        users: dict[str, dict] = {}
+        registered: set[str] = set()
+        for record in self.users:
+            session = record["session"]
+            connected = not record["registered"]
+            entry = directory_entry(
+                **self._identity(record["username"], record["provider"], record["dn"]),
+                connected=connected,
+                source="session" if connected else "registry",
+                address=record["tun_ip"] if connected else "",
+                public_ip=record["public_ip"],
+                device=record["hostname"] or record["device"],
+                last_seen="" if connected else _text(session.get("lastSeenAt")),
+            )
+            key = user_key(entry) if entry else ""
+            if entry and key:
+                users.setdefault(key, entry)
+                if record["registered"]:
+                    registered.add(key)
+                    self.registry_read = True
+        # The newest device of a user first, so it is the one listed.
+        for device in sorted(self.onboarded, key=lambda d: _text(d.get("lastSeenAt")), reverse=True):
+            entry = directory_entry(
+                **self._identity(
+                    _text(device.get("username")),
+                    _text(device.get("providerName")),
+                    _text(device.get("distinguishedName")),
+                ),
+                connected=False,
+                source="registry",
+                device=_text(device.get("hostname")) or _text(device.get("deviceId")),
+                last_seen=_text(device.get("lastSeenAt")),
+            )
+            key = user_key(entry) if entry else ""
+            if entry and key:
+                registered.add(key)
+                users.setdefault(key, entry)
+        self.registered_users = len(registered)
+        self.directory = {"node_id": COLLECTIVE_NODE_ID, "users": list(users.values())}
+
     # ── The collective ─────────────────────────────────────────────────────
 
     def build_collective_node(self) -> None:
@@ -958,6 +1043,7 @@ class _Builder:
                     ("Gateways", len(gateways)),
                     ("Sites", len(self.sites_raw)),
                     ("Connected users", len(self.users) if isinstance(self.raw.get("sessions"), list) else ""),
+                    ("Registered users", self.registered_users if self.registry_read else ""),
                     ("Policies", len(self.policies) if isinstance(self.raw.get("policies"), list) else ""),
                     ("Entitlements", len(self.entitlements) if self.entitlements_collected else ""),
                     ("Identity providers", len(self.identity_providers) if self.identity_providers else ""),
@@ -1215,6 +1301,7 @@ def build_snapshot(raw: dict, inventory: InventoryIndex | None = None) -> dict[s
             "wan_uplinks": 0,
             "vlans": builder.range_count,
             "remote_users": len(builder.users),
+            "registered_users": builder.registered_users,
             "gateways": sum(len(g) for g in builder.gateways_of_site.values()),
             "entitlements": len(builder.entitlements),
         },
@@ -1227,4 +1314,5 @@ def build_snapshot(raw: dict, inventory: InventoryIndex | None = None) -> dict[s
         "sites": sites,
         "nodes": nodes,
         "edges": builder.edges,
+        **({DIRECTORY_KEY: builder.directory} if builder.directory is not None else {}),
     }

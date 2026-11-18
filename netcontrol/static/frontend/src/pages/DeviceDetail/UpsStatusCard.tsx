@@ -3,14 +3,15 @@ import { Badge } from '@/components/Badge';
 import { formatBackendDateTime } from '@/lib/datetime';
 
 import { Item, ItemNode } from './DeviceInfoBar';
-import { formatRuntime, upsBatteryTone, upsOutputTone } from './ups';
+import { formatPower, formatRuntime, unit, upsBatteryTone, upsOutputTone } from './ups';
 
 const pct = (value: number | null | undefined) => (value != null ? `${value}%` : 'N/A');
 
 /**
  * An APC Smart-UPS's newest state, read by the monitoring poll through its
  * Network Management Card: output and battery state, capacity, runtime,
- * load, and the UPS and card identity. Nothing until the first poll.
+ * load, input and output power, last transfer cause, temperatures, and the
+ * UPS and card identity. Nothing until the first poll.
  */
 export function UpsStatusCard({ vendor }: { vendor: VendorStatus | undefined }) {
   if (!vendor || vendor.kind !== 'apc_ups') return null;
@@ -44,6 +45,13 @@ export function UpsStatusCard({ vendor }: { vendor: VendorStatus | undefined }) 
         <Item label="Battery capacity" value={pct(ups.battery_capacity_pct)} />
         <Item label="Runtime left" value={formatRuntime(ups.runtime_minutes)} />
         <Item label="Output load" value={pct(ups.output_load_pct)} />
+        <Item label="Input" value={formatPower(ups.input_voltage_v, ups.input_frequency_hz)} />
+        <Item label="Output voltage" value={unit(ups.output_voltage_v, 'V')} />
+        <Item label="Last transfer" value={ups.last_transfer_cause_label || 'N/A'} />
+        <Item label="Battery temperature" value={unit(ups.battery_temperature_c, '°C')} />
+        {ups.probe_temperature_c != null && (
+          <Item label="Probe temperature" value={unit(ups.probe_temperature_c, '°C')} />
+        )}
         <Item label="UPS model" value={ups.model || 'N/A'} />
         <Item label="UPS firmware" value={ups.firmware || 'N/A'} />
         <Item label="UPS serial" value={ups.serial || 'N/A'} />

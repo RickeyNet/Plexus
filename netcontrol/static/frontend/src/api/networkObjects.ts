@@ -34,6 +34,9 @@ export interface Vrf {
   /** The tenant that owns it (absent on older servers). */
   tenant_id?: number | null;
   tenant_name?: string | null;
+  /** The IPAM namespace it is in (1: Global; absent on older servers). */
+  namespace_id?: number;
+  namespace_name?: string;
 }
 
 export interface SiteRef {
@@ -61,6 +64,9 @@ export interface Vlan {
   /** The tenant that owns it (absent on older servers). */
   tenant_id?: number | null;
   tenant_name?: string | null;
+  /** The VLAN group it is in, if any (absent on older servers). */
+  vlan_group_id?: number | null;
+  vlan_group?: { id: number; name: string } | null;
 }
 
 /** `primary`, `secondary`, or `virtual` (an HSRP / VRRP / GLBP address). */
@@ -92,6 +98,19 @@ export interface VrfDetail extends Vrf {
   truncated?: boolean;
   /** `source`: the IPAM source's provider, or `interface`. */
   prefixes: { subnet: string; source: string }[];
+  /** The route targets the VRF imports and exports (absent on older servers). */
+  route_targets?: VrfRouteTargets;
+}
+
+export interface RouteTargetRef {
+  id: number;
+  name: string;
+  description: string;
+}
+
+export interface VrfRouteTargets {
+  import: RouteTargetRef[];
+  export: RouteTargetRef[];
 }
 
 export interface VlanDevice {
@@ -144,6 +163,7 @@ export interface VrfCreate {
   rd?: string;
   description?: string;
   tenant_id?: number | null;
+  namespace_id?: number;
 }
 
 /** The name of a VRF cannot change. */
@@ -151,6 +171,7 @@ export interface VrfUpdate {
   rd?: string;
   description?: string;
   tenant_id?: number | null;
+  namespace_id?: number;
 }
 
 export interface VlanCreate {
@@ -159,6 +180,7 @@ export interface VlanCreate {
   site_id?: number | null;
   description?: string;
   tenant_id?: number | null;
+  vlan_group_id?: number | null;
 }
 
 /** The VLAN id cannot change. */
@@ -167,6 +189,7 @@ export interface VlanUpdate {
   site_id?: number | null;
   description?: string;
   tenant_id?: number | null;
+  vlan_group_id?: number | null;
 }
 
 export interface RebuildResult {
@@ -286,6 +309,22 @@ export function useDeleteVlan() {
   return useMutation<unknown, Error, number>({
     mutationFn: (id) => detailRequest(`/ipam/vlans/${id}`, { method: 'DELETE' }),
     onSuccess: () => invalidateAll(qc),
+  });
+}
+
+/** Replaces the route targets a VRF imports and exports. */
+export function useSetVrfRouteTargets() {
+  const qc = useQueryClient();
+  return useMutation<VrfRouteTargets, Error, { vrfId: number; importIds: number[]; exportIds: number[] }>({
+    mutationFn: ({ vrfId, importIds, exportIds }) =>
+      detailRequest<VrfRouteTargets>(`/ipam/vrfs/${vrfId}/route-targets`, {
+        method: 'PUT',
+        body: { import_ids: importIds, export_ids: exportIds },
+      }),
+    onSuccess: () => {
+      invalidateAll(qc);
+      qc.invalidateQueries({ queryKey: ['dcim', 'route_target'] });
+    },
   });
 }
 

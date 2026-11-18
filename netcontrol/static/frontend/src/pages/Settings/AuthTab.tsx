@@ -8,13 +8,16 @@ import {
   AuthConfig,
   CredentialSummary,
   LoginRules,
+  SamlConfig,
   ServiceCredentialPayload,
   useAccessGroups,
   useAuthConfig,
   useCreateServiceCredential,
   useCredentialsList,
   useDeleteServiceCredential,
+  useImportSamlMetadata,
   useLoginRules,
+  useSamlSpInfo,
   useServiceCredentialsList,
   useUpdateAuthConfig,
   useTestOidcConnection,
@@ -51,10 +54,13 @@ import { useReportUnsaved } from './unsaved-context';
 import {
   OIDC_BUTTON_LABEL_MAX,
   OIDC_MAX_GROUP_MAPPINGS,
+  SAML_MAX_CERTS,
   oidcProblem,
   oidcRedirectUri,
   parseGroupLines,
   removeMapping,
+  samlProblem,
+  splitPemBlocks,
   updateMapping,
 } from './oidcSettings';
 import { GroupCheckboxes } from './UserModals';
@@ -185,7 +191,8 @@ function AuthConfigForm({ groups }: { groups: AccessGroup[] }) {
       onSubmit={(e) => {
         e.preventDefault();
         setStatus(null);
-        const problem = draft.oidc ? oidcProblem(draft.oidc) : null;
+        const problem =
+          (draft.oidc ? oidcProblem(draft.oidc) : null) ?? (draft.saml ? samlProblem(draft.saml) : null);
         if (problem) {
           setStatus({ kind: 'error', message: problem });
           return;
@@ -292,6 +299,7 @@ function AuthConfigForm({ groups }: { groups: AccessGroup[] }) {
         <LdapPanel draft={draft} setDraft={setDraft} groups={groups} />
       )}
       {draft.oidc && <OidcPanel draft={draft} setDraft={setDraft} groups={groups} />}
+      {draft.saml && <SamlPanel draft={draft} setDraft={setDraft} groups={groups} />}
 
       <SaveBar
         name="Authentication"
@@ -755,41 +763,7 @@ export function OidcPanel({ draft, setDraft, groups }: PanelProps) {
           flex="1 1 160px"
         />
       </FormRow>
-      <FormRow>
-        <div className="form-group" style={{ flex: '1 1 260px' }}>
-          <label className="form-label" htmlFor={`${fid}-admin-groups`}>Admin Groups</label>
-          <textarea
-            id={`${fid}-admin-groups`}
-            className="form-input"
-            rows={3}
-            value={o.admin_groups.join('\n')}
-            aria-describedby={`${fid}-admin-groups-help`}
-            onChange={(e) => setO({ admin_groups: parseGroupLines(e.target.value) })}
-          />
-          <div className="form-help" id={`${fid}-admin-groups-help`}>
-            One group claim value per line. Members get the admin role; re-checked on every login.
-          </div>
-        </div>
-        <div className="form-group" style={{ flex: '0 1 160px' }}>
-          <label className="form-label" htmlFor={`${fid}-default-role`}>Default Role</label>
-          <select
-            id={`${fid}-default-role`}
-            className="form-select"
-            value={o.default_role}
-            onChange={(e) => setO({ default_role: e.target.value })}
-          >
-            <option value="user">user</option>
-            <option value="admin">admin</option>
-          </select>
-        </div>
-        <TextField
-          label="Button Label"
-          value={o.button_label}
-          onChange={(v) => setO({ button_label: v })}
-          flex="1 1 200px"
-          help={`At most ${OIDC_BUTTON_LABEL_MAX} characters.`}
-        />
-      </FormRow>
+      <SsoRoleFields value={o} onChange={setO} groupNoun="group claim value" />
       <FormRow>
         <TextField
           label="Redirect URI Override (optional)"
@@ -806,16 +780,7 @@ export function OidcPanel({ draft, setDraft, groups }: PanelProps) {
           help="Path on the Plexus host for a private CA; blank uses the system trust store."
         />
       </FormRow>
-      <OidcMappingsField
-        mappings={o.group_mappings}
-        groups={groups}
-        onChange={(group_mappings) => setO({ group_mappings })}
-      />
-      <DefaultGroupsField
-        groups={groups}
-        selected={o.default_group_ids}
-        onChange={(ids) => setO({ default_group_ids: ids })}
-      />
+      <SsoGroupFields value={o} onChange={setO} groups={groups} groupNoun="group claim value" />
       <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
         <button
           type="button"
@@ -841,26 +806,320 @@ export function OidcPanel({ draft, setDraft, groups }: PanelProps) {
   );
 }
 
-function OidcMappingsField({
+/** The role, access group and login button settings every single sign-on
+ * protocol shares (OIDC and SAML). */
+interface SsoAccessValue {
+  admin_groups: string[];
+  default_role: string;
+  default_group_ids: number[];
+  group_mappings: { group: string; access_group_id: number }[];
+  button_label: string;
+}
+
+function SsoRoleFields({
+  value,
+  onChange,
+  groupNoun,
+}: {
+  value: SsoAccessValue;
+  onChange: (patch: Partial<SsoAccessValue>) => void;
+  groupNoun: string;
+}) {
+  const fid = useId();
+  return (
+    <FormRow>
+      <div className="form-group" style={{ flex: '1 1 260px' }}>
+        <label className="form-label" htmlFor={`${fid}-admin-groups`}>Admin Groups</label>
+        <textarea
+          id={`${fid}-admin-groups`}
+          className="form-input"
+          rows={3}
+          value={value.admin_groups.join('\n')}
+          aria-describedby={`${fid}-admin-groups-help`}
+          onChange={(e) => onChange({ admin_groups: parseGroupLines(e.target.value) })}
+        />
+        <div className="form-help" id={`${fid}-admin-groups-help`}>
+          One {groupNoun} per line. Members get the admin role; re-checked on every login.
+        </div>
+      </div>
+      <div className="form-group" style={{ flex: '0 1 160px' }}>
+        <label className="form-label" htmlFor={`${fid}-default-role`}>Default Role</label>
+        <select
+          id={`${fid}-default-role`}
+          className="form-select"
+          value={value.default_role}
+          onChange={(e) => onChange({ default_role: e.target.value })}
+        >
+          <option value="user">user</option>
+          <option value="admin">admin</option>
+        </select>
+      </div>
+      <TextField
+        label="Button Label"
+        value={value.button_label}
+        onChange={(v) => onChange({ button_label: v })}
+        flex="1 1 200px"
+        help={`At most ${OIDC_BUTTON_LABEL_MAX} characters.`}
+      />
+    </FormRow>
+  );
+}
+
+function SsoGroupFields({
+  value,
+  onChange,
+  groups,
+  groupNoun,
+}: {
+  value: SsoAccessValue;
+  onChange: (patch: Partial<SsoAccessValue>) => void;
+  groups: AccessGroup[];
+  groupNoun: string;
+}) {
+  return (
+    <>
+      <SsoMappingsField
+        mappings={value.group_mappings}
+        groups={groups}
+        groupNoun={groupNoun}
+        onChange={(group_mappings) => onChange({ group_mappings })}
+      />
+      <DefaultGroupsField
+        groups={groups}
+        selected={value.default_group_ids}
+        onChange={(ids) => onChange({ default_group_ids: ids })}
+      />
+    </>
+  );
+}
+
+/** SAML 2.0 single sign-on, next to OIDC: offered on the login page
+ * whichever password provider is set. */
+export function SamlPanel({ draft, setDraft, groups }: PanelProps) {
+  const fid = useId();
+  const sp = useSamlSpInfo();
+  const importer = useImportSamlMetadata();
+  const [metadataXml, setMetadataXml] = useState('');
+  if (!draft.saml) return null;
+  const o = draft.saml;
+  const setO = (patch: Partial<SamlConfig>) => setDraft({ ...draft, saml: { ...o, ...patch } });
+  const imported = importer.data;
+
+  function runImport(body: { xml?: string; url?: string }) {
+    importer.mutate(
+      { ...body, ca_cert_file: o.ca_cert_file.trim() },
+      {
+        onSuccess: (res) => {
+          if (res.ok) {
+            setO({ idp_entity_id: res.idp_entity_id, idp_sso_url: res.idp_sso_url, idp_certs: res.idp_certs });
+          }
+        },
+      },
+    );
+  }
+
+  return (
+    <ProviderFieldset legend="Single sign-on (SAML 2.0)">
+      <p className="form-help" style={{ marginTop: 0 }}>
+        Adds a sign-in button that sends the browser to a SAML 2.0 identity provider (Entra ID, Okta,
+        ADFS, Keycloak and others). The IdP must sign the assertion. Register Plexus at the IdP with the
+        entity ID and ACS URL below, or give it the metadata URL.
+      </p>
+      <CheckboxRow>
+        <CheckboxField label="Enabled" checked={o.enabled} onChange={(v) => setO({ enabled: v })} />
+        <CheckboxField
+          label="Lead with SSO on the login page"
+          checked={o.primary}
+          onChange={(v) => setO({ primary: v })}
+          help="The password form folds behind “Use a local account”."
+        />
+        <CheckboxField
+          label="Sync access groups on every login"
+          checked={o.sync_groups}
+          onChange={(v) => setO({ sync_groups: v })}
+          help="Sets the account's groups to the defaults plus every mapped group in the assertion."
+        />
+      </CheckboxRow>
+      {sp.data && (
+        <FormRow>
+          {(
+            [
+              ['SP entity ID', sp.data.sp_entity_id],
+              ['ACS URL (HTTP-POST)', sp.data.acs_url],
+              ['SP metadata URL', sp.data.metadata_url],
+            ] as const
+          ).map(([label, value], i) => (
+            <div className="form-group" style={{ flex: '1 1 260px' }} key={label}>
+              <label className="form-label" htmlFor={`${fid}-sp-${i}`}>{label}</label>
+              <div style={{ display: 'flex', gap: '0.5rem' }}>
+                <input id={`${fid}-sp-${i}`} className="form-input" readOnly value={value} />
+                <CopyButton text={value} />
+              </div>
+            </div>
+          ))}
+        </FormRow>
+      )}
+      <FormRow>
+        <TextField
+          label="IdP Metadata URL"
+          value={o.idp_metadata_url}
+          onChange={(v) => setO({ idp_metadata_url: v })}
+          flex="1 1 320px"
+          placeholder="https://idp.example.com/saml/metadata"
+        />
+        <div className="form-group form-check-field" style={{ flex: '0 0 auto' }}>
+          <span className="form-label" aria-hidden="true">&nbsp;</span>
+          <button
+            type="button"
+            className="btn btn-sm btn-secondary"
+            disabled={importer.isPending || !o.idp_metadata_url.trim()}
+            onClick={() => runImport({ url: o.idp_metadata_url.trim() })}
+          >
+            Import from URL
+          </button>
+        </div>
+      </FormRow>
+      <div className="form-group">
+        <label className="form-label" htmlFor={`${fid}-metadata-xml`}>Or paste IdP metadata XML</label>
+        <textarea
+          id={`${fid}-metadata-xml`}
+          className="form-input"
+          rows={3}
+          value={metadataXml}
+          onChange={(e) => setMetadataXml(e.target.value)}
+        />
+        <div style={{ marginTop: '0.5rem' }}>
+          <button
+            type="button"
+            className="btn btn-sm btn-secondary"
+            disabled={importer.isPending || !metadataXml.trim()}
+            onClick={() => runImport({ xml: metadataXml })}
+          >
+            {importer.isPending ? 'Reading…' : 'Import pasted metadata'}
+          </button>
+        </div>
+      </div>
+      {importer.isError && <Callout tone="danger">Metadata import failed: {(importer.error as Error).message}</Callout>}
+      {imported && (
+        <Callout tone={imported.ok ? 'success' : 'danger'}>
+          {imported.ok
+            ? `Read ${imported.idp_entity_id}: ${imported.idp_certs.length} signing certificate(s). Save to keep them.`
+            : `Could not read the metadata: ${imported.error}`}
+        </Callout>
+      )}
+      <FormRow>
+        <TextField
+          label="IdP Entity ID"
+          value={o.idp_entity_id}
+          onChange={(v) => setO({ idp_entity_id: v })}
+          flex="1 1 280px"
+          help="Must equal the Issuer of the IdP's assertions."
+        />
+        <TextField
+          label="IdP SSO URL"
+          value={o.idp_sso_url}
+          onChange={(v) => setO({ idp_sso_url: v })}
+          flex="1 1 280px"
+          help="The HTTP-Redirect SingleSignOnService location."
+        />
+      </FormRow>
+      <div className="form-group">
+        <label className="form-label" htmlFor={`${fid}-certs`}>IdP Signing Certificates</label>
+        <textarea
+          id={`${fid}-certs`}
+          className="form-input"
+          rows={4}
+          style={{ fontFamily: 'var(--font-mono, monospace)' }}
+          value={o.idp_certs.join('\n')}
+          aria-describedby={`${fid}-certs-help`}
+          onChange={(e) => setO({ idp_certs: splitPemBlocks(e.target.value) })}
+        />
+        <div className="form-help" id={`${fid}-certs-help`}>
+          PEM, one block after another (up to {SAML_MAX_CERTS}, for a rollover).
+          {sp.data?.certs.length
+            ? ` Saved: ${sp.data.certs.map((c) => `${c.fingerprint.slice(0, 23)}… until ${c.not_after}`).join('; ')}.`
+            : ''}
+        </div>
+      </div>
+      <FormRow>
+        <TextField
+          label="Username Attribute"
+          value={o.username_attribute}
+          onChange={(v) => setO({ username_attribute: v })}
+          flex="1 1 160px"
+          help="Blank uses the email attribute, else the NameID."
+        />
+        <TextField
+          label="Email Attribute"
+          value={o.email_attribute}
+          onChange={(v) => setO({ email_attribute: v })}
+          flex="1 1 160px"
+        />
+        <TextField
+          label="Display Name Attribute"
+          value={o.display_name_attribute}
+          onChange={(v) => setO({ display_name_attribute: v })}
+          flex="1 1 160px"
+        />
+        <TextField
+          label="Groups Attribute"
+          value={o.groups_attribute}
+          onChange={(v) => setO({ groups_attribute: v })}
+          flex="1 1 160px"
+        />
+      </FormRow>
+      <SsoRoleFields value={o} onChange={setO} groupNoun="groups attribute value" />
+      <FormRow>
+        <TextField
+          label="SP Entity ID Override (optional)"
+          value={o.sp_entity_id}
+          onChange={(v) => setO({ sp_entity_id: v })}
+          flex="1 1 240px"
+          help="Blank uses the metadata URL."
+        />
+        <TextField
+          label="ACS URL Override (optional)"
+          value={o.acs_url}
+          onChange={(v) => setO({ acs_url: v })}
+          flex="1 1 240px"
+          help="Blank derives it from the request."
+        />
+        <TextField
+          label="CA Certificate File (optional)"
+          value={o.ca_cert_file}
+          onChange={(v) => setO({ ca_cert_file: v })}
+          flex="1 1 220px"
+          help="For fetching metadata from a private-CA host."
+        />
+      </FormRow>
+      <SsoGroupFields value={o} onChange={setO} groups={groups} groupNoun="groups attribute value" />
+    </ProviderFieldset>
+  );
+}
+
+function SsoMappingsField({
   mappings,
   groups,
+  groupNoun,
   onChange,
 }: {
   mappings: { group: string; access_group_id: number }[];
   groups: AccessGroup[];
+  groupNoun: string;
   onChange: (next: { group: string; access_group_id: number }[]) => void;
 }) {
   const id = useId();
+  const nounLabel = groupNoun.charAt(0).toUpperCase() + groupNoun.slice(1);
   return (
     <div className="form-group">
       <span className="form-label" id={id}>Group Mappings</span>
       {mappings.length === 0 && (
-        <div className="form-help">No mappings. With access group sync on, a mapping adds an access group for a group claim value.</div>
+        <div className="form-help">No mappings. With access group sync on, a mapping adds an access group for a {groupNoun}.</div>
       )}
       {mappings.map((m, i) => (
         <div key={i} className="form-row" role="group" aria-labelledby={id}>
           <div className="form-group" style={{ flex: '1 1 220px' }}>
-            <label className="form-label" htmlFor={`${id}-group-${i}`}>Group claim value</label>
+            <label className="form-label" htmlFor={`${id}-group-${i}`}>{nounLabel}</label>
             <input
               id={`${id}-group-${i}`}
               className="form-input"

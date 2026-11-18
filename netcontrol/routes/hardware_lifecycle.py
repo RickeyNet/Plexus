@@ -4,9 +4,12 @@ settings and the alert check itself.
 
 One router (``router``), registered in ``app.py`` behind the ``lifecycle``
 feature: reads need ``lifecycle``, writes ``lifecycle.write`` (admins and
-the API token pass both). The lifecycle pages are not filtered by inventory
-group, so the feature is not enrolled in object scope (accounts limited to
-selected inventory groups never reach it). Every write is validated here
+the API token pass both). Object scope: a caller limited to selected
+inventory groups sees the status of the hosts of those groups and the
+support contracts that cover one of them (each listing only those hosts),
+changes a contract through a host it can change, reads the shared notice
+catalogue, which only unrestricted callers change, and cannot change the
+settings or run the check (both cover every device). Every write is validated here
 (422 with per-field ``fields``; 409 on a duplicate device type, part number
 or contract id; 404 on an unknown id) and audited under the ``lifecycle``
 category; notices and contracts are recorded in the change log by the
@@ -56,6 +59,20 @@ from netcontrol.hardware_lifecycle import (
     milestone_order_errors,
     notice_state,
 )
+from netcontrol.object_scope import (
+    ScopeModel,
+    filter_rows,
+    readable_host_ids,
+    refuse_scoped,
+    register_model,
+    request_scope,
+    require_host,
+    require_model_write,
+    require_new_row,
+    require_row,
+    scope_exempt,
+    scoped,
+)
 from netcontrol.routes.circuits import _conflict, _found, _merged, _raise_if
 from netcontrol.routes.reporting import _csv_download_response
 from netcontrol.routes.shared import _audit, _corr_id, _session_user
@@ -73,6 +90,17 @@ CHECK_INTERVAL = 6 * 60 * 60
 INITIAL_CHECK_DELAY = 180
 _check_lock = asyncio.Lock()
 _METRIC = "hardware lifecycle"
+
+# A support contract reaches the object scope through the devices it covers
+# (``scope_host_ids``, put on the row by ``_scoped_contract``).
+CONTRACT_MODEL = register_model(
+    ScopeModel(
+        "support_contract",
+        {"host": "scope_host_ids"},
+        not_found="Contract not found",
+        description="Hardware support contracts (by the devices they cover)",
+    )
+)
 
 SETTING_DEFAULTS: dict[str, str] = {
     "alerts_enabled": "true",
@@ -194,6 +222,7 @@ def _notice_out(notice: dict, today: date | None = None) -> dict:
 
 
 @router.get(f"{PREFIX}/notices")
+@scope_exempt("the shared end-of-life notice catalogue: no host or inventory group data")
 async def list_notices(
     device_type_id: int | None = Query(default=None), q: str | None = Query(default=None, max_length=200)
 ) -> dict:
@@ -203,13 +232,22 @@ async def list_notices(
 
 
 @router.get(f"{PREFIX}/notices/{{notice_id}}")
-async def get_notice(notice_id: int) -> dict:
+@scoped("catalog")
+async def get_notice(notice_id: int, request: Request = None) -> dict:  # type: ignore[assignment]
+    """A notice (shared) and the devices it applies to (a scoped caller:
+    those it can read)."""
     notice = _found(await db.get_hardware_notice(notice_id), "Notice")
-    return {**_notice_out(notice), "hosts": await db.hardware_notice_hosts(notice_id)}
+    hosts = await db.hardware_notice_hosts(notice_id)
+    readable = await readable_host_ids(request)
+    if readable is not None:
+        hosts = [h for h in hosts if int(h["id"]) in readable]
+    return {**_notice_out(notice), "hosts": hosts}
 
 
 @router.post(f"{PREFIX}/notices", status_code=201)
+@scoped("catalog")
 async def create_notice(body: NoticeBody, request: Request) -> dict:
+    await require_model_write(request)
     values = await _notice_values(_merged(None, body, db.HARDWARE_NOTICE_FIELDS))
     try:
         record = await db.create_hardware_notice(values)
@@ -220,7 +258,9 @@ async def create_notice(body: NoticeBody, request: Request) -> dict:
 
 
 @router.put(f"{PREFIX}/notices/{{notice_id}}")
+@scoped("catalog")
 async def update_notice(notice_id: int, body: NoticeBody, request: Request) -> dict:
+    await require_model_write(request)
     current = _found(await db.get_hardware_notice(notice_id), "Notice")
     values = await _notice_values(_merged(current, body, db.HARDWARE_NOTICE_FIELDS))
     try:
@@ -233,7 +273,9 @@ async def update_notice(notice_id: int, body: NoticeBody, request: Request) -> d
 
 
 @router.delete(f"{PREFIX}/notices/{{notice_id}}")
+@scoped("catalog")
 async def delete_notice(notice_id: int, request: Request) -> dict:
+    await require_model_write(request)
     record = _found(await db.get_hardware_notice(notice_id), "Notice")
     await db.delete_hardware_notice(notice_id)
     await _audit_write(request, "notice_delete", f"id={notice_id} {_notice_label(record)}")
@@ -262,14 +304,47 @@ async def _contract_values(raw: dict) -> dict:
     return values
 
 
-async def _contract_hosts(host_ids: list[int] | None) -> list[int] | None:
+async def _contract_hosts(host_ids: list[int] | None, request: Request | None = None) -> list[int] | None:
+    """The devices a contract body names (sorted); 422 naming the unknown
+    ones (for a scoped caller, the ones it cannot read too), 403 for a
+    scoped caller when one is not writable."""
     if host_ids is None:
         return None
     missing = await db.missing_host_ids(host_ids)
+    readable = await readable_host_ids(request)
+    if readable is not None:
+        missing = sorted({*missing, *(int(h) for h in host_ids if int(h) not in readable)})
     if missing:
         message = f"Unknown device id(s): {', '.join(str(h) for h in missing[:10])}."
         raise HTTPException(status_code=422, detail={"message": message, "fields": {"host_ids": message}})
+    if readable is not None and host_ids:
+        await require_new_row(request, CONTRACT_MODEL.name, {"scope_host_ids": list(host_ids)})
     return sorted(set(host_ids))
+
+
+def _scoped_contract(contract: dict) -> dict:
+    """The contract with ``scope_host_ids`` (the devices it covers)."""
+    return {**contract, "scope_host_ids": [int(h["id"]) for h in contract.get("hosts") or []]}
+
+
+def _visible_contract(contract: dict, readable: frozenset[int] | None) -> dict:
+    """What a caller sees of a contract: for a scoped one (``readable``),
+    only the devices it can read."""
+    if readable is None:
+        return contract
+    hosts = [h for h in contract.get("hosts") or [] if int(h["id"]) in readable]
+    return {**contract, "hosts": hosts, "host_count": len(hosts)}
+
+
+async def _require_contract(request: Request | None, contract_id: int, *, write: bool = False) -> dict:
+    """The contract; 404 when unknown or (scoped caller) it covers no device
+    the caller can read, 403 on ``write`` when it covers none it can change."""
+    contract = _found(await db.get_support_contract(contract_id), "Contract")
+    if (await request_scope(request)).restricted:
+        await require_row(
+            request, CONTRACT_MODEL.name, _scoped_contract(contract), write=write, not_found="Contract not found"
+        )
+    return contract
 
 
 async def _contract_out(contract: dict, today: date | None = None, warn_days: int | None = None) -> dict:
@@ -279,29 +354,46 @@ async def _contract_out(contract: dict, today: date | None = None, warn_days: in
 
 
 @router.get(f"{PREFIX}/contracts")
+@scoped("list")
 async def list_contracts(
     host_id: int | None = Query(default=None),
     state: str | None = Query(default=None, max_length=40),
     q: str | None = Query(default=None, max_length=200),
+    request: Request = None,  # type: ignore[assignment]
 ) -> dict:
+    readable = await readable_host_ids(request)
+    if readable is not None and host_id is not None:
+        await require_host(request, host_id)
     today, warn_days = _today(), (await lifecycle_settings())["contract_warn_days"]
-    contracts = [
-        await _contract_out(c, today, warn_days) for c in await db.list_support_contracts(host_id=host_id, search=q)
-    ]
+    rows = await db.list_support_contracts(host_id=host_id, search=q)
+    if readable is not None:
+        rows = [
+            _visible_contract(c, readable)
+            for c in await filter_rows(CONTRACT_MODEL.name, [_scoped_contract(c) for c in rows], request)
+        ]
+        for c in rows:
+            c.pop("scope_host_ids", None)
+    contracts = [await _contract_out(c, today, warn_days) for c in rows]
     if state:
         contracts = [c for c in contracts if c["state"] == state]
     return {"contracts": contracts}
 
 
 @router.get(f"{PREFIX}/contracts/{{contract_id}}")
-async def get_contract(contract_id: int) -> dict:
-    return await _contract_out(_found(await db.get_support_contract(contract_id), "Contract"))
+@scoped("contract")
+async def get_contract(contract_id: int, request: Request = None) -> dict:  # type: ignore[assignment]
+    contract = await _require_contract(request, contract_id)
+    return await _contract_out(_visible_contract(contract, await readable_host_ids(request)))
 
 
 @router.post(f"{PREFIX}/contracts", status_code=201)
+@scoped("create")
 async def create_contract(body: ContractBody, request: Request) -> dict:
     values = await _contract_values(_merged(None, body, db.SUPPORT_CONTRACT_FIELDS))
-    hosts = await _contract_hosts(body.host_ids) or []
+    if (await request_scope(request)).restricted and not body.host_ids:
+        # A contract that covers no device would be visible to no scoped caller.
+        await require_new_row(request, CONTRACT_MODEL.name, {"scope_host_ids": []})
+    hosts = await _contract_hosts(body.host_ids, request) or []
     try:
         record = await db.create_support_contract(values, hosts)
     except ValueError as exc:
@@ -311,14 +403,20 @@ async def create_contract(body: ContractBody, request: Request) -> dict:
         "contract_create",
         f"id={record['id']} provider={values['provider']} contract_id={values['contract_id']} hosts={len(hosts)}",
     )
-    return await _contract_out(record)
+    return _visible_contract(await _contract_out(record), await readable_host_ids(request))
 
 
 @router.put(f"{PREFIX}/contracts/{{contract_id}}")
+@scoped("contract")
 async def update_contract(contract_id: int, body: ContractBody, request: Request) -> dict:
-    current = _found(await db.get_support_contract(contract_id), "Contract")
+    current = await _require_contract(request, contract_id, write=True)
     values = await _contract_values(_merged(current, body, db.SUPPORT_CONTRACT_FIELDS))
-    hosts = await _contract_hosts(body.host_ids)
+    hosts = await _contract_hosts(body.host_ids, request)
+    writable = await readable_host_ids(request, write=True)
+    if hosts is not None and writable is not None:
+        # A scoped caller replaces the devices it can change; the others stay.
+        kept = [int(h["id"]) for h in current.get("hosts") or [] if int(h["id"]) not in writable]
+        hosts = sorted({*hosts, *kept})
     try:
         record = await db.update_support_contract(contract_id, values, hosts)
     except ValueError as exc:
@@ -328,12 +426,13 @@ async def update_contract(contract_id: int, body: ContractBody, request: Request
     if hosts is not None:
         detail += f" hosts={len(hosts)}"
     await _audit_write(request, "contract_update", detail)
-    return await _contract_out(record)
+    return _visible_contract(await _contract_out(record), await readable_host_ids(request))
 
 
 @router.delete(f"{PREFIX}/contracts/{{contract_id}}")
+@scoped("contract")
 async def delete_contract(contract_id: int, request: Request) -> dict:
-    record = _found(await db.get_support_contract(contract_id), "Contract")
+    record = await _require_contract(request, contract_id, write=True)
     await db.delete_support_contract(contract_id)
     await _audit_write(
         request,
@@ -391,22 +490,29 @@ def _check_choice(value: str | None, allowed: tuple[str, ...], name: str) -> Non
         raise HTTPException(status_code=422, detail=f"{name} must be one of {', '.join(allowed)}")
 
 
+async def _readable_statuses(request: Request | None, settings: dict[str, Any] | None = None) -> list[dict]:
+    """``device_statuses`` of the devices the caller can read."""
+    return await filter_rows("host_record", await device_statuses(settings=settings), request)
+
+
 @router.get(f"{PREFIX}/status")
+@scoped("list")
 async def fleet_status(
     stage: str | None = Query(default=None, max_length=40),
     coverage: str | None = Query(default=None, max_length=40),
     q: str | None = Query(default=None, max_length=200),
+    request: Request = None,  # type: ignore[assignment]
 ) -> dict:
     """Every device's lifecycle status (filtered) and the fleet summary (of
-    every device, unfiltered)."""
+    every device, unfiltered; a scoped caller: of the devices it can read)."""
     _check_choice(stage, STAGES, "stage")
     _check_choice(coverage, COVERAGE_STATES, "coverage")
     settings = await lifecycle_settings()
-    rows = await device_statuses(settings=settings)
+    rows = await _readable_statuses(request, settings)
     return {
         "summary": fleet_summary(rows),
         "devices": _filter_statuses(rows, stage, coverage, q),
-        "settings": settings,
+        "settings": await _caller_settings(request, settings, rows),
         "stages": list(STAGES),
         "coverage_states": list(COVERAGE_STATES),
     }
@@ -432,16 +538,18 @@ _CSV_COLUMNS: tuple[tuple[str, str], ...] = (
 
 
 @router.get(f"{PREFIX}/status/export")
+@scoped("list")
 async def export_status_csv(
     stage: str | None = Query(default=None, max_length=40),
     coverage: str | None = Query(default=None, max_length=40),
     q: str | None = Query(default=None, max_length=200),
+    request: Request = None,  # type: ignore[assignment]
 ) -> Response:
     """The device statuses as CSV (the filters of ``GET /status``); text a
     person entered is guarded against spreadsheet formulas."""
     _check_choice(stage, STAGES, "stage")
     _check_choice(coverage, COVERAGE_STATES, "coverage")
-    rows = _filter_statuses(await device_statuses(), stage, coverage, q)
+    rows = _filter_statuses(await _readable_statuses(request), stage, coverage, q)
     output = io.StringIO()
     writer = csv.writer(output)
     writer.writerow([header for header, _ in _CSV_COLUMNS])
@@ -458,9 +566,13 @@ async def export_status_csv(
 
 
 @router.get(f"{PREFIX}/hosts/{{host_id}}")
-async def host_lifecycle(host_id: int) -> dict:
+@scoped("host")
+async def host_lifecycle(host_id: int, request: Request = None) -> dict:  # type: ignore[assignment]
     """One device's lifecycle: its status, the notices that apply (with how
     and their own stage) and its contracts (with their state)."""
+    readable = await readable_host_ids(request)
+    if readable is not None:
+        await require_host(request, host_id, not_found="Device not found")
     settings = await lifecycle_settings()
     rows = await device_statuses(host_id, settings)
     if not rows:
@@ -477,17 +589,19 @@ async def host_lifecycle(host_id: int) -> dict:
         if int(n["id"]) in via
     ]
     contracts = [
-        await _contract_out(c, today, settings["contract_warn_days"])
+        await _contract_out(_visible_contract(c, readable), today, settings["contract_warn_days"])
         for c in await db.list_support_contracts(host_id=host_id)
     ]
     return {"host_id": host_id, "status": rows[0], "notices": notices, "contracts": contracts}
 
 
 @router.get(f"{PREFIX}/choices")
-async def choices() -> dict:
+@scoped("list")
+async def choices(request: Request = None) -> dict:  # type: ignore[assignment]
     """What the dialogs' pickers offer: devices and device types (id and
-    name only), so a user with the lifecycle feature alone can pick them."""
-    hosts = await db.get_all_hosts()
+    name only), so a user with the lifecycle feature alone can pick them (a
+    scoped caller: the devices it can read)."""
+    hosts = (await request_scope(request)).filter_hosts(await db.get_all_hosts())
     types = await db.list_device_types()
     return {
         "hosts": [{"id": h["id"], "hostname": h["hostname"], "ip_address": h.get("ip_address") or ""} for h in hosts],
@@ -502,13 +616,32 @@ async def choices() -> dict:
 # ── Settings and the alert check ─────────────────────────────────────────────
 
 
+async def _caller_settings(
+    request: Request | None, settings: dict[str, Any], rows: list[dict] | None = None
+) -> dict[str, Any]:
+    """The settings as the caller sees them: for a scoped caller the last
+    check's alert count covers the devices it can read (``rows``: their
+    statuses, when already read)."""
+    if (await request_scope(request)).unrestricted:
+        return settings
+    if rows is None:
+        rows = await _readable_statuses(request, settings)
+    count = 0
+    if settings["alerts_enabled"]:
+        count = sum(len(alert_conditions(r, support_warn_days=settings["support_warn_days"])) for r in rows)
+    return {**settings, "last_check_alerts": count}
+
+
 @router.get(f"{PREFIX}/settings")
-async def get_settings() -> dict:
-    return await lifecycle_settings()
+@scoped("list")
+async def get_settings(request: Request = None) -> dict:  # type: ignore[assignment]
+    return await _caller_settings(request, await lifecycle_settings())
 
 
 @router.put(f"{PREFIX}/settings")
+@scoped("refused")
 async def update_settings(body: SettingsBody, request: Request) -> dict:
+    await refuse_scoped(request)
     errors = FieldErrors()
     values: dict[str, Any] = {}
     if body.alerts_enabled is not None:
@@ -582,7 +715,10 @@ async def run_lifecycle_check(trigger: str = "manual") -> dict[str, Any]:
 
 
 @router.post(f"{PREFIX}/check")
+@scoped("refused")
 async def check_now(request: Request) -> dict:
+    # Evaluates every device.
+    await refuse_scoped(request)
     result = await run_lifecycle_check("manual")
     if not result["ok"]:
         raise HTTPException(status_code=500, detail="The lifecycle check failed; see the server log.")

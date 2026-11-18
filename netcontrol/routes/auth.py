@@ -14,6 +14,7 @@ import re
 import secrets
 import sys
 import time
+from collections.abc import Callable
 
 import routes.database as db
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
@@ -22,9 +23,10 @@ from itsdangerous import BadSignature, URLSafeTimedSerializer
 from pydantic import BaseModel, Field
 
 import netcontrol.routes.state as state
-from netcontrol import object_scope, oidc
+from netcontrol import object_scope, oidc, saml
 from netcontrol.routes.shared import _audit, _corr_id, _get_session, _request_scheme
 from netcontrol.routes.state import _env_flag
+from netcontrol.sso import SsoError, SsoIdentity, safe_next
 from netcontrol.telemetry import configure_logging
 
 LOGGER = configure_logging("plexus.auth")
@@ -791,23 +793,25 @@ async def upsert_ldap_user(username: str, ldap_attrs: dict) -> dict | None:
     return user
 
 
-async def _existing_access_group_ids(group_ids: list[int], username: str) -> list[int]:
+async def _existing_access_group_ids(group_ids: list[int], username: str, provider: str = "oidc") -> list[int]:
     """``group_ids`` without the ones that no longer exist (warned)."""
     known = {int(g["id"]) for g in await db.get_all_access_groups()}
     kept = sorted({gid for gid in group_ids if gid in known})
     skipped = sorted({gid for gid in group_ids if gid not in known})
     if skipped:
-        LOGGER.warning("oidc: skipping unknown access group ids %s for user '%s'", skipped, username)
+        LOGGER.warning("%s: skipping unknown access group ids %s for user '%s'", provider, skipped, username)
     return kept
 
 
-async def upsert_oidc_user(identity: oidc.OidcIdentity, oidc_cfg: dict) -> tuple[dict | None, str]:
-    """Provision or re-sync the account of an OIDC sign-in.
+async def upsert_sso_user(identity: SsoIdentity, sso_cfg: dict, provider: str) -> tuple[dict | None, str]:
+    """Provision or re-sync the account of a single sign-on (``provider``
+    is ``oidc`` or ``saml``; ``sso_cfg`` is that protocol's config block).
 
     Returns ``(user, "")`` or ``(None, reason)``. The account is bound to
-    the provider's ``sub`` on its first OIDC login (``users.external_id``);
-    a later login whose ``sub`` differs from the bound one is refused.
-    Role: ``admin`` when a groups-claim value is in ``admin_groups``, else
+    the provider's subject (OIDC ``sub``, SAML ``NameID``) on its first
+    sign-in through that provider (``users.external_id``); a later sign-in
+    whose subject differs from the bound one is refused.
+    Role: ``admin`` when a group value is in ``admin_groups``, else
     ``default_role``, re-synced every login through upsert_external_user
     (whose admin name-collision guard applies). Access groups: the defaults
     on first login; with ``sync_groups`` the defaults plus every mapped
@@ -816,8 +820,8 @@ async def upsert_oidc_user(identity: oidc.OidcIdentity, oidc_cfg: dict) -> tuple
     """
     username = identity.username
     existing = await db.get_user_by_username(username)
-    oidc_managed = bool(existing) and (existing.get("auth_provider") or "") == "oidc"
-    bound_sub = str((existing or {}).get("external_id") or "") if oidc_managed else ""
+    sso_managed = bool(existing) and (existing.get("auth_provider") or "") == provider
+    bound_sub = str((existing or {}).get("external_id") or "") if sso_managed else ""
     if bound_sub and not hmac.compare_digest(bound_sub.encode(), identity.sub.encode()):
         return None, "subject does not match the subject bound to this account"
 
@@ -825,15 +829,15 @@ async def upsert_oidc_user(identity: oidc.OidcIdentity, oidc_cfg: dict) -> tuple
     current_role = ((existing or {}).get("role") or "user").lower()
     # Overage: the groups are unknown, so keep the role. Not for adopting an
     # unmanaged local admin: that still needs an explicit grant.
-    if existing and identity.overage and (oidc_managed or current_role != "admin"):
+    if existing and identity.overage and (sso_managed or current_role != "admin"):
         role = current_role
-    elif groups & set(oidc_cfg.get("admin_groups") or []):
+    elif groups & set(sso_cfg.get("admin_groups") or []):
         role = "admin"
     else:
-        role = oidc_cfg.get("default_role") or "user"
+        role = sso_cfg.get("default_role") or "user"
 
     user = await upsert_external_user(
-        username, display_name=identity.display_name, role=role, provider="oidc", sync_role=True
+        username, display_name=identity.display_name, role=role, provider=provider, sync_role=True
     )
     if not user:
         return None, "local account provisioning refused (name collides with a local admin) or failed"
@@ -841,19 +845,24 @@ async def upsert_oidc_user(identity: oidc.OidcIdentity, oidc_cfg: dict) -> tuple
     if not bound_sub:
         await db.set_user_external_id(user_id, identity.sub)
 
-    if not existing or (oidc_cfg.get("sync_groups") and not identity.overage):
-        group_ids = list(oidc_cfg.get("default_group_ids") or [])
-        if oidc_cfg.get("sync_groups") and not identity.overage:
+    if not existing or (sso_cfg.get("sync_groups") and not identity.overage):
+        group_ids = list(sso_cfg.get("default_group_ids") or [])
+        if sso_cfg.get("sync_groups") and not identity.overage:
             group_ids += [
-                int(m["access_group_id"]) for m in oidc_cfg.get("group_mappings") or [] if m.get("group") in groups
+                int(m["access_group_id"]) for m in sso_cfg.get("group_mappings") or [] if m.get("group") in groups
             ]
-        group_ids = await _existing_access_group_ids(group_ids, username)
+        group_ids = await _existing_access_group_ids(group_ids, username, provider)
         if existing or group_ids:
             try:
                 await db.set_user_groups(user_id, group_ids)
             except ValueError:
-                LOGGER.warning("oidc: access group assignment failed for user '%s'", username)
+                LOGGER.warning("%s: access group assignment failed for user '%s'", provider, username)
     return await db.get_user_by_id(user_id), ""
+
+
+async def upsert_oidc_user(identity: oidc.OidcIdentity, oidc_cfg: dict) -> tuple[dict | None, str]:
+    """Provision or re-sync the account of an OIDC sign-in (see upsert_sso_user)."""
+    return await upsert_sso_user(identity, oidc_cfg, "oidc")
 
 
 def _dev_bootstrap_enabled() -> bool:
@@ -1288,6 +1297,7 @@ def _logged_out_status() -> dict:
     when /api/auth/register would accept the request.
     """
     oidc_cfg = _oidc_config()
+    saml_cfg = _saml_config()
     return {
         "authenticated": False,
         "allow_self_register": _env_flag("APP_ALLOW_SELF_REGISTER", False),
@@ -1297,7 +1307,12 @@ def _logged_out_status() -> dict:
                 "enabled": _oidc_ready(oidc_cfg),
                 "label": oidc_cfg.get("button_label") or "Sign in with SSO",
                 "primary": bool(oidc_cfg.get("primary")),
-            }
+            },
+            "saml": {
+                "enabled": _saml_ready(saml_cfg),
+                "label": saml_cfg.get("button_label") or "Sign in with SAML",
+                "primary": bool(saml_cfg.get("primary")),
+            },
         },
     }
 
@@ -1486,12 +1501,62 @@ def _drop_oidc_tx_cookie(response: Response) -> None:
     )
 
 
-def _sso_error_redirect(code: str) -> RedirectResponse:
+def _sso_error_redirect(code: str, drop_tx: Callable[[Response], None] | None = None) -> RedirectResponse:
     """Back to the login screen with one of the fixed error codes; the
-    transaction cookie is always dropped."""
+    protocol's transaction cookie (OIDC unless ``drop_tx`` says otherwise)
+    is always dropped."""
     response = RedirectResponse(f"/login?sso_error={code}", status_code=303)
-    _drop_oidc_tx_cookie(response)
+    (drop_tx or _drop_oidc_tx_cookie)(response)
     return response
+
+
+class _SsoAttempt:
+    """One sign-in callback of any single sign-on protocol: the lockout
+    check, failures (counted toward the lockout like a bad password and
+    audited) and success (provision, audit, session cookie, redirect)."""
+
+    def __init__(self, request: Request, provider: str, drop_tx: Callable[[Response], None]):
+        self.request = request
+        self.provider = provider
+        self.drop_tx = drop_tx
+        self.ip = request.client.host if request.client else "unknown"
+        self.now = time.time()
+        self.audit = getattr(_app_module(), "_audit", _audit)
+
+    async def blocked(self) -> RedirectResponse | None:
+        reason = await _login_blocked(self.ip, self.now)
+        return await self.fail("denied", f"refused, {reason}", count=False) if reason else None
+
+    async def fail(self, code: str, step: str, *, user: str = "", count: bool = True) -> RedirectResponse:
+        # ``step`` never carries a token, assertion, code, secret or verifier.
+        if count:
+            await _note_login_failure(self.ip, self.now)
+        await self.audit(
+            "auth",
+            "login.failure",
+            user=user,
+            detail=f"source={self.provider} step={step}",
+            correlation_id=_corr_id(self.request),
+        )
+        return _sso_error_redirect(code, self.drop_tx)
+
+    async def succeed(self, identity: SsoIdentity, cfg: dict, next_path: str | None) -> RedirectResponse:
+        user, reason = await upsert_sso_user(identity, cfg, self.provider)
+        if not user:
+            LOGGER.warning("%s: sign-in refused for '%s': %s", self.provider, identity.username, reason)
+            return await self.fail("account", reason, user=identity.username)
+        await _note_login_success(self.ip)
+        detail = f"source={self.provider}"
+        if identity.overage:
+            detail += " groups=unknown (overage): role and access groups left unchanged"
+        await self.audit(
+            "auth", "login.success", user=user["username"], detail=detail, correlation_id=_corr_id(self.request)
+        )
+        response = RedirectResponse(safe_next(next_path), status_code=303)
+        response.headers["Cache-Control"] = "no-store"
+        _set_session_cookie(response, user)
+        self.drop_tx(response)
+        return response
 
 
 @router.get(oidc.LOGIN_PATH)
@@ -1553,41 +1618,32 @@ def _load_oidc_tx(request: Request) -> dict | None:
 @router.get(oidc.CALLBACK_PATH)
 async def oidc_callback(request: Request):
     """The provider sends the browser back here with a code (or an error)."""
-    _audit_fn = getattr(_app_module(), "_audit", _audit)
-    ip = request.client.host if request.client else "unknown"
-    now = time.time()
+    attempt = _SsoAttempt(request, "oidc", _drop_oidc_tx_cookie)
     params = request.query_params
 
-    async def fail(code: str, step: str, *, user: str = "", count: bool = True) -> RedirectResponse:
-        # ``step`` never carries a token, code, secret or verifier.
-        if count:
-            await _note_login_failure(ip, now)
-        await _audit_fn(
-            "auth", "login.failure", user=user, detail=f"source=oidc step={step}", correlation_id=_corr_id(request)
-        )
-        return _sso_error_redirect(code)
-
-    blocked = await _login_blocked(ip, now)
-    if blocked:
-        return await fail("denied", f"refused, {blocked}", count=False)
+    refused = await attempt.blocked()
+    if refused:
+        return refused
     cfg = _oidc_config()
     if not _oidc_ready(cfg):
-        return await fail("disabled", "single sign-on is disabled")
+        return await attempt.fail("disabled", "single sign-on is disabled")
     tx = _load_oidc_tx(request)
     if tx is None:
-        return await fail("state", "transaction cookie is missing, expired or invalid")
+        return await attempt.fail("state", "transaction cookie is missing, expired or invalid")
     state_param = params.get("state") or ""
     if not state_param or not hmac.compare_digest(state_param.encode(), tx["state"].encode()):
-        return await fail("state", "state does not match the transaction")
+        return await attempt.fail("state", "state does not match the transaction")
     if params.get("error"):
         error = oidc.log_safe(params.get("error"), 60)
         LOGGER.warning(
             "oidc: provider returned error=%s description=%s", error, oidc.log_safe(params.get("error_description"))
         )
-        return await fail("denied" if params.get("error") == "access_denied" else "provider", f"provider error {error}")
+        return await attempt.fail(
+            "denied" if params.get("error") == "access_denied" else "provider", f"provider error {error}"
+        )
     code = params.get("code") or ""
     if not code:
-        return await fail("provider", "no authorization code in the callback")
+        return await attempt.fail("provider", "no authorization code in the callback")
 
     try:
         identity = await oidc.CLIENT.complete_login(
@@ -1600,20 +1656,165 @@ async def oidc_callback(request: Request):
         )
     except oidc.OidcError as exc:
         LOGGER.warning("oidc: sign-in failed: %s", exc.step)
-        return await fail(exc.code, exc.step)
+        return await attempt.fail(exc.code, exc.step)
+    return await attempt.succeed(identity, cfg, tx.get("next"))
 
-    user, reason = await upsert_oidc_user(identity, cfg)
-    if not user:
-        LOGGER.warning("oidc: sign-in refused for '%s': %s", identity.username, reason)
-        return await fail("account", reason, user=identity.username)
 
-    await _note_login_success(ip)
-    detail = "source=oidc"
-    if identity.overage:
-        detail += " groups=unknown (overage): role and access groups left unchanged"
-    await _audit_fn("auth", "login.success", user=user["username"], detail=detail, correlation_id=_corr_id(request))
-    response = RedirectResponse(oidc.safe_next(tx.get("next")), status_code=303)
+# ── SAML 2.0 single sign-on ──────────────────────────────────────────────────
+#
+# Another sign-in method next to the password form and OIDC. The protocol
+# lives in netcontrol/saml.py; these routes hold the browser side. Login
+# sends the browser to the IdP with an AuthnRequest (HTTP-Redirect) and sets
+# a signed, short-lived ``saml_tx`` cookie with the request ID; the IdP
+# POSTs the signed response to the ACS, which checks it against that ID,
+# refuses a replayed assertion and signs the browser in through the same
+# provisioning and session cookie as OIDC. The ACS POST arrives cross-site,
+# so over HTTPS the cookie is ``SameSite=None; Secure``; on plain HTTP only
+# a same-site IdP can complete a sign-in.
+
+_SAML_TX_COOKIE = "saml_tx"
+_SAML_TX_SALT = "plexus-saml-tx"
+_SAML_TX_MAX_AGE = 600
+_SAML_COOKIE_PATH = "/api/auth/saml"
+
+
+def _saml_config() -> dict:
+    return state.AUTH_CONFIG.get("saml") or {}
+
+
+def _saml_ready(cfg: dict) -> bool:
+    return bool(cfg.get("enabled") and cfg.get("idp_entity_id") and cfg.get("idp_sso_url") and cfg.get("idp_certs"))
+
+
+def _request_base(request: Request) -> str:
+    return f"{_request_scheme(request)}://{request.url.netloc}"
+
+
+def saml_sp_entity_id(request: Request, cfg: dict) -> str:
+    """The configured SP entity ID, else the metadata URL on this host."""
+    return str(cfg.get("sp_entity_id") or "").strip() or _request_base(request) + saml.METADATA_PATH
+
+
+def saml_acs_url(request: Request, cfg: dict) -> str:
+    """The configured ACS URL, else the ACS path on this host."""
+    return str(cfg.get("acs_url") or "").strip() or _request_base(request) + saml.ACS_PATH
+
+
+def _saml_settings(request: Request, cfg: dict) -> saml.SamlSettings:
+    return saml.SamlSettings(
+        idp_entity_id=str(cfg.get("idp_entity_id") or ""),
+        certs=tuple(cfg.get("idp_certs") or ()),
+        sp_entity_id=saml_sp_entity_id(request, cfg),
+        acs_url=saml_acs_url(request, cfg),
+        username_attribute=str(cfg.get("username_attribute") or ""),
+        email_attribute=str(cfg.get("email_attribute") or ""),
+        display_name_attribute=str(cfg.get("display_name_attribute") or ""),
+        groups_attribute=str(cfg.get("groups_attribute") or ""),
+    )
+
+
+def _saml_tx_serializer() -> URLSafeTimedSerializer:
+    return URLSafeTimedSerializer(_app_module()._secret_key, salt=_SAML_TX_SALT)
+
+
+def _saml_cookie_samesite() -> str:
+    # The IdP POSTs cross-site: only SameSite=None reaches the ACS, and
+    # browsers accept that only with Secure.
+    return "none" if _session_cookie_secure() else "lax"
+
+
+def _drop_saml_tx_cookie(response: Response) -> None:
+    response.delete_cookie(
+        _SAML_TX_COOKIE,
+        path=_SAML_COOKIE_PATH,
+        secure=_session_cookie_secure(),
+        httponly=True,
+        samesite=_saml_cookie_samesite(),  # type: ignore[arg-type]
+    )
+
+
+@router.get(saml.METADATA_PATH)
+async def saml_metadata(request: Request):
+    """The SP metadata to register at the IdP (entity ID and ACS URL)."""
+    cfg = _saml_config()
+    xml = saml.sp_metadata_xml(saml_sp_entity_id(request, cfg), saml_acs_url(request, cfg))
+    return Response(content=xml, media_type="application/samlmetadata+xml")
+
+
+@router.get(saml.LOGIN_PATH)
+async def saml_login(request: Request, next_path: str = Query("/", alias="next")):
+    """Start a SAML sign-in: remember the request ID, send the browser to
+    the IdP with an AuthnRequest."""
+    cfg = _saml_config()
+    if not _saml_ready(cfg):
+        return _sso_error_redirect("disabled", _drop_saml_tx_cookie)
+    request_id = saml.new_request_id()
+    relay_state = safe_next(next_path)
+    url = saml.authn_request_url(
+        str(cfg["idp_sso_url"]),
+        request_id=request_id,
+        sp_entity_id=saml_sp_entity_id(request, cfg),
+        acs_url=saml_acs_url(request, cfg),
+        relay_state=relay_state,
+    )
+    response = RedirectResponse(url, status_code=302)
     response.headers["Cache-Control"] = "no-store"
-    _set_session_cookie(response, user)
-    _drop_oidc_tx_cookie(response)
+    response.set_cookie(
+        _SAML_TX_COOKIE,
+        _saml_tx_serializer().dumps({"request_id": request_id, "next": relay_state}),
+        max_age=_SAML_TX_MAX_AGE,
+        path=_SAML_COOKIE_PATH,
+        httponly=True,
+        samesite=_saml_cookie_samesite(),  # type: ignore[arg-type]
+        secure=_session_cookie_secure(),
+    )
     return response
+
+
+def _load_saml_tx(request: Request) -> dict | None:
+    raw = request.cookies.get(_SAML_TX_COOKIE)
+    if not raw:
+        return None
+    try:
+        tx = _saml_tx_serializer().loads(raw, max_age=_SAML_TX_MAX_AGE)
+    except BadSignature:  # also covers SignatureExpired
+        return None
+    if not isinstance(tx, dict) or not isinstance(tx.get("request_id"), str) or not tx["request_id"]:
+        return None
+    return tx
+
+
+@router.post(saml.ACS_PATH)
+async def saml_acs(request: Request):
+    """The IdP POSTs the signed response here (HTTP-POST binding)."""
+    attempt = _SsoAttempt(request, "saml", _drop_saml_tx_cookie)
+    refused = await attempt.blocked()
+    if refused:
+        return refused
+    cfg = _saml_config()
+    if not _saml_ready(cfg):
+        return await attempt.fail("disabled", "SAML single sign-on is disabled")
+    tx = _load_saml_tx(request)
+    if tx is None:
+        return await attempt.fail("state", "transaction cookie is missing, expired or invalid")
+    try:
+        form = await request.form()
+    except Exception:  # malformed or oversized body
+        return await attempt.fail("provider", "the POST body could not be read")
+    saml_response = form.get("SAMLResponse")
+    relay_state = form.get("RelayState")
+    try:
+        result = saml.parse_response(
+            saml_response if isinstance(saml_response, str) else "",
+            _saml_settings(request, cfg),
+            request_id=tx["request_id"],
+        )
+    except SsoError as exc:
+        LOGGER.warning("saml: sign-in failed: %s", exc.step)
+        return await attempt.fail(exc.code, exc.step)
+    if not await db.remember_saml_assertion(result.assertion_id, result.expires_at):
+        return await attempt.fail("token", "the assertion was already used (replay)", user=result.identity.username)
+    # RelayState goes back through the same-site path rule; without one,
+    # the path remembered at login.
+    next_path = relay_state if isinstance(relay_state, str) and relay_state else tx.get("next")
+    return await attempt.succeed(result.identity, cfg, next_path)

@@ -6,6 +6,9 @@ Provides:
   - Client-triggered export endpoints (return chart config for frontend rendering)
   - Direct URL endpoints for embedding (return self-contained HTML with chart)
   - SVG generation using ECharts config (for non-interactive embedding)
+
+Object scope: a host graph follows its host; a graph of a host outside the
+caller's read scope answers 404 like an unknown graph.
 """
 
 import json
@@ -16,6 +19,7 @@ import routes.database as db
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
+from netcontrol.object_scope import require_row, scoped
 from netcontrol.telemetry import configure_logging
 
 router = APIRouter()
@@ -153,15 +157,17 @@ window.addEventListener('resize', function() {{ chart.resize(); }});
 
 
 @router.get("/api/graphs/{host_graph_id}/config")
+@scoped("host_record")
 async def get_graph_config(
     host_graph_id: int,
+    request: Request,
     range: str = Query("24h"),
     theme: str = Query("dark"),
 ):
     """Return the ECharts option JSON for a host graph (for client-side rendering/export)."""
-    host_graph = await db.get_host_graph(host_graph_id)
-    if not host_graph:
-        raise HTTPException(404, "Host graph not found")
+    host_graph = await require_row(
+        request, "host_record", await db.get_host_graph(host_graph_id), not_found="Host graph not found"
+    )
 
     template = await db.get_graph_template(host_graph["graph_template_id"])
     if not template:
@@ -184,17 +190,19 @@ async def get_graph_config(
 
 
 @router.get("/api/graphs/{host_graph_id}/embed")
+@scoped("host_record")
 async def get_graph_embed(
     host_graph_id: int,
+    request: Request,
     width: int = Query(800, ge=200, le=2000),
     height: int = Query(400, ge=150, le=1200),
     range: str = Query("24h"),
     theme: str = Query("dark"),
 ):
     """Return a self-contained HTML page with the chart for iframe embedding."""
-    host_graph = await db.get_host_graph(host_graph_id)
-    if not host_graph:
-        raise HTTPException(404, "Host graph not found")
+    host_graph = await require_row(
+        request, "host_record", await db.get_host_graph(host_graph_id), not_found="Host graph not found"
+    )
 
     template = await db.get_graph_template(host_graph["graph_template_id"])
     if not template:
@@ -246,8 +254,10 @@ async def get_graph_embed(
 
 
 @router.get("/api/graph-image/{host_graph_id}.svg")
+@scoped("host_record")
 async def get_graph_svg_stub(
     host_graph_id: int,
+    request: Request,
     width: int = Query(800, ge=200, le=2000),
     height: int = Query(400, ge=150, le=1200),
     range: str = Query("24h"),
@@ -258,9 +268,9 @@ async def get_graph_svg_stub(
     This endpoint returns a minimal SVG with a link to the embed page as a practical fallback.
     For full PNG/SVG rendering, use the /embed endpoint with a screenshotting tool.
     """
-    host_graph = await db.get_host_graph(host_graph_id)
-    if not host_graph:
-        raise HTTPException(404, "Host graph not found")
+    host_graph = await require_row(
+        request, "host_record", await db.get_host_graph(host_graph_id), not_found="Host graph not found"
+    )
 
     template = await db.get_graph_template(host_graph["graph_template_id"])
     title = _xml_escape(template.get("name", "Graph")) if template else "Graph"

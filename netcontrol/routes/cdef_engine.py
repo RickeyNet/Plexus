@@ -6,6 +6,10 @@ Provides:
   - CDEF CRUD API endpoints
   - Built-in functions: SUM, AVG, MIN, MAX, ABS, PERCENTILE_95, NEGATE
   - Expression evaluation endpoint for testing
+
+Object scope: CDEFs are a shared catalogue (every caller reads them, only
+unrestricted callers change them); a host's SNMP data sources follow the
+host (read and write scope of its inventory group).
 """
 
 from __future__ import annotations
@@ -16,6 +20,14 @@ import routes.database as db
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
+from netcontrol.object_scope import (
+    require_host,
+    require_model_write,
+    require_new_row,
+    require_row,
+    scope_exempt,
+    scoped,
+)
 from netcontrol.telemetry import configure_logging
 
 router = APIRouter()
@@ -210,11 +222,13 @@ def evaluate_cdef_expression(expression: str, data_map: dict[str, list[float]]) 
 
 
 @router.get("/api/cdefs")
+@scope_exempt("shared CDEF catalogue; no host data")
 async def list_cdefs():
     return await db.list_cdef_definitions()
 
 
 @router.get("/api/cdefs/{cdef_id}")
+@scope_exempt("shared CDEF catalogue; no host data")
 async def get_cdef(cdef_id: int):
     cdef = await db.get_cdef_definition(cdef_id)
     if not cdef:
@@ -223,7 +237,9 @@ async def get_cdef(cdef_id: int):
 
 
 @router.post("/api/cdefs", status_code=201)
+@scoped("catalog")
 async def create_cdef(body: CdefCreate, request: Request):
+    await require_model_write(request)
     user = getattr(request.state, "user", None)
     username = user.get("username", "") if user else ""
     cdef_id = await db.create_cdef_definition(
@@ -236,7 +252,9 @@ async def create_cdef(body: CdefCreate, request: Request):
 
 
 @router.put("/api/cdefs/{cdef_id}")
-async def update_cdef(cdef_id: int, body: CdefUpdate):
+@scoped("catalog")
+async def update_cdef(cdef_id: int, body: CdefUpdate, request: Request):
+    await require_model_write(request)
     existing = await db.get_cdef_definition(cdef_id)
     if not existing:
         raise HTTPException(404, "CDEF not found")
@@ -249,7 +267,9 @@ async def update_cdef(cdef_id: int, body: CdefUpdate):
 
 
 @router.delete("/api/cdefs/{cdef_id}")
-async def delete_cdef(cdef_id: int):
+@scoped("catalog")
+async def delete_cdef(cdef_id: int, request: Request):
+    await require_model_write(request)
     existing = await db.get_cdef_definition(cdef_id)
     if not existing:
         raise HTTPException(404, "CDEF not found")
@@ -260,6 +280,7 @@ async def delete_cdef(cdef_id: int):
 
 
 @router.post("/api/cdefs/evaluate")
+@scope_exempt("evaluates an expression over sample data in the body")
 async def evaluate_cdef(body: CdefEvaluateRequest):
     """Test a CDEF expression against sample data."""
     try:
@@ -275,19 +296,20 @@ async def evaluate_cdef(body: CdefEvaluateRequest):
 
 
 @router.get("/api/hosts/{host_id}/data-sources")
-async def list_data_sources(host_id: int, ds_type: str | None = None):
+@scoped("host")
+async def list_data_sources(host_id: int, request: Request, ds_type: str | None = None):
+    await require_host(request, host_id)
     return await db.list_snmp_data_sources(host_id, ds_type)
 
 
 @router.post("/api/hosts/{host_id}/data-sources/discover")
-async def discover_data_sources(host_id: int):
+@scoped("host")
+async def discover_data_sources(host_id: int, request: Request):
     """Trigger SNMP table walk to discover interfaces and storage as data sources."""
     import netcontrol.routes.state as state
     from netcontrol.routes.snmp import auto_discover_data_sources
 
-    host = await db.get_host(host_id)
-    if not host:
-        raise HTTPException(404, "Host not found")
+    host = await require_host(request, host_id, write=True)
 
     snmp_cfg = state._resolve_host_snmp_config(host)
     if not snmp_cfg.get("enabled"):
@@ -302,19 +324,23 @@ async def discover_data_sources(host_id: int):
 
 
 @router.put("/api/data-sources/{ds_id}")
+@scoped("host_record")
 async def update_data_source(ds_id: int, request: Request):
     body = await request.json()
-    existing = await db.get_snmp_data_source(ds_id)
-    if not existing:
-        raise HTTPException(404, "Data source not found")
+    existing = await require_row(
+        request, "host_record", await db.get_snmp_data_source(ds_id), write=True, not_found="Data source not found"
+    )
+    if isinstance(body, dict) and "host_id" in body and body["host_id"] != existing.get("host_id"):
+        await require_new_row(request, "host_record", {"host_id": body["host_id"]})
     await db.update_snmp_data_source(ds_id, **body)
     return await db.get_snmp_data_source(ds_id)
 
 
 @router.delete("/api/data-sources/{ds_id}")
-async def delete_data_source(ds_id: int):
-    existing = await db.get_snmp_data_source(ds_id)
-    if not existing:
-        raise HTTPException(404, "Data source not found")
+@scoped("host_record")
+async def delete_data_source(ds_id: int, request: Request):
+    await require_row(
+        request, "host_record", await db.get_snmp_data_source(ds_id), write=True, not_found="Data source not found"
+    )
     await db.delete_snmp_data_source(ds_id)
     return {"deleted": True}

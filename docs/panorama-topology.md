@@ -8,8 +8,9 @@ network configuration its template stack gives it (interfaces, zones,
 virtual routers, static routes, BGP, OSPF, IKE gateways, IPsec tunnels,
 GlobalProtect gateways), and, read from each connected firewall through
 Panorama, its operational state: the real interface addresses, the routing
-table, BGP peers, IPsec tunnel state, HA state and the GlobalProtect users
-connected right now. It is all read over the Panorama XML API, read-only,
+table, BGP peers, IPsec tunnel state, HA state and the GlobalProtect users,
+both those connected right now and those who connected earlier and logged
+out. It is all read over the Panorama XML API, read-only,
 and drawn on the same map as the devices Plexus discovers itself and any
 Meraki organizations, Cato accounts, Cisco FMCs, Appgate SDP collectives
 ([appgate-topology.md](appgate-topology.md)), AWS accounts, Azure
@@ -98,7 +99,7 @@ Panorama data appears when the group filter is **All groups**.
 | HA pair box | Both members of an HA pair, the active member first, joined by an **HA** link (a stack link carrying each member's HA state; its status is `failed` when a member is offline, suspended or non-functional) |
 | Firewall (firewall icon) | A firewall, online when it is connected to Panorama, offline when it is not, amber when its HA state is suspended or non-functional |
 | WAN triangle | Each outside interface of a firewall: one with a public address, the egress of the IPv4 default route, or a GlobalProtect gateway interface. It carries the interface's own address |
-| **GlobalProtect users (N)** (star) | The users connected to a firewall's GlobalProtect gateways when the collection ran, as one node per firewall |
+| **GlobalProtect users (N)** (star) | The users connected to a firewall's GlobalProtect gateways when the collection ran, as one node per firewall. **All users**, connected or not, are listed on the Panorama node |
 | VPN tunnel between firewalls | An IPsec tunnel between two firewalls of the Panorama (the active member for an HA pair), drawn like any VPN tunnel (purple dashed, red when either end reports its SA down) |
 | **IPsec** link to a peer | An IPsec tunnel to a peer Panorama does not manage, drawn like a non-Meraki IPsec peer (dotted) to a node in the **Site-to-site VPN peers** box, shared by every tunnel to that address |
 | Dotted grey link | **Managed by Panorama**: Panorama and each firewall on the map. It carries no traffic: Path Mode and the tidy-tree layout ignore it |
@@ -113,6 +114,21 @@ GlobalProtect users are one node per firewall, not one node per user: the
 users are listed in the node's details (user, domain, virtual IP, public IP,
 computer, client, app version, tunnel type, login time, lifetime) and found
 by the search box.
+
+The Panorama node lists **All users**:
+every GlobalProtect user the firewalls on the map know of, connected now or
+not. Each firewall is asked for its connected users and for its previous
+users (those who connected earlier and logged out); a user who logged out
+and is not connected to any firewall is listed as *disconnected*, last seen
+at the logout time, with the public IP and computer of that session. Users
+are named `domain\user` (a user name that is an email is also the email).
+A user seen by an earlier collection who is in neither list stays listed as
+*disconnected* for 180 days after they were last seen. The search box finds
+a user who is not connected right now there. A logged-out user's last
+virtual IP is not kept: it is no subnet and no Path Mode end, only the
+connected users' addresses belong to the address pools. The node's
+**Remote access users** section counts the users **Connected now** and
+**Logged out**.
 
 ### How a firewall joins the rest of the map
 
@@ -188,7 +204,8 @@ firewall (or all its virtual systems) out is not shown on it; a disabled
 rule is shown with **Enabled** *No*. Addresses and services are resolved
 through the device group hierarchy, then shared.
 
-Click the users node for the connected users. Click the Panorama node for
+Click the users node for the connected users (and, on the first one, all
+users). Click the Panorama node for
 its version, model and serial and the **Managed firewalls**, **High
 availability pairs**, **Device groups** (parent, firewalls, rule and object
 counts), **Templates**, **Template stacks** (templates in order, firewalls,
@@ -202,8 +219,8 @@ link.
 
 The toolbar search covers everything collected: firewall names, serials,
 addresses, object and group names, routes, security and NAT rules, tunnels
-and peers, gateway and pool names, and connected users by name, virtual IP
-or public IP.
+and peers, gateway and pool names, connected users by name, virtual IP
+or public IP, and every user in **All users**, connected or not.
 
 In **Path Mode** a firewall, one of its connected subnets, one of its
 static route destinations or one of its GlobalProtect address pools can be
@@ -264,6 +281,7 @@ is `/config/devices/entry[@name='localhost.localdomain']`.
 | IPsec tunnel state of each firewall | `<show><vpn><ipsec-sa/></vpn></show>`, `<show><vpn><flow/></vpn></show>` with `target=<serial>` | Device state and VPN |
 | HA state of each firewall | `<show><high-availability><state/></high-availability></show>` with `target=<serial>` | Device state |
 | Connected GlobalProtect users | `<show><global-protect-gateway><current-user/></global-protect-gateway></show>` with `target=<serial>` | Device state and GlobalProtect |
+| GlobalProtect users who logged out | `<show><global-protect-gateway><previous-user/></global-protect-gateway></show>` with `target=<serial>` (best-effort: a failure is listed in the collection report and the connected users are still shown) | Device state and GlobalProtect |
 
 Every configuration request is `type=config&action=show`: the running
 configuration Panorama last committed. A template stack's own settings win

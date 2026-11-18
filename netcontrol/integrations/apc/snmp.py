@@ -18,6 +18,18 @@ instance is returned by walking the object):
   upsAdvBatteryReplaceIndicator  1.3.6.1.4.1.318.1.1.1.2.2.4   INTEGER 1 no / 2 yes
   upsBasicOutputStatus           1.3.6.1.4.1.318.1.1.1.4.1.1   INTEGER (below)
   upsAdvOutputLoad               1.3.6.1.4.1.318.1.1.1.4.2.3   Gauge, percent
+  upsHighPrecInputLineVoltage    1.3.6.1.4.1.318.1.1.1.3.3.1   Gauge, tenths of VAC
+  upsAdvInputLineVoltage         1.3.6.1.4.1.318.1.1.1.3.2.1   Gauge, VAC (fallback)
+  upsHighPrecInputFrequency      1.3.6.1.4.1.318.1.1.1.3.3.4   Gauge, tenths of Hz
+  upsAdvInputFrequency           1.3.6.1.4.1.318.1.1.1.3.2.4   Gauge, Hz (fallback)
+  upsAdvInputLineFailCause       1.3.6.1.4.1.318.1.1.1.3.2.5   INTEGER (below)
+  upsHighPrecOutputVoltage       1.3.6.1.4.1.318.1.1.1.4.3.1   Gauge, tenths of VAC
+  upsAdvOutputVoltage            1.3.6.1.4.1.318.1.1.1.4.2.1   Gauge, VAC (fallback)
+  upsHighPrecExtdBatteryTemperature
+                                 1.3.6.1.4.1.318.1.1.1.2.3.13  INTEGER, tenths of °C, may be negative
+  upsHighPrecBatteryTemperature  1.3.6.1.4.1.318.1.1.1.2.3.2   Gauge, tenths of °C (fallback)
+  upsAdvBatteryTemperature       1.3.6.1.4.1.318.1.1.1.2.2.2   Gauge, °C (fallback; 255 = not present)
+  uioSensorStatusTemperatureDegC 1.3.6.1.4.1.318.1.1.25.1.2.1.6 INTEGER per probe, °C (-1 = invalid)
 
 The card's own firmware is not in PowerNet-MIB: it is the ``PF`` field of
 the card's sysDescr (``parse_apc_nmc_sys_descr``), read in the same poll.
@@ -30,23 +42,55 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from netcontrol.integrations.apc.firmware import DEVICE_TYPE, ups_version
-from netcontrol.routes.snmp import _snmp_str, parse_apc_nmc_sys_descr
+from netcontrol.routes.snmp import APC_UPS_MODEL_OID, APC_UPS_SERIAL_OID, _snmp_str, parse_apc_nmc_sys_descr
 
 # The kind of the vendor status row (``host_vendor_status.kind``).
 STATUS_KIND = DEVICE_TYPE
 
 SYS_DESCR_OID = "1.3.6.1.2.1.1.1"
 UPS_OIDS: dict[str, str] = {
-    "model": "1.3.6.1.4.1.318.1.1.1.1.1.1",  # upsBasicIdentModel
+    "model": APC_UPS_MODEL_OID,  # upsBasicIdentModel
     "firmware": "1.3.6.1.4.1.318.1.1.1.1.2.1",  # upsAdvIdentFirmwareRevision
-    "serial": "1.3.6.1.4.1.318.1.1.1.1.2.3",  # upsAdvIdentSerialNumber
+    "serial": APC_UPS_SERIAL_OID,  # upsAdvIdentSerialNumber
     "battery_status": "1.3.6.1.4.1.318.1.1.1.2.1.1",  # upsBasicBatteryStatus
     "battery_capacity": "1.3.6.1.4.1.318.1.1.1.2.2.1",  # upsAdvBatteryCapacity
     "runtime": "1.3.6.1.4.1.318.1.1.1.2.2.3",  # upsAdvBatteryRunTimeRemaining
     "battery_replace": "1.3.6.1.4.1.318.1.1.1.2.2.4",  # upsAdvBatteryReplaceIndicator
     "output_status": "1.3.6.1.4.1.318.1.1.1.4.1.1",  # upsBasicOutputStatus
     "output_load": "1.3.6.1.4.1.318.1.1.1.4.2.3",  # upsAdvOutputLoad
+    "input_voltage_hp": "1.3.6.1.4.1.318.1.1.1.3.3.1",  # upsHighPrecInputLineVoltage
+    "input_voltage": "1.3.6.1.4.1.318.1.1.1.3.2.1",  # upsAdvInputLineVoltage
+    "input_frequency_hp": "1.3.6.1.4.1.318.1.1.1.3.3.4",  # upsHighPrecInputFrequency
+    "input_frequency": "1.3.6.1.4.1.318.1.1.1.3.2.4",  # upsAdvInputFrequency
+    "transfer_cause": "1.3.6.1.4.1.318.1.1.1.3.2.5",  # upsAdvInputLineFailCause
+    "output_voltage_hp": "1.3.6.1.4.1.318.1.1.1.4.3.1",  # upsHighPrecOutputVoltage
+    "output_voltage": "1.3.6.1.4.1.318.1.1.1.4.2.1",  # upsAdvOutputVoltage
+    "battery_temp_extd": "1.3.6.1.4.1.318.1.1.1.2.3.13",  # upsHighPrecExtdBatteryTemperature
+    "battery_temp_hp": "1.3.6.1.4.1.318.1.1.1.2.3.2",  # upsHighPrecBatteryTemperature
+    "battery_temp": "1.3.6.1.4.1.318.1.1.1.2.2.2",  # upsAdvBatteryTemperature
 }
+# uioSensorStatusTemperatureDegC: one row per probe on the card's universal
+# I/O ports (index port.sensor); -1 when the reading is invalid.
+PROBE_TEMPERATURE_OID = "1.3.6.1.4.1.318.1.1.25.1.2.1.6"
+_PROBE_INVALID = -1
+
+# upsAdvInputLineFailCause: why the UPS last went to battery.
+TRANSFER_CAUSE_LABELS: dict[int, str] = {
+    1: "No transfer yet",
+    2: "High line voltage",
+    3: "Brownout",
+    4: "Blackout",
+    5: "Small momentary sag",
+    6: "Deep momentary sag",
+    7: "Small momentary spike",
+    8: "Large momentary spike",
+    9: "Self-test",
+    10: "Rate of voltage change",
+}
+
+# upsHighPrecBatteryTemperature / upsAdvBatteryTemperature report their
+# maximum (255) when the UPS has no reading.
+_TEMPERATURE_NOT_PRESENT = 255
 
 # upsBasicOutputStatus.
 OUTPUT_STATUS_LABELS: dict[int, str] = {
@@ -110,14 +154,47 @@ UPS_METRICS: dict[str, str] = {
     "ups_output_load_pct": "output_load_pct",
     "ups_output_status": "output_status",
     "ups_battery_status": "battery_status",
+    "ups_input_voltage_v": "input_voltage_v",
+    "ups_input_frequency_hz": "input_frequency_hz",
+    "ups_output_voltage_v": "output_voltage_v",
+    "ups_battery_temperature_c": "battery_temperature_c",
+    "ups_probe_temperature_c": "probe_temperature_c",
 }
 
 # Built-in alerts: one metric per condition, deduplicated per host like the
-# other built-in checks and resolved when the condition clears.
+# other built-in checks and resolved when the condition clears. The poll and
+# the UPS's SNMP traps (``traps.py``) raise and resolve the same keys.
 ALERT_ON_BATTERY = "ups_on_battery"
 ALERT_BATTERY = "ups_battery"
 ALERT_OUTPUT = "ups_output"
-ALERT_METRICS = (ALERT_ON_BATTERY, ALERT_BATTERY, ALERT_OUTPUT)
+ALERT_OVERLOAD = "ups_overload"
+ALERT_TEMPERATURE = "ups_battery_temperature"
+# Raised and resolved only by the card's communicationLost /
+# communicationEstablished traps; a poll that reads a known output state
+# (the card is talking to the UPS) also resolves it.
+ALERT_COMMUNICATION = "ups_communication"
+# The alerts the poll evaluates (and resolves when the UPS no longer reports
+# the condition).
+ALERT_METRICS = (ALERT_ON_BATTERY, ALERT_BATTERY, ALERT_OUTPUT, ALERT_OVERLOAD, ALERT_TEMPERATURE)
+_THRESHOLD_ALERTS = frozenset({ALERT_OVERLOAD, ALERT_TEMPERATURE})
+
+# Battery temperature alert thresholds, °C: (warning at or above, critical
+# at or above). Lead-acid batteries are rated at 20-25 °C and lose about
+# half their life for every 8-10 °C above that.
+BATTERY_TEMPERATURE_C = (40.0, 50.0)
+# upsOverload: the load is above the UPS's rated capacity.
+OUTPUT_OVERLOAD_PCT = 100
+
+
+def alert_type(metric: str) -> str:
+    """The ``alert_type`` of a built-in UPS alert."""
+    return "threshold" if metric in _THRESHOLD_ALERTS else "status"
+
+
+def alert_dedup_key(host_id: int, metric: str) -> str:
+    """The dedup key of a built-in UPS alert, the same one the poll's
+    built-in checks use (``host:metric:alert_type``)."""
+    return f"{host_id}:{metric}:{alert_type(metric)}"
 
 
 def _int(raw: Any) -> int | None:
@@ -133,15 +210,59 @@ def _first(rows: dict | None) -> Any:
     return next(iter(rows.values()), None) if rows else None
 
 
-def parse_ups_status(values: dict[str, Any], sys_descr: str = "") -> dict[str, Any]:
-    """The UPS state from the walked objects (``UPS_OIDS`` key -> raw value)
-    and the card's sysDescr. ``{}`` when the device answered none of the
-    PowerNet objects (not an APC UPS card, or SNMP did not answer)."""
+def _precise(tenths: Any, whole: Any) -> float | None:
+    """A reading from its high-precision object (tenths), else its plain one."""
+    value = _int(tenths)
+    if value is not None:
+        return round(value / 10, 1)
+    value = _int(whole)
+    return float(value) if value is not None else None
+
+
+def _battery_temperature(values: dict[str, Any]) -> float | None:
+    """The battery temperature in °C: the extended object (signed tenths),
+    else the high-precision one (tenths), else the whole-degree one. The
+    older two read 255 when the UPS has no reading; on the high-precision
+    object that is ambiguous (25.5 °C), so it counts as missing only when
+    the whole-degree object is missing too."""
+    extd = _int(values.get("battery_temp_extd"))
+    if extd is not None:
+        return round(extd / 10, 1)
+    whole = _int(values.get("battery_temp"))
+    whole_missing = whole is None or whole == _TEMPERATURE_NOT_PRESENT
+    tenths = _int(values.get("battery_temp_hp"))
+    if tenths is not None and tenths < _TEMPERATURE_NOT_PRESENT * 10:
+        if not (tenths == _TEMPERATURE_NOT_PRESENT and whole_missing):
+            return round(tenths / 10, 1)
+    if whole is None or whole == _TEMPERATURE_NOT_PRESENT:
+        return None
+    return float(whole)
+
+
+def _oid_key(oid: str) -> tuple[int, ...]:
+    return tuple(int(part) for part in oid.split(".") if part.isdigit())
+
+
+def _probe_temperature(rows: dict | None) -> float | None:
+    """The first valid reading of the card's temperature probes, °C."""
+    for oid in sorted(rows or {}, key=_oid_key):
+        value = _int(rows[oid]) if rows else None
+        if value is not None and value != _PROBE_INVALID:
+            return float(value)
+    return None
+
+
+def parse_ups_status(values: dict[str, Any], sys_descr: str = "", probe_rows: dict | None = None) -> dict[str, Any]:
+    """The UPS state from the walked objects (``UPS_OIDS`` key -> raw value),
+    the card's sysDescr and its probe temperature rows. ``{}`` when the
+    device answered none of the PowerNet objects (not an APC UPS card, or
+    SNMP did not answer). A reading the UPS did not answer is None, never 0."""
     if not any(values.get(key) is not None and _snmp_str(values[key]) for key in UPS_OIDS):
         return {}
     output = _int(values.get("output_status"))
     battery = _int(values.get("battery_status"))
     ticks = _int(values.get("runtime"))
+    cause = _int(values.get("transfer_cause"))
     firmware = _snmp_str(values.get("firmware")) if values.get("firmware") is not None else ""
     status: dict[str, Any] = {
         "model": _snmp_str(values.get("model")) if values.get("model") is not None else "",
@@ -158,6 +279,13 @@ def parse_ups_status(values: dict[str, Any], sys_descr: str = "") -> dict[str, A
         ),
         "output_load_pct": _int(values.get("output_load")),
         "battery_needs_replacing": _int(values.get("battery_replace")) == BATTERY_NEEDS_REPLACING,
+        "input_voltage_v": _precise(values.get("input_voltage_hp"), values.get("input_voltage")),
+        "input_frequency_hz": _precise(values.get("input_frequency_hp"), values.get("input_frequency")),
+        "output_voltage_v": _precise(values.get("output_voltage_hp"), values.get("output_voltage")),
+        "last_transfer_cause": cause,
+        "last_transfer_cause_label": TRANSFER_CAUSE_LABELS.get(cause, "") if cause is not None else "",
+        "battery_temperature_c": _battery_temperature(values),
+        "probe_temperature_c": _probe_temperature(probe_rows),
     }
     status.update(parse_apc_nmc_sys_descr(sys_descr))
     return status
@@ -167,10 +295,14 @@ async def read_ups_status(walk: Callable[[str], Awaitable[dict]]) -> dict[str, A
     """Read and parse the UPS state with ``walk(oid) -> {oid: value}`` (the
     monitoring poll's SNMP walk). ``{}`` when nothing answered."""
     keys = list(UPS_OIDS)
-    results = await asyncio.gather(*(walk(UPS_OIDS[key]) for key in keys), walk(SYS_DESCR_OID))
-    values = {key: _first(rows) for key, rows in zip(keys, results[:-1])}
-    sys_descr_raw = _first(results[-1])
-    return parse_ups_status(values, _snmp_str(sys_descr_raw) if sys_descr_raw is not None else "")
+    results = await asyncio.gather(
+        *(walk(UPS_OIDS[key]) for key in keys), walk(SYS_DESCR_OID), walk(PROBE_TEMPERATURE_OID)
+    )
+    values = {key: _first(rows) for key, rows in zip(keys, results[: len(keys)])}
+    sys_descr_raw = _first(results[len(keys)])
+    return parse_ups_status(
+        values, _snmp_str(sys_descr_raw) if sys_descr_raw is not None else "", results[len(keys) + 1] or None
+    )
 
 
 def ups_metric_samples(host_id: int, status: dict[str, Any]) -> list[tuple]:
@@ -253,4 +385,47 @@ def ups_alert_checks(status: dict[str, Any]) -> list[dict[str, Any]]:
                 "threshold": None,
             }
         )
+
+    load = status.get("output_load_pct")
+    if load is not None and load >= OUTPUT_OVERLOAD_PCT:
+        checks.append(
+            {
+                "metric": ALERT_OVERLOAD,
+                "alert_type": alert_type(ALERT_OVERLOAD),
+                "message": f"UPS overloaded: output load {load}% (rated capacity {OUTPUT_OVERLOAD_PCT}%)",
+                "severity": "critical",
+                "value": float(load),
+                "threshold": float(OUTPUT_OVERLOAD_PCT),
+            }
+        )
+
+    temperature = status.get("battery_temperature_c")
+    warning_c, critical_c = BATTERY_TEMPERATURE_C
+    if temperature is not None and temperature >= warning_c:
+        critical = temperature >= critical_c
+        threshold = critical_c if critical else warning_c
+        checks.append(
+            {
+                "metric": ALERT_TEMPERATURE,
+                "alert_type": alert_type(ALERT_TEMPERATURE),
+                "message": f"UPS battery temperature {temperature:g} °C (threshold {threshold:g} °C)",
+                "severity": "critical" if critical else "warning",
+                "value": float(temperature),
+                "threshold": threshold,
+            }
+        )
     return checks
+
+
+def ups_cleared_alerts(status: dict[str, Any], checks: list[dict[str, Any]]) -> list[str]:
+    """The built-in UPS alerts a poll's state clears: every poll-evaluated
+    alert it did not raise, and the communication alert once the card
+    reports a known output state (it is talking to the UPS again). None for
+    an empty state (the poll read nothing)."""
+    if not status:
+        return []
+    raised = {check["metric"] for check in checks}
+    cleared = [metric for metric in ALERT_METRICS if metric not in raised]
+    if status.get("output_status") not in (None, 1):
+        cleared.append(ALERT_COMMUNICATION)
+    return cleared

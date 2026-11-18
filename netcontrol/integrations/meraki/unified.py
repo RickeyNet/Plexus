@@ -24,6 +24,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
 
+from netcontrol.device_categories import DEVICE_CATEGORIES
 from netcontrol.integrations.cato.normalize import CLOUD_NODE_ID as CATO_CLOUD_NODE_ID
 from netcontrol.integrations.meraki.normalize import (
     SCHEMA_VERSION,
@@ -72,16 +73,9 @@ _EDGE_KIND = {
     "cloud": "attach",
     "management": "manage",
 }
-# Inventory device_category -> viewer node kind.
-_VIEWER_KIND = {
-    "router": "router",
-    "switch": "switch",
-    "firewall": "firewall",
-    "wireless": "wireless",
-    "wlc": "wlc",
-    "phone": "phone",
-    "server": "server",
-}
+# Inventory device_category -> viewer node kind (each category is a kind of
+# the same name in the viewer's KIND table).
+_VIEWER_KIND = {category: category for category in DEVICE_CATEGORIES}
 
 EXTERNAL_SITE_ID = "__external__"
 _SOURCE_NAME = {
@@ -352,6 +346,11 @@ def merge_meraki_into_graph(
         target.setdefault("meraki", ref)
         target.setdefault("x", x)
         target.setdefault("y", y)
+        # The role the source gives the device. An inventory host with no
+        # role of its own is drawn with it, as the device was before it was
+        # a host (one added as ICMP-only would be a bare dot).
+        if target.get("in_inventory") and ref["kind"] not in NON_DEVICE_KINDS:
+            target.setdefault("source_category", _CATEGORY.get(ref["kind"], ref["kind"]))
         # The instance a host or another integration's device is, even when
         # ``meraki`` belongs to that other integration.
         instance = _instance(ref)
@@ -733,7 +732,9 @@ def graph_to_snapshot(
         src = snap_nodes.get((ref["org_ref"], ref["node_id"])) if ref else None
         sections: list[dict] = []
         if g.get("in_inventory"):
-            kind = _VIEWER_KIND.get(str(g.get("device_category") or "").lower(), "device")
+            # Its own role, else the one its source gives it (``collapse``).
+            role = str(g.get("device_category") or g.get("source_category") or "").lower()
+            kind = _VIEWER_KIND.get(role, "device")
             status = _viewer_status(str(g.get("status") or ""))
             _add(
                 sections,

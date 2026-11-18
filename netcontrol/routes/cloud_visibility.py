@@ -6,6 +6,11 @@ Provides:
   - Discovery snapshot ingestion (sample/live/auto modes)
     - Cloud traffic-metric ingestion + analytics APIs
   - Cloud resource + connection + hybrid-link APIs for UI topology rendering
+
+Object scope: cloud accounts and what they discover are no inventory hosts,
+so a caller limited to selected inventory groups sees none of them (the
+lists and summaries are empty) and no sync status; account management is
+for administrators, who are unrestricted.
 """
 
 from __future__ import annotations
@@ -25,6 +30,7 @@ from pydantic import BaseModel, Field
 from netcontrol.integrations.aws.sample import build_sample as build_aws_sample
 from netcontrol.integrations.azure.sample import build_sample as build_azure_sample
 from netcontrol.integrations.gcp.sample import build_sample as build_gcp_sample
+from netcontrol.object_scope import request_scope, scope_exempt, scoped
 from netcontrol.routes.cloud_collectors import (
     CloudCollectorAuthError,
     CloudCollectorError,
@@ -46,6 +52,9 @@ LOGGER = configure_logging("plexus.cloud_visibility")
 _BACKGROUND_PULL_TASKS: set[asyncio.Task] = set()
 
 _require_admin = None
+# An account id no account has (ids start at 1): what a caller limited to
+# selected inventory groups reads its cloud summaries and timelines for.
+_NO_ACCOUNT = 0
 
 # Progress of the discoveries running in this process, by account id, for the
 # map's progress bar. The collector writes it from a worker thread; each write
@@ -1290,7 +1299,14 @@ async def run_scheduled_discovery() -> dict:
     return {"accounts": len(accounts), "refreshed": refreshed, "errors": errors}
 
 
+async def _hidden(request: Request | None) -> bool:
+    """Whether the caller is limited to selected inventory groups: cloud
+    accounts and their data are hidden from it."""
+    return (await request_scope(request)).restricted
+
+
 @router.get("/api/cloud/providers")
+@scope_exempt("the provider catalogue and collector capabilities: no account or host data")
 async def cloud_providers_api():
     capabilities = get_provider_capabilities()
     providers = []
@@ -1310,10 +1326,14 @@ async def cloud_providers_api():
 
 
 @router.get("/api/cloud/accounts")
+@scoped("hidden")
 async def cloud_accounts_api(
     provider: str | None = Query(default=None),
     enabled_only: bool = Query(default=False),
+    request: Request = None,  # type: ignore[assignment]
 ):
+    if await _hidden(request):
+        return {"accounts": [], "count": 0}
     try:
         normalized_provider = _normalize_provider(provider) if provider else None
     except ValueError:
@@ -1324,6 +1344,7 @@ async def cloud_accounts_api(
 
 
 @router.post("/api/cloud/accounts", status_code=201, dependencies=[Depends(_require_admin_dep)])
+@scoped("admin")
 async def create_cloud_account_api(body: CloudAccountCreate, request: Request):
     try:
         provider = _normalize_provider(body.provider)
@@ -1357,6 +1378,7 @@ async def create_cloud_account_api(body: CloudAccountCreate, request: Request):
 
 
 @router.put("/api/cloud/accounts/{account_id}", dependencies=[Depends(_require_admin_dep)])
+@scoped("admin")
 async def update_cloud_account_api(account_id: int, body: CloudAccountUpdate, request: Request):
     existing = await db.get_cloud_account(account_id)
     if not existing:
@@ -1395,6 +1417,7 @@ async def update_cloud_account_api(account_id: int, body: CloudAccountUpdate, re
 
 
 @router.delete("/api/cloud/accounts/{account_id}", dependencies=[Depends(_require_admin_dep)])
+@scoped("admin")
 async def delete_cloud_account_api(account_id: int, request: Request):
     existing = await db.get_cloud_account(account_id)
     if not existing:
@@ -1416,6 +1439,7 @@ async def delete_cloud_account_api(account_id: int, request: Request):
 
 
 @router.post("/api/cloud/accounts/{account_id}/validate", dependencies=[Depends(_require_admin_dep)])
+@scoped("admin")
 async def validate_cloud_account_api(account_id: int, request: Request, body: CloudValidationRequest | None = None):
     account = await db.get_cloud_account(account_id)
     if not account:
@@ -1484,6 +1508,7 @@ async def validate_cloud_account_api(account_id: int, request: Request, body: Cl
 
 
 @router.post("/api/cloud/accounts/{account_id}/flow-logs/ingest", dependencies=[Depends(_require_admin_dep)])
+@scoped("admin")
 async def ingest_cloud_flow_logs_api(account_id: int, request: Request, body: CloudFlowIngestRequest):
     account = await db.get_cloud_account(account_id)
     if not account:
@@ -1556,6 +1581,7 @@ async def ingest_cloud_flow_logs_api(account_id: int, request: Request, body: Cl
 
 
 @router.post("/api/cloud/accounts/{account_id}/traffic-metrics/ingest", dependencies=[Depends(_require_admin_dep)])
+@scoped("admin")
 async def ingest_cloud_traffic_metrics_api(account_id: int, request: Request, body: CloudTrafficMetricIngestRequest):
     account = await db.get_cloud_account(account_id)
     if not account:
@@ -1638,6 +1664,7 @@ async def ingest_cloud_traffic_metrics_api(account_id: int, request: Request, bo
 
 
 @router.get("/api/cloud/accounts/{account_id}/discover/progress", dependencies=[Depends(_require_admin_dep)])
+@scoped("admin")
 async def cloud_discovery_progress_api(account_id: int):
     """How far the running discovery of this account is, polled while the discover request is in flight."""
     progress = discovery_progress(account_id)
@@ -1645,6 +1672,7 @@ async def cloud_discovery_progress_api(account_id: int):
 
 
 @router.post("/api/cloud/accounts/{account_id}/discover", dependencies=[Depends(_require_admin_dep)])
+@scoped("admin")
 async def discover_cloud_account_api(account_id: int, request: Request, body: CloudDiscoveryRequest | None = None):
     with _tracked_discovery(account_id) as progress:
         return await _discover_cloud_account(account_id, request, body, progress)
@@ -1785,16 +1813,21 @@ async def _discover_cloud_account(
 
 
 @router.get("/api/cloud/flow-logs/summary")
+@scoped("hidden")
 async def cloud_flow_summary_api(
     account_id: int | None = Query(default=None),
     provider: str | None = Query(default=None),
     hours: int = Query(default=24, ge=1, le=720),
+    request: Request = None,  # type: ignore[assignment]
 ):
     try:
         normalized_provider = _normalize_provider(provider) if provider else None
     except ValueError:
         raise HTTPException(status_code=400, detail="Unsupported cloud provider") from None
 
+    if await _hidden(request):
+        # The summary of no flows: an account that does not exist.
+        account_id = _NO_ACCOUNT
     summary = await db.get_cloud_flow_summary(
         account_id=account_id,
         provider=normalized_provider,
@@ -1809,12 +1842,14 @@ async def cloud_flow_summary_api(
 
 
 @router.get("/api/cloud/flow-logs/top-talkers")
+@scoped("hidden")
 async def cloud_flow_top_talkers_api(
     account_id: int | None = Query(default=None),
     provider: str | None = Query(default=None),
     hours: int = Query(default=24, ge=1, le=720),
     direction: str = Query(default="src"),
     limit: int = Query(default=20, ge=1, le=200),
+    request: Request = None,  # type: ignore[assignment]
 ):
     try:
         normalized_provider = _normalize_provider(provider) if provider else None
@@ -1825,7 +1860,7 @@ async def cloud_flow_top_talkers_api(
         raise HTTPException(status_code=400, detail="direction must be 'src' or 'dst'")
 
     rows = await db.get_cloud_flow_top_talkers(
-        account_id=account_id,
+        account_id=_NO_ACCOUNT if await _hidden(request) else account_id,
         provider=normalized_provider,
         hours=hours,
         direction=direction_mode,
@@ -1842,11 +1877,13 @@ async def cloud_flow_top_talkers_api(
 
 
 @router.get("/api/cloud/flow-logs/timeline")
+@scoped("hidden")
 async def cloud_flow_timeline_api(
     account_id: int | None = Query(default=None),
     provider: str | None = Query(default=None),
     hours: int = Query(default=24, ge=1, le=720),
     bucket_minutes: int = Query(default=5, ge=1, le=60),
+    request: Request = None,  # type: ignore[assignment]
 ):
     try:
         normalized_provider = _normalize_provider(provider) if provider else None
@@ -1854,7 +1891,7 @@ async def cloud_flow_timeline_api(
         raise HTTPException(status_code=400, detail="Unsupported cloud provider") from None
 
     rows = await db.get_cloud_flow_timeline(
-        account_id=account_id,
+        account_id=_NO_ACCOUNT if await _hidden(request) else account_id,
         provider=normalized_provider,
         hours=hours,
         bucket_minutes=bucket_minutes,
@@ -1870,10 +1907,12 @@ async def cloud_flow_timeline_api(
 
 
 @router.get("/api/cloud/traffic-metrics/summary")
+@scoped("hidden")
 async def cloud_traffic_metric_summary_api(
     account_id: int | None = Query(default=None),
     provider: str | None = Query(default=None),
     hours: int = Query(default=24, ge=1, le=720),
+    request: Request = None,  # type: ignore[assignment]
 ):
     try:
         normalized_provider = _normalize_provider(provider) if provider else None
@@ -1881,7 +1920,7 @@ async def cloud_traffic_metric_summary_api(
         raise HTTPException(status_code=400, detail="Unsupported cloud provider") from None
 
     summary = await db.get_cloud_traffic_metric_summary(
-        account_id=account_id,
+        account_id=_NO_ACCOUNT if await _hidden(request) else account_id,
         provider=normalized_provider,
         hours=hours,
     )
@@ -1894,12 +1933,14 @@ async def cloud_traffic_metric_summary_api(
 
 
 @router.get("/api/cloud/traffic-metrics/timeline")
+@scoped("hidden")
 async def cloud_traffic_metric_timeline_api(
     account_id: int | None = Query(default=None),
     provider: str | None = Query(default=None),
     metric_name: str | None = Query(default=None),
     hours: int = Query(default=24, ge=1, le=720),
     bucket_minutes: int = Query(default=5, ge=1, le=60),
+    request: Request = None,  # type: ignore[assignment]
 ):
     try:
         normalized_provider = _normalize_provider(provider) if provider else None
@@ -1907,7 +1948,7 @@ async def cloud_traffic_metric_timeline_api(
         raise HTTPException(status_code=400, detail="Unsupported cloud provider") from None
 
     rows = await db.get_cloud_traffic_metric_timeline(
-        account_id=account_id,
+        account_id=_NO_ACCOUNT if await _hidden(request) else account_id,
         provider=normalized_provider,
         metric_name=metric_name.strip() if metric_name else None,
         hours=hours,
@@ -1925,12 +1966,14 @@ async def cloud_traffic_metric_timeline_api(
 
 
 @router.get("/api/cloud/traffic-metrics/top-resources")
+@scoped("hidden")
 async def cloud_traffic_metric_top_resources_api(
     account_id: int | None = Query(default=None),
     provider: str | None = Query(default=None),
     metric_name: str | None = Query(default=None),
     hours: int = Query(default=24, ge=1, le=720),
     limit: int = Query(default=20, ge=1, le=200),
+    request: Request = None,  # type: ignore[assignment]
 ):
     try:
         normalized_provider = _normalize_provider(provider) if provider else None
@@ -1938,7 +1981,7 @@ async def cloud_traffic_metric_top_resources_api(
         raise HTTPException(status_code=400, detail="Unsupported cloud provider") from None
 
     rows = await db.get_cloud_traffic_metric_top_resources(
-        account_id=account_id,
+        account_id=_NO_ACCOUNT if await _hidden(request) else account_id,
         provider=normalized_provider,
         metric_name=metric_name.strip() if metric_name else None,
         hours=hours,
@@ -1955,16 +1998,20 @@ async def cloud_traffic_metric_top_resources_api(
 
 
 @router.get("/api/cloud/resources")
+@scoped("hidden")
 async def cloud_resources_api(
     account_id: int | None = Query(default=None),
     provider: str | None = Query(default=None),
     resource_type: str | None = Query(default=None),
+    request: Request = None,  # type: ignore[assignment]
 ):
     try:
         normalized_provider = _normalize_provider(provider) if provider else None
     except ValueError:
         raise HTTPException(status_code=400, detail="Unsupported cloud provider") from None
 
+    if await _hidden(request):
+        return {"resources": [], "count": 0}
     resources = await db.get_cloud_resources(
         account_id=account_id,
         provider=normalized_provider,
@@ -1974,34 +2021,43 @@ async def cloud_resources_api(
 
 
 @router.get("/api/cloud/connections")
+@scoped("hidden")
 async def cloud_connections_api(
     account_id: int | None = Query(default=None),
     provider: str | None = Query(default=None),
+    request: Request = None,  # type: ignore[assignment]
 ):
     try:
         normalized_provider = _normalize_provider(provider) if provider else None
     except ValueError:
         raise HTTPException(status_code=400, detail="Unsupported cloud provider") from None
 
+    if await _hidden(request):
+        return {"connections": [], "count": 0}
     connections = await db.get_cloud_connections(account_id=account_id, provider=normalized_provider)
     return {"connections": [_serialize_connection(c) for c in connections], "count": len(connections)}
 
 
 @router.get("/api/cloud/hybrid-links")
+@scoped("hidden")
 async def cloud_hybrid_links_api(
     account_id: int | None = Query(default=None),
     provider: str | None = Query(default=None),
+    request: Request = None,  # type: ignore[assignment]
 ):
     try:
         normalized_provider = _normalize_provider(provider) if provider else None
     except ValueError:
         raise HTTPException(status_code=400, detail="Unsupported cloud provider") from None
 
+    if await _hidden(request):
+        return {"links": [], "count": 0}
     links = await db.get_cloud_hybrid_links(account_id=account_id, provider=normalized_provider)
     return {"links": [_serialize_hybrid_link(link) for link in links], "count": len(links)}
 
 
 @router.get("/api/cloud/policies/rules")
+@scoped("hidden")
 async def cloud_policy_rules_api(
     account_id: int | None = Query(default=None),
     provider: str | None = Query(default=None),
@@ -2009,6 +2065,7 @@ async def cloud_policy_rules_api(
     direction: str | None = Query(default=None),
     action: str | None = Query(default=None),
     limit: int = Query(default=200, ge=1, le=2000),
+    request: Request = None,  # type: ignore[assignment]
 ):
     try:
         provider_value = provider if isinstance(provider, str) else None
@@ -2034,6 +2091,8 @@ async def cloud_policy_rules_api(
 
     limit_value = limit if isinstance(limit, int) else 200
 
+    if await _hidden(request):
+        return {"rules": [], "count": 0}
     rules = await db.get_cloud_policy_rules(
         account_id=account_id,
         provider=normalized_provider,
@@ -2046,9 +2105,11 @@ async def cloud_policy_rules_api(
 
 
 @router.get("/api/cloud/policies/effective")
+@scoped("hidden")
 async def cloud_policy_effective_views_api(
     account_id: int | None = Query(default=None),
     provider: str | None = Query(default=None),
+    request: Request = None,  # type: ignore[assignment]
 ):
     try:
         provider_value = provider if isinstance(provider, str) else None
@@ -2056,20 +2117,27 @@ async def cloud_policy_effective_views_api(
     except ValueError:
         raise HTTPException(status_code=400, detail="Unsupported cloud provider") from None
 
+    if await _hidden(request):
+        return {"resources": [], "count": 0}
     rows = await db.get_cloud_policy_effective_views(account_id=account_id, provider=normalized_provider)
     return {"resources": rows, "count": len(rows)}
 
 
 @router.get("/api/cloud/topology")
+@scoped("hidden")
 async def cloud_topology_api(
     account_id: int | None = Query(default=None),
     provider: str | None = Query(default=None),
+    request: Request = None,  # type: ignore[assignment]
 ):
     try:
         normalized_provider = _normalize_provider(provider) if provider else None
     except ValueError:
         raise HTTPException(status_code=400, detail="Unsupported cloud provider") from None
 
+    if await _hidden(request):
+        # The snapshot of an account that does not exist: empty, same shape.
+        account_id = _NO_ACCOUNT
     snapshot = await db.get_cloud_topology_snapshot(account_id=account_id, provider=normalized_provider)
     return {
         "accounts": [_serialize_account(a) for a in snapshot.get("accounts", []) if a],
@@ -2103,6 +2171,7 @@ class CloudDiscoverySyncConfigUpdate(BaseModel):
 
 
 @router.get("/api/cloud/discovery-sync/config")
+@scope_exempt("the global discovery schedule: no account or host data")
 async def get_cloud_discovery_sync_config_api():
     import netcontrol.routes.state as state
 
@@ -2110,6 +2179,7 @@ async def get_cloud_discovery_sync_config_api():
 
 
 @router.put("/api/cloud/discovery-sync/config", dependencies=[Depends(_require_admin_dep)])
+@scoped("admin")
 async def update_cloud_discovery_sync_config_api(request: Request, body: CloudDiscoverySyncConfigUpdate):
     import netcontrol.routes.state as state
 
@@ -2135,13 +2205,17 @@ async def update_cloud_discovery_sync_config_api(request: Request, body: CloudDi
 
 
 @router.get("/api/cloud/flow-sync/config")
-async def get_cloud_flow_sync_config_api():
+@scoped("hidden")
+async def get_cloud_flow_sync_config_api(request: Request = None):  # type: ignore[assignment]
     import netcontrol.routes.state as state
 
-    return {"config": dict(state.CLOUD_FLOW_SYNC_CONFIG), "status": dict(state.CLOUD_FLOW_SYNC_STATUS)}
+    # The run status reports on the accounts, which a scoped caller does not see.
+    status = {} if await _hidden(request) else dict(state.CLOUD_FLOW_SYNC_STATUS)
+    return {"config": dict(state.CLOUD_FLOW_SYNC_CONFIG), "status": status}
 
 
 @router.put("/api/cloud/flow-sync/config", dependencies=[Depends(_require_admin_dep)])
+@scoped("admin")
 async def update_cloud_flow_sync_config_api(request: Request, body: CloudFlowSyncConfigUpdate):
     import netcontrol.routes.state as state
 
@@ -2169,6 +2243,7 @@ async def update_cloud_flow_sync_config_api(request: Request, body: CloudFlowSyn
 
 
 @router.post("/api/cloud/flow-sync/pull", dependencies=[Depends(_require_admin_dep)])
+@scoped("admin")
 async def trigger_cloud_flow_sync_api(
     request: Request,
     account_id: int | None = Query(default=None),
@@ -2253,6 +2328,7 @@ async def trigger_cloud_flow_sync_api(
 
 
 @router.get("/api/cloud/flow-sync/cursors", dependencies=[Depends(_require_admin_dep)])
+@scoped("admin")
 async def get_cloud_flow_sync_cursors_api():
     """Return per-account flow-log sync watermarks (operational internals; admin only)."""
     cursors = await db.list_cloud_flow_sync_cursors()
@@ -2267,16 +2343,20 @@ async def get_cloud_flow_sync_cursors_api():
 
 
 @router.get("/api/cloud/traffic-sync/config")
-async def get_cloud_traffic_sync_config_api():
+@scoped("hidden")
+async def get_cloud_traffic_sync_config_api(request: Request = None):  # type: ignore[assignment]
     import netcontrol.routes.state as state
 
+    # The run status reports on the accounts, which a scoped caller does not see.
+    status = {} if await _hidden(request) else dict(state.CLOUD_TRAFFIC_METRIC_SYNC_STATUS)
     return {
         "config": dict(state.CLOUD_TRAFFIC_METRIC_SYNC_CONFIG),
-        "status": dict(state.CLOUD_TRAFFIC_METRIC_SYNC_STATUS),
+        "status": status,
     }
 
 
 @router.put("/api/cloud/traffic-sync/config", dependencies=[Depends(_require_admin_dep)])
+@scoped("admin")
 async def update_cloud_traffic_sync_config_api(request: Request, body: CloudTrafficSyncConfigUpdate):
     import netcontrol.routes.state as state
 
@@ -2304,6 +2384,7 @@ async def update_cloud_traffic_sync_config_api(request: Request, body: CloudTraf
 
 
 @router.post("/api/cloud/traffic-sync/pull", dependencies=[Depends(_require_admin_dep)])
+@scoped("admin")
 async def trigger_cloud_traffic_sync_api(
     request: Request,
     account_id: int | None = Query(default=None),
@@ -2388,6 +2469,7 @@ async def trigger_cloud_traffic_sync_api(
 
 
 @router.get("/api/cloud/traffic-sync/cursors", dependencies=[Depends(_require_admin_dep)])
+@scoped("admin")
 async def get_cloud_traffic_sync_cursors_api():
     """Return per-account traffic-metric sync watermarks (operational internals; admin only)."""
     cursors = await db.list_cloud_traffic_metric_sync_cursors()

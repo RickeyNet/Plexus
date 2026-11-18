@@ -21,7 +21,9 @@ import routes.database as db
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field
 
+from netcontrol.component_templates import INTERFACE_TYPE_MAX, TEMPLATE_NAME_MAX, ComponentType, draw_error
 from netcontrol.custom_fields import CustomFieldError, TagColor
+from netcontrol.dcim import CONSOLE_PORT_TYPES, PORT_TYPES
 from netcontrol.device_model import (
     DESCRIPTION_MAX,
     HOST_DEVICE_FIELDS,
@@ -34,7 +36,8 @@ from netcontrol.device_model import (
     clean_name,
     parse_device_filters,
 )
-from netcontrol.object_scope import require_hosts, scoped
+from netcontrol.object_scope import require_host, require_hosts, scoped
+from netcontrol.routes.custom_fields import custom_list, with_custom_data
 from netcontrol.routes.shared import _audit, _corr_id, _session_user
 
 router = APIRouter()
@@ -245,18 +248,18 @@ async def _delete(kind: str, record: dict, label: str, request: Request, confirm
 
 
 @router.get(f"{PREFIX}/manufacturers")
-async def list_manufacturers() -> list[dict]:
-    return await db.list_manufacturers()
+async def list_manufacturers(request: Request) -> list[dict]:
+    return await custom_list("manufacturer", await db.list_manufacturers(), request)
 
 
 @router.get(f"{PREFIX}/device-types")
-async def list_device_types(manufacturer_id: int | None = Query(default=None)) -> list[dict]:
-    return await db.list_device_types(manufacturer_id)
+async def list_device_types(request: Request, manufacturer_id: int | None = Query(default=None)) -> list[dict]:
+    return await custom_list("device_type", await db.list_device_types(manufacturer_id), request)
 
 
 @router.get(f"{PREFIX}/roles")
-async def list_roles() -> list[dict]:
-    return await db.list_device_roles()
+async def list_roles(request: Request) -> list[dict]:
+    return await custom_list("device_role", await db.list_device_roles(), request)
 
 
 @router.get(f"{PREFIX}/statuses")
@@ -456,3 +459,151 @@ async def bulk_edit_hosts(body: BulkEdit, request: Request) -> dict:
     updated = await db.bulk_set_host_device_fields(body.host_ids, values, lock=True)
     await audit_device_write(request, "bulk_edit", f"hosts={updated} {describe_values(values)}")
     return {"ok": True, "updated": updated}
+
+
+# ── Component templates (read: any user; write: admin) ───────────────────────
+#
+# Rules: ``netcontrol.component_templates``; storage:
+# ``routes.db.component_templates``. Instantiation creates DCIM records.
+
+
+class ComponentTemplateCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    device_type_id: int
+    component_type: ComponentType
+    name: str = Field(max_length=_RAW_NAME_MAX)
+    type: str = Field(default="", max_length=INTERFACE_TYPE_MAX)
+    positions: int = Field(default=1, ge=1, le=1024)
+    rear_port_template_id: int | None = None
+    rear_port_position: int = Field(default=1, ge=1, le=1024)
+    maximum_draw: int | None = Field(default=None, ge=1, le=1_000_000)
+    allocated_draw: int | None = Field(default=None, ge=1, le=1_000_000)
+    description: str = Field(default="", max_length=DESCRIPTION_MAX)
+
+
+class ComponentTemplateUpdate(BaseModel):
+    """The device type and the component type of a template never change."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str | None = Field(default=None, max_length=_RAW_NAME_MAX)
+    type: str | None = Field(default=None, max_length=INTERFACE_TYPE_MAX)
+    positions: int | None = Field(default=None, ge=1, le=1024)
+    rear_port_template_id: int | None = None
+    rear_port_position: int | None = Field(default=None, ge=1, le=1024)
+    maximum_draw: int | None = Field(default=None, ge=1, le=1_000_000)
+    allocated_draw: int | None = Field(default=None, ge=1, le=1_000_000)
+    description: str | None = Field(default=None, max_length=DESCRIPTION_MAX)
+
+
+# Component type -> the connector types its ``type`` takes and the default
+# (``None``: free text, as for an interface; ``()``: no type).
+_TEMPLATE_TYPES: dict[str, tuple[tuple[str, ...] | None, str]] = {
+    "interface": (None, ""),
+    "console_port": (CONSOLE_PORT_TYPES, "rj-45"),
+    "power_port": ((), ""),
+    "rear_port": (PORT_TYPES, "8p8c"),
+    "front_port": (PORT_TYPES, "8p8c"),
+    "module_bay": ((), ""),
+}
+
+
+def _template_values(component_type: str, values: dict[str, Any], current: dict | None = None) -> dict[str, Any]:
+    """The cleaned template values: 422 for a value the component type does
+    not take."""
+    if "name" in values:
+        values["name"] = _name(values["name"] or "", "Component name", TEMPLATE_NAME_MAX)
+    if "description" in values:
+        values["description"] = (values["description"] or "").strip()
+    allowed, default = _TEMPLATE_TYPES[component_type]
+    if "type" in values or current is None:
+        given = (values.get("type") or "").strip() or default
+        if allowed is not None and given and given not in allowed:
+            what = ", ".join(allowed) if allowed else "no type"
+            raise _unprocessable(f"A {component_type.replace('_', ' ')} template takes {what}.")
+        values["type"] = given
+    if component_type != "front_port" and values.get("rear_port_template_id") is not None:
+        raise _unprocessable("Only a front port template maps to a rear port template.")
+    if component_type == "front_port" and current is None and values.get("rear_port_template_id") is None:
+        raise _unprocessable("A front port template maps to a rear port template.")
+    if component_type != "power_port" and (values.get("maximum_draw") or values.get("allocated_draw")):
+        raise _unprocessable("Only a power port template has a power draw.")
+    merged = {**(current or {}), **values}
+    problem = draw_error(merged.get("maximum_draw"), merged.get("allocated_draw"))
+    if problem:
+        raise _unprocessable(problem)
+    return values
+
+
+async def _template_write(call):
+    try:
+        return await call
+    except db.DcimRuleError as exc:
+        raise _unprocessable(str(exc)) from exc
+    except ValueError as exc:
+        raise _conflict(exc) from exc
+
+
+@router.get(f"{PREFIX}/device-types/{{device_type_id}}/components")
+async def list_device_type_components(device_type_id: int) -> dict:
+    """The component templates of a device type."""
+    _found(await db.get_device_type(device_type_id), "Device type")
+    return {"device_type_id": device_type_id, "templates": await db.list_component_templates(device_type_id)}
+
+
+@admin_router.post(f"{PREFIX}/component-templates", status_code=201)
+async def create_component_template(body: ComponentTemplateCreate, request: Request) -> dict:
+    _found(await db.get_device_type(body.device_type_id), "Device type")
+    values = _template_values(body.component_type, body.model_dump())
+    record = await _template_write(db.create_dcim_record("component_template", values, _session_user(request)))
+    await audit_device_write(
+        request,
+        "component_template_create",
+        f"id={record['id']} device_type={body.device_type_id} {body.component_type}={record['name']}",
+    )
+    return record
+
+
+@admin_router.put(f"{PREFIX}/component-templates/{{template_id}}")
+async def update_component_template(template_id: int, body: ComponentTemplateUpdate, request: Request) -> dict:
+    current = _found(await db.get_dcim_record("component_template", template_id), "Component template")
+    values = {k: getattr(body, k) for k in body.model_fields_set}
+    nulls = [k for k in ("name", "positions", "rear_port_position") if k in values and values[k] is None]
+    if nulls:
+        raise _unprocessable("A value is required: " + ", ".join(nulls) + ".")
+    values = _template_values(current["component_type"], values, current)
+    record = _found(
+        await _template_write(db.update_dcim_record("component_template", template_id, values, _session_user(request))),
+        "Component template",
+    )
+    await audit_device_write(request, "component_template_update", f"id={template_id} name={record['name']}")
+    return record
+
+
+@admin_router.delete(f"{PREFIX}/component-templates/{{template_id}}")
+async def delete_component_template(template_id: int, request: Request) -> dict:
+    record = _found(await db.get_dcim_record("component_template", template_id), "Component template")
+    usage = await db.count_dcim_usage("component_template", template_id)
+    if usage:
+        what = ", ".join(f"{n} {label}" for label, n in usage.items())
+        raise HTTPException(status_code=409, detail=f"The rear port template is in use ({what}).")
+    await db.delete_dcim_record("component_template", template_id)
+    await audit_device_write(request, "component_template_delete", f"id={template_id} name={record['name']}")
+    return {"ok": True}
+
+
+@inventory_router.post("/api/hosts/{host_id}/components/instantiate")
+@scoped("hosts")
+async def instantiate_host_components(host_id: int, request: Request) -> dict:
+    """Create the DCIM components the host's device type lists and the host
+    lacks; nothing existing is changed (see
+    ``routes.db.component_templates.instantiate_host_components``)."""
+    await require_host(request, host_id, write=True)
+    result = _found(await db.instantiate_host_components(host_id, _session_user(request)), "Host")
+    await audit_device_write(
+        request,
+        "components_instantiate",
+        f"host={host_id} device_type={result['device_type_id'] or '-'} created={result['created_count']}",
+    )
+    return result

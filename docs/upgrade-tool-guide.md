@@ -598,7 +598,7 @@ A campaign holds either UPS devices or other devices, not both (create and edit 
 |---|---|
 | Prestage | Pre-checks only: reads `upsabout` (UPS ID, firmware), `about` (NMC generation and application firmware) and `alarmcount`. Nothing changes on the UPS. |
 | Transfer | Repeats the pre-checks, copies the file to `/tmp/<file>` on the NMC with SCP and confirms it with `cd /tmp` and `dir`. |
-| Activate (**Install now** or scheduled) | Repeats the pre-checks, runs `upsfwupdate -install -file "/tmp/<file>"` (copying the file first if it is no longer in `/tmp`), polls `upsfwupdate -status` every 20 seconds until it reports `No firmware update is in progress`, then reads `upsabout` again and requires the new version. The UPS output stays on. |
+| Activate (**Install now** or scheduled) | Repeats the pre-checks, runs `upsfwupdate -install -file "/tmp/<file>"` (copying the file first if it is no longer in `/tmp`), polls `upsfwupdate -status` every 20 seconds until it reports `No firmware update in progress` (or `... is in progress`, depending on the card firmware), then reads `upsabout` again and requires the new version. The UPS output stays on. |
 | Verify | Reads `upsabout` and compares it with the target. |
 | Check status | Read only: already on the target (every step done), an update in progress, or whether the file is in `/tmp`. |
 
@@ -636,7 +636,7 @@ After the install Plexus reads `upsabout` again. When the firmware is unchanged 
 - FTP transfer is not supported: it is cleartext and needs enabling plus an NMC reboot. Use SCP.
 - No automated UPS output control (see Manual updates).
 - The `OUTPUT_OFF_REQUIRED_IDS` table starts empty; until it is filled, such a model is caught by the NMC's refusal.
-- The layout of `upsabout`, `about`, `alarmcount` and `upsfwupdate` output has not been checked on every NMC firmware. Plexus reads `Key: value` lines without regard to case and ignores lines it does not know; when a value cannot be read the device is stopped with a reason (for example "Could not read the UPS ID") rather than guessed. If that happens, send a sample of the command output (with serial numbers and addresses removed) so the parser can be extended.
+- The layout of `upsabout`, `about`, `alarmcount` and `upsfwupdate -status` output has been checked on an embedded NMC3 (application `su` v2.0) in a Smart-UPS SRT, not on every NMC firmware; `upsfwupdate -install` output and an NMC2 have not been seen yet. Plexus reads `Key: value` lines without regard to case and ignores lines it does not know; when a value cannot be read the device is stopped with a reason (for example "Could not read the UPS ID") rather than guessed. If that happens, send a sample of the command output (with serial numbers and addresses removed) so the parser can be extended.
 
 ---
 

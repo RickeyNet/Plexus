@@ -13,7 +13,10 @@ import ipaddress
 import json
 import re
 import socket
+from collections.abc import Awaitable, Callable
+from typing import Any
 
+from netcontrol.device_categories import device_type_category
 from netcontrol.routes.host_identity import interface_ip, placeholder_hostname
 from netcontrol.routes.state import _resolve_snmp_discovery_config  # noqa: F401
 from netcontrol.telemetry import configure_logging
@@ -104,9 +107,16 @@ _CATEGORY_PATTERNS: list[tuple[re.Pattern, str]] = [
 def _infer_device_category(model: str, sys_descr: str, device_type: str) -> str:
     """Infer a device category from model string, sysDescr, or device_type.
 
-    Returns one of: router, switch, firewall, wireless, wlc, phone, server,
-    or empty string (let the frontend fall back to device_type shape).
+    Returns one of ``netcontrol.device_categories.DEVICE_CATEGORIES``, or
+    empty string (let the frontend fall back to device_type shape).
     """
+    # A type that implies its category (an APC card is a UPS) wins over model text.
+    category = device_type_category(device_type)
+    if category:
+        return category
+    # An APC UPS card, known by its sysDescr alone (a CDP / LLDP neighbor's platform).
+    if any(_apc_device_type(text) for text in (model, sys_descr) if text):
+        return "ups"
     for text in (model, sys_descr):
         for pattern, category in _CATEGORY_PATTERNS:
             if pattern.search(text or ""):
@@ -214,6 +224,10 @@ _APC_NMC_FIELD = re.compile(r"\b(MB|PF|PN|AF1|AN1|MN|HR|SN|MD):\s*([^\s)]+)")
 _APC_NMC_APPLICATION = re.compile(r"^apc_hw[0-9a-z]+_([a-z0-9]+)_", re.IGNORECASE)
 _APC_UPS_APPLICATIONS = ("su", "sy", "smx", "ups")
 _APC_OS_NAMES = {"apc_ups": "apc-nmc"}
+# PowerNet-MIB identity of the UPS behind the card (scalars; ``.0`` is the
+# instance). Read by the discovery GET and the monitoring poll.
+APC_UPS_MODEL_OID = "1.3.6.1.4.1.318.1.1.1.1.1.1"  # upsBasicIdentModel
+APC_UPS_SERIAL_OID = "1.3.6.1.4.1.318.1.1.1.1.2.3"  # upsAdvIdentSerialNumber
 
 
 def parse_apc_nmc_sys_descr(sys_descr: str) -> dict[str, str]:
@@ -384,7 +398,7 @@ def _parse_model_and_version(sys_descr: str) -> tuple[str, str]:
 
     # APC UPS card: the version is the card's (AOS) firmware. The model is
     # left empty: the sysDescr names the card (AP9631), the host is the UPS,
-    # whose model the monitoring poll reads from PowerNet-MIB.
+    # whose model ``_snmp_get`` and the monitoring poll read from PowerNet-MIB.
     if _apc_device_type(sys_descr):
         model, version = "", parse_apc_nmc_sys_descr(sys_descr)["nmc_firmware"]
 
@@ -428,6 +442,15 @@ async def _resolve_snmp_secrets(snmp_config: dict) -> dict:
 
 
 # ── SNMP Get ─────────────────────────────────────────────────────────────────
+
+
+# The identity a discovery / test GET reads from every device.
+_IDENTITY_OIDS = (
+    "1.3.6.1.2.1.1.1.0",  # sysDescr
+    "1.3.6.1.2.1.1.5.0",  # sysName
+    "1.3.6.1.2.1.47.1.1.1.1.13.1",  # entPhysicalModelName.1 (chassis)
+    "1.3.6.1.2.1.47.1.1.1.1.11.1",  # entPhysicalSerialNum.1 (chassis)
+)
 
 
 async def _snmp_get(ip_address: str, timeout_seconds: float, snmp_config: dict) -> dict | None:
@@ -514,21 +537,19 @@ async def _snmp_get(ip_address: str, timeout_seconds: float, snmp_config: dict) 
             return None
         auth_data = CommunityData(community, mpModel=1)
 
-    engine = SnmpEngine()
-    try:
-        transport = await UdpTransportTarget.create((ip_address, port), timeout=timeout, retries=retries)
-        error_indication, error_status, _error_index, var_binds = await get_cmd(
-            engine,
-            auth_data,
-            transport,
-            ContextData(),
-            ObjectType(ObjectIdentity("1.3.6.1.2.1.1.1.0")),  # sysDescr
-            ObjectType(ObjectIdentity("1.3.6.1.2.1.1.5.0")),  # sysName
-            ObjectType(ObjectIdentity("1.3.6.1.2.1.47.1.1.1.1.13.1")),  # entPhysicalModelName.1 (chassis)
-            ObjectType(ObjectIdentity("1.3.6.1.2.1.47.1.1.1.1.11.1")),  # entPhysicalSerialNum.1 (chassis)
-        )
-    finally:
-        engine.close_dispatcher()
+    async def _get(auth: Any, oids: tuple[str, ...]) -> tuple[Any, Any, Any]:
+        """One SNMP GET of ``oids``: (error_indication, error_status, var_binds)."""
+        engine = SnmpEngine()
+        try:
+            transport = await UdpTransportTarget.create((ip_address, port), timeout=timeout, retries=retries)
+            error_indication, error_status, _error_index, var_binds = await get_cmd(
+                engine, auth, transport, ContextData(), *(ObjectType(ObjectIdentity(oid)) for oid in oids)
+            )
+        finally:
+            engine.close_dispatcher()
+        return error_indication, error_status, var_binds
+
+    error_indication, error_status, var_binds = await _get(auth_data, _IDENTITY_OIDS)
 
     # If SNMPv3 fails, fall back to v2c using the community string if available.
     if (error_indication or error_status) and version == "3":
@@ -540,30 +561,12 @@ async def _snmp_get(ip_address: str, timeout_seconds: float, snmp_config: dict) 
                 ip_address,
                 v3_err,
             )
-            v2_auth = CommunityData(community, mpModel=1)
-            engine2 = SnmpEngine()
-            try:
-                transport2 = await UdpTransportTarget.create(
-                    (ip_address, port),
-                    timeout=timeout,
-                    retries=retries,
-                )
-                error_indication, error_status, _error_index, var_binds = await get_cmd(
-                    engine2,
-                    v2_auth,
-                    transport2,
-                    ContextData(),
-                    ObjectType(ObjectIdentity("1.3.6.1.2.1.1.1.0")),  # sysDescr
-                    ObjectType(ObjectIdentity("1.3.6.1.2.1.1.5.0")),  # sysName
-                    ObjectType(ObjectIdentity("1.3.6.1.2.1.47.1.1.1.1.13.1")),  # entPhysicalModelName.1
-                    ObjectType(ObjectIdentity("1.3.6.1.2.1.47.1.1.1.1.11.1")),  # entPhysicalSerialNum.1
-                )
-                if not error_indication and not error_status:
-                    version = "2c-fallback"
-                else:
-                    raise RuntimeError(f"SNMPv3 failed for {ip_address}: {v3_err}")
-            finally:
-                engine2.close_dispatcher()
+            auth_data = CommunityData(community, mpModel=1)
+            error_indication, error_status, var_binds = await _get(auth_data, _IDENTITY_OIDS)
+            if not error_indication and not error_status:
+                version = "2c-fallback"
+            else:
+                raise RuntimeError(f"SNMPv3 failed for {ip_address}: {v3_err}")
         else:
             raise RuntimeError(f"SNMPv3 failed for {ip_address}: {v3_err}")
     elif error_indication:
@@ -593,6 +596,13 @@ async def _snmp_get(ip_address: str, timeout_seconds: float, snmp_config: dict) 
     # the software image name parsed from sysDescr (like CAT9K_LITE_IOSXE).
     if ent_model.strip():
         hw_model = ent_model.strip()
+    if detected_type == "apc_ups":
+        # The card has no ENTITY-MIB chassis row; the UPS's own model and
+        # serial are PowerNet-MIB scalars, read in a second GET so other
+        # devices are never asked for them.
+        ups_model, ups_serial = await _apc_ups_identity(_get, auth_data, ip_address)
+        hw_model = ups_model or hw_model
+        ent_serial = ups_serial or ent_serial
     category = _infer_device_category(hw_model, sys_descr, detected_type)
     return {
         "hostname": sys_name or placeholder_hostname("snmp", ip_address),
@@ -617,6 +627,25 @@ async def _snmp_get(ip_address: str, timeout_seconds: float, snmp_config: dict) 
             "auth": "configured",
         },
     }
+
+
+async def _apc_ups_identity(
+    get: Callable[..., Awaitable[tuple[Any, Any, Any]]], auth: Any, ip_address: str
+) -> tuple[str, str]:
+    """The (model, serial) of the UPS behind an APC card, read with ``get``
+    (``_snmp_get``'s GET); ``("", "")`` for any field the card did not
+    answer. Best-effort: a failed GET leaves both empty."""
+    model_oid, serial_oid = f"{APC_UPS_MODEL_OID}.0", f"{APC_UPS_SERIAL_OID}.0"
+    try:
+        error_indication, error_status, var_binds = await get(auth, (model_oid, serial_oid))
+    except Exception as exc:
+        LOGGER.warning("APC UPS identity read failed for %s: %s", ip_address, exc)
+        return "", ""
+    if error_indication or error_status:
+        LOGGER.warning("APC UPS identity read failed for %s: %s", ip_address, error_indication or error_status)
+        return "", ""
+    values = {str(name): _snmp_str(value) for name, value in var_binds}
+    return values.get(model_oid, ""), values.get(serial_oid, "")
 
 
 async def _probe_discovery_target_snmp(ip_address: str, timeout_seconds: float, snmp_config: dict) -> dict | None:
@@ -831,6 +860,63 @@ def _snmp_str(raw_value) -> str:
     if s and any(m in s.lower() for m in _SNMP_BAD_MARKERS):
         return ""
     return s
+
+
+# ── SNMP trap decoding ───────────────────────────────────────────────────────
+
+SNMP_TRAP_OID = "1.3.6.1.6.3.1.1.4.1.0"  # snmpTrapOID.0
+_SNMP_GENERIC_TRAPS = "1.3.6.1.6.3.1.1.5"  # snmpTraps (coldStart = .1)
+
+
+def decode_snmp_trap(data: bytes) -> dict | None:
+    """Decode an SNMPv1 or SNMPv2c trap datagram with pysnmp's BER codec.
+
+    Returns ``{"version": "v1" | "v2c", "community", "trap_oid",
+    "agent_address", "varbinds": [(oid, text)]}``. A v1 trap's OID is
+    formed as RFC 3584 does: ``enterprise.0.specific`` for an
+    enterprise-specific trap, ``snmpTraps.(generic + 1)`` otherwise; the
+    agent address is set only on v1. None for anything else: SNMPv3 (its
+    PDU needs the user's keys), a PDU that is not a trap, bytes that are
+    not valid BER, or pysnmp not installed.
+    """
+    try:
+        from pyasn1.codec.ber import decoder as ber_decoder
+        from pysnmp.proto import api as snmp_api
+    except ImportError:
+        return None
+    try:
+        version = int(snmp_api.decodeMessageVersion(data))
+        proto = snmp_api.PROTOCOL_MODULES.get(version)
+        if proto is None:
+            return None
+        message, _rest = ber_decoder.decode(data, asn1Spec=proto.Message())
+        pdu = proto.apiMessage.get_pdu(message)
+        trap_pdu = proto.TrapPDU() if version == snmp_api.SNMP_VERSION_1 else proto.SNMPv2TrapPDU()
+        if not pdu.isSameTypeWith(trap_pdu):
+            return None
+        community = bytes(proto.apiMessage.get_community(message).asOctets()).decode("utf-8", "replace")
+        varbinds = [(oid.prettyPrint(), value.prettyPrint()) for oid, value in proto.apiTrapPDU.get_varbinds(pdu)]
+        if version == snmp_api.SNMP_VERSION_1:
+            generic = int(proto.apiTrapPDU.get_generic_trap(pdu))
+            enterprise = proto.apiTrapPDU.get_enterprise(pdu).prettyPrint()
+            trap_oid = (
+                f"{enterprise}.0.{int(proto.apiTrapPDU.get_specific_trap(pdu))}"
+                if generic == 6
+                else f"{_SNMP_GENERIC_TRAPS}.{generic + 1}"
+            )
+            agent_address = proto.apiTrapPDU.get_agent_address(pdu).prettyPrint()
+        else:
+            trap_oid = next((value for oid, value in varbinds if oid == SNMP_TRAP_OID), "")
+            agent_address = ""
+    except Exception:  # noqa: BLE001 - untrusted network input: anything malformed is "not a trap"
+        return None
+    return {
+        "version": "v1" if version == snmp_api.SNMP_VERSION_1 else "v2c",
+        "community": community,
+        "trap_oid": trap_oid,
+        "agent_address": agent_address,
+        "varbinds": varbinds,
+    }
 
 
 def _parse_cdp_address(raw_value) -> str:

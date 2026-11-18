@@ -9,6 +9,7 @@ import { FieldError } from '@/components/FieldError';
 import { LoadingState } from '@/components/LoadingState';
 import { ProgressBar } from '@/components/ProgressBar';
 import { QueryError } from '@/components/QueryError';
+import { ObjectDataPanel } from '@/components/ObjectDataPanel';
 import { blockUnitsLabel, type FieldSpec, formatUnits, formatWatts } from '@/lib/dcim';
 import { utilizationTone } from '@/lib/severity';
 
@@ -238,6 +239,7 @@ function RackDetail({ rackId }: { rackId: number }) {
       <div className="card">
         <ChangelogPanel objectType="rack" objectId={rackId} pageSize={10} />
       </div>
+      <ObjectDataPanel objectType="rack" objectId={rackId} />
     </div>
   );
 }

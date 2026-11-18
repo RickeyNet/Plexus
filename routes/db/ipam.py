@@ -12,6 +12,7 @@ import ipaddress
 import json
 import os
 import re
+from collections.abc import Iterable
 from datetime import UTC, datetime, timedelta
 
 import routes.database as _dbcore
@@ -91,6 +92,14 @@ __all__ = [
 # ═════════════════════════════════════════════════════════════════════════════
 # IPAM - Lightweight IP Address Management
 # ═════════════════════════════════════════════════════════════════════════════
+
+
+def _group_ids_condition(column: str, group_ids: Iterable[int] | None) -> tuple[str, tuple[int, ...]]:
+    """``routes.db.inventory.group_ids_condition``, imported when called
+    (that module imports this one at load time)."""
+    from routes.db.inventory import group_ids_condition
+
+    return group_ids_condition(column, group_ids)
 
 
 def _infer_subnet(ip_str: str) -> str | None:
@@ -209,9 +218,18 @@ async def get_ipam_overview(
     include_cloud: bool = True,
     include_external: bool = True,
     topology_subnets: list[dict] | None = None,
+    *,
+    group_ids: Iterable[int] | None = None,
+    prefix_scope: tuple[str, tuple] | None = None,
+    allocation_scope: tuple[str, tuple] | None = None,
 ) -> dict:
     """Return a merged IPAM overview across inventory, cloud, external and
     topology sources.
+
+    Object scope (``netcontrol.object_scope``; ``None``: no filter):
+    ``group_ids`` keeps the hosts of those inventory groups,
+    ``prefix_scope`` / ``allocation_scope`` are SQL conditions on the
+    prefixes (alias ``p``) and allocations (alias ``a``) kept.
 
     ``topology_subnets`` are the rows of the topology subnet index (Meraki
     VLANs, single LANs, SVIs and static routes, Cato network ranges, FMC and
@@ -222,13 +240,16 @@ async def get_ipam_overview(
     db = await _dbcore.get_db(read_only=True)
     try:
         # ── 1. Inventory hosts ──────────────────────────────────────────────
+        scope_sql, scope_params = _group_ids_condition("h.group_id", group_ids)
+        scope_and = f" AND {scope_sql}" if scope_sql else ""
         if group_id is not None:
             cursor = await db.execute(
                 """SELECT h.ip_address, h.vrf_name, h.vlan_id, g.name AS group_name
                    FROM hosts h
                    JOIN inventory_groups g ON h.group_id = g.id
-                   WHERE h.group_id = ? AND h.ip_address != '' AND h.ip_address IS NOT NULL""",
-                (group_id,),
+                   WHERE h.group_id = ? AND h.ip_address != '' AND h.ip_address IS NOT NULL"""
+                + scope_and,  # nosec B608 - placeholders only
+                (group_id, *scope_params),
             )
         else:
             cursor = await db.execute(
@@ -236,6 +257,8 @@ async def get_ipam_overview(
                    FROM hosts h
                    JOIN inventory_groups g ON h.group_id = g.id
                    WHERE h.ip_address != '' AND h.ip_address IS NOT NULL"""
+                + scope_and,  # nosec B608 - placeholders only
+                scope_params,
             )
         host_rows = rows_to_list(await cursor.fetchall())
 
@@ -362,12 +385,16 @@ async def get_ipam_overview(
         subnet_ext_prefix_count: dict[tuple[str, str], int] = {}
         subnet_ext_alloc_count: dict[tuple[str, str], int] = {}
 
+        prefix_sql, prefix_params = prefix_scope or ("", ())
+        alloc_sql, alloc_params = allocation_scope or ("", ())
         if include_external:
             cursor = await db.execute(
                 """SELECT p.subnet, p.vrf, p.vlan, s.provider
                    FROM ipam_prefixes p
                    JOIN ipam_sources s ON s.id = p.source_id
                    WHERE p.subnet != '' AND p.subnet IS NOT NULL"""
+                + (f" AND {prefix_sql}" if prefix_sql else ""),  # nosec B608 - scope condition, placeholders only
+                tuple(prefix_params),
             )
             ext_prefix_rows = rows_to_list(await cursor.fetchall())
             for row in ext_prefix_rows:
@@ -387,8 +414,11 @@ async def get_ipam_overview(
                 """SELECT p.subnet, p.vrf, COUNT(a.id) AS cnt
                    FROM ipam_prefixes p
                    LEFT JOIN ipam_allocations a
-                     ON a.source_id = p.source_id AND a.prefix_subnet = p.subnet
-                   GROUP BY p.subnet, p.vrf"""
+                     ON a.source_id = p.source_id AND a.prefix_subnet = p.subnet"""
+                + (f" AND {alloc_sql}" if alloc_sql else "")
+                + (f" WHERE {prefix_sql}" if prefix_sql else "")
+                + " GROUP BY p.subnet, p.vrf",  # nosec B608 - scope conditions, placeholders only
+                (*alloc_params, *prefix_params),
             )
             alloc_rows = rows_to_list(await cursor.fetchall())
             for row in alloc_rows:
@@ -536,8 +566,17 @@ async def get_ipam_subnet_detail(
     group_id: int | None = None,
     include_cloud: bool = True,
     include_external: bool = True,
+    *,
+    group_ids: Iterable[int] | None = None,
+    allocation_scope: tuple[str, tuple] | None = None,
+    reservations: bool = True,
 ) -> dict:
-    """Return per-subnet utilisation detail: allocations, reservations, available preview."""
+    """Return per-subnet utilisation detail: allocations, reservations, available preview.
+
+    Object scope (``None``: no filter): ``group_ids`` keeps the hosts of
+    those inventory groups, ``allocation_scope`` is a SQL condition on the
+    allocations (alias ``a``) kept; ``reservations=False`` leaves the
+    reserved ranges out."""
     db = await _dbcore.get_db(read_only=True)
     try:
         net = ipaddress.ip_network(subnet, strict=False)
@@ -545,13 +584,16 @@ async def get_ipam_subnet_detail(
         prefix_len = net.prefixlen
 
         # ── Inventory hosts in this subnet ──────────────────────────────────
+        scope_sql, scope_params = _group_ids_condition("h.group_id", group_ids)
+        scope_and = f" AND {scope_sql}" if scope_sql else ""
         if group_id is not None:
             cursor = await db.execute(
                 """SELECT h.ip_address, h.hostname, g.name AS group_name
                    FROM hosts h
                    JOIN inventory_groups g ON h.group_id = g.id
-                   WHERE h.group_id = ? AND h.ip_address != '' AND h.ip_address IS NOT NULL""",
-                (group_id,),
+                   WHERE h.group_id = ? AND h.ip_address != '' AND h.ip_address IS NOT NULL"""
+                + scope_and,  # nosec B608 - placeholders only
+                (group_id, *scope_params),
             )
         else:
             cursor = await db.execute(
@@ -559,6 +601,8 @@ async def get_ipam_subnet_detail(
                    FROM hosts h
                    JOIN inventory_groups g ON h.group_id = g.id
                    WHERE h.ip_address != '' AND h.ip_address IS NOT NULL"""
+                + scope_and,  # nosec B608 - placeholders only
+                scope_params,
             )
         all_host_rows = rows_to_list(await cursor.fetchall())
 
@@ -573,14 +617,17 @@ async def get_ipam_subnet_detail(
                 continue
 
         # ── Custom reservations ─────────────────────────────────────────────
-        cursor = await db.execute(
-            "SELECT * FROM ipam_reservations WHERE subnet = ? ORDER BY start_ip",
-            (net_str,),
-        )
-        raw_reservations = rows_to_list(await cursor.fetchall())
+        raw_reservations: list[dict] = []
+        if reservations:
+            cursor = await db.execute(
+                "SELECT * FROM ipam_reservations WHERE subnet = ? ORDER BY start_ip",
+                (net_str,),
+            )
+            raw_reservations = rows_to_list(await cursor.fetchall())
 
         # ── External and local allocations for this prefix ─────────────────
         ext_allocs: list[dict] = []
+        alloc_sql, alloc_params = allocation_scope or ("", ())
         if include_external:
             cursor = await db.execute(
                 """SELECT a.id, a.address, a.dns_name, a.description, a.metadata_json,
@@ -589,8 +636,9 @@ async def get_ipam_subnet_detail(
                    FROM ipam_allocations a
                    JOIN ipam_sources s ON s.id = a.source_id
                    LEFT JOIN tenants tn ON tn.id = a.tenant_id
-                   WHERE a.prefix_subnet = ?""",
-                (net_str,),
+                   WHERE a.prefix_subnet = ?"""
+                + (f" AND {alloc_sql}" if alloc_sql else ""),  # nosec B608 - scope condition, placeholders only
+                (net_str, *alloc_params),
             )
             ext_allocs = rows_to_list(await cursor.fetchall())
 
@@ -1167,9 +1215,12 @@ async def create_ipam_prefix(
     vrf: str = "",
     notes: str = "",
     tenant_id: int | None = None,
+    namespace_id: int = 1,
 ) -> dict | None:
     """Create a manually-defined subnet prefix under the given IPAM source
-    (owned by ``tenant_id`` when given)."""
+    (owned by ``tenant_id`` when given) in a namespace (default 1, Global).
+    A prefix is one per source, namespace, VRF and subnet: an existing one
+    is returned as it is."""
     try:
         net = ipaddress.ip_network(subnet, strict=False)
         subnet_key = str(net)
@@ -1178,11 +1229,28 @@ async def create_ipam_prefix(
 
     db = await _dbcore.get_db()
     try:
+        # The external id is the subnet; the same subnet in another
+        # namespace or VRF of the source gets a qualified one.
+        cursor = await db.execute(
+            "SELECT 1 FROM ipam_prefixes WHERE source_id = ? AND external_id = ? AND subnet = ? "
+            "AND NOT (namespace_id = ? AND vrf = ?)",
+            (source_id, subnet_key, subnet_key, int(namespace_id), vrf),
+        )
+        external_id = subnet_key if await cursor.fetchone() is None else f"{subnet_key}|ns={namespace_id}|vrf={vrf}"
         cursor = await db.execute(
             """INSERT OR IGNORE INTO ipam_prefixes
-               (source_id, external_id, subnet, description, vrf, metadata_json, tenant_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
-            (source_id, subnet_key, subnet_key, description, vrf, json.dumps({"notes": notes}), tenant_id),
+               (source_id, external_id, subnet, description, vrf, metadata_json, tenant_id, namespace_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                source_id,
+                external_id,
+                subnet_key,
+                description,
+                vrf,
+                json.dumps({"notes": notes}),
+                tenant_id,
+                int(namespace_id),
+            ),
         )
         await db.commit()
         if vrf:
@@ -1191,8 +1259,9 @@ async def create_ipam_prefix(
         if not prefix_id:
             # Already existed - fetch it
             cursor2 = await db.execute(
-                "SELECT * FROM ipam_prefixes WHERE source_id = ? AND subnet = ? LIMIT 1",
-                (source_id, subnet_key),
+                "SELECT * FROM ipam_prefixes WHERE source_id = ? AND subnet = ? AND namespace_id = ? AND vrf = ? "
+                "LIMIT 1",
+                (source_id, subnet_key, int(namespace_id), vrf),
             )
             row = await cursor2.fetchone()
             return dict(row) if row else None
@@ -1399,13 +1468,13 @@ async def delete_ipam_allocation(allocation_id: int) -> bool:
 
 _PREFIX_RECORD_SELECT = """
     SELECT p.id, p.source_id, p.subnet, p.description, p.status, p.vrf, p.tenant, p.site, p.vlan,
-           p.discovered_at, p.updated_at, s.provider, s.name AS source_name
+           p.discovered_at, p.updated_at, p.tenant_id, p.namespace_id, s.provider, s.name AS source_name
     FROM ipam_prefixes p JOIN ipam_sources s ON s.id = p.source_id
     WHERE p.subnet IS NOT NULL AND p.subnet <> ''
 """
 _ALLOCATION_RECORD_SELECT = """
     SELECT a.id, a.source_id, a.prefix_subnet, a.address, a.dns_name, a.status, a.description,
-           a.vrf_name, a.vlan_id, a.discovered_at, s.provider, s.name AS source_name
+           a.vrf_name, a.vlan_id, a.discovered_at, a.tenant_id, s.provider, s.name AS source_name
     FROM ipam_allocations a JOIN ipam_sources s ON s.id = a.source_id
 """
 _RECORD_IN_LIMIT = 1000
@@ -1660,12 +1729,24 @@ async def get_pending_allocation(allocation_id: int) -> dict | None:
 
 
 async def list_pending_allocations(
-    state: str | None = None, include_expired: bool = False, limit: int = 200
+    state: str | None = None,
+    include_expired: bool = False,
+    limit: int = 200,
+    *,
+    subnets: Iterable[str] | None = None,
 ) -> list[dict]:
+    """``subnets`` (object scope; ``None``: every row) keeps the rows of
+    those subnets."""
+    clauses: list[str] = []
+    params: list = []
+    if subnets is not None:
+        wanted = sorted(set(subnets))
+        if not wanted:
+            return []
+        clauses.append(f"subnet IN ({','.join('?' * len(wanted))})")
+        params.extend(wanted)
     db = await _dbcore.get_db()
     try:
-        clauses: list[str] = []
-        params: list = []
         if state:
             clauses.append("state = ?")
             params.append(state)
@@ -2137,10 +2218,19 @@ async def list_subnet_utilization(
     since: str | None = None,
     until: str | None = None,
     limit: int = 500,
+    *,
+    subnets: Iterable[str] | None = None,
 ) -> list[dict]:
-    """Return time-series utilization rows, newest first."""
+    """Return time-series utilization rows, newest first. ``subnets``
+    (object scope; ``None``: every row) keeps the rows of those subnets."""
     clauses: list[str] = []
     params: list = []
+    if subnets is not None:
+        wanted = sorted(set(subnets))
+        if not wanted:
+            return []
+        clauses.append(f"subnet IN ({','.join('?' * len(wanted))})")
+        params.extend(wanted)
     if subnet:
         clauses.append("subnet = ?")
         params.append(subnet)

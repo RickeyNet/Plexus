@@ -1,8 +1,11 @@
 /**
- * Custom fields and tags: admin-defined fields and tags on hosts, inventory
- * groups and IPAM prefixes. Definitions live under /api/custom-fields and
- * /api/tags; an object's own tags and values under its `custom-data` route.
- * List endpoints (inventory, IPAM overview) carry the same data inline as
+ * Custom fields and tags: admin-defined fields and tags on every object type
+ * of the server's registry (hosts, groups, prefixes, VRFs, VLANs, sites,
+ * circuits, racks...). Definitions live under /api/custom-fields and
+ * /api/tags; an object's own tags and values under its `custom-data` route
+ * (hosts, groups and prefixes keep their own; every other type uses
+ * /api/objects/{type}/{id}/custom-data, which also carries its computed
+ * fields and relationships). List endpoints carry the same data inline as
  * `tags` and `custom_fields` on each row.
  */
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -15,7 +18,30 @@ import { invalidateOverview } from './ipam';
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
-export type ObjectType = 'host' | 'group' | 'prefix';
+/** Every object type of the registry (`netcontrol.custom_fields.OBJECT_TYPE_SPECS`). */
+export type ObjectType =
+  | 'host'
+  | 'group'
+  | 'prefix'
+  | 'vrf'
+  | 'vlan'
+  | 'region'
+  | 'site'
+  | 'tenant'
+  | 'manufacturer'
+  | 'device_type'
+  | 'device_role'
+  | 'circuit_provider'
+  | 'circuit'
+  | 'cluster'
+  | 'virtual_machine'
+  | 'autonomous_system'
+  | 'bgp_peering'
+  | 'rack'
+  | 'cable';
+/** The types addressed by id (every type but `prefix`). */
+export type IdObjectType = Exclude<ObjectType, 'prefix'>;
+export type Cardinality = 'one-to-one' | 'one-to-many' | 'many-to-many';
 export type FieldType = 'text' | 'number' | 'boolean' | 'date' | 'url' | 'select';
 
 export interface Tag {
@@ -26,7 +52,8 @@ export interface Tag {
 }
 
 export interface TagWithUsage extends Tag {
-  usage: Record<ObjectType, number>;
+  /** Assignments by object type: always host, group and prefix, then any other type in use. */
+  usage: Partial<Record<ObjectType, number>>;
 }
 
 export interface TagRef {
@@ -64,10 +91,63 @@ export interface ObjectDataPut {
   fields: Record<string, CustomValue | null>;
 }
 
-export type ObjectRef =
-  | { type: 'host'; id: number }
-  | { type: 'group'; id: number }
-  | { type: 'prefix'; subnet: string; vrf?: string | null };
+export type ObjectRef = { type: IdObjectType; id: number } | { type: 'prefix'; subnet: string; vrf?: string | null };
+
+/** One related object, seen from the object whose panel lists it. */
+export interface RelationshipLinkView {
+  id: number;
+  peer_id: number;
+  /** Empty when the caller cannot read the peer's type. */
+  peer_label: string;
+}
+
+/** A relationship the object's type takes part in, from one side, with its links. */
+export interface RelationshipGroup {
+  relationship: Relationship;
+  side: 'source' | 'destination';
+  peer_type: IdObjectType;
+  links: RelationshipLinkView[];
+}
+
+/** What /api/objects/{type}/{id}/custom-data returns. */
+export interface FullObjectData extends ObjectData {
+  computed_fields: Record<string, string>;
+  relationships: RelationshipGroup[];
+}
+
+export interface ObjectTypeInfo {
+  key: ObjectType;
+  label: string;
+  /** Served by /api/objects/{type}/{id}/...; false for prefix. */
+  generic: boolean;
+  readable: boolean;
+  writable: boolean;
+}
+
+export interface ComputedField {
+  id: number;
+  key: string;
+  label: string;
+  object_type: IdObjectType;
+  template: string;
+  description: string;
+  sort_order: number;
+}
+
+export type ComputedFieldInput = Omit<ComputedField, 'id'>;
+
+export interface Relationship {
+  id: number;
+  key: string;
+  label: string;
+  source_type: IdObjectType;
+  destination_type: IdObjectType;
+  cardinality: Cardinality;
+  description: string;
+  link_count?: number;
+}
+
+export type RelationshipInput = Omit<Relationship, 'id' | 'link_count'>;
 
 /** The editable part of a field definition (`key` and `field_type` only count on create). */
 export interface CustomFieldInput {
@@ -147,6 +227,11 @@ export function listOf<T>(body: unknown, key: string): T[] {
   return Array.isArray(wrapped) ? (wrapped as T[]) : [];
 }
 
+/** The generic object API base of an object: `/objects/{type}/{id}`. */
+export function objectPath(type: IdObjectType, id: number): string {
+  return `/objects/${type}/${id}`;
+}
+
 /** The custom-data URL of an object. */
 export function objectDataPath(ref: ObjectRef): string {
   switch (ref.type) {
@@ -158,6 +243,8 @@ export function objectDataPath(ref: ObjectRef): string {
       const qs = new URLSearchParams({ subnet: ref.subnet, vrf: ref.vrf ?? '' });
       return `/ipam/prefix-custom-data?${qs.toString()}`;
     }
+    default:
+      return `${objectPath(ref.type, ref.id)}/custom-data`;
   }
 }
 
@@ -174,6 +261,13 @@ const KEYS = {
   allFields: ['custom-data', 'fields'] as const,
   object: (ref: ObjectRef) => ['custom-data', 'object', refKey(ref)] as const,
   allObjects: ['custom-data', 'object'] as const,
+  full: (type: IdObjectType, id: number) => ['custom-data', 'object', 'full', `${type}:${id}`] as const,
+  types: ['custom-data', 'types'] as const,
+  computed: (objectType?: IdObjectType) => ['custom-data', 'computed', objectType ?? 'all'] as const,
+  allComputed: ['custom-data', 'computed'] as const,
+  relationships: (objectType?: IdObjectType) => ['custom-data', 'relationships', objectType ?? 'all'] as const,
+  allRelationships: ['custom-data', 'relationships'] as const,
+  lookup: (type: IdObjectType, q: string) => ['custom-data', 'lookup', type, q] as const,
 };
 
 type QC = ReturnType<typeof useQueryClient>;
@@ -223,7 +317,8 @@ export function useSaveObjectData() {
       qc.invalidateQueries({ queryKey: KEYS.object(ref) });
       qc.invalidateQueries({ queryKey: KEYS.tags });
       if (ref.type === 'prefix') invalidateOverview(qc);
-      else invalidateInventory(qc);
+      else if (ref.type === 'host' || ref.type === 'group') invalidateInventory(qc);
+      else qc.invalidateQueries({ queryKey: KEYS.full(ref.type, ref.id) });
     },
   });
 }
@@ -326,5 +421,135 @@ export function useDeleteCustomField() {
   return useMutation<{ ok: boolean; removed: number }, Error, number>({
     mutationFn: (id) => detailRequest(`/custom-fields/${id}`, { method: 'DELETE' }),
     onSuccess: () => invalidateFields(qc),
+  });
+}
+
+// ── Every object type: catalogue, full data, relationships ─────────────────
+
+/** The object types that carry custom data, with whether the caller reads and changes each. */
+export function useObjectTypes() {
+  return useQuery<ObjectTypeInfo[]>({
+    queryKey: KEYS.types,
+    queryFn: () => detailRequest<ObjectTypeInfo[]>('/custom-object-types'),
+    staleTime: 5 * 60_000,
+  });
+}
+
+/** An object's tags, values, computed fields and relationships (generic object API). */
+export function useFullObjectData(type: IdObjectType, id: number | null) {
+  return useQuery<FullObjectData>({
+    queryKey: id === null ? [...KEYS.allObjects, 'full', 'none'] : KEYS.full(type, id),
+    queryFn: () => detailRequest<FullObjectData>(`${objectPath(type, id!)}/custom-data`),
+    enabled: id !== null,
+  });
+}
+
+/** Up to 50 objects of a type whose name contains `q`: the relationship picker. */
+export function useObjectLookup(type: IdObjectType | null, q: string) {
+  return useQuery<{ id: number; label: string }[]>({
+    queryKey: KEYS.lookup(type ?? 'host', q),
+    queryFn: () => detailRequest(`/objects/${type}/lookup?q=${encodeURIComponent(q)}`),
+    enabled: type !== null,
+    staleTime: 30_000,
+  });
+}
+
+function invalidateObjectData(qc: QC) {
+  qc.invalidateQueries({ queryKey: KEYS.allObjects });
+  qc.invalidateQueries({ queryKey: KEYS.allRelationships });
+}
+
+/** Links the object to `peerId`. A link the cardinality forbids is a 409. */
+export function useAddObjectLink(type: IdObjectType, id: number) {
+  const qc = useQueryClient();
+  return useMutation<unknown, Error, { relationshipId: number; peerId: number; side?: 'source' | 'destination' }>({
+    mutationFn: ({ relationshipId, peerId, side }) =>
+      detailRequest(`${objectPath(type, id)}/relationships`, {
+        method: 'POST',
+        body: { relationship_id: relationshipId, peer_id: peerId, ...(side ? { side } : {}) },
+      }),
+    onSuccess: () => invalidateObjectData(qc),
+  });
+}
+
+export function useDeleteObjectLink(type: IdObjectType, id: number) {
+  const qc = useQueryClient();
+  return useMutation<unknown, Error, number>({
+    mutationFn: (linkId) => detailRequest(`${objectPath(type, id)}/relationships/${linkId}`, { method: 'DELETE' }),
+    onSuccess: () => invalidateObjectData(qc),
+  });
+}
+
+// ── Computed field and relationship definitions ────────────────────────────
+
+export function useComputedFields(objectType?: IdObjectType) {
+  return useQuery<ComputedField[]>({
+    queryKey: KEYS.computed(objectType),
+    queryFn: () => detailRequest<ComputedField[]>(`/computed-fields${objectType ? `?object_type=${objectType}` : ''}`),
+  });
+}
+
+function invalidateComputed(qc: QC) {
+  qc.invalidateQueries({ queryKey: KEYS.allComputed });
+  qc.invalidateQueries({ queryKey: KEYS.allObjects });
+}
+
+/** Creates (no `id`) or updates a computed field. A template syntax error is a 422. */
+export function useSaveComputedField() {
+  const qc = useQueryClient();
+  return useMutation<ComputedField, Error, { id?: number; data: ComputedFieldInput }>({
+    mutationFn: ({ id, data }) =>
+      id === undefined
+        ? detailRequest<ComputedField>('/computed-fields', { method: 'POST', body: data })
+        : detailRequest<ComputedField>(`/computed-fields/${id}`, {
+            method: 'PUT',
+            body: { label: data.label, template: data.template, description: data.description, sort_order: data.sort_order },
+          }),
+    onSuccess: () => invalidateComputed(qc),
+  });
+}
+
+export function useDeleteComputedField() {
+  const qc = useQueryClient();
+  return useMutation<unknown, Error, number>({
+    mutationFn: (id) => detailRequest(`/computed-fields/${id}`, { method: 'DELETE' }),
+    onSuccess: () => invalidateComputed(qc),
+  });
+}
+
+/** Renders a template against one object: `{value, error}`. */
+export function usePreviewComputedField() {
+  return useMutation<{ value: string; error: string | null }, Error, { object_type: IdObjectType; object_id: number; template: string }>({
+    mutationFn: (body) => detailRequest('/computed-fields/preview', { method: 'POST', body }),
+  });
+}
+
+export function useRelationships(objectType?: IdObjectType) {
+  return useQuery<Relationship[]>({
+    queryKey: KEYS.relationships(objectType),
+    queryFn: () => detailRequest<Relationship[]>(`/relationships${objectType ? `?object_type=${objectType}` : ''}`),
+  });
+}
+
+/** Creates (no `id`) or updates a relationship; only the label and description change on update. */
+export function useSaveRelationship() {
+  const qc = useQueryClient();
+  return useMutation<Relationship, Error, { id?: number; data: RelationshipInput }>({
+    mutationFn: ({ id, data }) =>
+      id === undefined
+        ? detailRequest<Relationship>('/relationships', { method: 'POST', body: data })
+        : detailRequest<Relationship>(`/relationships/${id}`, {
+            method: 'PUT',
+            body: { label: data.label, description: data.description },
+          }),
+    onSuccess: () => invalidateObjectData(qc),
+  });
+}
+
+export function useDeleteRelationship() {
+  const qc = useQueryClient();
+  return useMutation<{ ok: boolean; removed: number }, Error, number>({
+    mutationFn: (id) => detailRequest(`/relationships/${id}`, { method: 'DELETE' }),
+    onSuccess: () => invalidateObjectData(qc),
   });
 }

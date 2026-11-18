@@ -83,6 +83,39 @@ next 200.
 The subnet is stored in the built-in source named "Plexus (Built-in)" and
 shows with the `local` badge. A VRF name that has no VRF record yet gets one.
 
+**Namespace** (optional) picks the namespace the subnet goes to. Left empty,
+it is the VRF's namespace, or **Global** for no VRF. The same subnet may be
+defined once per namespace and VRF: defining it again in the same namespace
+and VRF is refused, in another VRF or namespace it is a second subnet.
+
+## Namespaces
+
+A namespace groups VRFs and prefixes so the same address space can exist
+more than once, for example a lab that reuses production ranges. Every VRF
+and prefix that existed before namespaces is in **Global**, the default
+namespace, which cannot be deleted; nothing about them changed.
+
+- A VRF record is in one namespace, and its prefixes follow it: a subnet
+  of a VRF must be in the VRF's namespace. Move the VRF (edit it on the
+  **VRFs** tab) to move them together.
+- A prefix is unique per namespace and VRF.
+- A namespace that holds a VRF or a prefix cannot be deleted.
+
+The **Namespaces** tab lists them with their VRF and prefix counts.
+
+## Aggregates and RIRs
+
+An aggregate is a top-level block of address space, such as the
+`198.51.100.0/24` an organisation was given, with the RIR that allocated
+it (a regional internet registry, or a private allocator such as
+RFC 1918) and the date it was added. Aggregates do not overlap. A RIR with
+aggregates cannot be deleted.
+
+The **Aggregates** tab lists each aggregate with how many prefixes are
+inside it and its **utilization**: the share of its addresses the IPAM
+prefixes (of every namespace and source) cover, overlapping prefixes counted
+once. A subnet's drill-down names the aggregate that holds it.
+
 ## Inspect a subnet
 
 Select **Drilldown** on a row. The **Subnet Drilldown** panel on the right
@@ -102,6 +135,8 @@ shows that subnet:
   allocation lists.
 - **External Prefix Context** and **Cloud Resources** when the subnet comes
   from those sources.
+- The aggregate that holds the subnet and how much of it is used, under
+  the address counts.
 
 ### Reserve a range
 
@@ -271,9 +306,11 @@ that discovery has not found.
 | Resolve drifts, push to IPAM | Admin |
 | Add, edit, sync or delete DHCP servers | Admin |
 | Change a subnet's tags and custom fields | Admin |
+| See namespaces, RIRs and aggregates | The `ipam` feature |
+| Add, change or delete namespaces, RIRs and aggregates; move a prefix to another namespace | Admin |
 
 Changes are written to the audit log under the `ipam` and `dhcp`
-categories.
+categories; namespaces, RIRs and aggregates under `ipam_model`.
 
 ## API
 
@@ -301,14 +338,72 @@ GET    /api/ipam/history/{address}
 GET    /api/dhcp/servers
 GET    /api/dhcp/exhaustion
 GET    /api/dhcp/correlation
+GET    /api/ipam/namespaces[?q=]
+POST   /api/ipam/namespaces                 {name, description?}
+GET    /api/ipam/namespaces/{id}
+PUT    /api/ipam/namespaces/{id}            {name?, description?}
+DELETE /api/ipam/namespaces/{id}
+PUT    /api/ipam/prefixes/{id}/namespace    {namespace_id}
+GET    /api/ipam/rirs[?is_private=&q=]
+POST   /api/ipam/rirs                       {name, is_private?, description?}
+GET    /api/ipam/rirs/{id}
+PUT    /api/ipam/rirs/{id}                  {name?, is_private?, description?}
+DELETE /api/ipam/rirs/{id}
+GET    /api/ipam/aggregates[?rir_id=&tenant_id=&q=]
+POST   /api/ipam/aggregates                 {prefix, rir_id, date_added?, tenant_id?, description?}
+GET    /api/ipam/aggregates/{id}
+GET    /api/ipam/aggregates/containing?subnet=<cidr>
+PUT    /api/ipam/aggregates/{id}            {prefix?, rir_id?, date_added?, tenant_id?, description?}
+DELETE /api/ipam/aggregates/{id}
 ```
 
-Define a subnet:
+Define a subnet (`namespace_id` optional: the VRF's namespace, else Global):
 
 ```json
 POST /api/ipam/prefixes
-{ "subnet": "198.51.100.0/24", "description": "Lab servers", "vrf": "" }
+{ "subnet": "198.51.100.0/24", "description": "Lab servers", "vrf": "", "namespace_id": 2 }
 ```
+
+The same subnet, namespace and VRF again gives `409`; a `namespace_id`
+other than the VRF record's `422`; an unknown one `400`. Moving a prefix to
+a namespace that has it in the same VRF gives `409`, and moving a prefix of
+a VRF record away from the VRF's namespace `422`.
+
+Namespaces answer `{"namespaces": [...]}` with `vrf_count` and
+`prefix_count`; a detail adds `vrfs` and `prefixes` (at most 2,000, with
+`truncated`). Deleting Global, or a namespace in use, gives `409`.
+
+An aggregate:
+
+```json
+{
+  "id": 5, "prefix": "198.51.100.0/24", "rir_id": 1, "rir_name": "RFC 5737", "rir_is_private": true,
+  "date_added": "2026-01-15", "tenant_id": null, "tenant_name": null, "description": "",
+  "prefix_count": 2, "total_addresses": 256, "used_addresses": 192, "utilization_pct": 75.0
+}
+```
+
+A detail adds `prefixes` (`id`, `subnet`, `vrf`, `namespace_id`, `source`).
+`containing` answers `{"subnet": ..., "aggregate": {...} | null}` (the most
+specific aggregate that holds the subnet), and the subnet drill-down
+carries the same `aggregate`. A prefix with host bits set, a `date_added`
+that is not `YYYY-MM-DD` or an aggregate that overlaps another gives `422`;
+an unknown `rir_id` `400`; the prefix of another aggregate `409`.
+
+For an account limited to selected inventory groups (object scope):
+
+- Namespaces and RIRs are reference data: every IPAM reader sees all of
+  them. A namespace's detail lists only the VRFs and prefixes the account
+  may read.
+- An aggregate is read when it is of one of the account's tenants (an
+  access group scope rule on `aggregate`, or a tenant its groups' hosts
+  have) or of no tenant; another gives `404`, and `containing` answers
+  `null` for it. Its detail lists only the prefixes the account may read.
+- Counts and an aggregate's usage (`prefix_count`, `used_addresses`,
+  `utilization_pct`) are totals over every prefix, like the address space
+  they describe.
+- The `aggregate` of a subnet's drill-down is reference data: it is shown
+  whoever owns the aggregate, like the RIR.
 
 Reserve a range:
 

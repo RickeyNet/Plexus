@@ -162,9 +162,12 @@ export interface SshEnrichmentSummary {
   enabled: boolean;
   /** The credential's name; null when none was used. */
   credential: string | null;
-  credential_source: 'explicit' | 'service' | null;
+  /** 'group': the credential the group remembers from its last explicit pick. */
+  credential_source: 'explicit' | 'group' | 'service' | null;
   /** Why no host was read over SSH ('' when SSH ran). */
   skipped_reason: string;
+  /** Why the group's remembered credential was not used ('' when it was, or there is none). */
+  note?: string;
   attempted?: number;
   enriched?: number;
   failed?: number;
@@ -195,8 +198,13 @@ export interface DiscoveryOptions {
   useIcmp?: boolean;
   /** Read model, serial, version and OS over SSH show version (default on). */
   useSsh?: boolean;
-  /** The credential for SSH; null/omitted: the Plexus service credential. */
+  /**
+   * The credential for SSH, remembered for the group; null/omitted: the
+   * group's remembered credential, else the Plexus service credential.
+   */
   credentialId?: number | null;
+  /** Without credentialId: the Plexus service credential, and the group forgets its own. */
+  useServiceCredential?: boolean;
   removeAbsent?: boolean;
 }
 
@@ -219,6 +227,8 @@ export interface DiscoverySshDefaults {
   service_credential: boolean;
   service_credential_id: number | null;
   service_credential_name: string | null;
+  /** The credential the group's discovery remembers (group request only; null: none). */
+  group_credential_id?: number | null;
 }
 
 export interface SnmpTestResponse {
@@ -725,14 +735,21 @@ function discoveryBody(
     use_icmp: opts.useIcmp !== false,
     use_ssh: opts.useSsh !== false,
     credential_id: opts.credentialId ?? null,
+    use_service_credential: !!opts.useServiceCredential,
     ...(includeRemoveAbsent ? { remove_absent: !!opts.removeAbsent } : {}),
   };
 }
 
-export function useDiscoverySshDefaults() {
+/** The SSH defaults, with the credential `groupId`'s discovery remembers when given. */
+export function useDiscoverySshDefaults(groupId?: number | null) {
   return useQuery<DiscoverySshDefaults>({
-    queryKey: ['inventory', 'discovery', 'ssh-defaults'],
-    queryFn: () => apiRequest('/inventory/discovery/ssh-defaults'),
+    queryKey: ['inventory', 'discovery', 'ssh-defaults', groupId ?? null],
+    queryFn: () =>
+      apiRequest(
+        groupId
+          ? `/inventory/${groupId}/discovery/ssh-defaults`
+          : '/inventory/discovery/ssh-defaults',
+      ),
   });
 }
 

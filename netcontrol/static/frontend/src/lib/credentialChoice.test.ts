@@ -16,6 +16,19 @@ describe("credential choice", () => {
     expect(defaultCollectCredential(null, [], [], false)).toBe("");
   });
 
+  it("preselects the group's remembered credential when the user's list holds it", () => {
+    // An administrator's service list, or anyone's own credentials.
+    expect(defaultCollectCredential(4, [4, 7], [12], true, 7)).toBe("7");
+    expect(defaultCollectCredential(4, [], [12], false, 12)).toBe("12");
+    // Not in the list (another user's, or a service credential a
+    // non-administrator cannot list): the usual default.
+    expect(defaultCollectCredential(4, [], [12], false, 7)).toBe(
+      SETTINGS_SERVICE_CREDENTIAL,
+    );
+    expect(defaultCollectCredential(4, [4, 7], [12], true, 99)).toBe("4");
+    expect(defaultCollectCredential(4, [4, 7], [12], true, null)).toBe("4");
+  });
+
   it("sends null for the Settings service credential and for no choice", () => {
     expect(credentialIdFromChoice(SETTINGS_SERVICE_CREDENTIAL)).toBeNull();
     expect(credentialIdFromChoice("")).toBeNull();

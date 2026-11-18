@@ -1,4 +1,5 @@
-"""Custom fields and tags on hosts, inventory groups and IPAM prefixes.
+"""Custom fields, tags, computed fields and relationships on every object
+type of the registry (``netcontrol.custom_fields.OBJECT_TYPE_SPECS``).
 
 Star re-exported by routes/database.py so the ``routes.database`` facade
 keeps its full public surface.
@@ -8,6 +9,11 @@ Tables (migration 0083): ``tags``, ``tag_assignments``, ``custom_fields``,
 object_key)``: the row id as text for ``host`` and ``group``, and
 ``prefix_key(subnet, vrf)`` for ``prefix``, so a prefix keeps its data when
 an IPAM source resync replaces its ``ipam_prefixes`` rows.
+
+Migration 0109 adds ``computed_fields``, ``relationships`` and
+``relationship_links``, and a delete trigger on every registered table that
+removes a deleted object's tags, values and links. Other object types use
+the row id as text for their key.
 
 Values are stored as the canonical text ``netcontrol.custom_fields``
 produces; this module stores and returns text and never converts types.
@@ -26,23 +32,39 @@ import routes.database as _dbcore
 from routes.database import _is_unique_violation, row_to_dict, rows_to_list
 
 __all__ = [
+    "add_relationship_link",
     "bulk_update_tags",
     "count_custom_field_values",
+    "create_computed_field",
     "create_custom_field",
+    "create_relationship",
     "create_tag",
+    "delete_computed_field",
     "delete_custom_field",
+    "delete_relationship",
+    "delete_relationship_link",
     "delete_tag",
     "find_object_keys",
+    "get_computed_field",
     "get_custom_field",
     "get_object_data",
     "get_object_data_bulk",
+    "get_object_rows",
+    "get_relationship",
+    "get_relationship_link",
     "get_tag",
+    "list_computed_fields",
     "list_custom_fields",
+    "list_object_rows",
+    "list_relationship_links",
+    "list_relationships",
     "list_tags",
     "prefix_key",
     "purge_object_data",
     "set_object_data",
+    "update_computed_field",
     "update_custom_field",
+    "update_relationship",
     "update_tag",
 ]
 
@@ -92,8 +114,9 @@ def _tag(row: dict | None) -> dict | None:
 
 
 async def list_tags(with_usage: bool = False) -> list[dict]:
-    """Every tag by name; with ``with_usage`` each carries
-    ``usage = {host, group, prefix}`` assignment counts."""
+    """Every tag by name; with ``with_usage`` each carries ``usage``,
+    assignment counts by object type: always ``host``, ``group`` and
+    ``prefix``, plus every other type that has any."""
     db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute("SELECT id, name, color, description FROM tags ORDER BY lower(name), id")
@@ -110,7 +133,7 @@ async def list_tags(with_usage: bool = False) -> list[dict]:
         await db.close()
     for tag in tags:
         mine = counts.get(tag["id"], {})
-        tag["usage"] = {t: mine.get(t, 0) for t in _USAGE_TYPES}
+        tag["usage"] = {**{t: mine.get(t, 0) for t in _USAGE_TYPES}, **mine}
     return tags
 
 
@@ -571,3 +594,404 @@ async def purge_object_data(db, object_type: str, object_keys: list[str]) -> Non
                 f"DELETE FROM {table} WHERE object_type = ? AND object_key IN ({_marks(chunk)})",  # nosec B608 - fixed table names
                 (object_type, *chunk),
             )
+
+
+# ── Objects of any registered type ───────────────────────────────────────────
+
+
+def _plain(value):
+    """A column value as JSON wants it (dates and decimals as text)."""
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    return str(value)
+
+
+async def get_object_rows(table: str, id_column: str, object_keys: list[str]) -> dict[str, dict]:
+    """``{key: row}`` of the rows of ``table`` whose ``id_column`` (as text)
+    is in ``object_keys``; keys with no row are absent. ``table`` and
+    ``id_column`` come from the object type registry, never from input.
+    Binary columns are dropped and other values made JSON-safe."""
+    keys = sorted({str(k) for k in object_keys})
+    out: dict[str, dict] = {}
+    if not keys:
+        return out
+    db = await _dbcore.get_db(read_only=True)
+    try:
+        for chunk in _chunks(keys):
+            cursor = await db.execute(
+                f"SELECT * FROM {table} WHERE CAST({id_column} AS TEXT) IN ({_marks(chunk)})",  # nosec B608 - registry names, placeholders only
+                tuple(chunk),
+            )
+            for row in rows_to_list(await cursor.fetchall()):
+                out[str(row[id_column])] = {
+                    k: _plain(v) for k, v in row.items() if not isinstance(v, (bytes, bytearray, memoryview))
+                }
+    finally:
+        await db.close()
+    return out
+
+
+async def list_object_rows(table: str, id_column: str, limit: int) -> list[dict]:
+    """The first ``limit`` rows of ``table`` by ``id_column`` (JSON-safe, no
+    binary columns). Names come from the object type registry."""
+    db = await _dbcore.get_db(read_only=True)
+    try:
+        cursor = await db.execute(
+            f"SELECT * FROM {table} ORDER BY {id_column} LIMIT ?",  # nosec B608 - registry names
+            (int(limit),),
+        )
+        rows = rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+    return [{k: _plain(v) for k, v in r.items() if not isinstance(v, (bytes, bytearray, memoryview))} for r in rows]
+
+
+# ── Computed fields ──────────────────────────────────────────────────────────
+
+
+def _computed(row: dict | None) -> dict | None:
+    if row is None:
+        return None
+    return {
+        "id": int(row["id"]),
+        "key": row["key"],
+        "label": row["label"],
+        "object_type": row["object_type"],
+        "template": row.get("template") or "",
+        "description": row.get("description") or "",
+        "sort_order": int(row.get("sort_order") or 0),
+    }
+
+
+async def list_computed_fields(object_type: str | None = None) -> list[dict]:
+    """Computed field definitions by object type, ``sort_order`` and id;
+    with ``object_type`` only those of that type."""
+    sql = "SELECT * FROM computed_fields"
+    params: tuple = ()
+    if object_type is not None:
+        sql += " WHERE object_type = ?"
+        params = (object_type,)
+    db = await _dbcore.get_db(read_only=True)
+    try:
+        cursor = await db.execute(sql + " ORDER BY object_type, sort_order, id", params)
+        return [c for c in (_computed(r) for r in rows_to_list(await cursor.fetchall())) if c]
+    finally:
+        await db.close()
+
+
+async def get_computed_field(field_id: int) -> dict | None:
+    db = await _dbcore.get_db(read_only=True)
+    try:
+        cursor = await db.execute("SELECT * FROM computed_fields WHERE id = ?", (int(field_id),))
+        return _computed(row_to_dict(await cursor.fetchone()))
+    finally:
+        await db.close()
+
+
+async def create_computed_field(
+    *,
+    key: str,
+    label: str,
+    object_type: str,
+    template: str,
+    description: str = "",
+    sort_order: int = 0,
+    created_by: str = "",
+) -> dict:
+    """Store a computed field. ``ValueError`` when the type already has the key."""
+    now = _now()
+    db = await _dbcore.get_db()
+    try:
+        cursor = await db.execute(
+            """INSERT INTO computed_fields
+                   (key, label, object_type, template, description, sort_order, created_by, created_at, updated_at)
+               VALUES (?,?,?,?,?,?,?,?,?) RETURNING id""",
+            (key, label, object_type, template, description, int(sort_order), created_by, now, now),
+        )
+        await db.commit()
+        field_id = int(cursor.lastrowid)
+    except Exception as exc:
+        await db.rollback()
+        if _is_unique_violation(exc):
+            raise ValueError(f"A computed field with the key '{key}' already exists on {object_type}.") from exc
+        raise
+    finally:
+        await db.close()
+    created = await get_computed_field(field_id)
+    if created is None:  # pragma: no cover - the row was just inserted
+        raise RuntimeError("computed field vanished after insert")
+    return created
+
+
+async def update_computed_field(
+    field_id: int, *, label: str, template: str, description: str, sort_order: int
+) -> dict | None:
+    """Change everything but the key and object type; ``None`` when unknown."""
+    db = await _dbcore.get_db()
+    try:
+        cursor = await db.execute(
+            """UPDATE computed_fields SET label = ?, template = ?, description = ?, sort_order = ?, updated_at = ?
+               WHERE id = ?""",
+            (label, template, description, int(sort_order), _now(), int(field_id)),
+        )
+        await db.commit()
+        found = (cursor.rowcount or 0) > 0
+    except Exception:
+        await db.rollback()
+        raise
+    finally:
+        await db.close()
+    return await get_computed_field(field_id) if found else None
+
+
+async def delete_computed_field(field_id: int) -> bool:
+    db = await _dbcore.get_db()
+    try:
+        cursor = await db.execute("DELETE FROM computed_fields WHERE id = ?", (int(field_id),))
+        await db.commit()
+        return (cursor.rowcount or 0) > 0
+    except Exception:
+        await db.rollback()
+        raise
+    finally:
+        await db.close()
+
+
+# ── Relationships ────────────────────────────────────────────────────────────
+
+
+def _relationship(row: dict | None) -> dict | None:
+    if row is None:
+        return None
+    return {
+        "id": int(row["id"]),
+        "key": row["key"],
+        "label": row["label"],
+        "source_type": row["source_type"],
+        "destination_type": row["destination_type"],
+        "cardinality": row["cardinality"],
+        "description": row.get("description") or "",
+    }
+
+
+async def list_relationships(object_type: str | None = None, with_counts: bool = False) -> list[dict]:
+    """Relationship definitions by label; with ``object_type`` those with it
+    on either side. With ``with_counts`` each carries ``link_count``."""
+    sql = "SELECT * FROM relationships"
+    params: tuple = ()
+    if object_type is not None:
+        sql += " WHERE source_type = ? OR destination_type = ?"
+        params = (object_type, object_type)
+    db = await _dbcore.get_db(read_only=True)
+    try:
+        cursor = await db.execute(sql + " ORDER BY lower(label), id", params)
+        out = [r for r in (_relationship(x) for x in rows_to_list(await cursor.fetchall())) if r]
+        if with_counts:
+            cursor = await db.execute(
+                "SELECT relationship_id, COUNT(*) AS n FROM relationship_links GROUP BY relationship_id"
+            )
+            counts = {int(r["relationship_id"]): int(r["n"]) for r in rows_to_list(await cursor.fetchall())}
+            for rel in out:
+                rel["link_count"] = counts.get(rel["id"], 0)
+        return out
+    finally:
+        await db.close()
+
+
+async def get_relationship(relationship_id: int) -> dict | None:
+    db = await _dbcore.get_db(read_only=True)
+    try:
+        cursor = await db.execute("SELECT * FROM relationships WHERE id = ?", (int(relationship_id),))
+        return _relationship(row_to_dict(await cursor.fetchone()))
+    finally:
+        await db.close()
+
+
+async def create_relationship(
+    *,
+    key: str,
+    label: str,
+    source_type: str,
+    destination_type: str,
+    cardinality: str,
+    description: str = "",
+    created_by: str = "",
+) -> dict:
+    """Store a relationship definition. ``ValueError`` when the key is taken."""
+    now = _now()
+    db = await _dbcore.get_db()
+    try:
+        cursor = await db.execute(
+            """INSERT INTO relationships
+                   (key, label, source_type, destination_type, cardinality, description,
+                    created_by, created_at, updated_at)
+               VALUES (?,?,?,?,?,?,?,?,?) RETURNING id""",
+            (key, label, source_type, destination_type, cardinality, description, created_by, now, now),
+        )
+        await db.commit()
+        relationship_id = int(cursor.lastrowid)
+    except Exception as exc:
+        await db.rollback()
+        if _is_unique_violation(exc):
+            raise ValueError(f"A relationship with the key '{key}' already exists.") from exc
+        raise
+    finally:
+        await db.close()
+    created = await get_relationship(relationship_id)
+    if created is None:  # pragma: no cover - the row was just inserted
+        raise RuntimeError("relationship vanished after insert")
+    return created
+
+
+async def update_relationship(relationship_id: int, *, label: str, description: str) -> dict | None:
+    """Rename or redescribe a relationship (its types and cardinality are
+    fixed); ``None`` when unknown."""
+    db = await _dbcore.get_db()
+    try:
+        cursor = await db.execute(
+            "UPDATE relationships SET label = ?, description = ?, updated_at = ? WHERE id = ?",
+            (label, description, _now(), int(relationship_id)),
+        )
+        await db.commit()
+        found = (cursor.rowcount or 0) > 0
+    except Exception:
+        await db.rollback()
+        raise
+    finally:
+        await db.close()
+    return await get_relationship(relationship_id) if found else None
+
+
+async def delete_relationship(relationship_id: int) -> int:
+    """Delete a relationship and its links; returns how many links went."""
+    db = await _dbcore.get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT COUNT(*) AS n FROM relationship_links WHERE relationship_id = ?", (int(relationship_id),)
+        )
+        removed = int((await cursor.fetchone())["n"])
+        await db.execute("DELETE FROM relationship_links WHERE relationship_id = ?", (int(relationship_id),))
+        await db.execute("DELETE FROM relationships WHERE id = ?", (int(relationship_id),))
+        await db.commit()
+        return removed
+    except Exception:
+        await db.rollback()
+        raise
+    finally:
+        await db.close()
+
+
+def _link(row: dict) -> dict:
+    return {
+        "id": int(row["id"]),
+        "relationship_id": int(row["relationship_id"]),
+        "source_type": row["source_type"],
+        "source_key": row["source_key"],
+        "destination_type": row["destination_type"],
+        "destination_key": row["destination_key"],
+    }
+
+
+async def get_relationship_link(link_id: int) -> dict | None:
+    db = await _dbcore.get_db(read_only=True)
+    try:
+        cursor = await db.execute("SELECT * FROM relationship_links WHERE id = ?", (int(link_id),))
+        row = row_to_dict(await cursor.fetchone())
+    finally:
+        await db.close()
+    return _link(row) if row else None
+
+
+async def list_relationship_links(object_type: str, object_keys: list[str]) -> list[dict]:
+    """Every link with one of the given objects on either side, by id."""
+    keys = sorted({str(k) for k in object_keys})
+    if not keys:
+        return []
+    found: dict[int, dict] = {}
+    db = await _dbcore.get_db(read_only=True)
+    try:
+        for chunk in _chunks(keys):
+            cursor = await db.execute(
+                f"""SELECT * FROM relationship_links
+                    WHERE (source_type = ? AND source_key IN ({_marks(chunk)}))
+                       OR (destination_type = ? AND destination_key IN ({_marks(chunk)}))""",  # nosec B608 - placeholders only
+                (object_type, *chunk, object_type, *chunk),
+            )
+            for row in rows_to_list(await cursor.fetchall()):
+                found[int(row["id"])] = _link(row)
+    finally:
+        await db.close()
+    return [found[i] for i in sorted(found)]
+
+
+async def add_relationship_link(
+    relationship_id: int, source_key: str, destination_key: str, *, created_by: str = ""
+) -> dict:
+    """Link two objects, enforcing the relationship's cardinality: on
+    ``one-to-one`` each side holds at most one link, on ``one-to-many`` a
+    destination has at most one source. Concurrent adds to one relationship
+    are serialised by a row lock on it. Raises ``LookupError`` for an
+    unknown relationship and ``ValueError`` (naming the problem) for a
+    duplicate, a self-link or a link the cardinality forbids."""
+    source_key, destination_key = str(source_key), str(destination_key)
+    db = await _dbcore.get_db()
+    try:
+        cursor = await db.execute("SELECT * FROM relationships WHERE id = ? FOR UPDATE", (int(relationship_id),))
+        rel = _relationship(row_to_dict(await cursor.fetchone()))
+        if rel is None:
+            raise LookupError("Relationship not found")
+        if rel["source_type"] == rel["destination_type"] and source_key == destination_key:
+            raise ValueError("An object cannot be linked to itself.")
+        cursor = await db.execute(
+            "SELECT 1 AS x FROM relationship_links WHERE relationship_id = ? AND source_key = ? AND destination_key = ?",
+            (rel["id"], source_key, destination_key),
+        )
+        if await cursor.fetchone():
+            raise ValueError("These objects are already linked.")
+        checks: list[tuple[str, str, str]] = []
+        if rel["cardinality"] in ("one-to-one", "one-to-many"):
+            checks.append(("destination_key", destination_key, "The destination already has a {label} link."))
+        if rel["cardinality"] == "one-to-one":
+            checks.append(("source_key", source_key, "The source already has a {label} link."))
+        for column, value, message in checks:
+            cursor = await db.execute(
+                f"SELECT 1 AS x FROM relationship_links WHERE relationship_id = ? AND {column} = ?",  # nosec B608 - fixed columns
+                (rel["id"], value),
+            )
+            if await cursor.fetchone():
+                raise ValueError(message.format(label=rel["label"]))
+        cursor = await db.execute(
+            """INSERT INTO relationship_links
+                   (relationship_id, source_type, source_key, destination_type, destination_key,
+                    created_by, created_at)
+               VALUES (?,?,?,?,?,?,?) RETURNING id""",
+            (rel["id"], rel["source_type"], source_key, rel["destination_type"], destination_key, created_by, _now()),
+        )
+        link_id = int(cursor.lastrowid)
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        raise
+    finally:
+        await db.close()
+    return {
+        "id": link_id,
+        "relationship_id": rel["id"],
+        "source_type": rel["source_type"],
+        "source_key": source_key,
+        "destination_type": rel["destination_type"],
+        "destination_key": destination_key,
+    }
+
+
+async def delete_relationship_link(link_id: int) -> bool:
+    db = await _dbcore.get_db()
+    try:
+        cursor = await db.execute("DELETE FROM relationship_links WHERE id = ?", (int(link_id),))
+        await db.commit()
+        return (cursor.rowcount or 0) > 0
+    except Exception:
+        await db.rollback()
+        raise
+    finally:
+        await db.close()

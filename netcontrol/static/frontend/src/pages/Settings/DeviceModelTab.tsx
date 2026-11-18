@@ -24,6 +24,7 @@ import { TagChip } from '@/components/TagChips';
 import { countObjects } from '@/lib/customData';
 import { usePendingKeys } from '@/lib/usePendingKeys';
 
+import { ComponentTemplatesModal } from './ComponentTemplatesModal';
 import { ColorRecordModal, DeviceTypeModal, ManufacturerModal } from './DeviceModelModals';
 import { SectionCard } from './SectionCard';
 
@@ -198,6 +199,7 @@ function DeviceTypesSection() {
   const remove = useDeleteDeviceType();
   const deleter = useCatalogueDelete();
   const [editing, setEditing] = useState<DeviceType | 'new' | null>(null);
+  const [componentsOf, setComponentsOf] = useState<DeviceType | null>(null);
   const rows = q.data ?? [];
   const noManufacturers = manufacturersQ.isSuccess && manufacturersQ.data.length === 0;
   const newButton = <NewButton label="New device type" onClick={() => setEditing('new')} disabled={noManufacturers} />;
@@ -253,18 +255,29 @@ function DeviceTypesSection() {
                 <td style={right}>{t.u_height}</td>
                 <td style={right}>{t.host_count.toLocaleString()}</td>
                 <td style={right}>
-                  <RowActions
-                    label={`device type ${t.manufacturer} ${t.model}`}
-                    onEdit={() => setEditing(t)}
-                    onDelete={() => handleDelete(t)}
-                    deleting={deleter.isPending(`t:${t.id}`)}
-                  />
+                  <div style={{ display: 'flex', gap: 'var(--space-2)', justifyContent: 'flex-end' }}>
+                    <button
+                      type="button"
+                      className="btn btn-sm btn-secondary"
+                      aria-label={`Components of device type ${t.manufacturer} ${t.model}`}
+                      onClick={() => setComponentsOf(t)}
+                    >
+                      Components
+                    </button>
+                    <RowActions
+                      label={`device type ${t.manufacturer} ${t.model}`}
+                      onEdit={() => setEditing(t)}
+                      onDelete={() => handleDelete(t)}
+                      deleting={deleter.isPending(`t:${t.id}`)}
+                    />
+                  </div>
                 </td>
               </tr>
             ))}
           </tbody>
         </DataTable>
       </CatalogueBody>
+      {componentsOf && <ComponentTemplatesModal deviceType={componentsOf} onClose={() => setComponentsOf(null)} />}
       {editing && <DeviceTypeModal deviceType={editing === 'new' ? null : editing} onClose={() => setEditing(null)} />}
     </div>
   );
