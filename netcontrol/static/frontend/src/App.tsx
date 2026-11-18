@@ -46,7 +46,7 @@ const NetworkTools = lazy(() => pageLoaders.networkTools().then(m => ({ default:
 const PluginPage = lazy(() => pageLoaders.pluginPage().then(m => ({ default: m.PluginPage })));
 const Reports = lazy(() => pageLoaders.reports().then(m => ({ default: m.Reports })));
 const Settings = lazy(() => pageLoaders.settings().then(m => ({ default: m.Settings })));
-const Topology = lazy(() => pageLoaders.topology().then(m => ({ default: m.TopologyPage })));
+const Topology = lazy(() => pageLoaders.topology().then(m => ({ default: m.Topology })));
 const Virtualization = lazy(() => pageLoaders.virtualization().then(m => ({ default: m.Virtualization })));
 const Organization = lazy(() => pageLoaders.organization().then(m => ({ default: m.Organization })));
 
@@ -238,8 +238,10 @@ export function App() {
           <Route path="/monitoring/suppressions" element={<Navigate to="/monitoring/configure/suppressions" replace />} />
           <Route path="/monitoring/oid-profiles" element={<Navigate to="/monitoring/configure/oid-profiles" replace />} />
           <Route path="/cloud-visibility/:tab?" element={<CloudVisibility />} />
-          {/* Topology: the map (/topology), the reachability sweep (/topology/reachability) and address summaries (/topology/summarize). */}
-          <Route path="/topology/:tab?" element={<Topology />} />
+          {/* Topology: the map. Its old Reachability and Summarize tabs are Network Tools tabs now. */}
+          <Route path="/topology" element={<Topology />} />
+          <Route path="/topology/reachability" element={<Navigate to="/network-tools/reachability" replace />} />
+          <Route path="/topology/summarize" element={<Navigate to="/network-tools/summarize" replace />} />
           <Route path="/settings/:tab?" element={<Settings />} />
           {/* Help: the user guides; /help is the front page, /help/<page> a guide. */}
           <Route path="/help/:page?" element={<Help />} />

@@ -188,7 +188,7 @@ belong to no inventory group).
   highlights the hops of the trace instead of the drawn path. A leg
   between a subnet and a device says which end to add as a subnet. See
   [path-trace.md](path-trace.md).
-- **Reachability** (the tab next to **Map**, `/topology/reachability`)
+- **Reachability** (a tab of **Network Tools**, `/network-tools/reachability`)
   traces one destination and traffic from many source networks at once,
   for example which user VLANs cannot reach a file server on `tcp/445`.
   Filter the sources by kind, VLAN id, name, exclusions (voice, guest...),
@@ -747,7 +747,12 @@ links plus, for *All groups*, every Meraki organization - as one
 self-contained interactive file: pan and zoom, search, click-through details
 for every device, site and link, layer toggles, and a build report. For
 inventory devices it embeds the interfaces, VLANs, neighbors and route table
-Plexus has collected.
+Plexus has collected, and the device's newest successful configuration
+backup (**Configuration** in its details, searchable in the file) with
+passwords, secrets, keys, SNMP communities and certificates masked as on
+the AI access tools. The configuration is only included when the user who
+exports may read configuration backups (feature `config-backups`), and only
+for devices in the inventory groups that user can see.
 
 With **Path Mode** open, the export also carries the path: its picks, the
 traffic asked about, and the hop-by-hop trace in both directions of every

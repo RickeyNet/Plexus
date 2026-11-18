@@ -35,9 +35,9 @@ export function Help() {
           onChange={(e) => setSearch(e.target.value)}
         />
       </PageHeader>
-      <div className="help-layout">
+      <div className="side-nav-layout">
         <HelpNav current={page} filter={search} />
-        <div className="card help-main">
+        <div className="card side-nav-main">
           {searching ? (
             <SearchResults query={query} onPick={() => setSearch('')} />
           ) : (
@@ -55,18 +55,18 @@ function HelpNav({ current, filter }: { current: string; filter: string }) {
   if (index.isPending) return <LoadingState text="Loading guides…" />;
   const sections = filterSections(index.data.sections, filter);
   return (
-    <nav className="help-nav card" aria-label="Guides">
-      <Link to="/help" className={`help-nav-link${current === HOME ? ' active' : ''}`} aria-current={current === HOME ? 'page' : undefined}>
+    <nav className="side-nav card" aria-label="Guides">
+      <Link to="/help" className={`side-nav-link${current === HOME ? ' active' : ''}`} aria-current={current === HOME ? 'page' : undefined}>
         Start here
       </Link>
       {sections.map((section) => (
-        <div key={section.title} className="help-nav-section">
-          <div className="help-nav-heading">{section.title}</div>
+        <div key={section.title} className="side-nav-section">
+          <div className="side-nav-heading">{section.title}</div>
           {section.pages.map((p) => (
             <Link
               key={p.name}
               to={`/help/${p.name}`}
-              className={`help-nav-link${current === p.name ? ' active' : ''}`}
+              className={`side-nav-link${current === p.name ? ' active' : ''}`}
               aria-current={current === p.name ? 'page' : undefined}
             >
               {p.title}
@@ -74,7 +74,7 @@ function HelpNav({ current, filter }: { current: string; filter: string }) {
           ))}
         </div>
       ))}
-      {sections.length === 0 && <div className="text-muted help-nav-empty">No guide titles match.</div>}
+      {sections.length === 0 && <div className="text-muted side-nav-empty">No guide titles match.</div>}
     </nav>
   );
 }

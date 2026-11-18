@@ -293,9 +293,9 @@ const NAV: TopItem[] = [
       { label: 'Monitoring', icon: ic.monitoring, to: '/monitoring', feature: ['monitoring', 'graph-templates'] },
       { label: 'Topology', icon: ic.topology, to: '/topology', feature: 'topology' },
       { label: 'Floor Plans', icon: ic.floorPlan, to: '/floor-plan', feature: 'floor-plan' },
-      // Network Tools - MAC Tracking and Traffic Analysis tabs, each gated on
-      // its own feature by the page.
-      { label: 'Network Tools', icon: ic.network, to: '/network-tools', feature: ['mac-tracking', 'traffic-analysis'] },
+      // Network Tools - MAC Tracking, Traffic Analysis, and the topology
+      // Reachability and Summarize tabs, each gated on its own feature by the page.
+      { label: 'Network Tools', icon: ic.network, to: '/network-tools', feature: ['mac-tracking', 'traffic-analysis', 'topology'] },
       { label: 'Cloud Visibility', icon: ic.cloud, to: '/cloud-visibility', feature: 'cloud-visibility' },
       { label: 'Reports', icon: ic.reports, to: '/reports', feature: 'reports' },
     ],

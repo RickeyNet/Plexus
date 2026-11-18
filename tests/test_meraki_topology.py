@@ -1118,6 +1118,62 @@ def test_api_topology_html_export(api):
     assert group_only.status_code == 200
 
 
+def _exported_nodes(client) -> list[dict]:
+    page = client.get("/api/topology/export.html")
+    assert page.status_code == 200, page.text
+    embedded = re.search(r'<script type="application/json" id="topology-data">(.*?)</script>', page.text, re.S)
+    return json.loads(embedded.group(1))["nodes"]
+
+
+def _config_section(nodes: list[dict], host_id: int) -> dict | None:
+    node = next(n for n in nodes if (n.get("inventory") or {}).get("host_id") == host_id)
+    return next((s for s in node["sections"] if s["title"].startswith("Configuration (backup")), None)
+
+
+def _back_up_a_mapped_host(portal, config: str) -> int:
+    """Put a seeded inventory host on the map (the map draws hosts that have
+    a neighbor link) and store a backup for it."""
+    import routes.database as db
+    from netcontrol.routes.topology import invalidate_topology_cache
+
+    host = portal.call(db.get_all_hosts)[0]
+    portal.call(
+        db.upsert_topology_link,
+        host["id"],
+        host["ip_address"],
+        "Gi1/0/1",
+        None,
+        "192.0.2.250",
+        "edge-neighbor.example.com",
+        "Gi0/1",
+    )
+    # A map assembled before the link (or by an earlier test) is not reused.
+    invalidate_topology_cache()
+    portal.call(db.create_config_backup, None, host["id"], config)
+    return host["id"]
+
+
+def test_api_topology_html_export_carries_masked_configs(api):
+    config = "hostname sw1\nenable secret 5 $1$abcd$Q2xJdW1hY2hpbmU\ninterface Gi1/0/1\n description uplink\n"
+    host_id = _back_up_a_mapped_host(api._c.portal, config)
+
+    section = _config_section(_exported_nodes(api), host_id)
+    assert section is not None and section["kind"] == "text"
+    assert "hostname sw1" in section["text"] and " description uplink" in section["text"]
+    assert "Q2xJdW1hY2hpbmU" not in section["text"]
+
+
+def test_api_topology_html_export_leaves_configs_out_without_backup_access(monkeypatch, request):
+    from mcp_helpers import admin_client, user_client
+
+    admin = admin_client(monkeypatch, request)
+    host_id = _back_up_a_mapped_host(admin.raw.portal, "hostname sw1\n")
+
+    assert _config_section(_exported_nodes(admin), host_id) is not None
+    viewer = user_client(admin, "map-viewer", features=["topology"])
+    assert _config_section(_exported_nodes(viewer), host_id) is None
+
+
 def test_api_build_job_runs_collector_and_stores_snapshot(api, monkeypatch):
     import netcontrol.routes.meraki_topology as routes_module
 

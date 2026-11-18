@@ -58,7 +58,7 @@ import json
 import re
 import socket
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -123,7 +123,12 @@ from netcontrol.integrations.meraki.client import (
 )
 from netcontrol.integrations.meraki.clients import client_records
 from netcontrol.integrations.meraki.collector import DEFAULT_OPTIONS, collect_organization, sanitize_options
-from netcontrol.integrations.meraki.enrich import collected_sections, enrich_snapshot, load_inventory_index
+from netcontrol.integrations.meraki.enrich import (
+    collected_sections,
+    config_sections,
+    enrich_snapshot,
+    load_inventory_index,
+)
 from netcontrol.integrations.meraki.forwarding import canonical
 from netcontrol.integrations.meraki.html_export import (
     export_csp,
@@ -190,6 +195,7 @@ from netcontrol.integrations.pathtrace.offline import (
     inputs as offline_inputs,
     trace as offline_trace,
 )
+from netcontrol.object_scope import request_scope
 from netcontrol.routes import background_jobs, state
 from netcontrol.routes.cloud_collectors import skipped_note
 from netcontrol.routes.cloud_visibility import discovery_progress
@@ -255,6 +261,10 @@ PROVIDER_AZURE = "azure"
 PROVIDER_GCP = "gcp"
 
 _require_admin = None
+# (request, feature key) -> whether the caller has that feature.
+_has_feature: Callable[[Request, str], Awaitable[bool]] | None = None
+# Who may read configuration backups, and so find them in the HTML export.
+_CONFIG_FEATURE = "config-backups"
 
 # org_ref -> job_id of the build currently running for that organization.
 _running_builds: dict[int, str] = {}
@@ -535,9 +545,10 @@ async def cloud_availability_changed(provider: str) -> None:
         await _availability_changed(cloud.provider, cloud.org_ref, snapshot, ref)
 
 
-def init_meraki_topology(require_admin):
-    global _require_admin
+def init_meraki_topology(require_admin, has_feature=None):
+    global _require_admin, _has_feature
     _require_admin = require_admin
+    _has_feature = has_feature
 
 
 async def _require_admin_dep(request: Request):
@@ -2872,6 +2883,21 @@ def _export_path_data(
     }
 
 
+async def _export_config_sections(request: Request, nodes: list[dict]) -> dict[int, dict]:
+    """``host id -> configuration section`` for the export: each inventory
+    host's newest backup, secrets masked. Only for a caller who may read
+    configuration backups, and only hosts in the inventory groups they see."""
+    if _has_feature is None or not await _has_feature(request, _CONFIG_FEATURE):
+        return {}
+    scope = await request_scope(request)
+    host_ids = [
+        node["id"]
+        for node in nodes
+        if node.get("in_inventory") and isinstance(node["id"], int) and scope.can_read_group(node.get("group_id"))
+    ]
+    return await config_sections(host_ids)
+
+
 @router.get("/api/topology/export.html")
 async def export_topology_html_api(
     request: Request,
@@ -2923,6 +2949,8 @@ async def export_topology_html_api(
         for node in graph["nodes"]
         if node.get("in_inventory") and isinstance(node["id"], int)
     }
+    for host_id, section in (await _export_config_sections(request, graph["nodes"])).items():
+        host_sections.setdefault(host_id, []).append(section)
     title = "Plexus"
     if group_id is not None:
         group = next((g for g in await db.get_all_groups() if g["id"] == group_id), None)

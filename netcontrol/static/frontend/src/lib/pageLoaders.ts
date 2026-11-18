@@ -33,7 +33,7 @@ export const pageLoaders = {
   settings: () => import('@/pages/Settings/Settings'),
   help: () => import('@/pages/Help/Help'),
   software: () => import('@/pages/Software/Software'),
-  topology: () => import('@/pages/Topology/TopologyPage'),
+  topology: () => import('@/pages/Topology/Topology'),
   virtualization: () => import('@/pages/Virtualization/Virtualization'),
   organization: () => import('@/pages/Organization/Organization'),
 } satisfies Record<string, Loader>;
@@ -67,6 +67,8 @@ const ROUTE_TO_PAGE: Record<string, PageKey> = {
   '/reports': 'reports',
   '/network-tools': 'networkTools',
   '/network-tools/traffic': 'networkTools',
+  '/network-tools/reachability': 'networkTools',
+  '/network-tools/summarize': 'networkTools',
   '/federation': 'federation',
   '/floor-plan': 'floorPlan',
   '/lab': 'lab',

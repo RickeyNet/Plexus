@@ -11,7 +11,7 @@ import { searchHost } from './merakiHelpers';
 // addresses is also traced by the server hop by hop through each device's
 // routes, policies and NAT (pathTrace.ts).
 
-type NodeId = number | string;
+export type NodeId = number | string;
 
 /** Most endpoints a path can connect (every pair is traced). */
 export const MAX_PATH_ENDPOINTS = 6;

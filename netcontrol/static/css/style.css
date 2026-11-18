@@ -3208,24 +3208,6 @@ input[type="search"].form-input::-webkit-search-results-decoration {
     white-space: nowrap;
 }
 
-/* Settings: the 12-tab row stays on one line; it scrolls sideways only when
-   the window is too narrow for the compact buttons. */
-.tab-bar-oneline {
-    flex-wrap: nowrap;
-    gap: var(--space-1);
-    overflow-x: auto;
-    scrollbar-width: thin;
-    padding-bottom: 2px;
-}
-
-.tab-bar-oneline .page-tab-btn {
-    flex: 0 0 auto;
-    padding-left: var(--space-2);
-    padding-right: var(--space-2);
-    font-size: var(--text-sm);
-    letter-spacing: 0;
-}
-
 /* Settings Notifications/SIEM: long targets and errors in table cells stay
    on one line (full text in the title); a test or save outcome above the
    table wraps long URLs and errors instead of overflowing. */
@@ -5784,19 +5766,24 @@ code {
 .topo-toolbar-badge { margin-left: 0.3rem; }
 .topo-menu-row { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
 
-/* Help: the user guides (pages/Help/Help.tsx). A guide list on the left, the
-   guide on the right; one column on narrow screens. The guide body is HTML
+/* Side navigation (Help, Settings): a grouped section list on the left, the
+   content on the right; one column on narrow screens. Links are <a> (Help) or
+   <button> (Settings), so the button chrome is reset. */
+.side-nav-layout { display: grid; grid-template-columns: minmax(13rem, 16rem) minmax(0, 1fr); gap: var(--space-4); align-items: start; }
+.side-nav { position: sticky; top: var(--space-4); max-height: calc(100vh - 8rem); overflow-y: auto; padding: var(--space-3); }
+.side-nav-section { margin-top: var(--space-3); }
+.side-nav-section:first-child { margin-top: 0; }
+.side-nav-heading { font-size: var(--text-xs); font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted); padding: 0 var(--space-2) var(--space-1); }
+.side-nav-link { display: block; width: 100%; padding: var(--space-1) var(--space-2); border: 0; border-radius: var(--radius-sm); background: none; color: var(--text); font: inherit; font-size: var(--text-sm); text-align: left; text-decoration: none; cursor: pointer; }
+.side-nav-link:hover { background: var(--primary-soft); }
+.side-nav-link.active { background: var(--primary-soft-strong); color: var(--primary-light); font-weight: 600; }
+.side-nav-link:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+.side-nav-empty { padding: var(--space-2); font-size: var(--text-sm); }
+.side-nav-main { min-width: 0; }
+.side-nav-select { display: none; width: 100%; }
+
+/* Help: the user guides (pages/Help/Help.tsx). The guide body is HTML
    rendered from markdown by the server, so it is styled by element. */
-.help-layout { display: grid; grid-template-columns: minmax(13rem, 16rem) minmax(0, 1fr); gap: var(--space-4); align-items: start; }
-.help-nav { position: sticky; top: var(--space-4); max-height: calc(100vh - 8rem); overflow-y: auto; padding: var(--space-3); }
-.help-nav-section { margin-top: var(--space-3); }
-.help-nav-heading { font-size: var(--text-xs); font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted); padding: 0 var(--space-2) var(--space-1); }
-.help-nav-link { display: block; padding: var(--space-1) var(--space-2); border-radius: var(--radius-sm); color: var(--text); text-decoration: none; font-size: var(--text-sm); }
-.help-nav-link:hover { background: var(--primary-soft); }
-.help-nav-link.active { background: var(--primary-soft-strong); color: var(--primary-light); font-weight: 600; }
-.help-nav-link:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
-.help-nav-empty { padding: var(--space-2); font-size: var(--text-sm); }
-.help-main { min-width: 0; }
 .help-meta { font-size: var(--text-sm); margin-bottom: var(--space-2); }
 .help-toc { margin-bottom: var(--space-4); font-size: var(--text-sm); }
 .help-toc summary { cursor: pointer; color: var(--text-muted); }
@@ -5806,23 +5793,31 @@ code {
 .help-results { list-style: none; margin: 0; padding: 0; }
 .help-results li { padding: var(--space-3) 0; border-top: 1px solid var(--border); }
 .help-snippet { color: var(--text-muted); font-size: var(--text-sm); margin-top: var(--space-1); }
-.help-body { max-width: 52rem; line-height: 1.65; color: var(--text); overflow-wrap: anywhere; }
+.help-body { line-height: 1.65; color: var(--text); overflow-wrap: anywhere; }
 .help-body h1, .help-body h2, .help-body h3, .help-body h4 { line-height: 1.3; margin: 1.6em 0 0.5em; scroll-margin-top: var(--space-4); }
 .help-body h1 { font-size: 1.6rem; margin-top: 0; }
 .help-body h2 { font-size: 1.3rem; padding-bottom: 0.3em; border-bottom: 1px solid var(--border); }
 .help-body h3 { font-size: 1.1rem; }
-.help-body p, .help-body ul, .help-body ol, .help-body pre, .help-body table, .help-body blockquote { margin: 0 0 1em; }
+.help-body p, .help-body ul, .help-body ol, .help-body pre, .help-body .help-table, .help-body blockquote { margin: 0 0 1em; }
 .help-body ul, .help-body ol { padding-left: 1.5em; }
 .help-body li + li { margin-top: 0.25em; }
 .help-body a { color: var(--primary-light); }
 .help-body code { font-size: 0.9em; }
 .help-body pre code { background: none; color: inherit; padding: 0; font-size: inherit; }
 .help-body blockquote { border-left: 3px solid var(--primary); padding: var(--space-1) var(--space-3); color: var(--text-muted); }
-.help-body table { display: block; overflow-x: auto; border-collapse: collapse; font-size: var(--text-sm); }
-.help-body th, .help-body td { border: 1px solid var(--border); padding: var(--space-1) var(--space-2); text-align: left; vertical-align: top; }
+/* Tables fill the width; on a narrow window the wrapper scrolls instead of
+   breaking words mid-letter. Long code in a cell may still wrap. */
+.help-body .help-table { overflow-x: auto; }
+.help-body table { width: 100%; border-collapse: collapse; font-size: var(--text-sm); }
+.help-body th, .help-body td { border: 1px solid var(--border); padding: var(--space-1) var(--space-2); text-align: left; vertical-align: top; overflow-wrap: normal; }
+.help-body td code { overflow-wrap: anywhere; }
 .help-body th { background: var(--bg-secondary); }
 .help-body hr { border: 0; border-top: 1px solid var(--border); margin: var(--space-5) 0; }
 @media (max-width: 768px) {
-    .help-layout { grid-template-columns: minmax(0, 1fr); }
-    .help-nav { position: static; max-height: 16rem; }
+    .side-nav-layout { grid-template-columns: minmax(0, 1fr); }
+    .side-nav { position: static; max-height: 16rem; }
+    /* Settings swaps its section list for one select. */
+    .side-nav:has(.side-nav-select) { max-height: none; }
+    .side-nav-select { display: block; }
+    .side-nav:has(.side-nav-select) .side-nav-list { display: none; }
 }

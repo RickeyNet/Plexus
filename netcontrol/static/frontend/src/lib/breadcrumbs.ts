@@ -62,12 +62,12 @@ const LABELS: Record<string, string> = {
   '/cloud-visibility/traffic': 'Cloud Visibility · Traffic Metrics',
   '/cloud-visibility/policy': 'Cloud Visibility · Policy',
   '/topology': 'Topology',
-  '/topology/reachability': 'Topology · Reachability',
-  '/topology/summarize': 'Topology · Summarize',
   '/settings': 'Settings',
   '/help': 'Help',
   '/network-tools': 'Network Tools · MAC Tracking',
   '/network-tools/traffic': 'Network Tools · Traffic Analysis',
+  '/network-tools/reachability': 'Network Tools · Reachability',
+  '/network-tools/summarize': 'Network Tools · Summarize',
 };
 
 // Pages whose tabs are sibling top-level paths rather than /page/<tab>.

@@ -3,19 +3,25 @@ import { PageHeader } from '@/components/PageHeader';
 import { TabBar } from '@/components/TabBar';
 import { visibleTabs } from '@/lib/tabGating';
 import { usePathTab } from '@/lib/usePathTab';
+import { Reachability } from '@/pages/Topology/Reachability';
+import { Summarize } from '@/pages/Topology/Summarize';
 
 import { MacTracking } from './MacTracking';
 import { TrafficAnalysis } from './TrafficAnalysis';
 
-type Tab = 'mac' | 'traffic';
+type Tab = 'mac' | 'traffic' | 'reachability' | 'summarize';
 
-// One sidebar entry for both tools. The views stay separate components - their
-// data is disjoint (MAC/ARP tables vs flow records) - and each tab is gated on
-// its own feature. The old standalone paths (/mac-tracking,
-// /traffic-analysis) redirect here.
+// One sidebar entry for the network tools. The views stay separate components
+// with disjoint data (MAC/ARP tables, flow records, the topology sources) and
+// each tab is gated on its own feature. Reachability and Summarize work on the
+// topology sources, so they stay under pages/Topology beside the path-trace
+// helpers they share with the map. The old paths (/mac-tracking,
+// /traffic-analysis, /topology/reachability, /topology/summarize) redirect here.
 const TABS: { key: Tab; label: string; feature: string }[] = [
   { key: 'mac', label: 'MAC Tracking', feature: 'mac-tracking' },
   { key: 'traffic', label: 'Traffic Analysis', feature: 'traffic-analysis' },
+  { key: 'reachability', label: 'Reachability', feature: 'topology' },
+  { key: 'summarize', label: 'Summarize', feature: 'topology' },
 ];
 const TAB_KEYS = TABS.map((t) => t.key);
 // Traffic Analysis resolves /network-tools/traffic/<view> with its own usePathTab.
@@ -40,6 +46,8 @@ export function NetworkTools() {
 
       {tab === 'mac' && <MacTracking />}
       {tab === 'traffic' && <TrafficAnalysis />}
+      {tab === 'reachability' && <Reachability />}
+      {tab === 'summarize' && <Summarize />}
     </div>
   );
 }

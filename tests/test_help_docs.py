@@ -39,6 +39,12 @@ def test_outside_links_open_in_a_new_tab_and_help_links_do_not() -> None:
     assert '<a href="#top">' in page.html
 
 
+def test_tables_sit_in_a_scroll_wrapper() -> None:
+    page = help_docs.render("| A | B |\n|---|---|\n| 1 | 2 |\n", "T")
+    assert page.html.startswith('<div class="help-table"><table>')
+    assert page.html.rstrip().endswith("</table>\n</div>")
+
+
 def test_headings_get_github_anchors_and_the_first_h1_is_the_title() -> None:
     page = help_docs.render("# Guide `one`\n\n## Set up: step 1\n\n## Set up: step 1\n\n### A/B\n", "Fallback")
     assert page.title == "Guide one"
