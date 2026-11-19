@@ -108,13 +108,13 @@ Alerts come from these sources:
 | Route table changed between full reads | `route_churn` | Warning, critical for a change of 10 routes or more |
 | Alert rules | the rule's metric | the rule's severity |
 | SLA targets (of hosts, and of integration entities such as OPNsense gateways) | `sla_<metric>` | see [SLA monitoring](sla-monitoring.md) |
-| Baseline deviations, Meraki alerts, Cato egress findings, integration entities | various | see the linked guides |
+| Baseline deviations, Meraki alerts, Cato egress and shared host findings, integration entities | various | see the linked guides |
 
 While an alert is unacknowledged, the same condition on the same host only
 raises its count and **Last seen**; a notification is sent only for a new
 alert. After you acknowledge it, the next occurrence opens a new alert.
 There is no **Resolve** button: an alert stays open until someone
-acknowledges it. Meraki alerts, Cato egress findings and integration
+acknowledges it. Meraki alerts, Cato egress and shared host findings and integration
 entities acknowledge their own alerts as `auto-resolved` when the condition
 clears.
 
@@ -180,7 +180,9 @@ changes state; an outage with no end is **Ongoing**.
 Below it, **Integrations and cloud** shows the same for the entities that
 Meraki, Cato, FMC, Panorama, Appgate, OPNsense, AWS, Azure and GCP report; see
 [Availability tracking](meraki-topology.md#availability-tracking). The
-**Meraki alerts** and **Cato egress vs cloud allow-lists** panels follow.
+**Meraki alerts**, **Cato egress vs cloud allow-lists** and
+[**Cato shared hosts vs Azure**](cato-topology.md#shared-hosts-check-azure)
+panels follow.
 
 ### Capacity
 

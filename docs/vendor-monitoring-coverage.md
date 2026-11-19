@@ -145,6 +145,25 @@ matched inventory host, else the notification channels); see
 | Azure | Subnet and NIC NSG inbound rules (CIDR sources, destination covering the VM) | VMs with a public IP; application gateways with one public and one private frontend (subnet NSG); Azure Firewall DNAT rules (classic and firewall policy) whose sources name an allocated IP | Yes | Public load balancers are not checked: their filters apply at the backends, not collected by address (gap). Service tags are skipped. |
 | GCP | VPC firewall ingress rules that target the instance (source ranges) | Instances with an external IP | Yes | Hierarchical / network firewall policies: not collected (an evaluation through them is unknown). External load balancers are not checked: their firewall rules apply at the backends, not collected by address (gap). |
 
+### Cato shared hosts vs Azure (scheduled check)
+
+Whether the hosts a Cato account's Shared Hosts rules name (multi-session
+VDI hosts whose Cato Client tunnels each user session to the Cato system
+range, `10.254.254.0/24` by default) can reach a Cato Socket: the route from
+the host subnet to the system range, the next-hop appliance (IP forwarding,
+in a Cato site range), the network security groups for GRE over UDP
+(udp/4754) on both sides, and the route back. Run on the server after every
+Cato collection and Azure discovery, and on demand; findings are persisted
+(`cato_egress_findings`, `check_name` `shared_host`) and warnings alert
+(monitoring alert on a matched inventory host, else the notification
+channels). See `docs/cato-topology.md`, "Shared Hosts check (Azure)".
+
+| Cloud | Routing read | Filters read | Status | Notes |
+|---|---|---|---|---|
+| Azure | Effective routes of the host subnet (user routes, system routes, peerings, gateway routes) and of the next hop's subnet for the return | Subnet and NIC NSGs, host side outbound and next-hop side inbound with the system range as the destination; NIC IP forwarding | Yes | The `GREOverUDP` registry value is not visible (reported as an informational note); routes learned over BGP or ExpressRoute are not collected (undetermined). |
+| AWS | n/a | n/a | Gap | Not checked: an EC2 host would need its route table's route for the system range to the vSocket's interface, the source/destination check off on that interface and its security groups for the tunnel; not implemented. |
+| GCP | n/a | n/a | Gap | Not checked: a Compute Engine host would need a custom static route for the system range to the vSocket instance, IP forwarding on it and VPC firewall rules for the tunnel; not implemented. |
+
 ## Vendor alert feeds
 
 Near-real-time ingestion of the vendor's own alerts, separate from the
@@ -187,3 +206,6 @@ matched inventory host) or the notification channels.
    AWS (EventBridge / SNS / Health) and Azure (Monitor action groups /
    Resource Health). Near-real-time alert ingestion exists for Meraki
    only; everything else is seen at its next collection.
+9. The Cato Shared Hosts check for AWS and GCP hosts (route to the system
+   range, the vSocket's source/destination check or IP forwarding, the
+   security groups or firewall rules for the tunnel); Azure only today.

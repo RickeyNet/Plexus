@@ -19,12 +19,15 @@ def _mode_line(mode: str) -> str:
 class _FakeConn:
     """Answers only the boot-mode command; other device I/O is stubbed."""
 
-    def __init__(self, boot_mode: str = "INSTALL") -> None:
+    def __init__(self, boot_mode: str = "INSTALL", install_summary: str = "") -> None:
         self.boot_mode = boot_mode
+        self.install_summary = install_summary
         self.commands: list[str] = []
 
     def send_command(self, cmd: str, **kwargs) -> str:
         self.commands.append(cmd)
+        if cmd == "show install summary":
+            return self.install_summary
         return _mode_line(self.boot_mode) if "INSTALL|BUNDLE" in cmd else ""
 
     def disconnect(self) -> None:
@@ -41,9 +44,10 @@ def _patch_check(
     expanded: bool = True,
     connect_error: Exception | None = None,
     local_image: str | None = "/images/x.bin",
+    install_summary: str = "",
 ) -> dict:
     """Stub device I/O for _device_verify_prestage; return the recorded device updates."""
-    rec: dict = {"updates": {}, "md5_checked": False}
+    rec: dict = {"updates": {}, "md5_checked": False, "emits": []}
 
     async def update_upgrade_device(dev_id, **fields):
         rec["updates"].update(fields)
@@ -51,10 +55,13 @@ def _patch_check(
     async def noop(*args, **kwargs):
         return None
 
+    async def emit(campaign_id, device_id, level, message, host=""):
+        rec["emits"].append((level, message))
+
     async def connect(*args, **kwargs):
         if connect_error:
             raise connect_error
-        return _FakeConn(boot_mode)
+        return _FakeConn(boot_mode, install_summary)
 
     async def detect_model(conn, ip):
         return "C9300-48P", running
@@ -70,7 +77,7 @@ def _patch_check(
         return "cisco_xe"
 
     monkeypatch.setattr(db, "update_upgrade_device", update_upgrade_device)
-    monkeypatch.setattr(upgrades, "_emit", noop)
+    monkeypatch.setattr(upgrades, "_emit", emit)
     monkeypatch.setattr(upgrades, "_emit_device_status", noop)
     monkeypatch.setattr(upgrades, "_resolve_device_type", device_type)
     monkeypatch.setattr(upgrades, "_connect_device", connect)
@@ -94,6 +101,58 @@ async def test_check_status_records_install_mode(monkeypatch: pytest.MonkeyPatch
     await _run_check(transfer_status="pending")
     assert rec["updates"]["boot_mode"] == "install"
     assert rec["updates"]["transfer_status"] == "completed"
+
+
+def _install_summary(packages: str, timer: str = "inactive") -> str:
+    return (
+        "[ Switch 1 ] Installed Package(s) Information:\n"
+        "Type  St   Filename/Version\n"
+        f"{packages}"
+        f"Auto abort timer: {timer}\n"
+    )
+
+
+_OLD_UNCOMMITTED = "IMG   I    17.15.05.0.2\nIMG   U    17.12.04.0.1\n"
+_TARGET_UNCOMMITTED = "IMG   U    17.15.05.0.2\n"
+
+
+@pytest.mark.asyncio
+async def test_check_status_reports_pending_install(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An install left open blocks the activate: Check status says so up front."""
+    rec = _patch_check(
+        monkeypatch,
+        install_summary=_install_summary(_OLD_UNCOMMITTED),
+    )
+    await _run_check(transfer_status="completed")
+    err = rec["updates"]["error_message"]
+    assert rec["updates"]["transfer_status"] == "failed"
+    assert "17.12.04.0.1 (the running version) is activated but not committed" in err
+    assert "'install commit'" in err and "'install abort'" in err
+    assert any(level == "error" and "still open" in message for level, message in rec["emits"])
+
+
+@pytest.mark.asyncio
+async def test_check_status_pending_install_with_commit_option_only_warns(monkeypatch: pytest.MonkeyPatch) -> None:
+    rec = _patch_check(
+        monkeypatch,
+        install_summary=_install_summary(_OLD_UNCOMMITTED),
+    )
+    await _run_check(transfer_status="pending", options={"commit_pending_install": True})
+    assert rec["updates"]["transfer_status"] == "completed"
+    assert any(level == "warn" and "Activate will commit it first" in message for level, message in rec["emits"])
+
+
+@pytest.mark.asyncio
+async def test_check_status_on_target_but_uncommitted_is_not_done(monkeypatch: pytest.MonkeyPatch) -> None:
+    rec = _patch_check(
+        monkeypatch,
+        running="17.15.05",
+        install_summary=_install_summary(_TARGET_UNCOMMITTED),
+    )
+    await _run_check(transfer_status="completed")
+    assert rec["updates"]["transfer_status"] == "failed"
+    assert "verify_status" not in rec["updates"]
+    assert "not committed" in rec["updates"]["error_message"]
 
 
 @pytest.mark.asyncio

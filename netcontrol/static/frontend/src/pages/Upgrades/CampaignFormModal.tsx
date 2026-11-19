@@ -56,9 +56,33 @@ const DEFAULT_OPTIONS: Required<UpgradeCampaignOptions> = {
   skip_health_check: false,
   verify_upgrade: true,
   issu: false,
+  commit_pending_install: false,
   parallel: 4,
   retries: 2,
 };
+
+type BooleanOptionKey =
+  | 'skip_backup'
+  | 'skip_md5'
+  | 'skip_health_check'
+  | 'verify_upgrade'
+  | 'issu'
+  | 'commit_pending_install';
+
+const BOOLEAN_OPTIONS: { key: BooleanOptionKey; label: string; help?: string }[] = [
+  { key: 'skip_backup', label: 'Skip config backup' },
+  { key: 'skip_md5', label: 'Skip MD5 verification' },
+  { key: 'skip_health_check', label: 'Skip health check' },
+  { key: 'verify_upgrade', label: 'Verify upgrade after reboot' },
+  { key: 'issu', label: 'ISSU (in-service; dual-sup / StackWise Virtual only)' },
+  {
+    key: 'commit_pending_install',
+    label: 'Commit a pending install before activating',
+    help:
+      'If the switch is running a version that was activated but never committed, ' +
+      'run install commit first. Without this the activate is refused.',
+  },
+];
 
 function parseObject(value: unknown): Record<string, unknown> {
   if (typeof value === 'string') {
@@ -162,6 +186,7 @@ export function CampaignFormModal({ mode, campaignId, onClose }: Props) {
           skip_health_check: Boolean(opts.skip_health_check),
           verify_upgrade: opts.verify_upgrade !== false,
           issu: Boolean(opts.issu),
+          commit_pending_install: Boolean(opts.commit_pending_install),
           parallel,
           retries,
         });
@@ -572,32 +597,31 @@ export function CampaignFormModal({ mode, campaignId, onClose }: Props) {
                 gap: '0.5rem',
               }}
             >
-              {(
-                [
-                  ['skip_backup', 'Skip config backup'],
-                  ['skip_md5', 'Skip MD5 verification'],
-                  ['skip_health_check', 'Skip health check'],
-                  ['verify_upgrade', 'Verify upgrade after reboot'],
-                  ['issu', 'ISSU (in-service; dual-sup / StackWise Virtual only)'],
-                ] as const
-              ).map(([key, label]) => (
-                <label
-                  key={key}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '0.5rem',
-                  }}
-                >
-                  <input
-                    type="checkbox"
-                    checked={options[key]}
-                    onChange={(e) =>
-                      setOptions((o) => ({ ...o, [key]: e.target.checked }))
-                    }
-                  />
-                  {label}
-                </label>
+              {BOOLEAN_OPTIONS.map(({ key, label, help }) => (
+                <div key={key}>
+                  <label
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '0.5rem',
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={options[key]}
+                      aria-describedby={help ? `${formId}-${key}-help` : undefined}
+                      onChange={(e) =>
+                        setOptions((o) => ({ ...o, [key]: e.target.checked }))
+                      }
+                    />
+                    {label}
+                  </label>
+                  {help && (
+                    <div className="form-help" id={`${formId}-${key}-help`}>
+                      {help}
+                    </div>
+                  )}
+                </div>
               ))}
             </div>
             <div style={{ display: 'flex', gap: '1rem', marginTop: '0.75rem' }}>

@@ -17,6 +17,7 @@ import {
 import { formatBackendDateTime } from '@/lib/datetime';
 import { statusTone, type Tone } from '@/lib/severity';
 import { CatoEgressPanel } from './CatoEgressPanel';
+import { CatoSharedHostPanel } from './CatoSharedHostPanel';
 import { MerakiAlertsPanel } from './MerakiAlertsPanel';
 import { AVAILABILITY_TABLE_MAX_HEIGHT, countTone, formatUptime, formatUptimePct } from './helpers';
 import { TopologyAvailabilityPanel } from './TopologyAvailabilityPanel';
@@ -196,6 +197,7 @@ export function AvailabilityTab() {
       <TopologyAvailabilityPanel days={days} />
       <MerakiAlertsPanel />
       <CatoEgressPanel />
+      <CatoSharedHostPanel />
     </div>
   );
 }

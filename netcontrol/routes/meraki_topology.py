@@ -530,6 +530,8 @@ async def _availability_changed(provider: str, org_ref: int, snapshot: dict, sna
     await record_snapshot_states(provider, org_ref, snapshot, snapshot_ref=snapshot_ref)
     if provider in (PROVIDER_CATO, *_CLOUD_BY_PROVIDER):
         await _egress_check_changed(f"{provider} collection")
+    if provider in (PROVIDER_CATO, PROVIDER_AZURE):
+        await _shared_host_check_changed(f"{provider} collection")
 
 
 async def _egress_check_changed(trigger: str) -> None:
@@ -539,6 +541,15 @@ async def _egress_check_changed(trigger: str) -> None:
     from netcontrol.routes.cato_egress_check import run_egress_check
 
     await run_egress_check(trigger)
+
+
+async def _shared_host_check_changed(trigger: str) -> None:
+    """A Cato collection or Azure discovery was stored: run the Cato shared
+    hosts vs Azure check (``netcontrol.routes.cato_shared_host_check``).
+    Best-effort; never raises."""
+    from netcontrol.routes.cato_shared_host_check import run_shared_host_check
+
+    await run_shared_host_check(trigger)
 
 
 async def cloud_availability_changed(provider: str) -> None:

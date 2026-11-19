@@ -140,7 +140,8 @@ for** (their option is off) or **read with the reduced query**.
 The policies other than the two firewalls, the Split Tunnel policy and the
 INTERNET rules of the WAN network policy (Network Rules) are listed, not
 applied: path tracing does not evaluate them, and no route, rule or note
-comes of them. The **Allocated IPs** table lists the account's allocated
+comes of them. The Terminal server (Shared Hosts) rules are also read by
+the server-side [Shared Hosts check](#shared-hosts-check-azure). The **Allocated IPs** table lists the account's allocated
 IPs (`popLocations.allocatedIpList`: address, PoP, type, description), the
 addresses a network rule with route NAT leaves from.
 
@@ -404,7 +405,7 @@ both hold, or that sits inside a VPC, is listed under **Overlapping Ranges**
 | Allocated IPs (address, PoP, type) that NAT network rules leave from | `popLocations.allocatedIpList` | All other policies |
 | Socket LAN, Socket bypass and site web proxy rules | `policy.socketLan`, `policy.socketBypass`, `policy.siteWebProxy` | All other policies |
 | TLS inspection, application control, app tenant restriction, anti-malware file hash rules | `policy.tlsInspect`, `policy.applicationControl`, `policy.appTenantRestriction`, `policy.antiMalwareFileHash` | All other policies |
-| Remote access: client connectivity, dynamic and SDP static IP allocation, private access, ZTNA always-on, terminal server rules | `policy.clientConnectivity`, `policy.dynamicIpAllocation`, `policy.sdpStaticIpAllocation`, `policy.privateAccess`, `policy.ztnaAlwaysOn`, `policy.terminalServer` | All other policies |
+| Remote access: client connectivity, dynamic and SDP static IP allocation, private access, ZTNA always-on, terminal server (Shared Hosts) rules, whose hosts and excluded traffic also feed the [Shared Hosts check](#shared-hosts-check-azure) | `policy.clientConnectivity`, `policy.dynamicIpAllocation`, `policy.sdpStaticIpAllocation`, `policy.privateAccess`, `policy.ztnaAlwaysOn`, `policy.terminalServer` | All other policies |
 | Remote port forwarding rules | `policy.remotePortFwd` | All other policies |
 | Sub-policies of the WAN firewall, Internet firewall and Socket LAN policies | `policy.<policy>.policyList` | All other policies (and that policy's own option) |
 | Groups and their members (sites, ranges, hosts...) | `groups.groupList`, `groups.group.members` | All other policies |
@@ -471,6 +472,93 @@ behind a site are not collected. Cato's API has no route table: the routes
 are built from the site ranges, the BGP peers, the connected users and the
 Split Tunnel policy.
 
+## Shared Hosts check (Azure)
+
+Cato's **User Awareness for Shared Hosts** (the Shared Hosts policy, shown
+as **Terminal server** on the Cato Cloud node; `policy.terminalServer`) is
+for multi-session hosts such as Azure Virtual Desktop: the Cato Client on
+the host tunnels each user session's traffic in GRE to the **Cato system
+range** (`10.254.254.0/24` by default), which must be routed to a Cato
+Socket inside the network. Azure drops GRE inside a VNet, so a host there
+must send the tunnel as GRE over UDP (registry value `GREOverUDP = 1`), on
+UDP port 4754. The **Cato shared hosts vs Azure** check
+(`netcontrol/integrations/cato/shared_host_check.py`,
+`netcontrol/routes/cato_shared_host_check.py`) tells whether the Azure
+virtual machines the rules name can reach a Socket that way.
+
+**What it reads.** The enabled Shared Hosts rules of the latest snapshot of
+every Cato account: each rule's hosts (`allowedHostIP`) and excluded traffic
+(`excludeTraffic`), global IP ranges resolved to their CIDRs at collection
+time (the Cato Cloud node's `shared_hosts` block), and the site ranges the
+Cato Cloud routes. On the Azure side, the collected virtual machines, route
+tables, network security groups and the IP forwarding flag of each network
+interface (see [azure-topology.md](azure-topology.md)). A snapshot taken
+before the block existed, a policy that was not read (the **All other
+policies** option is off, or Cato refused it), a disabled policy or no
+enabled rule gives no finding at all.
+
+**What it checks.** Every collected Azure VM address inside a rule's host
+ranges is a host (the appliance the hosts route the system range to, the
+vSocket, is left out even when a range covers it). For each host:
+
+1. the effective route from its subnet to the system range: only a user
+   route to a virtual appliance gets the tunnel anywhere (a `0.0.0.0/0`
+   user route to the vSocket covers the system range too);
+2. the appliance at that route's next hop: a collected VM whose network
+   interface has IP forwarding on, with an address in a network range of a
+   site of the account (the vSocket's LAN);
+3. the network security groups for udp/4754: the host's interface and
+   subnet groups outbound towards the system range, then the next hop's
+   subnet and interface groups inbound from the host, judged with the system
+   range as the destination (the address the packet carries), not the
+   vSocket's own address. Groups apply inside one subnet too;
+4. the route back from the next hop's subnet to the host.
+
+Findings are grouped by root cause, so fifty hosts behind one missing route
+are one finding and one alert: by host subnet (route findings), by next-hop
+VM and address (forwarding, not a Cato site), by group, direction and rule
+(network security groups). The message names the subnet, route table,
+route, group, rule and VM, and the first three hosts ("and N more"); every
+host is listed in the finding's detail.
+
+| Finding | Severity | When |
+|---|---|---|
+| No route to the Cato system range | warning | The host subnet's best route to the system range is the internet, VNet local, a peering, next hop None, or none: the message says what Azure does with the traffic and names the route table (or that the subnet has none). |
+| IP forwarding off on the next hop | warning | The network interface holding the next-hop address has IP forwarding off, so Azure drops traffic addressed to the system range there. Not reported when the flag was not collected. |
+| Network security group blocks the tunnel | warning | A group on the host side (outbound) or the next-hop side (inbound) denies udp/4754 to the system range; the group, direction and rule are named. |
+| No return route from the next hop | warning | The next hop's subnet has no route back to the hosts, or sends them to the internet or next hop None. |
+| Next hop is not in a Cato site | info | The next-hop address is in no network range of a site of the account (another appliance, or a vSocket of another account). |
+| Undetermined | info | A virtual network gateway route, routes learned over BGP or ExpressRoute with no closer collected route, narrower routes that split the system range, a next hop that is no collected VM (or an Azure Firewall), a group that decides only part of udp/4754 or nothing, or a return route Plexus does not follow. |
+| No host at a Shared Hosts range | info | A host range inside a collected Azure subnet holds no collected VM address: a stale rule entry. A range outside every collected subnet says nothing (the host may be on-premises). |
+| Shared Hosts range not resolved | info | A rule names a global IP range that did not resolve to addresses (not collected, or a name several ranges share). |
+| GRE over UDP required | info | One note per account with an Azure host: those hosts need GRE over UDP, which Plexus cannot see; the rules' excluded ranges are in its detail (that traffic bypasses the tunnel and is not attributed to a user). |
+
+**When it runs.** On the server after every stored Cato collection and
+every Azure discovery (scheduled or manual), next to the egress check, and
+on demand. Findings are stored with the egress check's in
+`cato_egress_findings` under `check_name` `shared_host` (migration 0118):
+a run updates the ones it reports again, resolves the ones it no longer
+reports (unless Azure could not be read this run) and reopens a resolved one
+that comes back. A warning alerts once while it stays open: as a
+`cato_shared_host` monitoring alert when the finding's address (one
+affected host, or the next hop) is an inventory host (acknowledged as
+`auto-resolved` when the finding resolves or turns informational), otherwise
+straight to the notification channels. Informational findings are listed,
+never alerted.
+
+**System range.** The default is Cato's `10.254.254.0/24`. An account that
+changed it in the Cato Management Application sets the environment variable
+`PLEXUS_CATO_SYSTEM_RANGE` to the new IPv4 network (for example
+`PLEXUS_CATO_SYSTEM_RANGE=10.255.0.0/24`) and restarts Plexus; a value that
+is not an IPv4 network is logged and the default is used.
+
+**Limits.** The `GREOverUDP` registry value of a host is not visible to
+Plexus: the check assumes it is set and evaluates udp/4754. Only Azure is
+checked; AWS and GCP hosts are not (a gap). Which user a session belongs to
+is not known: the check is about the hosts, not the users. Hosts outside
+Azure (on-premises) are not judged. The next hop is followed one appliance
+deep: what a vSocket does with the tunnel past its LAN interface is Cato's.
+
 ## Availability tracking
 
 Each collection also records the state of what it reports, shown under **Monitoring > Availability > Integrations and cloud** with uptime, outages and alerts: Sockets and IPsec sites (devices), sites (from their connectivity status: connected is up, degraded is degraded, disconnected is down), Socket WAN uplinks and the Socket and IPsec site tunnels. Remote users, PoPs and the Cato Cloud are left out. The state mapping, alerting and retention are described in [Meraki in the Topology Map](meraki-topology.md#availability-tracking).
@@ -488,3 +576,12 @@ A Cato account uses the organization endpoints listed in
 | `POST` | `/api/sources/{id}/build` | Start a collection; returns `job_id` |
 | `POST` | `/api/sources/sample?provider=cato` | Add / refresh the demo Cato account |
 | `GET` | `/api/topology` | Cato nodes carry `source: "meraki"` and a `meraki` reference whose `provider` is `cato` |
+
+The Shared Hosts check has endpoints of its own (both need the `monitoring`
+feature, `monitoring.write` to run; a caller limited to selected inventory
+groups sees no finding and cannot run it):
+
+| Method | Path | Notes |
+|---|---|---|
+| `GET` | `/api/monitoring/cato-shared-hosts/findings?include_resolved=<bool>&limit=<int>` | `{"findings": [...]}`: each stored finding (`finding_key`, `cato_org_ref`, `cato_org_name`, `provider`, `resource_id`, `resource_name`, `private_ip`, `protocol`, `ports`, `filter_name`, `rule_name`, `rule_id`, `kind`, `severity`, `message`, `detail`, `status`, `first_seen`, `last_seen`, `resolved_at`, `alert_state`, `alert_via`, `check_name`) with its `kind_label`; open ones only unless `include_resolved`; `limit` 1 to 10000 (default 1000) |
+| `POST` | `/api/monitoring/cato-shared-hosts/run` | Runs the check now: `{"ok", "trigger", "cato_accounts", "clouds", "clouds_not_read", "findings", "warnings", "new", "resolved", "alerted", "alerts_cleared"}` (`error` instead when it failed); audited as `cato_shared_host.checked` |

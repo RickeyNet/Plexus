@@ -1,4 +1,5 @@
-"""Findings of the Cato egress vs cloud allow-list check.
+"""Findings of the Cato egress vs cloud allow-list check and of the Cato
+shared hosts vs Azure check.
 
 Star re-exported by routes/database.py so the ``routes.database`` facade
 keeps its full public surface.
@@ -10,6 +11,10 @@ resolved one that comes back is reopened. ``alert_state`` is the severity an
 alert was raised at (``warning``) or ``""``, so a finding alerts once while
 it stays open and its alert is cleared when it resolves or turns
 informational.
+
+Both checks share the table (migration 0118 adds ``check_name``: ``egress``,
+the default, or ``shared_host``); every function takes the ``check`` its
+rows belong to, so a run lists, updates and resolves only its own findings.
 
 Timestamps are UTC ``YYYY-MM-DD HH:MM:SS`` text.
 """
@@ -47,6 +52,7 @@ _FIELDS = (
     "message",
 )
 _ALERTING = "warning"
+EGRESS = "egress"
 
 
 def _now() -> str:
@@ -69,9 +75,11 @@ def _row(row: dict) -> dict:
     return item
 
 
-async def list_cato_egress_findings(include_resolved: bool = False, limit: int = 1000) -> list[dict]:
-    """The findings, warnings first, then by Cato account and resource."""
-    where = "" if include_resolved else "WHERE status = 'open'"
+async def list_cato_egress_findings(
+    include_resolved: bool = False, limit: int = 1000, *, check: str = EGRESS
+) -> list[dict]:
+    """The findings of one check, warnings first, then by Cato account and resource."""
+    where = "WHERE check_name = ?" + ("" if include_resolved else " AND status = 'open'")
     db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
@@ -80,7 +88,7 @@ async def list_cato_egress_findings(include_resolved: bool = False, limit: int =
                          CASE severity WHEN 'warning' THEN 0 ELSE 1 END,
                          cato_org_ref, provider, resource_name, public_ip, ports, finding_key
                 LIMIT ?""",
-            (max(1, int(limit)),),
+            (check, max(1, int(limit))),
         )
         return [_row(r) for r in rows_to_list(await cursor.fetchall())]
     finally:
@@ -92,8 +100,10 @@ async def apply_cato_egress_findings(
     *,
     keep_providers: set[str] | None = None,
     now: str | None = None,
+    check: str = EGRESS,
 ) -> dict[str, Any]:
-    """Bring the stored findings up to date with one run of the check.
+    """Bring the stored findings of ``check`` up to date with one run of it;
+    another check's rows are never touched.
 
     An open finding missing from ``findings`` is resolved, unless its cloud
     provider is in ``keep_providers`` (that cloud could not be read this
@@ -105,7 +115,7 @@ async def apply_cato_egress_findings(
     keep = keep_providers or set()
     db = await _dbcore.get_db()
     try:
-        cursor = await db.execute("SELECT * FROM cato_egress_findings")
+        cursor = await db.execute("SELECT * FROM cato_egress_findings WHERE check_name = ?", (check,))
         stored = {str(r["finding_key"]): r for r in rows_to_list(await cursor.fetchall())}
         inserts: list[tuple] = []
         updates: list[tuple] = []
@@ -127,22 +137,23 @@ async def apply_cato_egress_findings(
                 alerts.append(finding)
             new_state = _ALERTING if warning else ""
             if row is None:
-                inserts.append((key, *_values(finding), "open", now, now, "", new_state))
+                inserts.append((key, *_values(finding), "open", now, now, "", new_state, check))
             else:
                 first_seen = row["first_seen"] if row["status"] == "open" else now
-                updates.append((*_values(finding), "open", first_seen, now, "", new_state, key))
+                updates.append((*_values(finding), "open", first_seen, now, "", new_state, key, check))
         for key, row in stored.items():
             if key in seen or row["status"] != "open" or str(row.get("provider") or "") in keep:
                 continue
-            resolves.append((now, key))
+            resolves.append((now, key, check))
             if row.get("alert_state"):
                 clears.append(row)
         columns = ", ".join(_FIELDS)
         if inserts:
             await db.executemany(
                 f"""INSERT INTO cato_egress_findings
-                    (finding_key, {columns}, detail_json, status, first_seen, last_seen, resolved_at, alert_state)
-                    VALUES ({", ".join("?" for _ in range(len(_FIELDS) + 7))})""",
+                    (finding_key, {columns}, detail_json, status, first_seen, last_seen, resolved_at, alert_state,
+                     check_name)
+                    VALUES ({", ".join("?" for _ in range(len(_FIELDS) + 8))})""",
                 inserts,
             )
         if updates:
@@ -151,14 +162,14 @@ async def apply_cato_egress_findings(
                 f"""UPDATE cato_egress_findings
                     SET {assignments}, detail_json = ?, status = ?, first_seen = ?, last_seen = ?,
                         resolved_at = ?, alert_state = ?
-                    WHERE finding_key = ?""",
+                    WHERE finding_key = ? AND check_name = ?""",
                 updates,
             )
         if resolves:
             await db.executemany(
                 """UPDATE cato_egress_findings
                    SET status = 'resolved', resolved_at = ?, alert_state = ''
-                   WHERE finding_key = ?""",
+                   WHERE finding_key = ? AND check_name = ?""",
                 resolves,
             )
         await db.commit()
@@ -173,12 +184,15 @@ async def apply_cato_egress_findings(
     }
 
 
-async def set_cato_egress_alert_via(finding_key: str, via: str) -> None:
+async def set_cato_egress_alert_via(finding_key: str, via: str, *, check: str = EGRESS) -> None:
     """Record how a finding's alert was raised: ``monitoring`` (an alert on
     an inventory host) or ``notification`` (the notification channels)."""
     db = await _dbcore.get_db()
     try:
-        await db.execute("UPDATE cato_egress_findings SET alert_via = ? WHERE finding_key = ?", (via, finding_key))
+        await db.execute(
+            "UPDATE cato_egress_findings SET alert_via = ? WHERE finding_key = ? AND check_name = ?",
+            (via, finding_key, check),
+        )
         await db.commit()
     finally:
         await db.close()

@@ -515,3 +515,422 @@ async def test_plain_activate_does_not_wait_for_standby(monkeypatch: pytest.Monk
     await upgrades._device_activate(campaign_id=1, dev=_DEV, credentials={}, image_map={}, options={})
     assert "install commit" in conn.commands
     assert _final_status(_patched["db"], "verify_status") == "completed"
+
+
+# ── Install state gate, activate reply, diagnosis ───────────────────────────
+#
+# An install left uncommitted by an earlier upgrade makes IOS-XE refuse the
+# next activate.  Plexus used to send the activate anyway, report the
+# prompt timeout as "connection closed", wait for a reload that never came
+# and stop at "Version mismatch" with no reason.
+
+_SUMMARY_HEAD = """\
+[ Switch 1 ] Installed Package(s) Information:
+State (St): I - Inactive, U - Activated & Uncommitted,
+            C - Activated & Committed, D - Deactivated & Uncommitted
+--------------------------------------------------------------------------------
+Type  St   Filename/Version
+--------------------------------------------------------------------------------
+"""
+
+
+def _summary(packages: str, timer: str = "inactive") -> str:
+    return f"{_SUMMARY_HEAD}{packages}{'-' * 80}\nAuto abort timer: {timer}\n{'-' * 80}\n"
+
+
+# Old version committed, target added and inactive: ready to activate.
+_READY = _summary("IMG   I    17.15.05.0.2\nIMG   C    17.15.04.0.1\n")
+# The incident: the running old version activated but never committed.
+_OLD_UNCOMMITTED = _summary("IMG   I    17.15.05.0.2\nIMG   U    17.15.04.0.1\n")
+# After a commit of the running old version.
+_OLD_COMMITTED = _READY
+# Target running and committed: the end state of a good upgrade.
+_TARGET_COMMITTED = _summary("IMG   C    17.15.05.0.2\n")
+_TARGET_UNCOMMITTED = _summary(
+    "IMG   U    17.15.05.0.2\n", "active on install_activate, time before rollback - 01:12:30"
+)
+
+_ACTIVATE = "install activate prompt-level none"
+
+
+class ReadTimeout(Exception):
+    """Stands in for ``netmiko.exceptions.ReadTimeout`` (matched by name)."""
+
+
+class _InstallConn(_FakeConn):
+    """``_FakeConn`` that also answers the install commands.
+
+    ``summaries`` is consumed one per ``show install summary`` (the last
+    repeats).  ``activate`` is the reply to the activate command, or an
+    exception to raise; ``chunks`` is what ``read_channel`` returns
+    afterwards; ``alive`` is the ``is_alive`` sequence (last repeats).
+    """
+
+    def __init__(
+        self,
+        versions: list[str],
+        summaries: list[str],
+        *,
+        activate: str | Exception = "",
+        chunks: list[str] | None = None,
+        alive: list[bool] | None = None,
+        install_log: str = "",
+        commit_output: str = "SUCCESS: install_commit",
+    ) -> None:
+        super().__init__(versions, commit_output=commit_output, redundancy="")
+        self._summaries = list(summaries)
+        self._activate = activate
+        self._chunks = list(chunks or [])
+        self._alive = list(alive or [True])
+        self._install_log = install_log
+        self.base_prompt = "lab-sw-1"
+
+    def send_command(self, command: str, **kw: object) -> str:
+        if command == "show install summary":
+            self.commands.append(command)
+            return self._summaries.pop(0) if len(self._summaries) > 1 else self._summaries[0]
+        if command == "show install log":
+            self.commands.append(command)
+            return self._install_log
+        if command.startswith("install activate"):
+            self.commands.append(command)
+            if isinstance(self._activate, Exception):
+                raise self._activate
+            return self._activate
+        return super().send_command(command, **kw)
+
+    def read_channel(self) -> str:
+        return self._chunks.pop(0) if self._chunks else ""
+
+    def is_alive(self) -> bool:
+        return self._alive.pop(0) if len(self._alive) > 1 else self._alive[0]
+
+
+def _errors(patched) -> list[str]:
+    return [msg for lvl, msg in patched["emits"] if lvl == "error"]
+
+
+@pytest.mark.asyncio
+async def test_pending_install_refuses_activate(_patched) -> None:
+    conn = _InstallConn(["17.15.04"], [_OLD_UNCOMMITTED])
+    _patched["holder"]["conn"] = conn
+    await upgrades._device_activate(campaign_id=1, dev=_DEV, credentials={}, image_map={}, options={})
+    assert _activate_cmds(conn) == [], "must not send activate with an install left open"
+    assert "install commit" not in conn.commands
+    assert _final_status(_patched["db"], "activate_status") == "failed"
+    _, err = _final_verify_state(_patched["db"])
+    assert "17.15.04.0.1 (the running version) is activated but not committed" in err
+    assert "auto-abort timer inactive" in err
+    assert "'install commit'" in err and "'install abort'" in err
+    assert "Commit a pending install before activating" in err
+
+
+@pytest.mark.asyncio
+async def test_pending_install_message_names_active_timer(_patched) -> None:
+    summary = _summary("IMG   I    17.15.05.0.2\nIMG   U    17.15.04.0.1\n", "active , time before rollback - 00:42:10")
+    conn = _InstallConn(["17.15.04"], [summary])
+    _patched["holder"]["conn"] = conn
+    await upgrades._device_activate(campaign_id=1, dev=_DEV, credentials={}, image_map={}, options={})
+    _, err = _final_verify_state(_patched["db"])
+    assert "auto-abort timer active (00:42:10 before rollback)" in err
+
+
+@pytest.mark.asyncio
+async def test_commit_pending_install_option_commits_then_activates(_patched) -> None:
+    conn = _InstallConn(
+        ["17.15.04", "17.15.05", "17.15.05"],
+        [_OLD_UNCOMMITTED, _OLD_COMMITTED, _TARGET_COMMITTED],
+    )
+    _patched["holder"]["conn"] = conn
+    await upgrades._device_activate(
+        campaign_id=1, dev=_DEV, credentials={}, image_map={}, options={"commit_pending_install": True}
+    )
+    assert _activate_cmds(conn) == [_ACTIVATE]
+    assert conn.commands.index("install commit") < conn.commands.index(_ACTIVATE)
+    assert _final_status(_patched["db"], "activate_status") == "completed"
+    assert _final_status(_patched["db"], "verify_status") == "completed"
+    assert any("running install commit" in msg for _lvl, msg in _patched["emits"])
+
+
+@pytest.mark.asyncio
+async def test_commit_pending_install_refuses_a_version_not_running(_patched) -> None:
+    # The uncommitted version is the target, which is not running: a
+    # commit would lock in a version the switch is not on.
+    conn = _InstallConn(["17.15.04"], [_summary("IMG   U    17.15.05.0.2\nIMG   C    17.15.04.0.1\n")])
+    _patched["holder"]["conn"] = conn
+    await upgrades._device_activate(
+        campaign_id=1, dev=_DEV, credentials={}, image_map={}, options={"commit_pending_install": True}
+    )
+    assert "install commit" not in conn.commands
+    assert _activate_cmds(conn) == []
+    _, err = _final_verify_state(_patched["db"])
+    assert "17.15.05.0.2 is activated but not committed" in err
+
+
+@pytest.mark.asyncio
+async def test_commit_pending_install_still_open_fails(_patched) -> None:
+    conn = _InstallConn(["17.15.04"], [_OLD_UNCOMMITTED])
+    _patched["holder"]["conn"] = conn
+    await upgrades._device_activate(
+        campaign_id=1, dev=_DEV, credentials={}, image_map={}, options={"commit_pending_install": True}
+    )
+    assert "install commit" in conn.commands
+    assert _activate_cmds(conn) == []
+    _, err = _final_verify_state(_patched["db"])
+    assert "still lists an open install" in err
+
+
+@pytest.mark.asyncio
+async def test_on_target_but_uncommitted_is_committed(_patched) -> None:
+    conn = _InstallConn(["17.15.05"], [_TARGET_UNCOMMITTED, _TARGET_COMMITTED])
+    _patched["holder"]["conn"] = conn
+    await upgrades._device_activate(campaign_id=1, dev=_DEV, credentials={}, image_map={}, options={})
+    assert "install commit" in conn.commands
+    assert _activate_cmds(conn) == []
+    assert _final_status(_patched["db"], "activate_status") == "completed"
+    assert _final_status(_patched["db"], "verify_status") == "completed"
+    assert any("01:12:30 before rollback" in msg for _lvl, msg in _patched["emits"])
+
+
+@pytest.mark.asyncio
+async def test_on_target_and_committed_skips_as_before(_patched) -> None:
+    conn = _InstallConn(["17.15.05"], [_TARGET_COMMITTED])
+    _patched["holder"]["conn"] = conn
+    await upgrades._device_activate(campaign_id=1, dev=_DEV, credentials={}, image_map={}, options={})
+    assert "install commit" not in conn.commands
+    assert _final_status(_patched["db"], "verify_status") == "completed"
+
+
+@pytest.mark.asyncio
+async def test_on_target_commit_failure_fails_with_switch_text(_patched) -> None:
+    conn = _InstallConn(
+        ["17.15.05"],
+        [_TARGET_UNCOMMITTED],
+        commit_output="FAILED: install_commit : commit not allowed",
+    )
+    _patched["holder"]["conn"] = conn
+    await upgrades._device_activate(campaign_id=1, dev=_DEV, credentials={}, image_map={}, options={})
+    assert _final_status(_patched["db"], "activate_status") == "failed"
+    _, err = _final_verify_state(_patched["db"])
+    assert "commit not allowed" in err
+    assert not any(w.get("verify_status") == "completed" for w in _patched["db"])
+
+
+@pytest.mark.asyncio
+async def test_target_not_added_refuses_activate(_patched) -> None:
+    conn = _InstallConn(["17.15.04"], [_summary("IMG   C    17.15.04.0.1\n")])
+    _patched["holder"]["conn"] = conn
+    await upgrades._device_activate(campaign_id=1, dev=_DEV, credentials={}, image_map={}, options={})
+    assert _activate_cmds(conn) == []
+    _, err = _final_verify_state(_patched["db"])
+    assert "Target 17.15.05 is not added on the switch" in err
+    assert "17.15.04.0.1 (C)" in err
+    assert "Transfer" in err
+
+
+@pytest.mark.asyncio
+async def test_target_match_ignores_leading_zeros(_patched) -> None:
+    dev = {**_DEV, "target_image": "cat9k_iosxe.17.09.04a.SPA.bin"}
+    conn = _InstallConn(
+        ["17.06.05", "17.09.04a", "17.09.04a"],
+        [_summary("IMG   I    17.9.4a.0.6\nIMG   C    17.6.5.0.5797\n"), _summary("IMG   C    17.9.4a.0.6\n")],
+    )
+    _patched["holder"]["conn"] = conn
+    await upgrades._device_activate(campaign_id=1, dev=dev, credentials={}, image_map={}, options={})
+    assert _activate_cmds(conn) == [_ACTIVATE]
+    assert _final_status(_patched["db"], "verify_status") == "completed"
+
+
+@pytest.mark.asyncio
+async def test_unrecognised_install_state_proceeds(_patched) -> None:
+    conn = _InstallConn(["17.15.04", "17.15.05", "17.15.05"], ["% Invalid input detected at '^' marker.\n"])
+    _patched["holder"]["conn"] = conn
+    await upgrades._device_activate(campaign_id=1, dev=_DEV, credentials={}, image_map={}, options={})
+    assert _activate_cmds(conn) == [_ACTIVATE]
+    assert _final_status(_patched["db"], "verify_status") == "completed"
+    assert any(lvl == "warn" and "Install state check skipped" in msg for lvl, msg in _patched["emits"])
+
+
+@pytest.mark.asyncio
+async def test_activate_reply_failed_fails_fast(monkeypatch: pytest.MonkeyPatch, _patched) -> None:
+    waited: list = []
+
+    async def fake_wait_for_down(*_a, **_k):
+        waited.append(1)
+        return True
+
+    monkeypatch.setattr(upgrades, "_wait_for_down", fake_wait_for_down)
+    conn = _InstallConn(
+        ["17.15.04"],
+        [_READY],
+        activate="install_activate: START Mon Jan  5 11:00:00 UTC 2026\n"
+        "FAILED: install_activate : No inactive package to activate\n",
+    )
+    _patched["holder"]["conn"] = conn
+    await upgrades._device_activate(campaign_id=1, dev=_DEV, credentials={}, image_map={}, options={})
+    assert waited == [], "must not wait for a reload the switch refused"
+    assert _final_status(_patched["db"], "activate_status") == "failed"
+    _, err = _final_verify_state(_patched["db"])
+    assert err.startswith("Activate failed on the switch:")
+    assert "No inactive package to activate" in err
+
+
+@pytest.mark.asyncio
+async def test_read_timeout_with_live_session_is_not_connection_closed(
+    monkeypatch: pytest.MonkeyPatch, _patched
+) -> None:
+    monkeypatch.setattr(upgrades, "ACTIVATE_REPLY_POLL_INTERVAL", 0)
+    conn = _InstallConn(
+        ["17.15.04"],
+        [_READY],
+        activate=ReadTimeout("Pattern not detected: 'lab\\-sw\\-1' in output."),
+        chunks=["", "install_activate: START x\n", "FAILED: install_activate : Install in progress\n"],
+        alive=[True],
+    )
+    _patched["holder"]["conn"] = conn
+    await upgrades._device_activate(campaign_id=1, dev=_DEV, credentials={}, image_map={}, options={})
+    messages = [msg for _lvl, msg in _patched["emits"]]
+    assert not any("Connection closed" in m or "SSH session closed" in m for m in messages)
+    assert any("has not finished the activate yet" in m for m in messages)
+    _, err = _final_verify_state(_patched["db"])
+    assert "Install in progress" in err
+    assert _final_status(_patched["db"], "activate_status") == "failed"
+
+
+@pytest.mark.asyncio
+async def test_read_timeout_then_prompt_returns_waits_for_reload(monkeypatch: pytest.MonkeyPatch, _patched) -> None:
+    monkeypatch.setattr(upgrades, "ACTIVATE_REPLY_POLL_INTERVAL", 0)
+    conn = _InstallConn(
+        ["17.15.04", "17.15.05", "17.15.05"],
+        [_READY, _TARGET_COMMITTED],
+        activate=ReadTimeout("Pattern not detected"),
+        chunks=["install_activate: START x\nSUCCESS: install_activate x\nlab-sw-1#"],
+    )
+    _patched["holder"]["conn"] = conn
+    await upgrades._device_activate(campaign_id=1, dev=_DEV, credentials={}, image_map={}, options={})
+    assert any("waiting for the switch to reload" in msg for _lvl, msg in _patched["emits"])
+    assert _final_status(_patched["db"], "verify_status") == "completed"
+
+
+@pytest.mark.asyncio
+async def test_read_timeout_then_session_drop_is_a_reload(monkeypatch: pytest.MonkeyPatch, _patched) -> None:
+    monkeypatch.setattr(upgrades, "ACTIVATE_REPLY_POLL_INTERVAL", 0)
+    seen: dict = {}
+
+    async def fake_wait_for_down(ip, **kw):
+        seen["timeout"] = kw["timeout"]
+        return True
+
+    monkeypatch.setattr(upgrades, "_wait_for_down", fake_wait_for_down)
+    conn = _InstallConn(
+        ["17.15.04", "17.15.05", "17.15.05"],
+        [_READY, _TARGET_COMMITTED],
+        activate=ReadTimeout("Pattern not detected"),
+        chunks=["Install will reload the system now!\n"],
+        alive=[True, True, False],
+    )
+    _patched["holder"]["conn"] = conn
+    await upgrades._device_activate(campaign_id=1, dev=_DEV, credentials={}, image_map={}, options={})
+    assert any("SSH session closed - the switch is reloading" in msg for _lvl, msg in _patched["emits"])
+    assert _final_status(_patched["db"], "verify_status") == "completed"
+    # The time spent reading counts against the same offline budget.
+    assert 60 <= seen["timeout"] <= upgrades.DEFAULT_DOWN_TIMEOUT
+
+
+@pytest.mark.asyncio
+async def test_read_timeout_budget_is_shared_with_offline_wait(monkeypatch: pytest.MonkeyPatch, _patched) -> None:
+    """Reading a silent, still-open session uses up the offline budget."""
+    monkeypatch.setattr(upgrades, "ACTIVATE_REPLY_POLL_INTERVAL", 0)
+    monkeypatch.setattr(upgrades, "DEFAULT_DOWN_TIMEOUT", 0)
+    seen: dict = {}
+
+    async def fake_wait_for_down(ip, **kw):
+        seen["timeout"] = kw["timeout"]
+        return False
+
+    monkeypatch.setattr(upgrades, "_wait_for_down", fake_wait_for_down)
+    conn = _InstallConn(["17.15.04"], [_READY], activate=ReadTimeout("Pattern not detected"))
+    _patched["holder"]["conn"] = conn
+    await upgrades._device_activate(campaign_id=1, dev=_DEV, credentials={}, image_map={}, options={})
+    assert seen["timeout"] == 0
+    assert any("neither finished nor dropped" in msg for _lvl, msg in _patched["emits"])
+
+
+@pytest.mark.asyncio
+async def test_dropped_session_is_still_a_reload(_patched) -> None:
+    conn = _InstallConn(
+        ["17.15.04", "17.15.05", "17.15.05"],
+        [_READY, _TARGET_COMMITTED],
+        activate=OSError("Socket is closed"),
+    )
+    _patched["holder"]["conn"] = conn
+    await upgrades._device_activate(campaign_id=1, dev=_DEV, credentials={}, image_map={}, options={})
+    assert any("SSH session closed (expected during reload)" in msg for _lvl, msg in _patched["emits"])
+    assert _final_status(_patched["db"], "verify_status") == "completed"
+
+
+@pytest.mark.asyncio
+async def test_never_went_offline_carries_diagnosis(monkeypatch: pytest.MonkeyPatch, _patched) -> None:
+    async def fake_wait_for_down(*_a, **_k):
+        return False
+
+    monkeypatch.setattr(upgrades, "_wait_for_down", fake_wait_for_down)
+    install_log = (
+        "[4|install_activate]: START Mon Jan  5 11:00:00 UTC 2026\n"
+        "[4|install_activate(ERROR, )]: Install operation not allowed while an install is in progress\n"
+        "[4|install_activate]: END FAILED exit(1) Mon Jan  5 11:00:05 UTC 2026\n"
+    )
+    conn = _InstallConn(["17.15.04"], [_READY, _OLD_UNCOMMITTED], install_log=install_log)
+    _patched["holder"]["conn"] = conn
+    await upgrades._device_activate(campaign_id=1, dev=_DEV, credentials={}, image_map={}, options={})
+    _, err = _final_verify_state(_patched["db"])
+    assert err.startswith("Version mismatch: 17.15.04. Switch did not reload.")
+    assert "17.15.04.0.1 (running) activated but not committed" in err
+    assert "auto-abort timer inactive" in err
+    assert "Last install operation: install_activate FAILED" in err
+    assert "not allowed while an install is in progress" in err
+    assert any("Switch did not reload" in msg for msg in _errors(_patched))
+    assert len(err) < 900
+
+
+@pytest.mark.asyncio
+async def test_version_mismatch_without_install_hooks_keeps_plain_message(_patched) -> None:
+    # Rolled back after the reboot, on a fake that knows no install commands.
+    conn = _FakeConn(versions=["17.15.04"])
+    _patched["holder"]["conn"] = conn
+    await upgrades._device_activate(campaign_id=1, dev=_DEV, credentials={}, image_map={}, options={})
+    _, err = _final_verify_state(_patched["db"])
+    assert err == "Version mismatch: 17.15.04"
+
+
+@pytest.mark.asyncio
+async def test_post_commit_install_state_must_be_committed(_patched) -> None:
+    conn = _InstallConn(["17.15.04", "17.15.05", "17.15.05"], [_READY, _TARGET_UNCOMMITTED])
+    _patched["holder"]["conn"] = conn
+    await upgrades._device_activate(campaign_id=1, dev=_DEV, credentials={}, image_map={}, options={})
+    assert _final_status(_patched["db"], "verify_status") == "failed"
+    assert _final_status(_patched["db"], "activate_status") == "failed"
+    _, err = _final_verify_state(_patched["db"])
+    assert "still lists an open install" in err
+    assert not any(w.get("verify_status") == "completed" for w in _patched["db"])
+
+
+@pytest.mark.asyncio
+async def test_prestage_warns_about_pending_install(monkeypatch: pytest.MonkeyPatch) -> None:
+    emits: list[tuple] = []
+
+    async def fake_emit(cid, did, level, message, host=""):
+        emits.append((level, message))
+
+    async def unpacked(*_a, **_k):
+        return True, None
+
+    monkeypatch.setattr(upgrades, "_emit", fake_emit)
+    monkeypatch.setattr(upgrades, "_verify_install_add_unpacked_files", unpacked)
+    conn = _InstallConn(["17.15.04"], [_OLD_UNCOMMITTED])
+    ok, _ = await upgrades._run_install_add_prestage(
+        conn, 1, 42, "192.0.2.10", "cat9k_iosxe.17.15.05.SPA.bin", "flash:", device_type="cisco_xe"
+    )
+    assert ok is True
+    assert any(c.startswith("install add file") for c in conn.commands), "a pending install must not block install add"
+    assert any(lvl == "warn" and "Activate will be refused until it is closed" in msg for lvl, msg in emits)
