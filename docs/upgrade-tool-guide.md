@@ -148,7 +148,7 @@ Risk mitigations built into this procedure:
 - The unpacked packages are verified on flash after `install add`, and can be re-verified any time before the reload window.
 - On redundant chassis, the standby supervisor must be STANDBY HOT before both Transfer and Activate. A cold or absent standby blocks the operation.
 - Each switch's boot mode (INSTALL or BUNDLE) is read from `show version` in Prestage, before the Transfer copy, in Check status and in Activate, and shown in the campaign's **Mode** column. Stackable switches report it in the `show version` Mode table; a modular chassis (9400, 9600) has no such table, so the mode is taken from the `System image file` line (`packages.conf` is INSTALL, a `.bin` file is BUNDLE). A bundle-mode switch is stopped before any image is copied. Install mode is required for every upgrade the tool runs, ISSU included.
-- The switch is not rebooted until the image is re-verified on flash and the boot-mode and redundancy gates pass.
+- The switch is not rebooted until the image is re-verified on flash and the boot-mode, redundancy and install-state gates pass. The install-state gate (IOS-XE) refuses to activate while an earlier install is left uncommitted, and when the target was never added. See Appendix F.
 - Post-upgrade verification confirms the running version, then runs `install commit`, then re-reads the version to confirm nothing rolled back.
 - Interactive confirmation is required before an immediate Activate.
 - The previous software version remains on the switch and can be restored with a single command.
@@ -303,7 +303,7 @@ Click **Run transfer**. On each device the tool:
 2. Reads the switch's TCP and SSH receive windows and logs a warning when they will slow the copy (see Appendix B). The transfer continues either way and no configuration is changed.
 3. Copies the image via SCP (30 - 60 minutes per device is normal).
 4. Verifies the on-device MD5 against the uploaded image (skippable).
-5. Runs `install add` to unpack the image, and verifies the unpacked packages.
+5. Runs `install add` to unpack the image, and verifies the unpacked packages. Before `install add` it reads `show install summary` (IOS-XE). If an earlier install is still uncommitted it logs a warning, because Activate will be refused until that install is closed. The transfer itself goes on.
 
 **Dual-sup / StackWise Virtual:** before `install add`, the standby supervisor must be **STANDBY HOT**. If it isn't, the transfer is refused (with "Skip health check" enabled it is only a warning). This is because `install add` silently skips syncing packages to a cold or absent standby and the problem would otherwise only surface at Activate time. Timeouts are automatically widened for redundant chassis.
 
@@ -316,6 +316,8 @@ Click **Run transfer**. On each device the tool:
 | What the switch shows | Result |
 |---|---|
 | Already running the target version | Every step is marked done |
+| Running the target version, but it was never committed | Transfer is marked failed with "not committed". Run **Activate** to commit it (no reload), or run `install commit` on the switch |
+| An earlier install is still uncommitted (another version in state U, or a package in state D) | Transfer is marked failed with the same message Activate gives (see Appendix E). With **Commit a pending install before activating** on, when the uncommitted version is the running one, it is only a warning |
 | Image on flash, MD5 matches the server copy, `install add` artifacts present | Transfer is marked done, ready to activate |
 | Image on flash and complete, but not expanded | Transfer is marked failed. **Retry failed** finishes `install add` without re-copying the image |
 | Image on flash but MD5 mismatch (partial/corrupt copy) | Transfer is marked failed. **Retry failed** re-copies it |
@@ -334,13 +336,27 @@ Two ways to start it:
 On each device the tool will:
 
 1. Re-verify the image on flash, then check the boot-mode gate and (on redundant chassis) the redundancy gate. A non-HOT standby blocks activation.
-2. Run `install activate` (with the ISSU verb when the ISSU option is set) and the switch reloads:
+2. Read `show install summary` (IOS-XE install mode). Activate is refused, before any command is sent, when:
+   - an earlier install is still open: a version is "Activated & Uncommitted" (U) or a package is "Deactivated & Uncommitted" (D). The message names the version, the auto-abort timer state and, when the timer runs, the time before rollback. With the **Commit a pending install before activating** option on, and when the uncommitted version is the one the switch is running, the tool runs `install commit` first (no reload), re-reads the state and goes on only when nothing is left uncommitted.
+   - the target version is not listed at all, so `install add` never ran for it. Run Transfer again.
+   If the reply cannot be read or is not recognised, the tool logs a warning and goes on as before.
+3. Run `install activate` (with the ISSU verb when the ISSU option is set) and the switch reloads:
    - Normal reload: about 5 - 15 minutes (up to about 20 for a fully populated dual-sup chassis).
    - ISSU: standby reloads first, switchover, then the old active reloads. 20 - 45 minutes, but the chassis keeps forwarding.
-3. Wait for the switch to go down and come back, then verify the running version.
-4. Run `install commit` to make the new version permanent. For ISSU it first waits for the former active to return as STANDBY HOT, because committing earlier would abort the ISSU. After commit it re-reads the version to confirm nothing rolled back.
+4. Wait for the switch to go down and come back, then verify the running version.
+5. Run `install commit` to make the new version permanent. For ISSU it first waits for the former active to return as STANDBY HOT, because committing earlier would abort the ISSU. After commit it re-reads the version to confirm nothing rolled back. Then it reads `show install summary` once more: the target must be committed (C) and nothing may be left uncommitted.
 
-Expect no response from the switch for 5 - 15 minutes during step 3. This is normal. Do not cancel the step while a device is mid-reload.
+If the switch already runs the target version, Activate does not reload it. When that version was never committed, the tool runs `install commit` first and marks the device done only when the commit succeeds.
+
+**How the activate reply is read.** The tool keeps the switch's reply to `install activate`:
+
+- If the reply says the activate failed (a `FAILED` line, a `% ` error line, "not allowed", "no inactive package"), the device fails at once with the switch's own text. The tool does not wait for a reload that will not come.
+- If the SSH session closes, the reload has started. The log says "SSH session closed (expected during reload)".
+- If the prompt does not come back within 2 minutes but the session is still open, the log says the switch has not finished the activate yet. The tool keeps reading the switch's output until a failure line appears (the device fails with that text), the session closes (the reload started) or the prompt returns. This reading time comes out of the budget for the switch to go offline, so the overall wait does not grow.
+
+**When the switch did not reload or came back on the wrong version**, the tool reconnects, reads `show install summary` and `show install log`, and adds a short diagnosis to the error. For example: "Version mismatch: 17.x. Switch did not reload. Install state: 17.x (running) activated but not committed, auto-abort timer inactive. Last install operation: install_activate FAILED: ...". Platforms without these commands keep the plain "Version mismatch" message.
+
+Expect no response from the switch for 5 - 15 minutes during step 4. This is normal. Do not cancel the step while a device is mid-reload.
 
 If the commit fails or the post-commit version is wrong, the device is marked **failed** and the log will say whether the switch is going to roll back. Act on that before the auto-rollback timer expires (see Roll Back / Backout, Scenario 2).
 
@@ -522,6 +538,7 @@ The switch warns that a larger SSH window can raise CPU load and should be used 
 | Skip health check | off | Skips the pre-flight health check (also downgrades the dual-sup standby gate to a warning) |
 | Verify upgrade after reboot | **on** | After Activate, wait for the switch to return, confirm the version, and run `install commit`. Turning this off leaves the install uncommitted. The switch rolls back on its own timer unless you commit manually |
 | ISSU | off | In-service upgrade for dual-sup / StackWise Virtual only. Requires SSO with the standby in STANDBY HOT. Refused on unsupported platforms |
+| Commit a pending install before activating | off | IOS-XE install mode. If the switch runs a version that was activated but never committed, run `install commit` before the activate (no reload). Only the running version is committed. Without this option the activate is refused and you close the install by hand |
 | Parallel Workers | 4 (max 8) | Devices upgraded concurrently |
 | SSH Retries | 2 | Connection retry attempts per device |
 
@@ -542,6 +559,11 @@ The **Backups** tab lists every running-config capture taken during Prestage (`b
 | "Device is booted in BUNDLE mode" (Prestage, Transfer, Check status or Activate); **Mode** shows BUNDLE | The switch boots the `.bin` directly, not `packages.conf` | Convert the switch to install mode first, then re-run the step. No image is copied while it is in bundle mode |
 | "ISSU not supported on this platform" | The device does not support in-service upgrade | Untick the ISSU option. The device will do a normal reload |
 | "Reload missed - reschedule" | The Plexus server was down over the scheduled window | Schedule a new time |
+| "An earlier install is still open on the switch: ... is activated but not committed" (Activate, Check status, warning in Transfer) | An earlier upgrade activated a version and never committed it. The install is still open, so the switch refuses a new activate. With the auto-abort timer inactive it stays that way | On the switch run `show install summary`. Then run `install commit` to keep the running version (no reload), or `install abort` to roll back to the last committed version (reloads). Or turn on **Commit a pending install before activating** in the campaign and run Activate again |
+| "Target ... is not added on the switch" | `show install summary` does not list the target version, so `install add` did not run or the package was removed | Run Transfer again. It re-runs `install add` without re-copying a good image |
+| "Activate failed on the switch: ..." | The switch answered `install activate` with an error. It did not reload | Read the switch's text in the error. Check `show install summary` and `show install log`, fix the cause, then run Activate again |
+| "Version mismatch: ... Switch did not reload. Install state: ..." | The activate did not take effect, or the switch rolled back | The diagnosis names the install state and the last install operation. Act on it as above |
+| "install commit ran but the switch still lists an open install" | `install commit` did not close the install | Check `show install summary` and `show install log` on the switch |
 | Commit failed / switch will roll back | The post-reload version check or `install commit` did not succeed | Connect to the switch and investigate immediately. Run `install commit` manually if the state is good, before the rollback timer expires |
 | Image upload fails with a storage error | The image directory is not writable by the application | On Docker deployments: `sudo chown -R 1000:1000 ./software_images`, then restart the container |
 
@@ -566,6 +588,10 @@ install commit                          ! Verify: makes the new packages permane
 ```
 
 Until `install commit` runs, the switch keeps a rollback timer and will revert to the previously committed packages on its own if the timer expires. The tool commits automatically after it confirms the running version.
+
+The timer can also be inactive. Then an uncommitted version stays uncommitted and the install stays open. IOS-XE refuses the next `install activate` until it is closed with `install commit` or `install abort`. This is why the tool reads `show install summary` before Activate, in Check status and in Transfer, and refuses to activate while an install is open. `show install summary` marks each package I (Inactive), U (Activated & Uncommitted), C (Activated & Committed) or D (Deactivated & Uncommitted), and shows the auto-abort timer.
+
+These install-state checks cover Cisco IOS-XE in install mode only. IOS-XR has a similar add, activate and commit model, but the tool does not read its install state yet. That is a known gap. Other platforms have no such check and behave as before.
 
 ### Appendix G. Scheduling unattended reloads
 

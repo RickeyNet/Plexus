@@ -36,6 +36,7 @@ import netcontrol.routes.state as state
 from netcontrol.drivers import DriverCapabilityError, get_driver
 from netcontrol.drivers.show_version import classify_show_version_os, parse_show_version
 from netcontrol.integrations.apc import upgrade as apc_upgrade
+from netcontrol.integrations.software.versions import version_tokens
 from netcontrol.object_scope import (
     READ_ONLY_DETAIL,
     WRITE_SCOPE_DETAIL,
@@ -1969,6 +1970,11 @@ ISSU_DOWN_TIMEOUT = 1800
 ISSU_STANDBY_WAIT = 1800
 ISSU_STANDBY_CHECK_INTERVAL = 30
 
+# How long the activate command waits for its prompt, and how often the
+# channel is read afterwards while the switch is still working on it.
+ACTIVATE_READ_TIMEOUT = 120
+ACTIVATE_REPLY_POLL_INTERVAL = 3
+
 
 def _install_add_timeout(options: dict, redundant: bool) -> int:
     """Resolve the ``install add`` prompt budget for this device."""
@@ -2067,6 +2073,397 @@ async def _boot_mode_gate(conn, campaign_id, dev_id, ip, device_type) -> str | N
             host=ip,
         )
     return None
+
+
+# ── Install state (IOS-XE ``show install summary`` / ``show install log``) ──
+#
+# An activate left uncommitted by an earlier upgrade keeps the install
+# transaction open, and IOS-XE then refuses the next ``install activate``.
+# These helpers read the state through the driver so the route can refuse
+# (or, when asked, commit) before sending an activate, and can explain a
+# switch that did not reload.  A platform whose driver has no such command,
+# a failed read and an unrecognised reply all mean "no check": the route
+# carries on exactly as it did before.
+
+
+def _same_release(a: str | None, b: str | None) -> bool:
+    """Whether two spellings name the same release.
+
+    Compares the numeric and letter parts, so leading zeros do not matter
+    (``17.9.4a`` matches ``17.09.04a.0.6``), and the shorter one only has
+    to be a prefix of the longer one, as the ``expected in running`` check
+    elsewhere in this file does.  At least three parts are required.
+    """
+    ka, kb = version_tokens(a), version_tokens(b)
+    n = min(len(ka), len(kb))
+    return n >= 3 and ka[:n] == kb[:n]
+
+
+# An install-summary package entry that is a dotted release, not a file name.
+_INSTALL_RELEASE = re.compile(r"^\d+\.\d+\.\d+")
+
+
+def _install_versions_comparable(state: dict, expected_version: str | None) -> bool:
+    """Whether the target can be safely looked up in ``state``'s package list."""
+    if not expected_version or len(version_tokens(expected_version)) < 3:
+        return False
+    images = [p for p in state.get("packages") or [] if p.get("type") == "IMG"]
+    return bool(images) and all(_INSTALL_RELEASE.match(str(p.get("version") or "")) for p in images)
+
+
+async def _read_install_state(conn, device_type) -> tuple[dict | None, str]:
+    """Read and parse the install state.
+
+    Returns ``(state, "")`` when recognised, ``(None, "")`` when the
+    platform has no install-state command, and ``(None, reason)`` when the
+    read failed or the reply was not recognised.
+    """
+    driver = get_driver(device_type)
+    try:
+        show_cmd = driver.upgrade_install_state_show_command()
+    except DriverCapabilityError:
+        show_cmd = ""
+    if not show_cmd:
+        return None, ""
+    try:
+        output = await asyncio.to_thread(conn.send_command, show_cmd, read_timeout=60)
+        state = driver.parse_install_state(output or "")
+    except Exception as exc:
+        return None, f"{show_cmd} failed ({exc})"
+    if not state or not state.get("packages"):
+        return None, f"{show_cmd} reply not recognised"
+    return state, ""
+
+
+async def _read_install_log(conn, device_type) -> dict:
+    """The driver's summary of the last install operation ({} when none)."""
+    driver = get_driver(device_type)
+    try:
+        show_cmd = driver.upgrade_install_log_show_command()
+        if not show_cmd:
+            return {}
+        output = await asyncio.to_thread(conn.send_command, show_cmd, read_timeout=60)
+        return driver.parse_install_log(output or "") or {}
+    except Exception as exc:
+        LOGGER.debug("install log read failed: %s", exc)
+        return {}
+
+
+def _install_state_text(state: dict) -> str:
+    """``17.09.04a.0.6 (C), 17.12.03.0.3740 (I)``."""
+    return ", ".join(f"{p['version']} ({p['state']})" for p in state.get("packages") or []) or "no packages"
+
+
+def _abort_timer_text(state: dict) -> str:
+    timer = state.get("auto_abort_timer")
+    if timer == "active":
+        rollback = state.get("rollback_in")
+        return f"auto-abort timer active ({rollback} before rollback)" if rollback else "auto-abort timer active"
+    if timer == "inactive":
+        return "auto-abort timer inactive"
+    return "auto-abort timer state not shown"
+
+
+def _install_pending(state: dict | None) -> bool:
+    return bool(state and (state.get("uncommitted") or state.get("deactivated")))
+
+
+def _can_commit_pending(state: dict, running_version: str | None) -> bool:
+    """The open install is only the running version, activated and uncommitted."""
+    uncommitted = state.get("uncommitted") or []
+    return (
+        bool(uncommitted and running_version)
+        and not state.get("deactivated")
+        and all(_same_release(v, running_version) for v in uncommitted)
+    )
+
+
+def _pending_install_message(
+    state: dict, running_version: str | None = None, outcome: str = "Activate was not sent."
+) -> str:
+    """Operator-facing text for an install left open on the switch.
+
+    ``outcome`` says what Plexus did about it (refused the activate, or
+    only warns ahead of it)."""
+    pending = []
+    for version in state.get("uncommitted") or []:
+        running = " (the running version)" if _same_release(version, running_version) else ""
+        pending.append(f"{version}{running} is activated but not committed")
+    for version in state.get("deactivated") or []:
+        pending.append(f"{version} is deactivated but not committed")
+    return (
+        f"An earlier install is still open on the switch: {'; '.join(pending)}, {_abort_timer_text(state)}. "
+        f"{outcome} Close it on the switch first: 'install commit' keeps the running version "
+        "(no reload), 'install abort' rolls back to the last committed version (reloads). Or turn on the "
+        "campaign option 'Commit a pending install before activating' to have Plexus run install commit "
+        "when the uncommitted version is the one running."
+    )
+
+
+_ACTIVATE_WILL_BE_REFUSED = "Activate will be refused until it is closed."
+
+
+def _install_state_summary(state: dict, running_version: str | None, expected_version: str | None) -> str:
+    """Short plain description of an install state for a failure message."""
+    parts = []
+    for version in state.get("uncommitted") or []:
+        running = " (running)" if _same_release(version, running_version) else ""
+        parts.append(f"{version}{running} activated but not committed")
+    for version in state.get("deactivated") or []:
+        parts.append(f"{version} deactivated but not committed")
+    for version in state.get("committed") or []:
+        running = " (running)" if _same_release(version, running_version) else ""
+        parts.append(f"{version}{running} committed")
+    if _install_versions_comparable(state, expected_version):
+        if any(_same_release(v, expected_version) for v in state.get("inactive") or []):
+            parts.append(f"target {expected_version} added but inactive")
+        elif not any(_same_release(p["version"], expected_version) for p in state.get("packages") or []):
+            parts.append(f"target {expected_version} not added")
+    parts.append(_abort_timer_text(state))
+    return ", ".join(parts)
+
+
+def _post_commit_install_problem(state: dict | None, expected_version: str | None) -> str | None:
+    """What is still wrong with the install state after ``install commit``.
+
+    None when the state was not recognised (the version check stands) or
+    the target is committed with nothing left open.
+    """
+    if state is None:
+        return None
+    if _install_pending(state):
+        return f"install commit ran but the switch still lists an open install: {_install_state_text(state)}"
+    if _install_versions_comparable(state, expected_version) and not any(
+        _same_release(v, expected_version) for v in state.get("committed") or []
+    ):
+        return (
+            f"install commit ran but target {expected_version} is not committed "
+            f"(show install summary lists: {_install_state_text(state)})"
+        )
+    return None
+
+
+async def _install_diagnosis(conn, device_type, expected_version, running_version, *, reloaded: bool) -> str:
+    """Why an activate did not land, from the install state and log.
+
+    Empty when the platform has neither hook or neither reply is
+    recognised, so the caller keeps its plain message.
+    """
+    state, _ = await _read_install_state(conn, device_type)
+    log = await _read_install_log(conn, device_type)
+    if state is None and not log:
+        return ""
+    parts = [] if reloaded else ["Switch did not reload."]
+    if state is not None:
+        parts.append(f"Install state: {_install_state_summary(state, running_version, expected_version)}.")
+    if log:
+        text = f"Last install operation: {log.get('operation') or 'unknown'} {log.get('result') or 'did not finish'}"
+        reasons = log.get("reasons") or []
+        if reasons and log.get("result") != "SUCCESS":
+            text += ": " + "; ".join(reasons[-3:])
+        parts.append(text + ".")
+    return " ".join(parts)[:700]
+
+
+async def _fail_upgrade_device(campaign_id, dev_id, ip, message, *, status_keys=("activate_status",), **fields):
+    """Record and announce a device failure: the db / status / emit triple."""
+    statuses = dict.fromkeys(status_keys, "failed")
+    await db.update_upgrade_device(dev_id, **statuses, phase="failed", error_message=message, **fields)
+    await _emit_device_status(campaign_id, dev_id, **statuses, error_message=message)
+    await _emit(campaign_id, dev_id, "error", message, host=ip)
+
+
+async def _send_install_commit(conn, device_type) -> str | None:
+    """Run the driver's commit command; the error text, or None on success."""
+    try:
+        commit_cmd = get_driver(device_type).upgrade_commit_command()
+    except DriverCapabilityError as exc:
+        return str(exc)
+    if not commit_cmd:
+        return "this platform has no commit command"
+    try:
+        output = await asyncio.to_thread(conn.send_command, commit_cmd, read_timeout=300)
+    except Exception as exc:
+        return str(exc)
+    if _install_commit_output_failed(output):
+        return output.strip()[:500]
+    return None
+
+
+async def _commit_open_install(conn, campaign_id, dev_id, ip, device_type, reason) -> tuple[str | None, dict | None]:
+    """Commit an install left open, then confirm nothing is left uncommitted.
+
+    Returns ``(error, state_after)``.  A state that cannot be re-read
+    after a commit the switch accepted is logged and allowed through.
+    """
+    await _emit(campaign_id, dev_id, "info", f"{reason} - running install commit (no reload)", host=ip)
+    err = await _send_install_commit(conn, device_type)
+    if err:
+        return f"install commit failed: {err}", None
+    await _emit(campaign_id, dev_id, "success", "Install committed", host=ip)
+    state, note = await _read_install_state(conn, device_type)
+    if state is None:
+        await _emit(
+            campaign_id,
+            dev_id,
+            "warn",
+            f"Could not re-read the install state after commit ({note or 'no reply'}) - continuing",
+            host=ip,
+        )
+        return None, None
+    if _install_pending(state):
+        return f"install commit ran but the switch still lists an open install: {_install_state_text(state)}", state
+    return None, state
+
+
+async def _commit_uncommitted_target(conn, campaign_id, dev_id, ip, device_type, expected_version) -> str | None:
+    """A device already on the target: commit it when it was never committed.
+
+    Without a commit the version rolls back when the auto-abort timer
+    fires, or stays uncommitted (and blocks the next upgrade) when the
+    timer is inactive.  Returns an error string, or None to mark the
+    device done.
+    """
+    state, note = await _read_install_state(conn, device_type)
+    if state is None:
+        if note:
+            await _emit(campaign_id, dev_id, "warn", f"Install state check skipped: {note}", host=ip)
+        return None
+    if not any(_same_release(v, expected_version) for v in state.get("uncommitted") or []):
+        return None
+    err, _ = await _commit_open_install(
+        conn,
+        campaign_id,
+        dev_id,
+        ip,
+        device_type,
+        f"Target {expected_version} is running but not committed ({_abort_timer_text(state)})",
+    )
+    return err
+
+
+async def _install_state_gate(
+    conn, campaign_id, dev_id, ip, device_type, expected_version, running_version, options
+) -> str | None:
+    """Pre-activate install-state check.  Returns an error to abort on, or None.
+
+    - an install left open (a version activated or deactivated but not
+      committed) refuses the activate, unless ``commit_pending_install``
+      is set and the open install is only the running version, which is
+      then committed first;
+    - a target that ``install add`` never added refuses the activate;
+    - no check on the platform, a failed read or an unrecognised reply
+      proceed as before.
+    """
+    state, note = await _read_install_state(conn, device_type)
+    if state is None:
+        if note:
+            await _emit(campaign_id, dev_id, "warn", f"Install state check skipped: {note} - continuing", host=ip)
+        return None
+    await _emit(
+        campaign_id, dev_id, "info", f"Install state: {_install_state_text(state)}; {_abort_timer_text(state)}", host=ip
+    )
+    if _install_pending(state):
+        if not (options.get("commit_pending_install") and _can_commit_pending(state, running_version)):
+            return _pending_install_message(state, running_version)
+        err, state_after = await _commit_open_install(
+            conn,
+            campaign_id,
+            dev_id,
+            ip,
+            device_type,
+            f"Running version {running_version} was activated but never committed "
+            "and 'Commit a pending install before activating' is on",
+        )
+        if err:
+            return err
+        state = state_after or state
+    if expected_version:
+        if not _install_versions_comparable(state, expected_version):
+            await _emit(
+                campaign_id,
+                dev_id,
+                "warn",
+                f"Cannot match target {expected_version} against show install summary - continuing",
+                host=ip,
+            )
+        elif not any(_same_release(p["version"], expected_version) for p in state["packages"]):
+            return (
+                f"Target {expected_version} is not added on the switch (show install summary lists: "
+                f"{_install_state_text(state)}); run the Transfer phase again to add it"
+            )
+    return None
+
+
+# Lines in an install command's reply that mean it failed.  ``FAILED`` is
+# matched in capitals only (``FAILED: install_activate ...``); ``% `` starts
+# an IOS CLI error.
+_INSTALL_REPLY_FAILED = re.compile(r"\bFAILED\b|^\s*% ", re.MULTILINE)
+_INSTALL_REPLY_REFUSED = re.compile(r"not allowed|no inactive package|operation aborted", re.IGNORECASE)
+
+
+def _install_reply_failure(output: str | None) -> str:
+    """The switch's own text (bounded) when an install reply says it failed, else ''."""
+    text = output or ""
+    if _INSTALL_REPLY_FAILED.search(text) or _INSTALL_REPLY_REFUSED.search(text):
+        return text.strip()[-500:]
+    return ""
+
+
+def _is_read_timeout(exc: Exception) -> bool:
+    """Netmiko gave up waiting for the prompt (``ReadTimeout``), as opposed
+    to the session failing."""
+    text = str(exc).lower()
+    return type(exc).__name__ == "ReadTimeout" or "pattern not detected" in text or "timed out" in text
+
+
+async def _session_alive(conn) -> bool:
+    is_alive = getattr(conn, "is_alive", None)
+    if is_alive is None:
+        return True
+    try:
+        return bool(await asyncio.to_thread(is_alive))
+    except Exception:
+        return False
+
+
+def _prompt_returned(text: str, prompt: str) -> bool:
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    return bool(prompt and lines and lines[-1].startswith(prompt) and lines[-1][-1] in "#>")
+
+
+async def _read_activate_reply(conn, campaign_id, dev_id, ip, budget: float) -> tuple[str, str]:
+    """Keep reading an activate whose prompt did not come back in time.
+
+    Returns ``(outcome, text)``: ``failed`` (a failure marker appeared),
+    ``dropped`` (the session closed: the reload started), ``prompt`` (the
+    command finished without dropping the session) or ``timeout`` (the
+    budget ran out with the session still open).
+    """
+    start = time.monotonic()
+    prompt = str(getattr(conn, "base_prompt", "") or "")
+    text = ""
+    last_note = 0
+    while True:
+        try:
+            chunk = await asyncio.to_thread(conn.read_channel)
+        except Exception:
+            return "dropped", text
+        if chunk:
+            text = (text + chunk)[-20000:]
+            if _install_reply_failure(text):
+                return "failed", text
+            if _prompt_returned(text, prompt):
+                return "prompt", text
+        if not await _session_alive(conn):
+            return "dropped", text
+        elapsed = time.monotonic() - start
+        if elapsed >= budget:
+            return "timeout", text
+        if elapsed - last_note >= 60:
+            last_note = int(elapsed)
+            await _emit(campaign_id, dev_id, "dim", f"Activate still running on the switch ({last_note}s)...", host=ip)
+        await asyncio.sleep(ACTIVATE_REPLY_POLL_INTERVAL)
 
 
 async def _transfer_window_check(conn, campaign_id, dev_id, ip, device_type) -> None:
@@ -2304,6 +2701,17 @@ async def _run_install_add_prestage(
     except DriverCapabilityError as e:
         await _emit(campaign_id, dev_id, "error", f"Pre-stage not supported on this platform: {e}", host=ip)
         return False, str(e)
+    # An install left open by an earlier upgrade does not stop install add,
+    # but it will stop the activate: say so now, while there is time.
+    install_state, _ = await _read_install_state(conn, device_type)
+    if _install_pending(install_state):
+        await _emit(
+            campaign_id,
+            dev_id,
+            "warn",
+            _pending_install_message(install_state or {}, outcome=_ACTIVATE_WILL_BE_REFUSED),
+            host=ip,
+        )
     await _emit(campaign_id, dev_id, "info", f"Pre-staging image: {install_add_cmd}", host=ip)
     await _emit(campaign_id, dev_id, "info", "This may take several minutes...", host=ip)
 
@@ -3059,11 +3467,22 @@ async def _device_activate(campaign_id, dev, credentials, image_map, options):
 
         # Check if device is already running the target version - skip activate
         expected_version = _extract_version(image_name)
+        running_version = None
         if expected_version:
             det_model, running_version = await _detect_model(conn, ip)
             if det_model:
                 await db.update_upgrade_device(dev_id, model=det_model, current_version=running_version or "")
             if running_version and expected_version in running_version:
+                # Running the target is not enough when it was never
+                # committed: commit it now instead of calling it done.
+                commit_err = await _commit_uncommitted_target(
+                    conn, campaign_id, dev_id, ip, device_type, expected_version
+                )
+                if commit_err:
+                    await _fail_upgrade_device(
+                        campaign_id, dev_id, ip, f"Running target {running_version} but {commit_err}"
+                    )
+                    return
                 await _emit(
                     campaign_id,
                     dev_id,
@@ -3125,6 +3544,27 @@ async def _device_activate(campaign_id, dev, credentials, image_map, options):
             await _emit_device_status(campaign_id, dev_id, activate_status="failed", error_message=red_err)
             await _emit(campaign_id, dev_id, "error", red_err, host=ip)
             return
+        # Install state: an install left open by an earlier upgrade makes
+        # the switch refuse the activate, and a target that was never
+        # added cannot be activated.  Refuse here, before any reload.
+        install_err = await _install_state_gate(
+            conn, campaign_id, dev_id, ip, device_type, expected_version, running_version, options
+        )
+        if install_err:
+            await _fail_upgrade_device(campaign_id, dev_id, ip, install_err)
+            return
+
+        # Reboot windows.  ISSU takes far longer to reach the SSH-drop
+        # point (the standby has to fully reload before the switchover
+        # kills our session) and longer overall, so both windows are
+        # widened when the in-service path is used.  ``down_timeout`` also
+        # bounds how long a still-running activate is read below.
+        if issu:
+            default_verify_wait, down_timeout = ISSU_VERIFY_WAIT, ISSU_DOWN_TIMEOUT
+        elif chassis_redundant:
+            default_verify_wait, down_timeout = REDUNDANT_VERIFY_WAIT, REDUNDANT_DOWN_TIMEOUT
+        else:
+            default_verify_wait, down_timeout = DEFAULT_VERIFY_WAIT, DEFAULT_DOWN_TIMEOUT
 
         # Image already pre-staged during transfer (install add), just activate.
         # The driver supplies the platform-specific activate verb(s); for
@@ -3143,6 +3583,10 @@ async def _device_activate(campaign_id, dev, credentials, image_map, options):
             await _emit_device_status(campaign_id, dev_id, activate_status="failed", error_message=str(e))
             await _emit(campaign_id, dev_id, "error", f"Activate not supported on this platform: {e}", host=ip)
             return
+        session_dropped = False
+        # Seconds spent reading a still-running activate; they count
+        # against the same ``down_timeout`` the offline wait uses.
+        reply_wait = 0
         for command in activate_commands:
             await _emit(campaign_id, dev_id, "cmd", f"Executing: {command}", host=ip)
             if issu:
@@ -3156,33 +3600,72 @@ async def _device_activate(campaign_id, dev, credentials, image_map, options):
             else:
                 await _emit(campaign_id, dev_id, "info", "This will trigger a reload (5-15 minutes)...", host=ip)
 
+            # Read the reply.  A dropped session is the reload starting;
+            # a reply (or late output) that says the activate failed
+            # fails the device now instead of waiting for a reload that
+            # will not come; a prompt timeout with the session still
+            # open means the switch is still working on it, so its output
+            # is read for up to the rest of ``down_timeout``.
             try:
-                await asyncio.to_thread(
+                output = await asyncio.to_thread(
                     conn.send_command,
                     command,
-                    read_timeout=120,
+                    read_timeout=ACTIVATE_READ_TIMEOUT,
                 )
             except Exception as e:
-                # Expected on the final command - the switch reboots and drops
-                # the SSH session.  We don't try to distinguish "reboot drop"
-                # from a real error here; if the switch comes back at the
-                # right version the upgrade was a success.
-                await _emit(campaign_id, dev_id, "info", f"Connection closed (expected during reload): {e}", host=ip)
-                break
+                if not (_is_read_timeout(e) and await _session_alive(conn)):
+                    session_dropped = True
+                    await _emit(
+                        campaign_id, dev_id, "info", f"SSH session closed (expected during reload): {e}", host=ip
+                    )
+                    break
+                budget = max(down_timeout - reply_wait, 0)
+                await _emit(
+                    campaign_id,
+                    dev_id,
+                    "info",
+                    f"The switch has not finished the activate yet (no prompt after {ACTIVATE_READ_TIMEOUT}s, "
+                    f"SSH session still open) - reading its output for up to {budget // 60} minutes...",
+                    host=ip,
+                )
+                read_start = time.monotonic()
+                outcome, output = await _read_activate_reply(conn, campaign_id, dev_id, ip, budget)
+                reply_wait += int(time.monotonic() - read_start)
+                if outcome == "failed":
+                    await _fail_upgrade_device(
+                        campaign_id, dev_id, ip, f"Activate failed on the switch: {_install_reply_failure(output)}"
+                    )
+                    return
+                if output.strip():
+                    await _emit(campaign_id, dev_id, "info", output.strip()[-500:], host=ip)
+                if outcome == "dropped":
+                    session_dropped = True
+                    await _emit(campaign_id, dev_id, "info", "SSH session closed - the switch is reloading", host=ip)
+                    break
+                if outcome == "timeout":
+                    await _emit(
+                        campaign_id,
+                        dev_id,
+                        "warn",
+                        "The activate neither finished nor dropped the session within the wait budget",
+                        host=ip,
+                    )
+                    break
+                continue
+            failure = _install_reply_failure(output)
+            if failure:
+                await _fail_upgrade_device(campaign_id, dev_id, ip, f"Activate failed on the switch: {failure}")
+                return
+            if (output or "").strip():
+                await _emit(campaign_id, dev_id, "info", output.strip()[-500:], host=ip)
 
-        await _emit(campaign_id, dev_id, "success", "Activate sent - switch is rebooting", host=ip)
+        if session_dropped:
+            await _emit(campaign_id, dev_id, "success", "Activate sent - switch is rebooting", host=ip)
+        else:
+            await _emit(campaign_id, dev_id, "success", "Activate sent - waiting for the switch to reload", host=ip)
 
-        # Wait for switch to come back.  ISSU takes far longer to reach
-        # the SSH-drop point (the standby has to fully reload before
-        # the switchover kills our session) and longer overall, so
-        # both windows are widened when the in-service path was used.
+        # Wait for switch to come back.
         if options.get("verify_upgrade", True):
-            if issu:
-                default_verify_wait, down_timeout = ISSU_VERIFY_WAIT, ISSU_DOWN_TIMEOUT
-            elif chassis_redundant:
-                default_verify_wait, down_timeout = REDUNDANT_VERIFY_WAIT, REDUNDANT_DOWN_TIMEOUT
-            else:
-                default_verify_wait, down_timeout = DEFAULT_VERIFY_WAIT, DEFAULT_DOWN_TIMEOUT
             verify_wait = options.get("verify_wait", default_verify_wait)
             check_interval = options.get("check_interval", 30)
 
@@ -3196,8 +3679,12 @@ async def _device_activate(campaign_id, dev, credentials, image_map, options):
 
             # First: wait for switch to go DOWN (confirm reboot started)
             await _emit(campaign_id, dev_id, "info", "Waiting for switch to go offline...", host=ip)
+            # Time already spent reading a still-running activate comes off
+            # this budget; a session that dropped still gets a short window
+            # for the port to close.
+            down_remaining = max(down_timeout - reply_wait, 60 if session_dropped else 0)
             went_down = await _wait_for_down(
-                ip, timeout=down_timeout, check_interval=10, campaign_id=campaign_id, dev_id=dev_id
+                ip, timeout=down_remaining, check_interval=10, campaign_id=campaign_id, dev_id=dev_id
             )
             if went_down:
                 await _emit(campaign_id, dev_id, "info", "Switch is offline - reboot in progress", host=ip)
@@ -3379,6 +3866,27 @@ async def _device_activate(campaign_id, dev, credentials, image_map, options):
                                 return
                             running_version = post_commit_version
 
+                            # The install state must agree: target
+                            # committed and nothing left open.  An
+                            # unrecognised reply keeps the version check
+                            # above as the verdict.
+                            state_after, _ = await _read_install_state(new_conn, device_type)
+                            problem = _post_commit_install_problem(state_after, expected_version)
+                            if problem:
+                                await _fail_upgrade_device(
+                                    campaign_id,
+                                    dev_id,
+                                    ip,
+                                    problem,
+                                    status_keys=("activate_status", "verify_status"),
+                                    current_version=running_version,
+                                )
+                                try:
+                                    await asyncio.to_thread(new_conn.disconnect)
+                                except Exception as exc:
+                                    LOGGER.debug("Disconnect failed for %s: %s", ip, exc)
+                                return
+
                         await _emit(
                             campaign_id,
                             dev_id,
@@ -3395,11 +3903,17 @@ async def _device_activate(campaign_id, dev, credentials, image_map, options):
                         )
                         await _emit_device_status(campaign_id, dev_id, verify_status="completed", error_message="")
                     else:
+                        # Say why: the install state and the last install
+                        # operation, read from the switch (IOS-XE).
+                        diagnosis = await _install_diagnosis(
+                            new_conn, device_type, expected_version, running_version, reloaded=went_down
+                        )
+                        suffix = f". {diagnosis}" if diagnosis else ""
                         await _emit(
                             campaign_id,
                             dev_id,
                             "error",
-                            f"Version mismatch! Running: {running_version}, Expected: {expected_version}",
+                            f"Version mismatch! Running: {running_version}, Expected: {expected_version}{suffix}",
                             host=ip,
                         )
                         await db.update_upgrade_device(
@@ -3408,14 +3922,14 @@ async def _device_activate(campaign_id, dev, credentials, image_map, options):
                             verify_status="failed",
                             phase="failed",
                             current_version=running_version or "",
-                            error_message=f"Version mismatch: {running_version}",
+                            error_message=f"Version mismatch: {running_version}{suffix}",
                         )
                         await _emit_device_status(
                             campaign_id,
                             dev_id,
                             activate_status="failed",
                             verify_status="failed",
-                            error_message=f"Version mismatch: {running_version}",
+                            error_message=f"Version mismatch: {running_version}{suffix}",
                         )
                         try:
                             await asyncio.to_thread(new_conn.disconnect)
@@ -3677,7 +4191,21 @@ async def _device_verify_prestage(campaign_id, dev, credentials, image_map, opti
 
         image_name = os.path.basename(target_image)
         expected_version = _extract_version(image_name)
+        # An install left open blocks the next activate; report it with the
+        # same wording the activate gate uses.  Read-only: nothing is
+        # committed here.
+        install_state, _ = await _read_install_state(conn, device_type)
         if expected_version and running_version and expected_version in running_version:
+            if install_state and any(
+                _same_release(v, expected_version) for v in install_state.get("uncommitted") or []
+            ):
+                err_msg = (
+                    f"Running target {running_version} but it is not committed "
+                    f"({_abort_timer_text(install_state)}). Run Activate to commit it (no reload), "
+                    "or run 'install commit' on the switch"
+                )
+                await _finish("failed", "error", err_msg, "Target not committed", err_msg)
+                return
             await _mark_device_on_target_version(campaign_id, dev_id, running_version)
             await _emit(
                 campaign_id,
@@ -3690,6 +4218,22 @@ async def _device_verify_prestage(campaign_id, dev, credentials, image_map, opti
         if boot_err:
             await _finish("failed", "error", boot_err, "BUNDLE boot mode", boot_err)
             return
+        pending_msg = ""
+        if _install_pending(install_state):
+            pending_msg = _pending_install_message(
+                install_state or {}, running_version, outcome=_ACTIVATE_WILL_BE_REFUSED
+            )
+            if options.get("commit_pending_install") and _can_commit_pending(install_state or {}, running_version):
+                await _emit(
+                    campaign_id,
+                    dev_id,
+                    "warn",
+                    f"{pending_msg} (Commit a pending install is on: Activate will commit it first)",
+                    host=ip,
+                )
+                pending_msg = ""
+            else:
+                await _emit(campaign_id, dev_id, "error", pending_msg, host=ip)
         await _emit(
             campaign_id,
             dev_id,
@@ -3742,6 +4286,10 @@ async def _device_verify_prestage(campaign_id, dev, credentials, image_map, opti
             return
 
         detail = f"Image transferred and expanded for {expected_version}" if expected_version else "Image transferred"
+        if pending_msg:
+            # The image is ready, but the activate would be refused.
+            await _finish("failed", "error", pending_msg, f"{detail}; earlier install still open", pending_msg)
+            return
         await _finish("completed", "success", f"{detail} - ready to activate", detail)
 
     except Exception as e:

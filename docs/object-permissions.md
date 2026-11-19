@@ -91,7 +91,7 @@ outside their devices.
 | Feature | Lists and details | Writes and actions |
 |---------|-------------------|--------------------|
 | Dashboard | Stats, recent jobs, groups, health and open alerts over the user's hosts and jobs (not cached); no topology problems | - |
-| Monitoring (polls, alerts, rules, suppressions, SLA, availability, baselines, interface errors, metrics, Meraki alerts) | Per host, filtered in SQL before limits and counts; rules by target host or group (global rules shared); integration entities only when mapped to a readable host; Cato egress findings empty | Acknowledge, poll and compute need write on the host; a rule needs write on its target; global rules, OID profile changes, site mutes and Cato checks are refused |
+| Monitoring (polls, alerts, rules, suppressions, SLA, availability, baselines, interface errors, metrics, Meraki alerts) | Per host, filtered in SQL before limits and counts; rules by target host or group (global rules shared); integration entities only when mapped to a readable host; Cato egress and shared host findings empty | Acknowledge, poll and compute need write on the host; a rule needs write on its target; global rules, OID profile changes, site mutes and Cato checks are refused |
 | Jobs | A job is visible when every target host (or its group) is readable; dynamic group jobs to their launcher only | Launch, cancel, retry, rerun and priority need write on every target; ad-hoc IPs are refused |
 | Playbooks, templates | Shared catalogue | Unrestricted users only |
 | Deployments, maintenance windows, risk analysis | By group and hosts | Need write on the group and hosts; global windows unrestricted only |
@@ -243,7 +243,7 @@ Other consumers use the same rules with a scope from `scope_for_user`:
 - GraphQL fields other than inventory and backups answer "Access denied"
   for scoped users until their resolvers filter by scope.
 - Integration data with no inventory host (Meraki organizations and
-  snapshots, cloud accounts, Cato egress findings, DHCP servers, upgrade
+  snapshots, cloud accounts, Cato egress and shared host findings, DHCP servers, upgrade
   prestage backup files) is hidden from scoped users.
 - Some totals stay estate-wide: a tenant's usage counts, IPAM source
   counts, a sync run's summary counters, a site's floor and placement

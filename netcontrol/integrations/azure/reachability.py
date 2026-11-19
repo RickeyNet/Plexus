@@ -370,6 +370,22 @@ class Reachability:
             )
         return routes, unknown
 
+    def _routes_where(self, subnet: dict, table: dict | None) -> str:
+        """``Effective routes of <subnet> (route table <name>)``, as a route step names its place."""
+        where = f"Effective routes of {self._subnet_name(subnet)}"
+        if table is not None:
+            where += f" (route table {_text(table.get('name')) or _short(table['rid'])})"
+        return where
+
+    @staticmethod
+    def _split(route: dict | None, narrower: list[dict]) -> list[dict]:
+        """The narrower routes that send part of a network somewhere ``route`` does not."""
+        return [
+            r
+            for r in narrower
+            if route is None or r["kind"] != route["kind"] or r.get("next_hop_ip") != route.get("next_hop_ip")
+        ]
+
     @staticmethod
     def _longest(routes: list[dict], net: _Network) -> tuple[dict | None, list[dict]]:
         best: dict | None = None
@@ -405,16 +421,13 @@ class Reachability:
             step(OK, "route", self._subnet_name(subnet), "Same subnet: delivered directly, no route is used.")
             return {"kind": "delivered"}
         routes, unknown = self._effective_routes(subnet, vnet_id)
-        table = unknown["table"]
-        where = f"Effective routes of {self._subnet_name(subnet)}"
-        if table is not None:
-            where += f" (route table {_text(table.get('name')) or _short(table['rid'])})"
+        where = self._routes_where(subnet, unknown["table"])
         route, narrower = self._longest(routes, net)
         if route is None:
             step(BLOCKED, "route", where, f"No route to {_show(net)}.")
             return {"kind": "stop"}
         via = f"{_show(route['net'])} via {route['name']}"
-        split = [r for r in narrower if r["kind"] != route["kind"] or r.get("next_hop_ip") != route.get("next_hop_ip")]
+        split = self._split(route, narrower)
         if split:
             other = ", ".join(f"{_show(r['net'])} via {r['name']}" for r in split[:3])
             step(PARTIAL, "route", where, f"Part of {_show(net)} is routed differently: {other}.")
@@ -613,6 +626,11 @@ class Reachability:
     def _find_owner(self, address: str, vnet_id: str) -> dict | None:
         """The virtual machine or firewall at ``address``: in the VNet, else in
         a peered VNet (a hub appliance), else anywhere collected."""
+        owner = self._find_owner_entry(address, vnet_id)
+        return owner[0] if owner else None
+
+    def _find_owner_entry(self, address: str, vnet_id: str) -> tuple[dict, dict | None] | None:
+        """``(owner, interface)`` at ``address``, looked up as ``_find_owner`` does."""
         owner = self._address_owner.get((vnet_id, address))
         if owner is None:
             for peering in self._peerings.get(vnet_id, []):
@@ -621,7 +639,7 @@ class Reachability:
                     break
         if owner is None:
             owner = next((o for (_v, ip), o in self._address_owner.items() if ip == address), None)
-        return owner[0] if owner else None
+        return owner
 
     def _through_gateway(
         self,
@@ -771,15 +789,36 @@ class Reachability:
         outbound: bool,
         protocol: str,
         ports: tuple[int, int] | None,
+        *,
+        addressed: dict | None = None,
     ) -> dict:
+        """One group's step. ``addressed`` is where the address the packet
+        carries at this end is, when that is not ``place`` (traffic an
+        appliance at ``place`` forwards); by default it is ``place``."""
+        return self._nsg_decision(nsg, level, place, peer, outbound, protocol, ports, addressed=addressed)[0]
+
+    def _nsg_decision(
+        self,
+        nsg: dict,
+        level: str,
+        place: dict,
+        peer: dict,
+        outbound: bool,
+        protocol: str,
+        ports: tuple[int, int] | None,
+        *,
+        addressed: dict | None = None,
+    ) -> tuple[dict, dict | None]:
+        """``_nsg_step``'s step and the rule that decided it (``None``: none did)."""
         way = "outbound" if outbound else "inbound"
         where = f"Network security group {_text(nsg.get('name')) or _short(nsg['rid'])} on {level}, {way}"
         rules = [r for r in nsg["meta"].get("policy_rules") or [] if isinstance(r, dict) and _rule_direction(r) == way]
         rules.sort(key=lambda r: priority if (priority := _int(r.get("priority"))) is not None else 1 << 20)
         decided: dict | None = None
         partly: list[dict] = []
+        here = addressed if addressed is not None else place
         for rule in rules:
-            own, far = (place, peer) if outbound else (peer, place)
+            own, far = (here, peer) if outbound else (peer, here)
             cover = min(
                 self._selector_cover(rule.get("source_selector"), own, place["vnet_id"], place["subnet"]),
                 self._selector_cover(rule.get("destination_selector"), far, place["vnet_id"], place["subnet"]),
@@ -798,7 +837,7 @@ class Reachability:
                 partly.append(rule)
 
         name = _nsg_rule_name
-        own, far = (place, peer) if outbound else (peer, place)
+        own, far = (here, peer) if outbound else (peer, here)
 
         def why(rule: dict) -> str:
             """Why the rule's ``VirtualNetwork`` tag takes an end that is not
@@ -835,7 +874,11 @@ class Reachability:
             "ports": port_sets.to_json(allowed),
         }
         if decided is None:
-            return {**result, "status": UNKNOWN, "text": "No rule matches and the default rules were not collected."}
+            return {
+                **result,
+                "status": UNKNOWN,
+                "text": "No rule matches and the default rules were not collected.",
+            }, None
         action = _rule_action(decided)
         other = [r for r in partly if _rule_action(r) != action]
         if other:
@@ -846,10 +889,10 @@ class Reachability:
                 **result,
                 "status": PARTIAL,
                 "text": f"{first} {verb}(s) part of it; the rest is {rest} by {name(decided)}.{why(decided)}",
-            }
+            }, decided
         if action == "allow":
-            return {**result, "status": OK, "text": f"Allowed by {name(decided)}.{why(decided)}"}
-        return {**result, "status": BLOCKED, "text": f"Denied by {name(decided)}.{why(decided)}"}
+            return {**result, "status": OK, "text": f"Allowed by {name(decided)}.{why(decided)}"}, decided
+        return {**result, "status": BLOCKED, "text": f"Denied by {name(decided)}.{why(decided)}"}, decided
 
     def _nsg_levels(self, place: dict) -> list[tuple[dict | None, str]]:
         """The network security groups at ``place`` (``None``: none applied)
@@ -867,33 +910,65 @@ class Reachability:
             levels.append((self._nsg_of_nic.get(nic_id), f"interface {nic_name} of {self._owner_name(instance)}"))
         return levels
 
+    def _security_group_levels(
+        self,
+        place: dict,
+        peer: dict,
+        outbound: bool,
+        protocol: str,
+        ports: tuple[int, int] | None,
+        *,
+        addressed: dict | None = None,
+    ) -> list[tuple[dict | None, str, dict, dict | None]]:
+        """``(group, level, step, deciding rule)`` of each network security
+        group level traffic passes at ``place``, in the order it meets them
+        (``group`` ``None``: none applied)."""
+        way = "outbound" if outbound else "inbound"
+        levels = self._nsg_levels(place)
+        if outbound:
+            levels.reverse()  # leaving: the interface's group first, then the subnet's
+        found: list[tuple[dict | None, str, dict, dict | None]] = []
+        for nsg, level in levels:
+            if nsg is None:
+                step = {
+                    "direction": FORWARD,
+                    "stage": "security_group",
+                    "status": OK,
+                    "where": f"Network security group on {level}, {way}",
+                    "text": "None applied: Azure allows it.",
+                    "ports": port_sets.to_json(port_sets.uniform(OK, port_sets.Asked(protocol, ports))),
+                }
+                found.append((None, level, step, None))
+            else:
+                step, decided = self._nsg_decision(
+                    nsg, level, place, peer, outbound, protocol, ports, addressed=addressed
+                )
+                found.append((nsg, level, step, decided))
+        return found
+
     def _security_groups(
-        self, place: dict, peer: dict, outbound: bool, protocol: str, ports: tuple[int, int] | None
+        self,
+        place: dict,
+        peer: dict,
+        outbound: bool,
+        protocol: str,
+        ports: tuple[int, int] | None,
+        *,
+        addressed: dict | None = None,
     ) -> list[dict]:
         """The network security groups traffic passes at ``place``: the
-        subnet's and, for a virtual machine, its network interface's."""
+        subnet's and, for a virtual machine, its network interface's.
+        ``addressed`` as in ``_nsg_step``."""
         if place["subnet"] is None:
             return []
         way = "outbound" if outbound else "inbound"
         instance = place["instance"]
-        levels = self._nsg_levels(place)
-        if outbound:
-            levels.reverse()  # leaving: the interface's group first, then the subnet's
-        steps: list[dict] = []
-        for nsg, level in levels:
-            if nsg is None:
-                steps.append(
-                    {
-                        "direction": FORWARD,
-                        "stage": "security_group",
-                        "status": OK,
-                        "where": f"Network security group on {level}, {way}",
-                        "text": "None applied: Azure allows it.",
-                        "ports": port_sets.to_json(port_sets.uniform(OK, port_sets.Asked(protocol, ports))),
-                    }
-                )
-            else:
-                steps.append(self._nsg_step(nsg, level, place, peer, outbound, protocol, ports))
+        steps = [
+            step
+            for _nsg, _level, step, _rule in self._security_group_levels(
+                place, peer, outbound, protocol, ports, addressed=addressed
+            )
+        ]
         if instance is None:
             what = (
                 "no collected virtual machine has this address"
@@ -938,11 +1013,101 @@ class Reachability:
         for ``pathtrace.services``."""
         return [row for kind in SERVICE_TYPES for row in self._by_type.get(kind, {}).values()]
 
-    def nsg(self, place: dict, peer: dict, outbound: bool, protocol: str, ports: tuple[int, int] | None) -> list[dict]:
-        """The network security group steps at ``place`` (subnet, then interface)."""
-        return self._security_groups(place, peer, outbound, protocol, ports)
+    def nsg(
+        self,
+        place: dict,
+        peer: dict,
+        outbound: bool,
+        protocol: str,
+        ports: tuple[int, int] | None,
+        *,
+        addressed: dict | None = None,
+    ) -> list[dict]:
+        """The network security group steps at ``place`` (subnet, then
+        interface). ``addressed`` is where the address the packet carries at
+        this end is, when that is not ``place``: traffic a virtual appliance
+        at ``place`` receives for, or sends from, another address."""
+        return self._security_groups(place, peer, outbound, protocol, ports, addressed=addressed)
 
     security_groups = nsg
+
+    def nsg_levels(
+        self,
+        place: dict,
+        peer: dict,
+        outbound: bool,
+        protocol: str,
+        ports: tuple[int, int] | None,
+        *,
+        addressed: dict | None = None,
+    ) -> list[dict]:
+        """``nsg``'s steps with the group and rule behind each, in the order
+        the traffic meets them: ``{"step", "level", "nsg_id", "nsg_name",
+        "rule", "rule_id"}`` (``nsg_id`` ``""``: no group applied; ``rule``
+        ``""``: no rule decided). The informational step for an end that is
+        no virtual machine is left out."""
+        if place["subnet"] is None:
+            return []
+        found: list[dict] = []
+        for group, level, step, decided in self._security_group_levels(
+            place, peer, outbound, protocol, ports, addressed=addressed
+        ):
+            rule_key = _text((decided or {}).get("rule_uid")) or _text((decided or {}).get("rule_name"))
+            found.append(
+                {
+                    "step": step,
+                    "level": level,
+                    "nsg_id": group["rid"] if group else "",
+                    "nsg_name": (_text(group.get("name")) or _short(group["rid"])) if group else "",
+                    "rule": _nsg_rule_name(decided) if decided else "",
+                    "rule_id": f"{group['rid']}:{rule_key}" if group and decided else "",
+                }
+            )
+        return found
+
+    def effective_route(self, origin: dict, target: dict) -> dict[str, Any]:
+        """The route Azure applies from ``origin``'s subnet to ``target``'s
+        address or network (both ``locate`` places, ``origin`` in a
+        collected subnet): ``{"route", "split", "table", "bgp", "where",
+        "same_subnet"}``. ``route`` is the best effective route (``None``:
+        none covers it) with its ``net``, ``kind`` (``vnetlocal``,
+        ``vnetpeering``, ``internet``, ``virtualnetworkgateway``,
+        ``virtualappliance``, ``none``...), ``origin`` (``user``,
+        ``gateway``, ``system``), ``name`` and ``next_hop_ip``; ``split``
+        the narrower routes that send part of it elsewhere; ``table`` the
+        subnet's route table (``None``: none); ``bgp`` the names of the
+        gateway connections whose BGP or ExpressRoute routes are not
+        collected; ``where`` the subnet and table as the steps name them."""
+        subnet = origin["subnet"]
+        routes, unknown = self._effective_routes(subnet, origin["vnet_id"])
+        route, narrower = self._longest(routes, target["net"])
+        return {
+            "route": route,
+            "split": self._split(route, narrower),
+            "table": unknown["table"],
+            "bgp": sorted({c["name"] for _g, c in unknown["bgp"]}),
+            "where": self._routes_where(subnet, unknown["table"]),
+            "same_subnet": target["subnet"] is not None and target["subnet"] is subnet,
+        }
+
+    def owner_at(self, address: str, vnet_id: str) -> tuple[dict, dict | None] | None:
+        """``(virtual machine or firewall, interface holding the address)``
+        at a next-hop ``address``, looked up from ``vnet_id`` as a route's
+        next hop is: in the VNet, else a peered VNet, else anywhere
+        collected. ``None`` when no collected resource has it."""
+        return self._find_owner_entry(address, vnet_id)
+
+    def subnet_name(self, subnet: dict) -> str:
+        """``subnet <name> (<CIDR>)``, as the steps name a subnet."""
+        return self._subnet_name(subnet)
+
+    def owner_name(self, owner: dict) -> str:
+        """``virtual machine <name>`` or ``Azure Firewall <name>``, as the steps name it."""
+        return self._owner_name(owner)
+
+    def vnet_name(self, vnet_id: str) -> str:
+        """``VNet <name>``, as the steps name a VNet."""
+        return self._vnet_name(vnet_id)
 
     def inbound_rules(self, place: dict) -> list[dict]:
         """The inbound rules of the network security groups at ``place``

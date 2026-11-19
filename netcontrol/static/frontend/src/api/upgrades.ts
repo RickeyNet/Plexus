@@ -248,6 +248,9 @@ export interface UpgradeCampaignOptions {
   verify_upgrade?: boolean;
   // In-service upgrade (install activate issu) - dual-sup chassis / SVL only.
   issu?: boolean;
+  // Run install commit first when the running version was activated but
+  // never committed (IOS-XE install mode); otherwise activate is refused.
+  commit_pending_install?: boolean;
   parallel?: number;
   retries?: number;
 }

@@ -105,6 +105,7 @@ from netcontrol.routes.bulk_import import (
     router as bulk_import_router,
 )
 from netcontrol.routes.cato_egress_check import router as cato_egress_check_router
+from netcontrol.routes.cato_shared_host_check import router as cato_shared_host_check_router
 from netcontrol.routes.cdef_engine import router as cdef_router
 from netcontrol.routes.chatops import (
     WEBHOOK_PATHS as CHATOPS_WEBHOOK_PATHS,
@@ -2632,6 +2633,10 @@ app.include_router(
 )
 app.include_router(
     cato_egress_check_router,
+    dependencies=[Depends(require_auth), Depends(require_feature_method("monitoring"))],
+)
+app.include_router(
+    cato_shared_host_check_router,
     dependencies=[Depends(require_auth), Depends(require_feature_method("monitoring"))],
 )
 # Near-real-time Meraki alerts: the list follows monitoring access; settings

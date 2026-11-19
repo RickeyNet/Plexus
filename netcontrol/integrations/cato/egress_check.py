@@ -57,6 +57,7 @@ from collections.abc import Callable, Iterable
 from typing import Any
 
 from netcontrol.integrations.cato import network_rules
+from netcontrol.integrations.cato.normalize import SHARED_HOSTS_KIND
 from netcontrol.integrations.pathtrace import services as managed
 from netcontrol.integrations.pathtrace.cloud import public_addresses
 from netcontrol.integrations.pathtrace.model import BLOCKED, OK, Network, _port_ranges, contains, net, show, worst
@@ -106,21 +107,28 @@ def severity_of(kind: str) -> str:
 
 
 def cato_account(snapshot: dict) -> dict[str, Any]:
-    """What a Cato snapshot holds for the check: the compiled network rules
+    """What a Cato snapshot holds for the checks: the compiled network rules
     (``policy``, ``None`` when the snapshot predates their collection), the
     allocated IPs (``allocated``: ``[{"ip", "pop"}]``, ``None`` when not
-    collected) and the ``sources``, ``[(label, network)]``: each range and
-    remote user the Cato Cloud routes."""
-    found: dict[str, Any] = {"policy": None, "allocated": None, "sources": []}
+    collected), the Shared Hosts rules (``shared_hosts``, the block
+    ``normalize.shared_hosts_of`` builds, ``None`` when not read) and the
+    ``sources``, ``[(label, network)]``: each range and remote user the
+    Cato Cloud routes."""
+    found: dict[str, Any] = {"policy": None, "allocated": None, "shared_hosts": None, "sources": []}
     for node in snapshot.get("nodes") or []:
         forwarding = node.get("forwarding") if isinstance(node, dict) else None
         if not isinstance(forwarding, dict):
             continue
         policy = forwarding.get("egress_policy")
-        if not isinstance(policy, dict) or policy.get("kind") != network_rules.KIND:
+        policy = policy if isinstance(policy, dict) and policy.get("kind") == network_rules.KIND else None
+        shared = forwarding.get("shared_hosts")
+        shared = shared if isinstance(shared, dict) and shared.get("kind") == SHARED_HOSTS_KIND else None
+        if policy is None and shared is None:
             continue
-        found["policy"] = policy
-        found["allocated"] = policy.get("allocated")
+        if policy is not None:
+            found["policy"] = policy
+            found["allocated"] = policy.get("allocated")
+        found["shared_hosts"] = shared
         sources: list[tuple[str, Network]] = []
         for route in forwarding.get("routes") or []:
             prefix = net(route.get("prefix")) if isinstance(route, dict) else None

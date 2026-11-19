@@ -984,9 +984,10 @@ export function useUnmuteTopologyEntity() {
   });
 }
 
-// ── Cato egress vs cloud allow-lists ────────────────────────────────────────
+// ── Cato checks (egress vs cloud allow-lists, shared hosts vs Azure) ────────
 
-export interface CatoEgressFinding {
+/** A finding of a server-side Cato check; both checks store the same row. */
+export interface CatoCheckFinding {
   id: number;
   finding_key: string;
   cato_org_ref: number;
@@ -1013,7 +1014,7 @@ export interface CatoEgressFinding {
   resolved_at: string;
 }
 
-export interface CatoEgressRunResult {
+export interface CatoCheckRunResult {
   ok: boolean;
   error?: string;
   findings: number;
@@ -1021,18 +1022,42 @@ export interface CatoEgressRunResult {
   alerted: number;
 }
 
-export function useCatoEgressFindings(includeResolved = false) {
-  return useQuery<{ findings: CatoEgressFinding[] }>({
-    queryKey: ['cato-egress-findings', includeResolved],
-    queryFn: () => apiRequest(`/monitoring/cato-egress/findings?include_resolved=${includeResolved}`),
+export type CatoEgressFinding = CatoCheckFinding;
+export type CatoEgressRunResult = CatoCheckRunResult;
+export type CatoSharedHostFinding = CatoCheckFinding;
+
+/** The path segment of each check under /api/monitoring. */
+type CatoCheck = 'cato-egress' | 'cato-shared-hosts';
+
+function useCatoCheckFindings(check: CatoCheck, includeResolved: boolean) {
+  return useQuery<{ findings: CatoCheckFinding[] }>({
+    queryKey: [`${check}-findings`, includeResolved],
+    queryFn: () => apiRequest(`/monitoring/${check}/findings?include_resolved=${includeResolved}`),
   });
+}
+
+function useRunCatoCheck(check: CatoCheck) {
+  const qc = useQueryClient();
+  return useMutation<CatoCheckRunResult, Error, void>({
+    mutationFn: () => apiRequest(`/monitoring/${check}/run`, { method: 'POST' }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: [`${check}-findings`] }),
+  });
+}
+
+export function useCatoEgressFindings(includeResolved = false) {
+  return useCatoCheckFindings('cato-egress', includeResolved);
 }
 
 /** Run the Cato egress vs cloud allow-list check now. */
 export function useRunCatoEgressCheck() {
-  const qc = useQueryClient();
-  return useMutation<CatoEgressRunResult, Error, void>({
-    mutationFn: () => apiRequest('/monitoring/cato-egress/run', { method: 'POST' }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['cato-egress-findings'] }),
-  });
+  return useRunCatoCheck('cato-egress');
+}
+
+export function useCatoSharedHostFindings(includeResolved = false) {
+  return useCatoCheckFindings('cato-shared-hosts', includeResolved);
+}
+
+/** Run the Cato shared hosts vs Azure check now. */
+export function useRunCatoSharedHostCheck() {
+  return useRunCatoCheck('cato-shared-hosts');
 }

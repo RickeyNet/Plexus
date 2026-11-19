@@ -295,3 +295,99 @@ class CiscoXEDriver(CiscoStyleTables, Driver):
         # Without ``install commit`` an IOS-XE box auto-rolls-back to
         # the prior image on the *next* reload.  This finalizes it.
         return "install commit"
+
+    def upgrade_install_state_show_command(self) -> str:
+        return "show install summary"
+
+    def parse_install_state(self, output: str) -> dict:
+        # Representative output (Cisco Catalyst 9000 upgrade guide; the
+        # header names the members: ``[ Switch 1 2 ]``, ``[ R0 R1 ]``):
+        #
+        #   [ Switch 1 2 ] Installed Package(s) Information:
+        #   State (St): I - Inactive, U - Activated & Uncommitted,
+        #               C - Activated & Committed, D - Deactivated & Uncommitted
+        #   --------------------------------------------------------------
+        #   Type  St   Filename/Version
+        #   --------------------------------------------------------------
+        #   IMG   I    17.12.03.0.3740
+        #   IMG   C    17.09.04a.0.6
+        #   --------------------------------------------------------------
+        #   Auto abort timer: inactive
+        #
+        # An open activate shows ``Auto abort timer: active on
+        # install_activate, time before rollback - 01:52:08`` (later
+        # releases drop "on install_activate").  Some releases print one
+        # block per member; identical package lines are merged.
+        text = output or ""
+        packages: list[dict] = []
+        seen: set[tuple[str, str, str]] = set()
+        for line in text.splitlines():
+            m = _INSTALL_PACKAGE_LINE.match(line)
+            if not m:
+                continue
+            key = (m.group(1), m.group(2), m.group(3))
+            if key in seen:
+                continue
+            seen.add(key)
+            packages.append({"type": key[0], "state": key[1], "version": key[2]})
+        if not packages:
+            return {}
+
+        def _versions(state: str) -> list[str]:
+            return list(dict.fromkeys(p["version"] for p in packages if p["state"] == state))
+
+        timer: str | None = None
+        m = re.search(r"Auto abort timer\s*:\s*(inactive|active)\b", text, re.IGNORECASE)
+        if m:
+            timer = m.group(1).lower()
+        rollback = re.search(r"time before rollback\s*[-:]\s*(\d+:\d{2}:\d{2})", text, re.IGNORECASE)
+        return {
+            "packages": packages,
+            "committed": _versions("C"),
+            "uncommitted": _versions("U"),
+            "inactive": _versions("I"),
+            "deactivated": _versions("D"),
+            "auto_abort_timer": timer,
+            "rollback_in": rollback.group(1) if rollback else None,
+        }
+
+    def upgrade_install_log_show_command(self) -> str:
+        return "show install log"
+
+    def parse_install_log(self, output: str) -> dict:
+        # Operations start with ``[2|install_activate]: START <date>`` in
+        # the log, or ``install_activate: START <date>`` when echoed by
+        # the command itself, and end with ``END SUCCESS`` / ``END
+        # FAILED ...`` or ``SUCCESS: install_activate`` / ``FAILED:
+        # install_activate : <reason>``.  Only the last operation that
+        # started is summarised.
+        lines = (output or "").splitlines()
+        start_idx = None
+        operation = ""
+        for idx, line in enumerate(lines):
+            m = _INSTALL_LOG_START.search(line)
+            if m:
+                start_idx, operation = idx, m.group(1)
+        if start_idx is None:
+            return {}
+        result: str | None = None
+        reasons: list[str] = []
+        for line in lines[start_idx + 1 :]:
+            stripped = line.strip()
+            if not stripped:
+                continue
+            outcome = _INSTALL_LOG_RESULT.search(stripped)
+            if outcome:
+                result = (outcome.group(1) or outcome.group(2)).upper()
+            if _INSTALL_LOG_REASON.search(stripped):
+                reasons.append(stripped[:200])
+        return {"operation": operation, "result": result, "reasons": list(dict.fromkeys(reasons))[-5:]}
+
+
+# ``IMG   C    17.09.04a.0.6`` - package type, one-letter state, version
+# or package file name.  The legend and header rows never match: their
+# second column is not a single state letter.
+_INSTALL_PACKAGE_LINE = re.compile(r"^\s*([A-Z]{2,8})\s+([IUCD])\s+(\S+)")
+_INSTALL_LOG_START = re.compile(r"\b(install_\w+)(?:\([^)]*\))?\]?\s*:\s*START\b")
+_INSTALL_LOG_RESULT = re.compile(r"\bEND\s+(SUCCESS|FAILED)\b|^(SUCCESS|FAILED)\s*:", re.IGNORECASE)
+_INSTALL_LOG_REASON = re.compile(r"\bFAILED\b|\bERROR\b|^%\s|not allowed", re.IGNORECASE)

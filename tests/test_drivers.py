@@ -1615,6 +1615,115 @@ def test_non_xe_drivers_have_no_boot_mode_concept() -> None:
             drv.parse_boot_mode("")
 
 
+# ── Install state (show install summary / show install log) ─────────────
+
+_XE_INSTALL_HEADER = """\
+State (St): I - Inactive, U - Activated & Uncommitted,
+            C - Activated & Committed, D - Deactivated & Uncommitted
+--------------------------------------------------------------------------------
+Type  St   Filename/Version
+--------------------------------------------------------------------------------
+"""
+
+
+def _xe_install_block(members: str, packages: str, timer: str = "inactive") -> str:
+    return (
+        f"[ {members} ] Installed Package(s) Information:\n{_XE_INSTALL_HEADER}{packages}"
+        "--------------------------------------------------------------------------------\n"
+        f"Auto abort timer: {timer}\n"
+        "--------------------------------------------------------------------------------\n"
+    )
+
+
+def test_cisco_xe_install_state_single_switch_timer_inactive() -> None:
+    drv = get_driver("cisco_xe")
+    assert drv.upgrade_install_state_show_command() == "show install summary"
+    state = drv.parse_install_state(
+        _xe_install_block("Switch 1", "IMG   I    17.12.03.0.3740\nIMG   C    17.09.04a.0.6\n")
+    )
+    assert state["packages"] == [
+        {"type": "IMG", "state": "I", "version": "17.12.03.0.3740"},
+        {"type": "IMG", "state": "C", "version": "17.09.04a.0.6"},
+    ]
+    assert state["committed"] == ["17.09.04a.0.6"]
+    assert state["inactive"] == ["17.12.03.0.3740"]
+    assert state["uncommitted"] == [] and state["deactivated"] == []
+    assert state["auto_abort_timer"] == "inactive"
+    assert state["rollback_in"] is None
+
+
+def test_cisco_xe_install_state_stack_blocks_are_merged() -> None:
+    drv = get_driver("cisco_xe")
+    packages = "IMG   U    17.09.04a.0.6\nIMG   C    17.06.05.0.5797\n"
+    output = _xe_install_block("Switch 1", packages) + _xe_install_block("Switch 2 3", packages)
+    state = drv.parse_install_state(output)
+    assert len(state["packages"]) == 2
+    assert state["uncommitted"] == ["17.09.04a.0.6"]
+    assert state["committed"] == ["17.06.05.0.5797"]
+    # A combined header for every member parses the same way.
+    assert drv.parse_install_state(_xe_install_block("Switch 1 2 3", packages))["packages"] == state["packages"]
+
+
+def test_cisco_xe_install_state_timer_active_both_spellings() -> None:
+    drv = get_driver("cisco_xe")
+    older = drv.parse_install_state(
+        _xe_install_block(
+            "R0 R1", "IMG   U    16.12.1.0.544\n", "active on install_activate, time before rollback - 01:52:08"
+        )
+    )
+    assert older["auto_abort_timer"] == "active"
+    assert older["rollback_in"] == "01:52:08"
+    assert older["uncommitted"] == ["16.12.1.0.544"]
+    newer = drv.parse_install_state(
+        _xe_install_block("R0", "IMG   U    17.12.03.0.3740\n", "active , time before rollback - 00:09:42")
+    )
+    assert newer["auto_abort_timer"] == "active"
+    assert newer["rollback_in"] == "00:09:42"
+
+
+def test_cisco_xe_install_state_unrecognised_output_is_empty() -> None:
+    drv = get_driver("cisco_xe")
+    assert drv.parse_install_state("") == {}
+    assert drv.parse_install_state("% Invalid input detected at '^' marker.\n") == {}
+    # Legend and header rows alone are not packages.
+    assert drv.parse_install_state(_XE_INSTALL_HEADER + "Auto abort timer: inactive\n") == {}
+
+
+def test_cisco_xe_install_log_last_operation() -> None:
+    drv = get_driver("cisco_xe")
+    assert drv.upgrade_install_log_show_command() == "show install log"
+    log = (
+        "[1|install_add]: START Mon Jan  5 10:00:00 UTC 2026\n"
+        "[1|install_add]: END SUCCESS Mon Jan  5 10:09:00 UTC 2026\n"
+        "[2|install_activate]: START Mon Jan  5 11:00:00 UTC 2026\n"
+        "[2|install_activate(INFO, )]: Activating packages\n"
+        "[2|install_activate(ERROR, )]: Install operation not allowed while an install is in progress\n"
+        "[2|install_activate]: END FAILED exit(1) Mon Jan  5 11:00:05 UTC 2026\n"
+    )
+    summary = drv.parse_install_log(log)
+    assert summary["operation"] == "install_activate"
+    assert summary["result"] == "FAILED"
+    assert any("not allowed" in r for r in summary["reasons"])
+    interactive = drv.parse_install_log(
+        "install_activate: START Mon Jan  5 11:00:00 UTC 2026\n"
+        "FAILED: install_activate : No inactive package to activate\n"
+    )
+    assert interactive["result"] == "FAILED"
+    assert interactive["reasons"] == ["FAILED: install_activate : No inactive package to activate"]
+    ok = drv.parse_install_log("install_commit: START x\nSUCCESS: install_commit x\n")
+    assert ok == {"operation": "install_commit", "result": "SUCCESS", "reasons": []}
+    assert drv.parse_install_log("nothing here") == {}
+
+
+def test_non_xe_drivers_have_no_install_state_check() -> None:
+    for dt in ("cisco_nxos", "cisco_xr", "juniper_junos", "arista_eos", "cisco_ios"):
+        drv = get_driver(dt)
+        assert drv.upgrade_install_state_show_command() == ""
+        assert drv.parse_install_state(_xe_install_block("Switch 1", "IMG   C    17.09.04a.0.6\n")) == {}
+        assert drv.upgrade_install_log_show_command() == ""
+        assert drv.parse_install_log("[2|install_activate]: START x") == {}
+
+
 # ── Transfer receive windows (SCP throughput) ────────────────────────────
 
 

@@ -759,6 +759,54 @@ class Driver:
         """
         raise DriverCapabilityError(f"{type(self).__name__} does not implement parse_transfer_window()")
 
+    def upgrade_install_state_show_command(self) -> str:
+        """Return the command that lists installed packages and their state.
+
+        IOS-XE install mode: ``show install summary``, which marks each
+        package Inactive, Activated & Uncommitted, Activated & Committed
+        or Deactivated & Uncommitted and shows the auto-abort timer.  The
+        route reads it before an activate, because an install left
+        uncommitted by an earlier upgrade blocks the next one.  Default
+        is an empty string: the platform has no such check and the route
+        proceeds as before.
+        """
+        return ""
+
+    def parse_install_state(self, output: str) -> dict:
+        """Parse ``upgrade_install_state_show_command()`` output.
+
+        Returns a dict with:
+
+        - ``packages`` (list[dict]): ``{"type", "state", "version"}`` per
+          distinct package line, state one of ``I``/``U``/``C``/``D``
+        - ``committed`` / ``uncommitted`` / ``inactive`` /
+          ``deactivated`` (list[str]): versions per state
+        - ``auto_abort_timer`` (``"active"`` | ``"inactive"`` | None)
+        - ``rollback_in`` (``"HH:MM:SS"`` | None): time left on an
+          active timer
+
+        An empty dict means the output was not recognised; the route
+        never blocks on that.  Default: always empty.
+        """
+        return {}
+
+    def upgrade_install_log_show_command(self) -> str:
+        """Return the command that shows the history of install operations.
+
+        IOS-XE: ``show install log``.  Read only to explain a failed
+        activate.  Default is an empty string (no such log).
+        """
+        return ""
+
+    def parse_install_log(self, output: str) -> dict:
+        """Summarise the last operation in ``upgrade_install_log_show_command()`` output.
+
+        Returns ``{"operation": str, "result": "SUCCESS" | "FAILED" | None,
+        "reasons": list[str]}`` for the last operation that started, or an
+        empty dict when none is found.  Default: always empty.
+        """
+        return {}
+
     def upgrade_commit_command(self) -> str:
         """Return the command that makes the new image permanent.
 

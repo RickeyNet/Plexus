@@ -72,6 +72,10 @@ name a remote user (by name or by users group) on that user. None of them
 adds a route, a rule or a note to the forwarding data. The Network Rules
 policy is listed too, and its INTERNET rules are also the Cloud's
 ``egress_policy`` (above); its WAN rules (QoS, transport) are listed only.
+The Shared Hosts policy (``terminal_server``) is listed too, and its rules'
+hosts and excluded traffic are also the Cloud's ``shared_hosts`` block
+(``shared_hosts_of``), which the server-side Shared Hosts check
+(``shared_host_check``) reads; path tracing does not use it.
 
 The Split Tunnel policy decides, per remote user, which traffic the Cato
 Client sends into the tunnel and which leaves the device directly (out of
@@ -140,6 +144,8 @@ from netcontrol.integrations.remote_users import DIRECTORY_KEY, directory_entry
 
 CLOUD_SITE_ID = "__cato_cloud__"
 CLOUD_NODE_ID = "cato:cloud"
+# The ``kind`` of the Cato Cloud's ``shared_hosts`` block (``shared_hosts_of``).
+SHARED_HOSTS_KIND = "cato_shared_hosts"
 # Each PoP is a box with the remote users connected to it: "<prefix>:<PoP name>".
 POP_SITE_ID = "__cato_pop__"
 # Remote users connected to no PoP are a box of their own.
@@ -1280,18 +1286,56 @@ def _split_destinations(item: dict, book: AddressBook) -> tuple[list[tuple[str, 
     resolve (not collected, or a name several share), and what is no
     address (applications, domains, FQDNs)."""
     destination = _obj(item.get("destination"))
+    ranges, unresolved = _global_ranges(destination.get("globalIpRange"), book)
+    other = [f"application {_ref_name(a)}" for a in _items_of(destination.get("application"))]
+    other += [f"domain {_text(d)}" for d in _items_of(destination.get("domain")) if _text(d)]
+    other += [f"FQDN {_text(f)}" for f in _items_of(destination.get("fqdn")) if _text(f)]
+    return ranges, unresolved, other
+
+
+def _global_ranges(refs: Any, book: AddressBook) -> tuple[list[tuple[str, list[str]]], list[str]]:
+    """``(ranges, unresolved)`` of the global IP ranges a rule field names:
+    each with its CIDRs, and the names of those Plexus cannot resolve (not
+    collected, or a name several share)."""
     ranges: list[tuple[str, list[str]]] = []
     unresolved: list[str] = []
-    for ref in _items_of(destination.get("globalIpRange")):
+    for ref in _items_of(refs):
         cidrs = _resolve(book, "globalIpRange", ref)
         if cidrs:
             ranges.append((_ref_name(ref), cidrs))
         else:
             unresolved.append(_ref_name(ref))
-    other = [f"application {_ref_name(a)}" for a in _items_of(destination.get("application"))]
-    other += [f"domain {_text(d)}" for d in _items_of(destination.get("domain")) if _text(d)]
-    other += [f"FQDN {_text(f)}" for f in _items_of(destination.get("fqdn")) if _text(f)]
-    return ranges, unresolved, other
+    return ranges, unresolved
+
+
+def shared_hosts_of(payload: Any, book: AddressBook) -> dict | None:
+    """The Shared Hosts rules (``terminal_server``, Cato's ``policy.terminalServer``)
+    as ``shared_host_check`` reads them: each rule's hosts (``allowedHostIP``)
+    and the traffic kept off the per-user tunnel (``excludeTraffic``) as
+    global IP ranges with their CIDRs, and the host ranges that did not
+    resolve. ``None`` when the policy was not read."""
+    if not isinstance(payload, dict):
+        return None
+    rules = []
+    for index, item in _ordered_rules(payload):
+        hosts, unresolved = _global_ranges(item.get("allowedHostIP"), book)
+        excluded, _excluded_unresolved = _global_ranges(item.get("excludeTraffic"), book)
+        rules.append(
+            {
+                "index": index,
+                "name": _text(item.get("name")),
+                "enabled": item.get("enabled", True) is not False,
+                "hosts": [{"name": name, "cidrs": cidrs} for name, cidrs in hosts],
+                "unresolved": unresolved,
+                "excluded": [{"name": name, "cidrs": cidrs} for name, cidrs in excluded],
+            }
+        )
+    return {
+        "kind": SHARED_HOSTS_KIND,
+        "enabled": payload.get("enabled", True) is not False,
+        "reduced": bool(payload.get("reduced")),
+        "rules": rules,
+    }
 
 
 def _global_range_texts(refs: Any, book: AddressBook) -> list[str]:
@@ -2605,6 +2649,10 @@ class _Builder:
         # Which network rule routes a flow out to the internet, and the
         # address it leaves with (an allocated IP, else a PoP's shared one).
         cloud["egress_policy"] = self.network_rules(book)
+        # The Shared Hosts rules, for the server-side check (not traced).
+        shared_hosts = shared_hosts_of(self.raw.get("terminal_server"), book)
+        if shared_hosts is not None:
+            cloud["shared_hosts"] = shared_hosts
         self.nodes[CLOUD_NODE_ID]["forwarding"] = cloud
 
         # Cato enforces the account's policy at the PoP a flow enters by: the
