@@ -30,6 +30,7 @@ from dataclasses import dataclass
 import routes.database as db
 
 from netcontrol.integrations.apc import snmp as apc_snmp
+from netcontrol.monitoring_repoll import keep_task, schedule_repoll
 
 LOGGER = logging.getLogger(__name__)
 
@@ -168,41 +169,6 @@ async def find_ups_host(source_ip: str, agent_address: str = "") -> dict | None:
     return None
 
 
-# ── Re-poll scheduling ──────────────────────────────────────────────────────
-
-_repoll_waiting: set[int] = set()
-_background: set[asyncio.Task] = set()
-
-
-def _keep(task: asyncio.Task) -> asyncio.Task:
-    _background.add(task)
-    task.add_done_callback(_background.discard)
-    return task
-
-
-async def _repoll(host_id: int, delay: float) -> None:
-    try:
-        await asyncio.sleep(delay)
-    finally:
-        _repoll_waiting.discard(host_id)
-    try:
-        from netcontrol.routes.monitoring import poll_host_now
-
-        await poll_host_now(host_id)
-    except Exception as exc:  # noqa: BLE001 - a background re-poll must not crash the loop
-        LOGGER.warning("apc traps: re-poll of host %s failed: %s", host_id, exc)
-
-
-def schedule_repoll(host_id: int, delay: float = REPOLL_DELAY_SECONDS) -> bool:
-    """Poll ``host_id`` once after ``delay`` seconds. False when a re-poll of
-    the host is already waiting (it will see this trap's state too)."""
-    if host_id in _repoll_waiting:
-        return False
-    _repoll_waiting.add(host_id)
-    _keep(asyncio.ensure_future(_repoll(host_id, delay)))
-    return True
-
-
 # ── Acting on a trap ────────────────────────────────────────────────────────
 
 
@@ -240,7 +206,9 @@ async def handle_apc_trap(source_ip: str, trap: ApcTrap) -> dict:
                 hostname=host.get("hostname") or "",
             )
             outcome.update(alert=kind.alert, action=RAISE)
-    outcome["repoll"] = schedule_repoll(host_id)
+    # A host already waiting for a re-poll is not scheduled again: that poll
+    # sees this trap's state too.
+    outcome["repoll"] = schedule_repoll(host_id, REPOLL_DELAY_SECONDS)
     return outcome
 
 
@@ -253,4 +221,4 @@ def dispatch_apc_trap(source_ip: str, trap: ApcTrap) -> None:
         except Exception as exc:  # noqa: BLE001 - one trap must not stop the receiver
             LOGGER.warning("apc traps: handling a trap from %s failed: %s", source_ip, exc)
 
-    _keep(asyncio.ensure_future(_run()))
+    keep_task(asyncio.ensure_future(_run()))

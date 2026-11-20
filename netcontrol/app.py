@@ -283,7 +283,9 @@ from netcontrol.routes.meraki_topology import init_meraki_topology, router as me
 from netcontrol.routes.metrics_engine import (
     _downsampling_loop,
     admin_router as metrics_engine_admin_router,
+    apply_event_receiver_config,
     router as metrics_engine_router,
+    stop_receivers,
 )
 from netcontrol.routes.monitoring import (
     _alert_escalation_loop,
@@ -351,6 +353,7 @@ from netcontrol.routes.snmp import (
 from netcontrol.routes.software import _software_refresh_loop, init_software, router as software_router
 from netcontrol.routes.source_import import router as source_import_router
 from netcontrol.routes.sync import admin_router as sync_admin_router, router as sync_router
+from netcontrol.routes.syslog_rules import router as syslog_rules_router
 from netcontrol.routes.templates import TemplateCreate, TemplateUpdate, router as templates_router
 from netcontrol.routes.tool_history import router as tool_history_router
 from netcontrol.routes.topology import (
@@ -1206,6 +1209,10 @@ async def _load_persisted_security_settings():
     # Mirror persisted config into the collector module so it sees the same
     # values without a separate refresh dance.
     FLOW_COLLECTOR_CONFIG.update(state.FLOW_COLLECTOR_CONFIG)
+    # Inbound syslog / SNMP trap receivers (started in the lifespan). Updated
+    # in place: the receivers and the syslog rule engine read this dict.
+    event_receivers = await db.get_auth_setting("event_receivers")
+    state.EVENT_RECEIVER_CONFIG.update(state._sanitize_event_receiver_config(event_receivers))
 
 
 def require_feature(feature_key: str):
@@ -1766,6 +1773,23 @@ async def lifespan(app: FastAPI):
         if flow_collector_started:
             _ensure_flow_aggregation_task()
 
+    # Syslog / SNMP trap receivers: each starts when enabled in the saved
+    # settings. A port that will not bind is logged and left stopped.
+    try:
+        await apply_event_receiver_config(state.EVENT_RECEIVER_CONFIG)
+    except Exception as exc:
+        LOGGER.warning("event receivers: startup failed: %s", type(exc).__name__)
+    # Syslog rule counters and pending config-change runs, rebuilt from the
+    # stored messages in the background. Only the process whose syslog
+    # receiver listens acts on syslog (one worker binds the UDP port), so
+    # only it restores, or every worker would start the same backups.
+    from netcontrol import syslog_rules
+    from netcontrol.monitoring_repoll import keep_task
+    from netcontrol.routes.metrics_engine import receiver_running
+
+    if receiver_running("syslog"):
+        keep_task(asyncio.ensure_future(syslog_rules.restore_state()))
+
     # Plugins: migrations, startup hooks and background tasks. Each plugin is
     # isolated - one that fails is marked failed and the rest carry on.
     try:
@@ -1809,6 +1833,10 @@ async def lifespan(app: FastAPI):
                 await stop_flow_collector()
             except Exception as exc:
                 LOGGER.warning("flow_collector: shutdown failed: %s", type(exc).__name__)
+        try:
+            stop_receivers()
+        except Exception as exc:
+            LOGGER.warning("event receivers: shutdown failed: %s", type(exc).__name__)
         try:
             db.set_audit_event_hook(None)
             await siem_forwarder.stop_dispatcher()
@@ -2630,6 +2658,12 @@ app.include_router(
 app.include_router(
     monitoring_admin_router,
     dependencies=[Depends(require_admin)],
+)
+# Syslog alert rules (docs/syslog-rules.md): reads need monitoring, changes
+# monitoring.write, like the alert rules.
+app.include_router(
+    syslog_rules_router,
+    dependencies=[Depends(require_auth), Depends(require_feature_method("monitoring"))],
 )
 app.include_router(
     cato_egress_check_router,

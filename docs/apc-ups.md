@@ -50,8 +50,12 @@ not this type: add it as an **ICMP-only** host if it has an address.
    second GET, since the card has no ENTITY-MIB chassis row. Without SNMP, discovery
    with an SSH credential (the card's login) also recognises it: the card
    answers `show version` with `E101: Command Not Found`, so Plexus asks
-   `upsabout` and adds the UPS with its model and serial. Monitoring still
-   needs the SNMP profile.
+   `upsabout` and `about` in one more login and adds the UPS with its model
+   and serial and the card's firmware as its software version (the AOS
+   release in `about`, the same value SNMP discovery reads from the
+   sysDescr; the application module's version when `about` lists no AOS
+   section). Monitoring, the UPS firmware row of the software tracker and
+   the alerts still need the SNMP profile.
 3. Turn on monitoring (Monitoring > Settings) if it is not on. Each poll
    keeps the UPS's model and serial on the host up to date.
 
@@ -86,6 +90,13 @@ blackout.
 Plus, as for every SNMP host: uptime (`sysUpTime`), the card's network
 interface (IF-MIB), and ICMP latency and loss. A UPS has no CPU or memory to
 read, so those stay empty and their built-in alerts never fire.
+
+The card's SNMP agent is small: it answers SNMPv3 slowly and holds few
+requests at a time. Plexus polls a UPS in one SNMP session, one request
+after the other: the objects above are read in a few GET requests (ten
+objects each), not a walk per object, and the interface tables are walked
+one at a time. A card that does not answer the first request is not asked
+again in that poll.
 
 Where it goes:
 
@@ -147,6 +158,30 @@ Alert rules can use `ups_battery_capacity_pct`, `ups_runtime_minutes`,
 minutes*, *load above 80 %*, *input voltage below 207 V* or *probe
 temperature above 30 °C*.
 
+### No alerts, or no UPS state
+
+A UPS that is on line with a healthy battery raises nothing: the alerts
+above appear only while a condition holds. The Software page's
+vulnerability alerts need an advisory for the `apc-nmc` or `apc-ups`
+platform, and none is fetched automatically (see below). To tell a quiet UPS
+from one Plexus cannot read, open **Monitoring > the device**: the *UPS*
+card shows the output and battery state of the last poll. When the card is
+missing:
+
+- **Monitoring is off.** It is off on a new installation: turn it on in
+  **Monitoring > Settings**. Nothing is polled, stored or alerted on until
+  then, and the `<host> (UPS)` row of the software tracker stays absent.
+- **The host has no SNMP profile**, or its group's profile is not the
+  card's: the poll uses the host's own profile, else its group's.
+- **The card does not answer.** Each poll that reads no state logs
+  `monitoring: no UPS state read from <host> over SNMP: <reason>` on the
+  server. *No SNMP response received before timeout* is the card's access
+  control (the NMS address of the SNMPv3 access entry), a firewall, or
+  SNMPv3 switched off; *Unknown USM user*, *Wrong SNMP PDU digest* and
+  *Unsupported SNMP security level* are the user name, the authentication
+  passphrase or protocol, and the privacy settings. Discovery logs the same
+  reasons as `SNMP probe failed for <address>` when it falls back to SSH.
+
 ## SNMP traps
 
 The card sends a trap the moment the UPS changes state. Plexus's SNMP trap
@@ -195,19 +230,19 @@ name, the card's text (`mtrapargsString`) and its MIB severity.
 
 ### Pointing the card at Plexus
 
-1. **Start the receiver.** It is not started with Plexus: an admin starts it
-   with `POST /api/admin/metrics/receivers/start` (body
-   `{"trap_port": 10162}` to choose the port; 10162 by default, since 162
-   needs root). It listens on UDP on every interface until Plexus restarts.
-   Open that UDP port from the card's network to the Plexus server (and
-   publish it from the container when Plexus runs in Docker).
+1. **Turn on the trap receiver.** In **Settings > Syslog & Traps**, tick
+   **Enabled** for SNMP traps and save. It listens on UDP 10162 (an
+   unprivileged port) on every interface, and starts with Plexus from then
+   on. The Docker stack publishes host port 162 to it, so the card sends to
+   the standard port 162; without Docker, the card sends to 10162. Open that
+   UDP port from the card's network to the Plexus server.
 2. **Add Plexus as a trap receiver on the card**: *Configuration >
    Network > SNMPv1 > Trap Receivers* (NMC2: *Administration > Network >
    SNMPv1 > trap receivers*), *Add Trap Receiver*: the Plexus server's
    address as the NMS IP / host name, **SNMPv1** or **SNMPv2c** as the
-   trap type, a community name, and the port (10162) where the card
-   offers one. Plexus does not check the trap community today: use one
-   that is not your read community.
+   trap type, a community name, and the port (162 with Docker, else
+   10162) where the card offers one. Plexus does not check the trap
+   community today: use one that is not your read community.
 3. **Enable the UPS events** for that receiver: *Configuration >
    Notification > Event Actions* (*by Event* or *by Group*), and make sure
    the trap action is on for at least *UPS: On battery*, *Power restored*,
@@ -230,6 +265,11 @@ The software tracker lists an `apc_ups` host twice:
 |---|---|---|
 | The host (the card) | `apc-nmc` (APC Network Management Card) | Card AOS firmware (`PF` in the sysDescr), e.g. `6.8.2` or `1.4.2.1` |
 | `<host> (UPS)` | `apc-ups` (APC Smart-UPS firmware) | UPS firmware from `upsAdvIdentFirmwareRevision`, e.g. `UPS 09.3 (ID18)` tracked as `9.3` |
+
+A firmware update the Upgrades tool verified polls the UPS at once and
+rebuilds the tracker, so the `<host> (UPS)` version and its alerts follow
+the campaign without waiting for the next monitoring poll. Monitoring must
+be enabled for that poll to run.
 
 Advisories for either platform are entered by hand or imported (Software >
 Advisories). Schneider Electric publishes its security notifications as

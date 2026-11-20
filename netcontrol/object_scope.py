@@ -150,6 +150,7 @@ SCOPE_ENFORCED_ROUTERS: tuple[str, ...] = (
     "netcontrol.routes.export_templates:router",
     # Monitoring and alerting.
     "netcontrol.routes.monitoring:router",
+    "netcontrol.routes.syslog_rules:router",
     "netcontrol.routes.cato_egress_check:router",
     "netcontrol.routes.cato_shared_host_check:router",
     "netcontrol.routes.meraki_alerts:router",

@@ -12,6 +12,7 @@ import { OidProfilesTab } from './OidProfilesTab';
 import { RulesTab } from './RulesTab';
 import { SlaTargetsTab } from './SlaTargetsTab';
 import { SuppressionsTab } from './SuppressionsTab';
+import { SyslogRulesTab } from './SyslogRulesTab';
 import { CONFIGURE_TABS, type ConfigureSubTab } from './configureTabs';
 
 const TAB_KEYS = CONFIGURE_TABS.map((t) => t.key);
@@ -50,6 +51,7 @@ export function ConfigureTab() {
 
       {tab === 'rules' && <RulesTab />}
       {tab === 'suppressions' && <SuppressionsTab />}
+      {tab === 'syslog-rules' && <SyslogRulesTab />}
       {tab === 'sla-targets' && <SlaTargetsTab />}
       {tab === 'oid-profiles' && <OidProfilesTab />}
 

@@ -810,6 +810,60 @@ def _sanitize_flow_collector_config(data: dict | None) -> dict:
 FLOW_COLLECTOR_CONFIG: dict = dict(FLOW_COLLECTOR_DEFAULTS)
 
 
+# ── Syslog / SNMP trap event receivers ───────────────────────────────────────
+# The inbound UDP listeners in metrics_engine (not SYSLOG_CONFIG, which is the
+# outbound application-log forwarder). Persisted via auth_settings key
+# "event_receivers"; the listeners start with Plexus when enabled. The
+# defaults are unprivileged ports because the container runs as a non-root
+# user: docker-compose publishes host 162 -> 10162 and 1514 -> 1514.
+
+EVENT_RECEIVER_DEFAULTS = {
+    "syslog_enabled": False,
+    "syslog_port": 1514,
+    "trap_enabled": False,
+    "trap_port": 10162,
+    # Raise alerts from the syslog rules.
+    "syslog_alerts": True,
+    # A configuration-change message triggers a config backup and drift check.
+    "config_change_trigger": True,
+    # A link-down / reload message triggers an immediate re-poll of the host.
+    "repoll_trigger": True,
+    # An OPNsense gateway / CARP / VPN / config message triggers an immediate
+    # collection of the firewall's topology source.
+    "recollect_trigger": True,
+    # OPNsense firewall log (filterlog) lines are summed per rule as live
+    # pass / block evidence; off: they are dropped (never stored raw).
+    "filterlog_evidence": True,
+}
+
+_EVENT_RECEIVER_BOOL_KEYS = (
+    "syslog_enabled",
+    "trap_enabled",
+    "syslog_alerts",
+    "config_change_trigger",
+    "repoll_trigger",
+    "recollect_trigger",
+    "filterlog_evidence",
+)
+_EVENT_RECEIVER_PORT_KEYS = ("syslog_port", "trap_port")
+
+
+def _sanitize_event_receiver_config(data: dict | None) -> dict:
+    cfg = dict(EVENT_RECEIVER_DEFAULTS)
+    if isinstance(data, dict):
+        for key in _EVENT_RECEIVER_BOOL_KEYS:
+            cfg[key] = bool(data.get(key, cfg[key]))
+        for key in _EVENT_RECEIVER_PORT_KEYS:
+            try:
+                cfg[key] = max(1, min(65535, int(data.get(key, cfg[key]))))
+            except (TypeError, ValueError) as exc:
+                LOGGER.warning("event receiver config: invalid %s, keeping default: %s", key, exc)
+    return cfg
+
+
+EVENT_RECEIVER_CONFIG: dict = dict(EVENT_RECEIVER_DEFAULTS)
+
+
 def _sanitize_dhcp_sync_config(data: dict | None) -> dict:
     cfg = dict(DHCP_SYNC_DEFAULTS)
     if isinstance(data, dict):

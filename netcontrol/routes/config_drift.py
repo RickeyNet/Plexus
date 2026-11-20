@@ -151,15 +151,31 @@ def _group_ids(hosts: list[dict]) -> list[int | None]:
     return sorted({h.get("group_id") for h in hosts}, key=lambda g: (g is None, g or 0))
 
 
-async def _capture_for_drift(host: dict, credentials: dict) -> str:
+async def _capture_for_drift(host: dict, credentials: dict, *, max_age_seconds: int = 0) -> str:
     """The configuration text a drift snapshot of ``host`` stores. An
     OPNsense firewall is never read over SSH: its snapshot is its newest
     config.xml backup, normalized and with secrets masked (raises
     ``OpnsenseBackupMissing`` without one). Any other host is read from the
-    device the usual way."""
+    device the usual way; ``max_age_seconds`` accepts a backup the device
+    confirmed within that window instead (``get_device_config``)."""
     if opnsense_masking.is_opnsense_host(host):
         return await opnsense_masking.drift_snapshot_text(host)
-    return (await get_device_config(host, credentials, capture_method="drift")).config_text
+    stored = await get_device_config(host, credentials, capture_method="drift", max_age_seconds=max_age_seconds)
+    return stored.config_text
+
+
+async def snapshot_and_analyze(host_id: int, config_text: str, *, capture_method: str) -> dict:
+    """Store ``config_text`` as the host's newest drift snapshot and compare
+    it with the host's baseline (``_analyze_drift_for_host``). The result
+    also carries ``snapshot_id``."""
+    snapshot_id = await db.create_config_snapshot(
+        host_id=host_id,
+        config_text=config_text,
+        capture_method=capture_method,
+    )
+    result = await _analyze_drift_for_host(host_id)
+    result["snapshot_id"] = snapshot_id
+    return result
 
 
 def _drift_form(text: str) -> str:
@@ -1476,13 +1492,7 @@ async def full_config_drift_check(body: ConfigDriftCheckRequest, request: Reques
         config_text = await _capture_for_drift(host, cred)
     except Exception as exc:
         raise _capture_failed(host, exc) from None
-    snapshot_id = await db.create_config_snapshot(
-        host_id=body.host_id,
-        config_text=config_text,
-        capture_method="manual",
-    )
-    result = await _analyze_drift_for_host(body.host_id)
-    result["snapshot_id"] = snapshot_id
+    result = await snapshot_and_analyze(body.host_id, config_text, capture_method="manual")
     result["host_id"] = body.host_id
     result["hostname"] = host["hostname"]
     session = _get_session(request)

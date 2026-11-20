@@ -305,12 +305,16 @@ sudo ufw allow 443/tcp          # HTTPS
 # Plexus collectors (only open the ones you'll actually receive on)
 sudo ufw allow 2055/udp         # NetFlow
 sudo ufw allow 6343/udp         # sFlow
-sudo ufw allow 162/udp          # SNMP traps
+sudo ufw allow 162/udp          # SNMP traps (published to the container's 10162)
 sudo ufw allow 1514/udp         # Syslog
+# sudo ufw allow 514/udp        # Syslog on 514: also publish "514:1514/udp" in docker-compose.yml
 
 sudo ufw enable
 sudo ufw status verbose
 ```
+
+The syslog and trap receivers are off until an admin turns them on in
+**Settings > Syslog & Traps**; after that they start with Plexus.
 
 > Restrict by source if you can - `sudo ufw allow from <CIDR> to any port 22`
 > is safer than the open `allow 22/tcp` on a sensitive network.

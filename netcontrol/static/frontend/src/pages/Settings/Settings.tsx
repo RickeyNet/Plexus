@@ -18,6 +18,7 @@ import { AuthTab } from './AuthTab';
 import { CustomDataTab } from './CustomDataTab';
 import { DeviceModelTab } from './DeviceModelTab';
 import { DiscoveryTab } from './DiscoveryTab';
+import { EventReceiversTab } from './EventReceiversTab';
 import { ExportTemplatesTab } from './ExportTemplatesTab';
 import { FeaturesTab } from './FeaturesTab';
 import { GitSourcesTab } from './GitSourcesTab';
@@ -45,6 +46,7 @@ type Tab =
   | 'discovery'
   | 'monitoring'
   | 'netflow'
+  | 'event-receivers'
   | 'notifications'
   | 'webhooks'
   | 'features'
@@ -96,6 +98,10 @@ const TAB_HELP: Record<Tab, { title: string; text: string }> = {
   netflow: {
     title: 'NetFlow / sFlow Collector',
     text: 'Turn the UDP collector for NetFlow v5/v9, IPFIX and sFlow v5 on or off, set its listen ports, and choose how long raw flows and hourly summaries are kept.',
+  },
+  'event-receivers': {
+    title: 'Syslog & SNMP Trap Receivers',
+    text: 'Turn the UDP receivers for device syslog messages and SNMP traps on or off and set their ports; enabled receivers start with Plexus. Choose what received syslog messages trigger: alerts, a config backup, an immediate re-poll. Received events appear in Monitoring > Events.',
   },
   notifications: {
     title: 'Alert Notification Channels',
@@ -180,6 +186,7 @@ const ADMIN_GROUPS: { title: string; tabs: TabItem[] }[] = [
       { key: 'discovery', label: 'Discovery' },
       { key: 'monitoring', label: 'Monitoring' },
       { key: 'netflow', label: 'NetFlow' },
+      { key: 'event-receivers', label: 'Syslog & Traps' },
     ],
   },
   {
@@ -307,6 +314,7 @@ export function Settings() {
             {tab === 'discovery' && <DiscoveryTab />}
             {tab === 'monitoring' && <MonitoringTab />}
             {tab === 'netflow' && <NetFlowTab />}
+            {tab === 'event-receivers' && <EventReceiversTab />}
             {tab === 'notifications' && <NotificationsTab />}
             {tab === 'webhooks' && <WebhooksTab />}
             {tab === 'features' && <FeaturesTab capabilities={caps} />}

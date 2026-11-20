@@ -109,7 +109,7 @@ describe('Monitoring Configure tab gate', () => {
   it('shows Configure with only the monitoring sub-tabs to a monitoring-only user', () => {
     const c = ctx({ access: ['monitoring'] });
     expect(isNavItemVisible(configure, c)).toBe(true);
-    expect(shownSubTabs(c)).toEqual(['rules', 'suppressions', 'sla-targets', 'oid-profiles']);
+    expect(shownSubTabs(c)).toEqual(['rules', 'suppressions', 'syslog-rules', 'sla-targets', 'oid-profiles']);
   });
 
   it('hides Configure when neither feature is available', () => {

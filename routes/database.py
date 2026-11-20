@@ -2992,6 +2992,8 @@ from routes.db.metrics import *  # noqa: E402,F403
 from routes.db.monitoring import *  # noqa: E402,F403
 from routes.db.network_objects import *  # noqa: E402,F403
 from routes.db.object_changes import *  # noqa: E402,F403
+from routes.db.opnsense_alias_tables import *  # noqa: E402,F403
+from routes.db.opnsense_filterlog import *  # noqa: E402,F403
 from routes.db.organization import *  # noqa: E402,F403
 from routes.db.playbooks import *  # noqa: E402,F403
 from routes.db.reporting import *  # noqa: E402,F403
@@ -2999,6 +3001,7 @@ from routes.db.routing import *  # noqa: E402,F403
 from routes.db.saml import *  # noqa: E402,F403
 from routes.db.secrets_providers import *  # noqa: E402,F403
 from routes.db.software import *  # noqa: E402,F403
+from routes.db.syslog_rules import *  # noqa: E402,F403
 from routes.db.tool_history import *  # noqa: E402,F403
 from routes.db.topology import *  # noqa: E402,F403
 from routes.db.topology_availability import *  # noqa: E402,F403
