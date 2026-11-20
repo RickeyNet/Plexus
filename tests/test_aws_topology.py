@@ -681,7 +681,7 @@ def test_snapshot_lists_fsx_in_its_vpc(snapshot):
     systems = {r[0]: r for r in _section(core, "FSx file systems")["rows"]}
     assert systems["core-ontap"][1:4] == ["fs-0c0re0a0a7001", "NetApp ONTAP", "available"]
     assert systems["core-files"][5:7] == ["10.200.10.70", "core-app-a (10.200.10.0/24)"]
-    assert "files.corp.example.com" in [name.strip() for name in systems["core-files"][4].split(",")]
+    assert [name.strip() for name in systems["core-files"][4].split(",")].count("files.corp.example.com") == 1
     svm = _section(core, "FSx storage virtual machines")["rows"][0]
     assert svm[:3] == ["core-svm1", "svm-0c0re0a0a7001", "core-ontap (fs-0c0re0a0a7001)"]
     endpoints = _section(core, "FSx endpoints")
@@ -727,7 +727,7 @@ def test_subnet_index_has_every_fsx_address(snapshot):
 def test_subnet_index_names_hosts_by_dns_name(snapshot):
     index = subnet_index(snapshot)
     by_cidr = {s["cidr"]: s for s in index}
-    assert "coresvm1.corp.example.com" in list(by_cidr["10.200.10.60/32"]["dns_names"])
+    assert list(by_cidr["10.200.10.60/32"]["dns_names"]).count("coresvm1.corp.example.com") == 1
     # A subnet, and a host listed without a name, have none.
     assert "dns_names" not in by_cidr["10.200.10.0/24"] and "dns_names" not in by_cidr["10.220.1.81/32"]
     # A whole name finds every address behind it, whatever its case; part of one too.

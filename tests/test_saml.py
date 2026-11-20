@@ -155,6 +155,10 @@ def test_fetch_metadata(idp):
         asyncio.run(saml.fetch_metadata("https://idp.example.com/missing", transport=transport))
     with pytest.raises(saml.SamlError, match="https"):
         asyncio.run(saml.fetch_metadata("http://idp.example.com/metadata", transport=transport))
+    # The outbound guard runs before the request: a link-local address (the
+    # cloud instance-metadata endpoint) is refused even over https.
+    with pytest.raises(saml.SamlError, match="not allowed"):
+        asyncio.run(saml.fetch_metadata("https://169.254.169.254/metadata", transport=transport))
 
 
 def test_sp_metadata():

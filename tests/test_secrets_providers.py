@@ -279,9 +279,9 @@ async def test_unreachable_and_ssrf_and_bad_ca(monkeypatch):
         raise httpx.ConnectError("connection refused")
 
     monkeypatch.setattr(base, "HTTP_TRANSPORT", httpx.MockTransport(refuse))
-    with pytest.raises(SecretsProviderError) as err:
+    with pytest.raises(SecretsProviderError, match=r"could not reach vault\.example\.com ") as err:
         await _vault().resolve(Reference("x"))
-    assert err.value.code == base.UNREACHABLE and "vault.example.com" in str(err.value)
+    assert err.value.code == base.UNREACHABLE
 
     monkeypatch.undo()  # the real SSRF guard: link-local metadata addresses are refused
     blocked = VaultProvider({**_vault().config, "url": "http://169.254.169.254"}, {"token": "t"}, name="meta")

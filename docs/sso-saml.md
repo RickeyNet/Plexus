@@ -54,7 +54,7 @@ signing certificates, then **Save**), or fill the fields by hand:
 | Field | Default | Meaning |
 |-------|---------|---------|
 | Enabled | off | Offer SAML on the login page. Needs the entity ID, SSO URL and at least one certificate. |
-| IdP Metadata URL | | Where to import the metadata from (`https`; redirects are not followed). Kept so the admin can re-import after a certificate rollover. |
+| IdP Metadata URL | | Where to import the metadata from (`https`; redirects are not followed). The address passes the same outbound guard as webhooks (`APP_SSRF_BLOCK_PRIVATE`, `APP_SSRF_ALLOW`): link-local addresses such as the cloud metadata endpoint are always refused. Kept so the admin can re-import after a certificate rollover. |
 | IdP Entity ID | | Must equal the `Issuer` of the IdP's assertions |
 | IdP SSO URL | | The HTTP-Redirect `SingleSignOnService` location (`https`) |
 | IdP Signing Certificates | | PEM blocks (or the bare base64 from metadata), up to 5 so a rollover can overlap. Stored as PEM; the form shows the saved certificates' SHA-256 fingerprints and expiry dates. An expired certificate is refused. |

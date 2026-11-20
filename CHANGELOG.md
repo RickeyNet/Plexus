@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- SAML metadata import by URL (`docs/sso-saml.md`): the address now passes the outbound SSRF guard (`net_guard`, the one webhooks, notification channels and secrets providers use) before Plexus fetches it, so a link-local address such as the cloud instance-metadata endpoint is refused, and private ranges too when `APP_SSRF_BLOCK_PRIVATE=true` (`APP_SSRF_ALLOW` lists exceptions). Found by CodeQL (`py/full-ssrf`).
+
 ## 1.1.0 - 2026-11-19
 
 Feature release covering expanded inventory and infrastructure management, cloud and vendor monitoring, topology and path tracing, automation approvals, SSO, external secrets providers, and security and upgrade improvements.
