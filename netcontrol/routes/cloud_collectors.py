@@ -1598,6 +1598,7 @@ def _collect_azure(account: dict, progress: ProgressCallback | None = None) -> t
 
     _report(progress, phase="azure login")
     try:
+        credential: ClientSecretCredential | DefaultAzureCredential
         if tenant_id and client_id and client_secret:
             credential = ClientSecretCredential(tenant_id=tenant_id, client_id=client_id, client_secret=client_secret)
         else:

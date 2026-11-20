@@ -22,6 +22,47 @@ class _DummyRequest:
         self.state = type("State", (), {"correlation_id": correlation_id})()
 
 
+@pytest.mark.parametrize("use_account_key", [True, False])
+def test_azure_blob_client_preserves_authentication_and_timeouts(monkeypatch, use_account_key):
+    """Both auth modes use the same explicitly typed client keyword arguments."""
+    identity = MagicMock()
+    blob = MagicMock()
+    monkeypatch.setitem(sys.modules, "azure.identity", identity)
+    monkeypatch.setitem(sys.modules, "azure.storage.blob", blob)
+    auth = {"storage_account_key": " fixture "} if use_account_key else {}
+
+    result = pullers_mod._build_azure_blob_client(auth, "sample")
+
+    credential = "fixture" if use_account_key else identity.DefaultAzureCredential.return_value
+    blob.BlobServiceClient.assert_called_once_with(
+        account_url="https://sample.blob.core.windows.net",
+        credential=credential,
+        connection_timeout=10,
+        read_timeout=60,
+    )
+    if use_account_key:
+        identity.DefaultAzureCredential.assert_not_called()
+    else:
+        identity.DefaultAzureCredential.assert_called_once_with()
+    assert result is blob.BlobServiceClient.return_value
+
+
+def test_azure_blob_client_account_key_does_not_require_identity_sdk(monkeypatch):
+    blob = MagicMock()
+    monkeypatch.setitem(sys.modules, "azure.identity", None)
+    monkeypatch.setitem(sys.modules, "azure.storage.blob", blob)
+    assert pullers_mod._build_azure_blob_client({"storage_account_key": "fixture"}, "sample") is (
+        blob.BlobServiceClient.return_value
+    )
+
+
+def test_azure_blob_client_missing_identity_sdk_reports_required_dependency(monkeypatch):
+    monkeypatch.setitem(sys.modules, "azure.identity", None)
+    monkeypatch.setitem(sys.modules, "azure.storage.blob", MagicMock())
+    with pytest.raises(ImportError, match="azure-identity is required when storage_account_key is not provided"):
+        pullers_mod._build_azure_blob_client({}, "sample")
+
+
 # ───────────────────────────────────────────────────────────────────────────
 # Window / cursor helpers
 # ───────────────────────────────────────────────────────────────────────────
