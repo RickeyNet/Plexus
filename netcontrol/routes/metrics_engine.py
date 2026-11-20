@@ -28,10 +28,13 @@ from typing import Any
 
 import routes.database as db
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from pydantic import BaseModel, Field
 
 import netcontrol.routes.state as state
+from netcontrol import syslog_rules
 from netcontrol.integrations.apc.snmp import UPS_METRICS, ups_metric_samples
 from netcontrol.integrations.apc.traps import dispatch_apc_trap, parse_apc_trap
+from netcontrol.integrations.opnsense.health import FIREWALL_METRICS, firewall_metric_samples
 from netcontrol.object_scope import (
     HOST_NOT_FOUND,
     group_filter,
@@ -40,6 +43,8 @@ from netcontrol.object_scope import (
     scope_exempt,
     scoped,
 )
+from netcontrol.routes import opnsense_filterlog
+from netcontrol.routes.shared import _audit, _corr_id, _get_session
 from netcontrol.routes.snmp import decode_snmp_trap
 from netcontrol.telemetry import configure_logging, redact_value
 
@@ -676,6 +681,8 @@ async def emit_metric_samples_from_poll(poll_result: dict) -> int:
     rows.append((host_id, "route_count", "{}", float(poll_result.get("route_count", 0))))
     # A UPS: battery, runtime, load and the output / battery state codes.
     rows.extend(ups_metric_samples(host_id, poll_result.get("ups") or {}))
+    # An OPNsense firewall read over its API: disks, temperature, state table, load.
+    rows.extend(firewall_metric_samples(host_id, poll_result.get("opnsense_health") or {}))
 
     return await db.create_metric_samples_batch(rows)
 
@@ -707,6 +714,7 @@ _DOWNSAMPLE_METRICS = [
     "if_in_discards_rate",
     "if_out_discards_rate",
     *UPS_METRICS,
+    *FIREWALL_METRICS,
 ]
 
 
@@ -798,6 +806,7 @@ async def run_retention_cleanup() -> dict:
     ifts_deleted = await db.delete_old_interface_ts(30)
     traps_deleted = await db.delete_old_trap_syslog_events(30)
     error_events_deleted = await db.delete_old_interface_error_events(90)
+    filterlog_deleted = await opnsense_filterlog.delete_old_evidence()
     return {
         "raw_samples_deleted": raw_deleted,
         "hourly_rollups_deleted": hourly_deleted,
@@ -805,6 +814,7 @@ async def run_retention_cleanup() -> dict:
         "interface_ts_deleted": ifts_deleted,
         "trap_events_deleted": traps_deleted,
         "error_events_deleted": error_events_deleted,
+        "filterlog_evidence_deleted": filterlog_deleted,
     }
 
 
@@ -840,6 +850,15 @@ async def _downsampling_loop() -> None:
                 LOGGER.info("metrics: retention cleanup: %s", result)
                 last_cleanup = now
 
+            # Syslog alerts that time out (a flapping link quiet again).
+            # Its own guard: a failure here must not delay the rollups.
+            try:
+                resolved = await syslog_rules.resolve_expired_alerts()
+                if resolved:
+                    LOGGER.info("metrics: auto-resolved %d syslog alerts", resolved)
+            except Exception as exc:
+                LOGGER.warning("metrics: syslog alert auto-resolve failed: %s", redact_value(str(exc)))
+
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -857,23 +876,48 @@ async def _downsampling_loop() -> None:
 _PRINTABLE_RUN = re.compile(rb"[ -~]{6,}")
 
 
+class _ReceiverStats:
+    """Counters of one UDP receiver since it last started. Updated on the
+    datagram hot path, so only plain attribute writes."""
+
+    __slots__ = ("received", "errors", "last_message_at", "started_at")
+
+    def __init__(self) -> None:
+        self.reset(0.0)
+
+    def reset(self, started_at: float) -> None:
+        self.received = 0
+        self.errors = 0
+        self.last_message_at = 0.0
+        self.started_at = started_at
+
+
+_RECEIVER_STATS: dict[str, _ReceiverStats] = {"trap": _ReceiverStats(), "syslog": _ReceiverStats()}
+
+
 class _TrapSyslogProtocol(asyncio.DatagramProtocol):
-    """Async UDP listener for SNMP traps (port 162) and syslog (port 514)."""
+    """Async UDP listener for SNMP traps and syslog (ports from
+    state.EVENT_RECEIVER_CONFIG; 10162 and 1514 by default)."""
 
     def __init__(self, event_type: str):
         self.event_type = event_type
+        self._stats = _RECEIVER_STATS[event_type]
 
     def connection_made(self, transport):
         self.transport = transport
 
     def datagram_received(self, data: bytes, addr: tuple):
         source_ip = addr[0]
+        stats = self._stats
+        stats.received += 1
+        stats.last_message_at = time.time()
         try:
             if self.event_type == "trap":
                 self._handle_trap(data, source_ip)
             else:
                 self._handle_syslog(data, source_ip)
         except Exception as exc:
+            stats.errors += 1
             LOGGER.debug("metrics: %s parse error from %s: %s", self.event_type, source_ip, exc)
 
     def _handle_trap(self, data: bytes, source_ip: str):
@@ -954,14 +998,18 @@ _HOST_IP_CACHE_TTL_SECONDS = 300.0
 
 _trap_event_buffer: list[tuple] = []  # (source_ip, event_type, facility, severity, oid, message, raw_data)
 _trap_events_dropped = 0
+# Never reset (the writer resets _trap_events_dropped each flush): shown in
+# the receiver settings as events dropped since Plexus started.
+_trap_events_dropped_total = 0
 _trap_event_writer_task: asyncio.Task | None = None
 _host_ip_cache: dict[str, tuple[int | None, float]] = {}
 
 
 def _queue_trap_syslog_event(source_ip, event_type, facility, severity, oid, message, raw_data) -> None:
-    global _trap_events_dropped, _trap_event_writer_task
+    global _trap_events_dropped, _trap_events_dropped_total, _trap_event_writer_task
     if len(_trap_event_buffer) >= _TRAP_EVENT_BUFFER_MAX:
         _trap_events_dropped += 1
+        _trap_events_dropped_total += 1
         return
     _trap_event_buffer.append((source_ip, event_type, facility, severity, oid, message[:2000], raw_data[:2000]))
     if _trap_event_writer_task is None or _trap_event_writer_task.done():
@@ -975,7 +1023,9 @@ async def _resolve_host_id_cached(source_ip: str) -> int | None:
         return cached[0]
     host_id = None
     try:
-        host = await db.find_host_by_ip(source_ip)
+        # A device often sends from an interface other than its primary
+        # address: recorded interface IPs match too.
+        host = await db.find_host_by_ip(source_ip, include_aliases=True)
         if host:
             host_id = host["id"]
     except Exception as exc:
@@ -1000,69 +1050,169 @@ async def _trap_event_writer_loop() -> None:
         if _trap_events_dropped:
             LOGGER.warning("metrics: trap/syslog buffer overflow - dropped %d events", _trap_events_dropped)
             _trap_events_dropped = 0
+        rows: list[tuple] = []
         try:
             host_ids = {ip: await _resolve_host_id_cached(ip) for ip in {row[0] for row in batch}}
             rows = [
                 (source_ip, host_ids.get(source_ip), event_type, facility, severity, oid, message, raw_data)
                 for (source_ip, event_type, facility, severity, oid, message, raw_data) in batch
             ]
+            # OPNsense firewall log lines are summed per rule, never stored
+            # raw nor run through the syslog rules.
+            rows = opnsense_filterlog.divert(rows)
             await db.create_trap_syslog_events_batch(rows)
         except Exception as exc:
             LOGGER.warning("metrics: trap/syslog batch write failed, dropping %d events: %s", len(batch), exc)
+        await _evaluate_syslog_rules(rows)
 
 
-_trap_transport = None
-_syslog_transport = None
+async def _evaluate_syslog_rules(rows: list[tuple]) -> None:
+    """Hand the syslog messages of inventory hosts in a flushed batch to the
+    syslog rule engine (alerts, config-change and re-poll triggers), and
+    every syslog message, with its source address, to the OPNsense
+    re-collection trigger (a firewall need not be an inventory host). A
+    rule or trigger error is logged: it never touches the stored events."""
+    syslog_rows = [
+        (host_id, message)
+        for (_ip, host_id, event_type, _facility, _severity, _oid, message, _raw) in rows
+        if event_type == "syslog" and host_id is not None
+    ]
+    if syslog_rows:
+        try:
+            await syslog_rules.process_syslog_batch(syslog_rows)
+        except Exception as exc:
+            LOGGER.warning("metrics: syslog rule evaluation failed for %d events: %s", len(syslog_rows), exc)
+    recollect_rows = [
+        (source_ip, host_id, message)
+        for (source_ip, host_id, event_type, _facility, _severity, _oid, message, _raw) in rows
+        if event_type == "syslog"
+    ]
+    if recollect_rows:
+        try:
+            await syslog_rules.process_recollect_batch(recollect_rows)
+        except Exception as exc:
+            LOGGER.warning("metrics: syslog re-collect trigger failed for %d events: %s", len(recollect_rows), exc)
+
+
+# ── Receiver lifecycle ──────────────────────────────────────────────────────
+#
+# Settings (ports, on/off, rule-engine switches) live in
+# state.EVENT_RECEIVER_CONFIG, persisted in auth_settings("event_receivers")
+# and applied at startup and by PUT /api/admin/metrics/receivers/config.
+# The default ports are unprivileged because the container runs as a
+# non-root user; publish host 162 -> 10162 and 514 -> 1514 to use the
+# standard ports.
+
+# Listen on every interface: devices send from anywhere. Tests rebind it to
+# loopback.
+_RECEIVER_BIND_HOST = "0.0.0.0"  # nosec B104 - trap/syslog listener must accept devices on any interface
+_RECEIVER_LABELS = {"trap": "SNMP trap", "syslog": "syslog"}
+_receiver_transports: dict[str, asyncio.DatagramTransport | None] = {"trap": None, "syslog": None}
+_receiver_ports: dict[str, int] = {"trap": 0, "syslog": 0}
+
+
+def receiver_running(kind: str) -> bool:
+    return _receiver_transports.get(kind) is not None
+
+
+async def _start_receiver(kind: str, port: int) -> bool:
+    """Bind one UDP receiver. True when it is (already) listening. A failed
+    bind is logged and returns False; it never raises."""
+    if _receiver_transports[kind] is not None:
+        return True
+    label = _RECEIVER_LABELS[kind]
+    try:
+        loop = asyncio.get_running_loop()
+        transport, _ = await loop.create_datagram_endpoint(
+            lambda: _TrapSyslogProtocol(kind),
+            local_addr=(_RECEIVER_BIND_HOST, port),
+        )
+    except Exception as exc:
+        LOGGER.warning("metrics: failed to start %s receiver on UDP port %d: %s", label, port, exc)
+        return False
+    _receiver_transports[kind] = transport
+    _receiver_ports[kind] = port
+    _RECEIVER_STATS[kind].reset(time.time())
+    LOGGER.info("metrics: %s receiver started on UDP port %d", label, port)
+    return True
+
+
+def _stop_receiver(kind: str) -> bool:
+    """Close one UDP receiver. True when it was running."""
+    transport = _receiver_transports[kind]
+    if transport is None:
+        return False
+    transport.close()
+    _receiver_transports[kind] = None
+    _receiver_ports[kind] = 0
+    LOGGER.info("metrics: %s receiver stopped", _RECEIVER_LABELS[kind])
+    return True
 
 
 async def start_trap_receiver(port: int = 10162) -> bool:
-    """Start SNMP trap UDP listener.  Uses port 10162 by default
-    (non-privileged).  Set to 162 if running as root."""
-    global _trap_transport
-    if _trap_transport is not None:
-        return True
-    try:
-        loop = asyncio.get_running_loop()
-        transport, _ = await loop.create_datagram_endpoint(
-            lambda: _TrapSyslogProtocol("trap"),
-            local_addr=("0.0.0.0", port),  # nosec B104 - trap/syslog listener must accept devices on any interface
-        )
-        _trap_transport = transport
-        LOGGER.info("metrics: SNMP trap receiver started on UDP port %d", port)
-        return True
-    except Exception as exc:
-        LOGGER.warning("metrics: failed to start trap receiver on port %d: %s", port, exc)
-        return False
+    """Start the SNMP trap UDP listener (10162 by default: unprivileged)."""
+    return await _start_receiver("trap", port)
 
 
-async def start_syslog_receiver(port: int = 10514) -> bool:
-    """Start syslog UDP listener.  Uses port 10514 by default
-    (non-privileged).  Set to 514 if running as root."""
-    global _syslog_transport
-    if _syslog_transport is not None:
-        return True
-    try:
-        loop = asyncio.get_running_loop()
-        transport, _ = await loop.create_datagram_endpoint(
-            lambda: _TrapSyslogProtocol("syslog"),
-            local_addr=("0.0.0.0", port),  # nosec B104 - trap/syslog listener must accept devices on any interface
-        )
-        _syslog_transport = transport
-        LOGGER.info("metrics: syslog receiver started on UDP port %d", port)
-        return True
-    except Exception as exc:
-        LOGGER.warning("metrics: failed to start syslog receiver on port %d: %s", port, exc)
-        return False
+async def start_syslog_receiver(port: int = 1514) -> bool:
+    """Start the syslog UDP listener (1514 by default: unprivileged)."""
+    return await _start_receiver("syslog", port)
 
 
-def stop_receivers():
-    global _trap_transport, _syslog_transport
-    if _trap_transport:
-        _trap_transport.close()
-        _trap_transport = None
-    if _syslog_transport:
-        _syslog_transport.close()
-        _syslog_transport = None
+def stop_trap_receiver() -> bool:
+    return _stop_receiver("trap")
+
+
+def stop_syslog_receiver() -> bool:
+    return _stop_receiver("syslog")
+
+
+def stop_receivers() -> None:
+    _stop_receiver("trap")
+    _stop_receiver("syslog")
+
+
+async def apply_event_receiver_config(new_cfg: dict) -> dict:
+    """Make state.EVENT_RECEIVER_CONFIG ``new_cfg`` (already sanitized) and
+    reconcile the listeners: a receiver is started, stopped or rebound only
+    when its own on/off or port differs from what is running. Returns the
+    config snapshot."""
+    state.EVENT_RECEIVER_CONFIG.update(new_cfg)
+    cfg = state.EVENT_RECEIVER_CONFIG
+    for kind in ("syslog", "trap"):
+        enabled = bool(cfg.get(f"{kind}_enabled"))
+        port = int(cfg.get(f"{kind}_port") or 0)
+        running = receiver_running(kind)
+        if running and (not enabled or _receiver_ports[kind] != port):
+            _stop_receiver(kind)
+            running = False
+        if enabled and not running:
+            await _start_receiver(kind, port)
+    return event_receiver_snapshot()
+
+
+def _epoch_iso(value: float) -> str:
+    return datetime.fromtimestamp(value, UTC).isoformat() if value else ""
+
+
+def event_receiver_snapshot() -> dict:
+    """The persisted receiver config plus the live listener state and the
+    counters since each receiver last started."""
+    snapshot = dict(state.EVENT_RECEIVER_CONFIG)
+    for kind in ("syslog", "trap"):
+        stats = _RECEIVER_STATS[kind]
+        running = receiver_running(kind)
+        snapshot[f"{kind}_running"] = running
+        snapshot[f"{kind}_listening_port"] = _receiver_ports[kind] if running else None
+        snapshot[f"{kind}_received"] = stats.received
+        snapshot[f"{kind}_errors"] = stats.errors
+        snapshot[f"{kind}_last_message_at"] = _epoch_iso(stats.last_message_at)
+        snapshot[f"{kind}_started_at"] = _epoch_iso(stats.started_at)
+    snapshot["events_dropped"] = _trap_events_dropped_total
+    snapshot["events_pending"] = len(_trap_event_buffer)
+    # OPNsense firewall log lines, summed per rule since Plexus started.
+    snapshot.update(opnsense_filterlog.receiver_stats())
+    return snapshot
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -1452,19 +1602,89 @@ async def trap_syslog_events(
 # ── Admin: Receiver control ─────────────────────────────────────────────────
 
 
+#
+# The receivers' settings are the persisted state.EVENT_RECEIVER_CONFIG. The
+# older start/stop endpoints write the same settings (both receivers on or
+# off, saved), so a receiver started through the API also starts with
+# Plexus and the Settings tab always shows what is running.
+
+
+class EventReceiverStartRequest(BaseModel):
+    """Optional ports; a port left out keeps its saved value."""
+
+    trap_port: int | None = Field(default=None, ge=1, le=65535)
+    syslog_port: int | None = Field(default=None, ge=1, le=65535)
+
+
+class EventReceiverConfigRequest(BaseModel):
+    """PUT body: a field left out keeps its saved value."""
+
+    syslog_enabled: bool | None = None
+    syslog_port: int | None = Field(default=None, ge=1, le=65535)
+    trap_enabled: bool | None = None
+    trap_port: int | None = Field(default=None, ge=1, le=65535)
+    syslog_alerts: bool | None = None
+    config_change_trigger: bool | None = None
+    repoll_trigger: bool | None = None
+    recollect_trigger: bool | None = None
+    filterlog_evidence: bool | None = None
+
+
+async def _save_event_receiver_config(cfg: dict, request: Request, action: str) -> dict:
+    """Sanitize, persist, apply and audit a receiver config. Returns the snapshot."""
+    sanitized = state._sanitize_event_receiver_config(cfg)
+    both_enabled = sanitized["syslog_enabled"] and sanitized["trap_enabled"]
+    if both_enabled and sanitized["syslog_port"] == sanitized["trap_port"]:
+        raise HTTPException(400, "The syslog and trap receivers cannot use the same UDP port.")
+    await db.set_auth_setting("event_receivers", sanitized)
+    snapshot = await apply_event_receiver_config(sanitized)
+    session = _get_session(request)
+    await _audit(
+        "system",
+        action,
+        user=session["user"] if session else "",
+        detail=(
+            f"syslog={'on' if sanitized['syslog_enabled'] else 'off'}:{sanitized['syslog_port']} "
+            f"trap={'on' if sanitized['trap_enabled'] else 'off'}:{sanitized['trap_port']} "
+            f"syslog_alerts={sanitized['syslog_alerts']} "
+            f"config_change_trigger={sanitized['config_change_trigger']} "
+            f"repoll_trigger={sanitized['repoll_trigger']} "
+            f"recollect_trigger={sanitized['recollect_trigger']} "
+            f"filterlog_evidence={sanitized['filterlog_evidence']}"
+        ),
+        correlation_id=_corr_id(request),
+    )
+    return snapshot
+
+
 @admin_router.post("/api/admin/metrics/receivers/start")
-async def admin_start_receivers(body: dict = {}):
-    trap_port = int(body.get("trap_port", 10162))
-    syslog_port = int(body.get("syslog_port", 10514))
-    trap_ok = await start_trap_receiver(trap_port)
-    syslog_ok = await start_syslog_receiver(syslog_port)
-    return {"trap_started": trap_ok, "syslog_started": syslog_ok}
+async def admin_start_receivers(request: Request, body: EventReceiverStartRequest | None = None):
+    """Turn both receivers on (optionally on new ports) and save that."""
+    cfg = {**state.EVENT_RECEIVER_CONFIG, "syslog_enabled": True, "trap_enabled": True}
+    if body is not None:
+        cfg.update(body.model_dump(exclude_none=True))
+    snapshot = await _save_event_receiver_config(cfg, request, "event_receivers.started")
+    return {"trap_started": snapshot["trap_running"], "syslog_started": snapshot["syslog_running"], **snapshot}
 
 
 @admin_router.post("/api/admin/metrics/receivers/stop")
-async def admin_stop_receivers():
-    stop_receivers()
+async def admin_stop_receivers(request: Request):
+    """Turn both receivers off and save that, so they stay off after a restart."""
+    cfg = {**state.EVENT_RECEIVER_CONFIG, "syslog_enabled": False, "trap_enabled": False}
+    await _save_event_receiver_config(cfg, request, "event_receivers.stopped")
     return {"ok": True}
+
+
+@admin_router.get("/api/admin/metrics/receivers/config")
+async def admin_get_event_receiver_config():
+    return event_receiver_snapshot()
+
+
+@admin_router.put("/api/admin/metrics/receivers/config")
+async def admin_update_event_receiver_config(body: EventReceiverConfigRequest, request: Request):
+    changes = body.model_dump(exclude_none=True)
+    cfg = {**state.EVENT_RECEIVER_CONFIG, **changes}
+    return await _save_event_receiver_config(cfg, request, "event_receivers.config.updated")
 
 
 @admin_router.post("/api/admin/metrics/rollup/hourly")

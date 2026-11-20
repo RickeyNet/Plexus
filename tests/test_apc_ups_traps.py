@@ -14,6 +14,7 @@ import asyncio
 import netcontrol.routes.state as state
 import pytest
 import routes.database as db
+from netcontrol import monitoring_repoll as repoll
 from netcontrol.integrations.apc import snmp as apc_snmp, traps as apc_traps
 from netcontrol.routes.snmp import SNMP_TRAP_OID, decode_snmp_trap
 from pyasn1.codec.ber import encoder
@@ -159,14 +160,14 @@ def repolls(monkeypatch):
     monkeypatch.setitem(state.MONITORING_CONFIG, "enabled", True)
     monkeypatch.setattr(monitoring, "poll_host_now", fake_poll)
     monkeypatch.setattr(apc_traps, "REPOLL_DELAY_SECONDS", 0.0)
-    apc_traps._repoll_waiting.clear()
+    repoll._repoll_waiting.clear()
     return polled
 
 
 async def _settle() -> None:
     for _ in range(5):
         await asyncio.sleep(0)
-    await asyncio.gather(*list(apc_traps._background), return_exceptions=True)
+    await asyncio.gather(*list(repoll._background), return_exceptions=True)
 
 
 async def _ups(name: str = "ups-t1", ip: str = UPS_IP, device_type: str = "apc_ups") -> tuple[int, int]:
@@ -301,13 +302,13 @@ async def test_nothing_happens_while_monitoring_is_off(repolls, monkeypatch):
 
 async def test_a_burst_of_traps_is_one_repoll(repolls, monkeypatch):
     monkeypatch.setattr(apc_traps, "REPOLL_DELAY_SECONDS", 0.05)
-    assert apc_traps.schedule_repoll(42, 0.05) is True
-    assert apc_traps.schedule_repoll(42, 0.05) is False
+    assert repoll.schedule_repoll(42, 0.05) is True
+    assert repoll.schedule_repoll(42, 0.05) is False
     await asyncio.sleep(0.1)
     await _settle()
     assert repolls == [42]
     # Waiting is over: the next trap schedules a new one.
-    assert apc_traps.schedule_repoll(42, 0.0) is True
+    assert repoll.schedule_repoll(42, 0.0) is True
     await _settle()
     assert repolls == [42, 42]
 
@@ -319,8 +320,8 @@ async def test_a_failing_repoll_is_logged(monkeypatch, caplog):
         raise RuntimeError("poll failed")
 
     monkeypatch.setattr(monitoring, "poll_host_now", broken)
-    apc_traps._repoll_waiting.clear()
-    assert apc_traps.schedule_repoll(43, 0.0)
+    repoll._repoll_waiting.clear()
+    assert repoll.schedule_repoll(43, 0.0)
     await _settle()
     assert "re-poll of host 43 failed" in caplog.text
 

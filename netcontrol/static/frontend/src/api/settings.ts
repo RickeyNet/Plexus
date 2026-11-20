@@ -276,6 +276,45 @@ export interface FlowCollectorConfig {
   sflow_running?: boolean;
 }
 
+/** Saved settings of the inbound syslog and SNMP trap receivers. */
+export interface EventReceiverSettings {
+  syslog_enabled: boolean;
+  syslog_port: number;
+  trap_enabled: boolean;
+  trap_port: number;
+  syslog_alerts: boolean;
+  config_change_trigger: boolean;
+  repoll_trigger: boolean;
+  recollect_trigger: boolean;
+  /** Sum OPNsense firewall log (filterlog) lines per rule; off drops them. */
+  filterlog_evidence: boolean;
+}
+
+/** The settings plus live listener state and counters since each receiver started. */
+export interface EventReceiverConfig extends EventReceiverSettings {
+  syslog_running?: boolean;
+  trap_running?: boolean;
+  syslog_listening_port?: number | null;
+  trap_listening_port?: number | null;
+  syslog_received?: number;
+  trap_received?: number;
+  syslog_errors?: number;
+  trap_errors?: number;
+  /** ISO timestamps; '' when none yet. */
+  syslog_last_message_at?: string;
+  trap_last_message_at?: string;
+  syslog_started_at?: string;
+  trap_started_at?: string;
+  /** Events dropped on buffer overflow since Plexus started (both receivers). */
+  events_dropped?: number;
+  events_pending?: number;
+  /** OPNsense filterlog lines counted into the rule evidence since Plexus started. */
+  filterlog_received?: number;
+  /** Filterlog lines dropped (switch off, unknown source, memory bound) since Plexus started. */
+  filterlog_dropped?: number;
+  filterlog_unknown_source?: number;
+}
+
 export interface TopologyDiscoveryConfig {
   enabled: boolean;
   interval_seconds: number;
@@ -939,6 +978,29 @@ export function useUpdateFlowCollectorConfig() {
         body: data,
       }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['admin', 'flows', 'config'] }),
+  });
+}
+
+// ── Syslog / SNMP trap receivers ───────────────────────────────────────────
+
+export function useEventReceiverConfig() {
+  return useQuery<EventReceiverConfig>({
+    queryKey: ['admin', 'event-receivers', 'config'],
+    queryFn: () => apiRequest('/admin/metrics/receivers/config'),
+    // Keeps the running state and counters current while the tab is open.
+    refetchInterval: 15_000,
+  });
+}
+
+export function useUpdateEventReceiverConfig() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data: EventReceiverSettings) =>
+      apiRequest<EventReceiverConfig>('/admin/metrics/receivers/config', {
+        method: 'PUT',
+        body: data,
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['admin', 'event-receivers', 'config'] }),
   });
 }
 

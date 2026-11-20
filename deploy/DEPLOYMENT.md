@@ -185,12 +185,20 @@ The AI access endpoint (`/mcp`, off until enabled in Settings > AI Access) is se
 
 Additional UDP ports exposed on the app container:
 
-| Port       | Purpose                       |
-|------------|-------------------------------|
-| `2055/udp` | NetFlow v5/v9/IPFIX collector |
-| `6343/udp` | sFlow collector               |
-| `162/udp`  | SNMP trap receiver            |
-| `1514/udp` | Syslog receiver               |
+| Host port  | Container port | Purpose                       |
+|------------|----------------|-------------------------------|
+| `2055/udp` | `2055/udp`     | NetFlow v5/v9/IPFIX collector |
+| `6343/udp` | `6343/udp`     | sFlow collector               |
+| `162/udp`  | `10162/udp`    | SNMP trap receiver            |
+| `1514/udp` | `1514/udp`     | Syslog receiver               |
+
+The app runs as a non-root user, so the syslog and trap receivers listen on
+unprivileged ports (1514 and 10162). They are off until an admin turns them
+on in **Settings > Syslog & Traps**; after that they start with Plexus. Point
+devices at host port 162 for traps and 1514 for syslog. For devices that can
+only send syslog to UDP 514, add `"514:1514/udp"` to the `plexus` service's
+`ports` in `docker-compose.yml` (and open 514/udp in the firewall). A port
+changed in Settings needs the matching container port in `docker-compose.yml`.
 
 ## Step 6: Verify
 

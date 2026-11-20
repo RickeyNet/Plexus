@@ -177,6 +177,16 @@ DEFAULT_RULES = {
     # tests/test_apc_ups*.py (100%, 100%); do not lower them to land a change.
     "netcontrol/integrations/apc/snmp.py": 95.0,
     "netcontrol/integrations/apc/traps.py": 95.0,
+    # Syslog alert rules: parsing, the built-in rules, the engine and its
+    # triggers, storage and the API, and the shared re-poll scheduler.
+    # Measured by tests/test_syslog_rules.py and tests/test_apc_ups_traps.py
+    # (96%, 98%, 98%, 92%); do not lower them to land a change.
+    "netcontrol/syslog_rules.py": 92.0,
+    "netcontrol/routes/syslog_rules.py": 92.0,
+    "routes/db/syslog_rules.py": 92.0,
+    "netcontrol/monitoring_repoll.py": 88.0,
+    # Syslog rule activity analysis; measured by tests/test_syslog_activity.py.
+    "netcontrol/syslog_activity.py": 92.0,
 }
 
 

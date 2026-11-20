@@ -6,7 +6,8 @@ rules plus steps to confirm flow packets are reaching the collector.
 
 Reference ruleset for a Plexus host running the Docker stack
 (`docker-compose.yml`: nginx 80/443, app 8080, NetFlow 2055/udp, sFlow
-6343/udp, SNMP traps 162/udp, syslog 1514/udp). Substitute the placeholder
+6343/udp, SNMP traps 162/udp (to container port 10162), syslog 1514/udp).
+Substitute the placeholder
 variables at the top for your environment, then run the block as `root`.
 
 > **Important - Docker + UFW interaction**
@@ -79,9 +80,10 @@ sudo ufw allow from "$SFLOW_EXPORTERS"   to any port 6343 proto udp comment 'sFl
 # SNMP traps
 sudo ufw allow from "$SNMP_TRAP_SOURCES" to any port 162  proto udp comment 'SNMP traps'
 
-# Syslog (Plexus listens on 1514/udp - UFW lets you also publish 514 if you
-# add an iptables NAT redirect; keep 1514 by default).
+# Syslog (Plexus listens on 1514/udp). For devices that can only send to
+# 514, also publish "514:1514/udp" in docker-compose.yml and open 514 here.
 sudo ufw allow from "$SYSLOG_SOURCES"    to any port 1514 proto udp comment 'Syslog'
+# sudo ufw allow from "$SYSLOG_SOURCES"  to any port 514  proto udp comment 'Syslog (514)'
 ```
 
 ## 5. Inbound - federation (optional)
@@ -181,7 +183,10 @@ sudo ufw status numbered verbose
 its own NAT rules that bypass `ufw` for any port published in
 `docker-compose.yml`. Add explicit `DOCKER-USER` rules so the
 source-IP restrictions are actually enforced for the published
-container ports (2055, 6343, 162, 1514, 80, 443, 8080):
+container ports (2055, 6343, 10162, 1514, 80, 443, 8080). `DOCKER-USER`
+sees a packet after Docker has translated it, so `--dport` is the
+container port: traps sent to host port 162 match `--dport 10162`, and
+syslog published as `514:1514/udp` still matches `--dport 1514`:
 
 ```bash
 # Run as root. These rules are NOT persisted by UFW - install
@@ -196,7 +201,7 @@ sudo iptables -I DOCKER-USER -m conntrack --ctstate ESTABLISHED,RELATED -j RETUR
 # Telemetry: restrict to declared exporter/source subnets
 sudo iptables -I DOCKER-USER -p udp --dport 2055 -s "$NETFLOW_EXPORTERS" -j RETURN
 sudo iptables -I DOCKER-USER -p udp --dport 6343 -s "$SFLOW_EXPORTERS"   -j RETURN
-sudo iptables -I DOCKER-USER -p udp --dport 162  -s "$SNMP_TRAP_SOURCES" -j RETURN
+sudo iptables -I DOCKER-USER -p udp --dport 10162 -s "$SNMP_TRAP_SOURCES" -j RETURN
 sudo iptables -I DOCKER-USER -p udp --dport 1514 -s "$SYSLOG_SOURCES"    -j RETURN
 
 # Web UI: admin + user networks only
@@ -211,7 +216,7 @@ sudo iptables -I DOCKER-USER -p tcp --dport 8080 -s "$ADMIN_NET" -j RETURN
 # Drop everything else destined for the published container ports
 sudo iptables -A DOCKER-USER -p udp --dport 2055 -j DROP
 sudo iptables -A DOCKER-USER -p udp --dport 6343 -j DROP
-sudo iptables -A DOCKER-USER -p udp --dport 162  -j DROP
+sudo iptables -A DOCKER-USER -p udp --dport 10162 -j DROP
 sudo iptables -A DOCKER-USER -p udp --dport 1514 -j DROP
 sudo iptables -A DOCKER-USER -p tcp --dport 443  -j DROP
 sudo iptables -A DOCKER-USER -p tcp --dport 80   -j DROP

@@ -44,6 +44,12 @@ with a limit of 90 seconds per host. A poll has three independent parts:
 | SSH | A service credential is set | VPN tunnels (`show crypto isakmp sa`, or `show vpn-sessiondb summary` on an ASA) and the route table |
 | ICMP | When the server can ping and ICMP is not switched off | Response time and packet loss (3 pings, 2 second timeout) |
 
+A host that is the firewall of an OPNsense topology source also has its
+health read over the source's API at every poll (CPU, memory, uptime,
+file systems, temperature, state table), with no SNMP profile needed; the
+API fills only what SNMP left empty (see
+[OPNsense firewall metrics](#opnsense-firewall-metrics)).
+
 Hosts with the platform `icmp_only` get the ping only. The CPU and memory
 OIDs depend on the host's platform; the built-in list is on **Configure >
 OID Profiles** under **Built-in Vendor OIDs**.
@@ -73,6 +79,24 @@ dashboard panels and graph templates:
 
 Interface traffic is stored separately per interface and shown on the
 device detail page.
+
+### OPNsense firewall metrics
+
+An inventory host that is the firewall of an OPNsense topology source (see
+[OPNsense in the Topology Map](opnsense-topology.md#health-and-services))
+gets these samples too, read over the source's API:
+
+| Metric | Meaning |
+|---|---|
+| `fw_disk_used_pct` | Use of the fullest file system in % |
+| `fw_temperature_c` | The hottest temperature sensor in °C |
+| `fw_pf_states`, `fw_pf_states_pct` | State table entries, and their share of the limit in % |
+| `fw_load_avg_1m` | Load average over 1 minute |
+
+Two built-in alerts come with them: `fw_disk_full` when a file system is
+at 90 % or more (critical from 95 %) and `fw_state_table` when the state
+table is at 80 % or more of its limit (critical from 95 %). Each resolves
+at the first poll below its threshold.
 
 ## Using the Monitoring page
 
@@ -146,6 +170,7 @@ use acknowledge and suppressions.
 | VPN Tunnels Down | VPN tunnels down |
 | Route Count | Routes in the global table |
 | Uptime (seconds) | Device uptime |
+| Firewall disk used %, temperature, state table entries, state table %, load average | The [OPNsense firewall metrics](#opnsense-firewall-metrics) |
 
 A rule is checked against every poll of the hosts in its scope. A rule on a
 metric the poll has no value for (for example CPU without SNMP) never fires.
@@ -164,9 +189,16 @@ by the retention cleanup.
 The syslog messages and SNMP traps Plexus received, filtered by
 **Severity**, **Type** (**Syslog** or **SNMP Trap**) and **Search**, with
 the counts **Total Events**, **Critical+**, **Errors** and **Warnings**. The
-receivers listen on UDP 10514 (syslog) and 10162 (traps); they are not
-started with Plexus: an admin starts them with
-`POST /api/admin/metrics/receivers/start`.
+receivers listen on UDP 1514 (syslog) and 10162 (traps). They are off until
+an admin turns them on in **Settings > Syslog & Traps** (see
+[administration.md](administration.md#syslog--traps)); after that they start
+with Plexus. The Docker stack publishes host port 162 to the trap receiver
+and 1514 to the syslog receiver; for devices that can only send syslog to
+UDP 514, publish `514:1514/udp` as well.
+
+Syslog from inventory hosts can also raise alerts, start a config backup
+and drift check, and trigger an immediate re-poll: see
+[Syslog Rules](syslog-rules.md).
 
 ### Availability
 
@@ -179,7 +211,13 @@ changes state; an outage with no end is **Ongoing**.
 
 Below it, **Integrations and cloud** shows the same for the entities that
 Meraki, Cato, FMC, Panorama, Appgate, OPNsense, AWS, Azure and GCP report; see
-[Availability tracking](meraki-topology.md#availability-tracking). The
+[Availability tracking](meraki-topology.md#availability-tracking). Its
+**Avg traffic** column gives the mean traffic in and out of the entities
+whose vendor reports byte counters (OPNsense tunnels and OpenVPN servers,
+see [Tunnel traffic](opnsense-topology.md#tunnel-traffic)), and
+**Measurements** opens the charts of what is measured for an entity: the
+latency, jitter and loss of an OPNsense gateway, the traffic in and out of
+a tunnel (an average between two collections). The
 **Meraki alerts**, **Cato egress vs cloud allow-lists** and
 [**Cato shared hosts vs Azure**](cato-topology.md#shared-hosts-check-azure)
 panels follow.
@@ -244,7 +282,7 @@ Poll**, and the matching IPAM subnet when there is one.
 | See every Monitoring tab and the device detail page | `monitoring` |
 | Poll Now, acknowledge alerts, manage rules and suppressions, mute entities | `monitoring.write` |
 | OID profiles | `monitoring` |
-| Settings > Monitoring, start the syslog and trap receivers, vendor OID overrides | Admin |
+| Settings > Monitoring, Settings > Syslog & Traps (the syslog and trap receivers), vendor OID overrides | Admin |
 | Graph templates, host templates and graph trees | `graph-templates` |
 | Device detail **Compliance** and **Flow** tabs | `compliance`, `traffic-analysis` |
 

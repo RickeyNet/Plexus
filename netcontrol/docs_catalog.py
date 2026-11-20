@@ -118,6 +118,7 @@ PAGES: list[tuple[str, list[tuple[str, str]]]] = [
         [
             ("Dashboard", "docs/dashboard.md"),
             ("Monitoring", "docs/monitoring.md"),
+            ("Syslog-Rules", "docs/syslog-rules.md"),
             ("Graph-Templates", "docs/graph-templates.md"),
             ("SLA-Monitoring", "docs/sla-monitoring.md"),
             ("Software-Versions-and-Vulnerabilities", "docs/software-versions.md"),

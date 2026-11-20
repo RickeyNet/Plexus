@@ -38,6 +38,7 @@ __all__ = [
     "acknowledge_monitoring_alert",
     "delete_old_monitoring_alerts",
     "resolve_monitoring_alerts",
+    "resolve_stale_monitoring_alerts",
     "create_route_snapshot",
     "get_route_snapshots",
     "get_latest_route_snapshot",
@@ -562,6 +563,28 @@ async def resolve_monitoring_alerts(dedup_key: str, resolved_by: str = "auto-res
         await db.close()
 
 
+async def resolve_stale_monitoring_alerts(
+    alert_type: str, metric: str, older_than_minutes: int, resolved_by: str = "auto-resolved"
+) -> int:
+    """Acknowledge the open ``alert_type`` / ``metric`` alerts last seen
+    more than ``older_than_minutes`` ago as ``resolved_by`` (0: every open
+    one): the event that raises them has not been seen again. Returns how
+    many were open."""
+    db = await _dbcore.get_db()
+    try:
+        cursor = await db.execute(
+            """UPDATE monitoring_alerts
+               SET acknowledged = 1, acknowledged_by = ?, acknowledged_at = datetime('now')
+               WHERE alert_type = ? AND metric = ? AND acknowledged = 0
+                 AND last_seen_at <= datetime('now', '-' || ? || ' minutes')""",
+            (resolved_by, alert_type, metric, max(0, int(older_than_minutes))),
+        )
+        await db.commit()
+        return cursor.rowcount or 0
+    finally:
+        await db.close()
+
+
 async def delete_old_monitoring_alerts(retention_days: int) -> int:
     db = await _dbcore.get_db()
     try:
@@ -653,10 +676,15 @@ async def get_latest_route_snapshots_for_hosts(host_ids: list[int]) -> dict[int,
 
 
 async def delete_old_route_snapshots(retention_days: int) -> int:
+    """Delete the route snapshots older than ``retention_days``, except each
+    host's newest: an unchanged table is never written again, so that row
+    is what the path trace reads until the table changes."""
     db = await _dbcore.get_db()
     try:
         cursor = await db.execute(
-            "DELETE FROM route_snapshots WHERE captured_at < datetime('now', '-' || ? || ' days')",
+            """DELETE FROM route_snapshots
+               WHERE captured_at < datetime('now', '-' || ? || ' days')
+                 AND id NOT IN (SELECT MAX(id) FROM route_snapshots GROUP BY host_id)""",
             (retention_days,),
         )
         await db.commit()

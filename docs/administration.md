@@ -29,6 +29,7 @@ has its own guide, this page gives a short summary and the link.
 | **Discovery** | Topology discovery and STP polling schedules, STP root policies |
 | **Monitoring** | Polling switch, interval, retention, CPU and memory thresholds, alert escalation |
 | **NetFlow** | The NetFlow, IPFIX and sFlow collector |
+| **Syslog & Traps** | The UDP receivers for device syslog messages and SNMP traps, and what a received syslog message triggers |
 | **Notifications** | Alert notification channels |
 | **Features** | Which features appear in the navigation |
 | **Custom Fields & Tags** | Extra fields and tags for hosts, groups and IPAM prefixes |
@@ -189,6 +190,42 @@ Turns the flow collector on (**Enabled**), sets **NetFlow / IPFIX port**
 summary retention and the aggregation interval. Saving rebinds the
 listeners without a restart. See [flow-collector.md](flow-collector.md).
 
+### Syslog & Traps
+
+The receivers for syslog messages and SNMP traps that devices send to
+Plexus (not the **Logging** tab, which forwards Plexus's own log). Each
+receiver has **Enabled** (off by default) and a **UDP port**: syslog 1514,
+traps 10162. Both are unprivileged ports, because Plexus runs as a non-root
+user. Choose **Save Receiver Settings**: each receiver is started, stopped or
+moved to its new port right away, and an enabled receiver starts again with
+Plexus. A port that cannot be bound (another program holds it) is logged and
+the receiver shows **Stopped**.
+
+Each receiver shows **Running on UDP** with its port, or **Stopped**, and since it
+last started: **Received** messages, **Last message** and **Unreadable**
+messages (ones that could not be parsed). Below them is the number of events
+dropped since Plexus started because the write buffer was full.
+
+Three switches set what a received syslog message does:
+
+- **Raise alerts from syslog rules**: a message that matches a syslog alert
+  rule raises a monitoring alert.
+- **Back up the config on a change message**: a configuration-change
+  message starts a config backup and drift check of the sending host.
+- **Re-poll on link down or reload**: a link-down or reload message polls
+  the sending host at once.
+
+All three are on by default. Received events are listed in
+[Monitoring > Events](monitoring.md#events).
+
+In Docker, `docker-compose.yml` publishes host port 162 to the trap
+receiver's 10162 and 1514 to the syslog receiver's 1514, so devices send
+traps to 162 and syslog to 1514. For devices that can only send syslog to
+UDP 514, add `"514:1514/udp"` to the `plexus` service's `ports`. A port
+changed here needs the matching container port in `docker-compose.yml`, and
+the firewall must let the devices reach the host port
+([deploy/FIREWALL.md](../deploy/FIREWALL.md)).
+
 ### Notifications
 
 Email, PagerDuty, webhook and Microsoft Teams channels for monitoring
@@ -251,7 +288,8 @@ section "Update from the web UI".
 - **Feature visibility is global.** It applies to all users. Use access
   groups to control who may use a feature.
 - **Audit.** User, access group and feature visibility changes are written
-  to the audit log under `auth`, syslog and SIEM changes under `system`, and
+  to the audit log under `auth`, syslog forwarding, syslog and trap
+  receiver, and SIEM changes under `system`, and
   update actions under `admin_updates`. Login rule changes are not audited.
   See [audit-log.md](audit-log.md).
 
@@ -281,7 +319,17 @@ GET|PUT /api/admin/login-rules
 GET|PUT /api/admin/feature-visibility        {"hidden": ["federation"]}
 GET    /api/admin/updates/status
 POST   /api/admin/updates/check | apply | rollback
+GET|PUT /api/admin/metrics/receivers/config  {"syslog_enabled": true, "syslog_port": 1514}
+POST   /api/admin/metrics/receivers/start    {"trap_port": 10162, "syslog_port": 1514}  (optional body)
+POST   /api/admin/metrics/receivers/stop
 ```
+
+A field left out of the receiver `PUT` keeps its saved value. `filterlog_evidence` (default on)
+sums OPNsense firewall log lines per rule
+([opnsense-topology.md](opnsense-topology.md#firewall-log-evidence)); the `GET` answer adds
+`filterlog_received`, `filterlog_dropped` and `filterlog_unknown_source` since Plexus started. `start` and
+`stop` turn both receivers on or off and save that, the same as the
+**Enabled** boxes; the ports in a `start` body are saved too.
 
 ```json
 POST /api/admin/users

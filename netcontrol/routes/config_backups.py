@@ -542,24 +542,13 @@ async def run_config_backup_policy_now(policy_id: int, request: Request):
         async def _do_backup(host):
             nonlocal backed_up, skipped, errs
             async with sem:
-                try:
-                    # An unchanged config writes no new row (the host's
-                    # newest backup is marked re-checked instead).
-                    stored = await get_device_config(host, cred, capture_method="manual", policy_id=policy_id)
-                    if not stored.created:
-                        skipped += 1
-                        return
-                    backed_up += 1
-                except Exception as exc:
-                    await db.create_config_backup(
-                        policy_id=policy_id,
-                        host_id=host["id"],
-                        config_text="",
-                        capture_method="manual",
-                        status="error",
-                        error_message=str(exc)[:1000],
-                    )
-                    errs += 1
+                result = await backup_host(host, cred, policy_id=policy_id, capture_method="manual")
+            if result is True:
+                backed_up += 1
+            elif result == "skipped":
+                skipped += 1
+            else:
+                errs += 1
 
         await asyncio.gather(*[_do_backup(h) for h in hosts], return_exceptions=True)
         await db.update_config_backup_policy_last_run(policy_id)
@@ -666,6 +655,65 @@ async def restore_config_from_backup(body: ConfigBackupRestoreRequest, request: 
 _POLL_INTERVAL_SECONDS = 60
 
 
+async def backup_host(host: dict, cred: dict, *, policy_id: int, capture_method: str) -> bool | str:
+    """Back up one host of a backup policy. True when a new backup row was
+    stored, ``"skipped"`` when the config is unchanged (no new row: the
+    host's newest backup is marked re-checked instead), False when the
+    capture failed (recorded as an error row). ``capture_method`` is stored
+    on the row: ``scheduled``, ``manual``, ``syslog`` (a configuration
+    change message from the device)."""
+    try:
+        stored = await get_device_config(host, cred, capture_method=capture_method, policy_id=policy_id)
+        return True if stored.created else "skipped"
+    except Exception as exc:
+        await db.create_config_backup(
+            policy_id=policy_id,
+            host_id=host["id"],
+            config_text="",
+            capture_method=capture_method,
+            status="error",
+            error_message=str(exc)[:1000],
+        )
+        return False
+
+
+async def _policy_credential(policy: dict) -> dict | None:
+    """The credential a scheduled run of ``policy`` uses, or None (logged)
+    when it is rejected. The stored credential is re-validated against the
+    policy creator so a policy can never keep running with a credential its
+    creator no longer owns (or after the creator account is removed)."""
+    try:
+        return await require_credential_access(
+            policy["credential_id"],
+            submitter_username=policy.get("created_by") or None,
+            allow_service=True,
+        )
+    except HTTPException as exc:
+        LOGGER.warning(
+            "config-backup: credential %s rejected for policy %s (created_by=%r): %s",
+            policy["credential_id"],
+            policy["id"],
+            policy.get("created_by"),
+            exc.detail,
+        )
+        return None
+
+
+async def host_backup_policy(host: dict) -> tuple[dict, dict] | None:
+    """The enabled backup policy of ``host``'s inventory group to back it up
+    with outside the schedule, and that policy's credential: the first one
+    by name whose credential is accepted. None when there is none."""
+    if host.get("group_id") is None:
+        return None
+    for policy in await db.get_config_backup_policies(int(host["group_id"])):
+        if not policy.get("enabled"):
+            continue
+        cred = await _policy_credential(policy)
+        if cred is not None:
+            return policy, cred
+    return None
+
+
 async def _run_config_backups_once() -> dict:
     """Run backups for all due policies."""
     due_policies = await db.get_config_backup_policies_due()
@@ -678,43 +726,14 @@ async def _run_config_backups_once() -> dict:
     for policy in due_policies:
         try:
             hosts = await db.get_hosts_for_group(policy["group_id"])
-            try:
-                # Re-validate the stored credential against the policy creator so
-                # a policy can never keep running with a credential its creator
-                # no longer owns (or after the creator account is removed).
-                cred = await require_credential_access(
-                    policy["credential_id"],
-                    submitter_username=policy.get("created_by") or None,
-                    allow_service=True,
-                )
-            except HTTPException as exc:
-                LOGGER.warning(
-                    "config-backup: credential %s rejected for policy %s (created_by=%r): %s",
-                    policy["credential_id"],
-                    policy["id"],
-                    policy.get("created_by"),
-                    exc.detail,
-                )
+            cred = await _policy_credential(policy)
+            if cred is None:
                 errors += 1
                 continue
 
             async def _backup_host(host, cred_data, pol_id):
                 async with sem:
-                    try:
-                        # An unchanged config writes no new row (the host's
-                        # newest backup is marked re-checked instead).
-                        stored = await get_device_config(host, cred_data, capture_method="scheduled", policy_id=pol_id)
-                        return True if stored.created else "skipped"
-                    except Exception as exc:
-                        await db.create_config_backup(
-                            policy_id=pol_id,
-                            host_id=host["id"],
-                            config_text="",
-                            capture_method="scheduled",
-                            status="error",
-                            error_message=str(exc)[:1000],
-                        )
-                        return False
+                    return await backup_host(host, cred_data, policy_id=pol_id, capture_method="scheduled")
 
             tasks = [_backup_host(h, cred, policy["id"]) for h in hosts]
             results = await asyncio.gather(*tasks, return_exceptions=True)
