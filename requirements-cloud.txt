@@ -12,21 +12,21 @@
 #   RUN pip install --no-cache-dir -r requirements-cloud.txt
 
 # ── AWS (topology + CloudWatch Logs Insights flow logs + CloudWatch metrics)
-boto3>=1.34,<2
+boto3>=1.44.5,<2
 
 # ── Azure (topology + NSG flow-log blobs + Azure Monitor metrics)
 # <1.16.1 has GHSA-m5vv-6r4h-3vj9 (elevation of privilege).
-azure-identity>=1.16.1,<2
-azure-mgmt-network>=25,<32
+azure-identity>=1.27.0,<2
+azure-mgmt-network>=33.1.0,<34
 # Lists the resource groups, so the gateways and connections of every group
 # are read (the Network API lists them per group only). Optional: without it
 # the groups of the resources already read are used.
-azure-mgmt-resource>=23,<27
-azure-storage-blob>=12.19,<13
-azure-monitor-query>=1.3,<2
+azure-mgmt-resource>=26.0.0,<27
+azure-storage-blob>=12.31.1,<13
+azure-monitor-query>=2.0.0,<3
 
 # ── GCP (topology + Cloud Logging vpc_flows + Cloud Monitoring metrics)
-google-auth>=2.29,<3
-google-api-python-client>=2.126,<3
-google-cloud-logging>=3.10,<4
-google-cloud-monitoring>=2.21,<3
+google-auth>=2.62.2,<3
+google-api-python-client>=2.202.0,<3
+google-cloud-logging>=3.17.0,<4
+google-cloud-monitoring>=2.32.0,<3
