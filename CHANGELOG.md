@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Security maintenance: access-control, input-handling or resource-limit updates; detailed review notes are maintained privately.
+
 ## 1.1.0 - 2026-11-19
 
 Feature release covering expanded inventory and infrastructure management, cloud and vendor monitoring, topology and path tracing, automation approvals, SSO, external secrets providers, and security and upgrade improvements.
