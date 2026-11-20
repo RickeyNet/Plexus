@@ -460,3 +460,268 @@ def test_unrestricted_user_sees_everything(admin, estate):
         assert everyone.get(url.format(estate["hB"])).status_code == 200, url
     assert everyone.get(f"/api/organization/tenants/{estate['tB']}").status_code == 200
     assert everyone.get("/api/dashboard").json()["stats"]["total_hosts"] >= 2
+
+
+# ── DCIM and virtualization ──────────────────────────────────────────────────
+#
+# A writable grant reaches its hosts and their tenants; a site is reached read
+# only. So a record is writable through its tenant or host, never its site.
+
+DCIM = "/api/dcim"
+VIRT = "/api/virtualization"
+
+
+def _made(client: CsrfClient, url: str, body: dict) -> dict:
+    resp = client.post(url, json=body)
+    assert resp.status_code == 201, resp.text
+    return resp.json()
+
+
+def _listed(client: CsrfClient, url: str, key: str = "") -> set[int]:
+    resp = client.get(url)
+    assert resp.status_code == 200, resp.text
+    return {int(r["id"]) for r in _rows(resp.json(), key)}
+
+
+def test_dcim_racks_power_and_host_records(admin, estate, writer, reader):
+    e = estate
+    role = _made(admin, f"{DCIM}/rack-roles", {"name": "Network"})["id"]
+    rack = {
+        key: _made(admin, f"{DCIM}/racks", body)["id"]
+        for key, body in {
+            "east": {"site_id": e["sA"], "name": "A01", "tenant_id": e["tA"], "role_id": role},
+            "west": {"site_id": e["sB"], "name": "B01", "tenant_id": e["tB"], "role_id": role},
+            # In the west site for the east tenant: reached through the tenant only.
+            "lent": {"site_id": e["sB"], "name": "B02", "tenant_id": e["tA"]},
+        }.items()
+    }
+    panel = {
+        key: _made(admin, f"{DCIM}/power-panels", {"site_id": e[site], "name": f"MDB-{key}"})["id"]
+        for key, site in (("east", "sA"), ("west", "sB"))
+    }
+    feed = {
+        key: _made(admin, f"{DCIM}/power-feeds", {"power_panel_id": panel[key], "rack_id": rack[key], "name": "A"})[
+            "id"
+        ]
+        for key in ("east", "west")
+    }
+    rear = {
+        key: _made(admin, f"{DCIM}/rear-ports", {"host_id": e[host], "name": "R1"})["id"]
+        for key, host in (("east", "hA"), ("west", "hB"))
+    }
+    reservations = f"{DCIM}/rack-reservations"
+    hidden = {"rack_id": rack["lent"], "units": [5], "user": "west-ops", "description": "west growth"}
+    own = {"rack_id": rack["lent"], "units": [6], "tenant_id": e["tA"], "description": "east growth"}
+    res = {"hidden": _made(admin, reservations, hidden)["id"], "own": _made(admin, reservations, own)["id"]}
+    spare = _made(admin, f"/api/inventory/{e['B']}/hosts", {"hostname": "spare-west", "ip_address": "198.51.100.11"})
+    for host, body in (
+        (e["hA"], {"rack_id": rack["east"], "rack_position": 1}),
+        (e["hB"], {"rack_id": rack["lent"], "rack_position": 1}),
+        (int(spare["id"]), {"rack_id": rack["lent"]}),  # in the rack, not mounted
+    ):
+        assert admin.put(f"{DCIM}/hosts/{host}/placement", json=body).status_code == 200, body
+    _made(admin, f"{DCIM}/power-ports", {"host_id": e["hB"], "name": "PSU1", "maximum_draw": 500})
+
+    # Lists keep the caller's records; a hidden one answers like an unknown id.
+    assert _listed(writer, f"{DCIM}/racks") == {rack["east"], rack["lent"]}
+    assert writer.get(f"{DCIM}/racks/{rack['west']}").status_code == 404
+    assert writer.get(f"{DCIM}/racks/{rack['east']}").json()["name"] == "A01"
+    assert _listed(writer, f"{DCIM}/power-panels") == {panel["east"]}
+    assert _listed(writer, f"{DCIM}/power-feeds") == {feed["east"]}
+    assert _listed(writer, f"{DCIM}/rear-ports") == {rear["east"]}
+    assert _listed(writer, reservations) == {res["own"]}
+    # A shared rack role counts the caller's racks only.
+    assert [r["rack_count"] for r in writer.get(f"{DCIM}/rack-roles").json()] == [1]
+    assert [r["rack_count"] for r in admin.get(f"{DCIM}/rack-roles").json()] == [2]
+
+    # A new record must be writable: by its tenant or host, not by its site alone.
+    new_rack = {"site_id": e["sA"], "name": "A02"}
+    assert writer.post(f"{DCIM}/racks", json=new_rack).status_code == 403
+    assert writer.post(f"{DCIM}/racks", json={**new_rack, "tenant_id": e["tB"]}).status_code == 403
+    assert reader.post(f"{DCIM}/racks", json={**new_rack, "tenant_id": e["tA"]}).status_code == 403
+    assert writer.post(f"{DCIM}/racks", json={**new_rack, "tenant_id": e["tA"]}).status_code == 201
+    assert writer.post(f"{DCIM}/rack-roles", json={"name": "Storage"}).status_code == 403
+    assert writer.post(f"{DCIM}/power-panels", json={"site_id": e["sA"], "name": "MDB-2"}).status_code == 403
+    new_feed = {"power_panel_id": panel["east"], "name": "B"}
+    assert writer.post(f"{DCIM}/power-feeds", json=new_feed).status_code == 403
+    assert writer.post(f"{DCIM}/rear-ports", json={"host_id": e["hB"], "name": "R9"}).status_code == 403
+    assert writer.post(f"{DCIM}/rear-ports", json={"host_id": e["hA"], "name": "R2"}).status_code == 201
+    # A reference to a record the caller may not read answers like an unknown id.
+    for path, body, field_name in (
+        ("power-feeds", {**new_feed, "power_panel_id": panel["west"]}, "power_panel_id"),
+        ("rack-reservations", {"rack_id": rack["west"], "units": [9], "tenant_id": e["tA"]}, "rack_id"),
+        ("front-ports", {"host_id": e["hA"], "name": "F1", "rear_port_id": rear["west"]}, "rear_port_id"),
+    ):
+        refused = writer.post(f"{DCIM}/{path}", json=body)
+        assert refused.status_code == 422 and f"Unknown id: {field_name}" in refused.text, path
+    _made(writer, reservations, {"rack_id": rack["east"], "units": [9], "tenant_id": e["tA"]})
+
+    # An edit needs a writable record that stays writable under its new keys.
+    east = f"{DCIM}/racks/{rack['east']}"
+    assert reader.put(east, json={"comments": "checked"}).status_code == 403
+    assert writer.put(east, json={"comments": "checked"}).json()["comments"] == "checked"
+    assert writer.put(east, json={"tenant_id": e["tB"]}).status_code == 403
+    assert writer.delete(f"{DCIM}/racks/{rack['west']}").status_code == 404
+    assert reader.delete(east).status_code == 403
+
+    # Elevation: other devices are anonymous occupied units, other reservations lose their text.
+    lent = writer.get(f"{DCIM}/racks/{rack['lent']}/elevation").json()
+    blocks = lent["faces"]["front"]
+    assert [(b["host_id"], b["name"]) for b in blocks if b["kind"] == "device"] == [(None, "")]
+    shown = {b["reservation_id"]: (b["description"], b["user"]) for b in blocks if b["kind"] == "reservation"}
+    assert shown == {None: ("", ""), res["own"]: ("east growth", "")}
+    assert [r["id"] for r in lent["reservations"]] == [res["own"]] and lent["unmounted"] == []
+    full = admin.get(f"{DCIM}/racks/{rack['lent']}/elevation").json()
+    assert e["hB"] in {b.get("host_id") for b in full["faces"]["front"]}
+    assert len(full["unmounted"]) == 1 and len(full["reservations"]) == 2
+    mine = writer.get(f"{DCIM}/racks/{rack['east']}/elevation").json()
+    assert e["hA"] in {b.get("host_id") for b in mine["faces"]["front"]}
+    assert writer.get(f"{DCIM}/racks/{rack['west']}/elevation").status_code == 404
+    # Rack power: the ports of readable devices only.
+    assert writer.get(f"{DCIM}/racks/{rack['lent']}/power").json()["ports"] == []
+    assert len(admin.get(f"{DCIM}/racks/{rack['lent']}/power").json()["ports"]) == 1
+    assert writer.get(f"{DCIM}/racks/{rack['west']}/power").status_code == 404
+
+    # Placement: a writable host, into a rack the caller may read.
+    place = f"{DCIM}/hosts/{e['hA']}/placement"
+    assert writer.put(place, json={"rack_id": rack["west"], "rack_position": 3}).status_code == 422
+    assert reader.put(place, json={"rack_position": 2}).status_code == 403
+    assert writer.put(place, json={"rack_position": 2}).json()["rack_position"] == 2
+    assert writer.put(f"{DCIM}/hosts/{e['hB']}/placement", json={"rack_id": None}).status_code == 404
+
+
+def test_dcim_cables_and_traces_stop_at_the_scope(admin, estate, writer, reader):
+    e = estate
+    cables = f"{DCIM}/cables"
+
+    def interface(host: str, name: str) -> dict:
+        return {"type": "interface", "host_id": e[host], "name": name}
+
+    def cable(a: dict, b: dict) -> int:
+        return int(_made(admin, cables, {"a": a, "b": b})["id"])
+
+    def trace(client: CsrfClient, **params):
+        return client.get(f"{DCIM}/trace", params=params)
+
+    feed = {}
+    for key, site in (("east", "sA"), ("west", "sB")):
+        panel = _made(admin, f"{DCIM}/power-panels", {"site_id": e[site], "name": f"MDB-{key}"})["id"]
+        feed[key] = _made(admin, f"{DCIM}/power-feeds", {"power_panel_id": panel, "name": "A"})["id"]
+    psu1, psu2 = (
+        {"type": "power_port", "id": _made(admin, f"{DCIM}/power-ports", {"host_id": e["hA"], "name": name})["id"]}
+        for name in ("PSU1", "PSU2")
+    )
+    provider = _made(admin, "/api/circuits/providers", {"name": "carrier-1"})["id"]
+    ctype = _made(admin, "/api/circuits/circuit-types", {"name": "internet"})["id"]
+    circuit = _made(
+        admin,
+        "/api/circuits/circuits",
+        {
+            "cid": "C-WEST",
+            "provider_id": provider,
+            "circuit_type_id": ctype,
+            "tenant_id": e["tB"],
+            "terminations": [{"term_side": "A", "site_id": e["sB"]}],
+        },
+    )
+    termination = {"type": "circuit_termination", "id": circuit["terminations"][0]["id"]}
+
+    local = cable(interface("hA", "Gi1"), interface("hA", "Gi2"))
+    cross = cable(interface("hA", "Gi3"), interface("hB", "Gi3"))
+    far = cable(interface("hB", "Gi4"), interface("hB", "Gi5"))
+    fed = cable(psu1, {"type": "power_feed", "id": feed["east"]})
+    uplink = cable(interface("hA", "Gi6"), termination)
+
+    # A cable is the caller's when one of its ends is; the scope keys stay internal.
+    assert _listed(writer, cables) == {local, cross, fed, uplink}
+    assert far in _listed(admin, cables)
+    assert writer.get(f"{cables}/{far}").status_code == 404
+    shown = writer.get(f"{cables}/{local}").json()
+    assert shown["id"] == local and "scope_host_ids" not in shown and "scope_site_ids" not in shown
+
+    # A new end the caller may not see answers like an unknown endpoint.
+    hidden_host = writer.post(cables, json={"a": interface("hA", "Gi7"), "b": interface("hB", "Gi7")})
+    assert hidden_host.status_code == 422 and "Unknown endpoint on side B" in hidden_host.text
+    hidden_feed = writer.post(cables, json={"a": psu2, "b": {"type": "power_feed", "id": feed["west"]}})
+    assert hidden_feed.status_code == 422 and "Unknown endpoint on side B" in hidden_feed.text
+    own = {"a": interface("hA", "Gi8"), "b": interface("hA", "Gi9")}
+    assert reader.post(cables, json=own).status_code == 403
+    assert writer.post(cables, json=own).status_code == 201
+    assert reader.put(f"{cables}/{local}", json={"label": "L-1"}).status_code == 403
+    assert writer.put(f"{cables}/{local}", json={"label": "L-1"}).json()["label"] == "L-1"
+    moved = writer.put(f"{cables}/{local}", json={"b": interface("hB", "Gi9")})
+    assert moved.status_code == 422 and "Unknown endpoint on side B" in moved.text
+    assert writer.delete(f"{cables}/{far}").status_code == 404
+    assert reader.delete(f"{cables}/{local}").status_code == 403
+
+    # A trace ends ``restricted`` before the first endpoint the caller may not see.
+    assert trace(writer, type="interface", host_id=e["hA"], name="Gi1").json()["status"] == "complete"
+    powered = trace(writer, type="power_port", id=psu1["id"]).json()
+    assert powered["status"] == "complete" and powered["destination"]["type"] == "power_feed"
+    for name in ("Gi3", "Gi6"):
+        cut = trace(writer, type="interface", host_id=e["hA"], name=name).json()
+        assert (cut["status"], cut["steps"], cut["destination"]) == ("restricted", [], None), name
+        assert trace(admin, type="interface", host_id=e["hA"], name=name).json()["status"] == "complete", name
+    assert trace(writer, type="interface", host_id=e["hB"], name="Gi4").status_code == 404
+    assert writer.delete(f"{cables}/{local}").status_code == 200
+
+
+def test_virtualization_clusters_and_virtual_machines(admin, estate, writer, reader):
+    e = estate
+    clusters, machines = f"{VIRT}/clusters", f"{VIRT}/virtual-machines"
+    ctype = _made(admin, f"{VIRT}/cluster-types", {"name": "kvm"})["id"]
+
+    def cluster(name: str, **extra) -> int:
+        return int(_made(admin, clusters, {"name": name, "cluster_type_id": ctype, **extra})["id"])
+
+    def machine(cluster_id: int, name: str, **extra) -> int:
+        return int(_made(admin, machines, {"name": name, "cluster_id": cluster_id, **extra})["id"])
+
+    east = cluster("cl-east", tenant_id=e["tA"], site_id=e["sA"])
+    west = cluster("cl-west", tenant_id=e["tB"], site_id=e["sB"])
+    hosted = cluster("cl-hosted")  # no tenant or site: reached through its member host
+    for host in ("hA", "hB"):
+        _made(admin, f"{clusters}/{hosted}/hosts", {"host_id": e[host]})
+    vm_east = machine(east, "web-east", tenant_id=e["tA"])
+    vm_west = machine(west, "web-west")
+    vm_lent = machine(west, "db-east", tenant_id=e["tA"])  # in a hidden cluster, for the east tenant
+
+    # Lists and details keep the caller's clusters, hosts and VMs, and count only those.
+    listed = {c["id"]: c for c in writer.get(clusters).json()["clusters"]}
+    assert set(listed) == {east, hosted} and listed[hosted]["host_count"] == 1
+    assert [t["cluster_count"] for t in writer.get(f"{VIRT}/cluster-types").json()["cluster_types"]] == [2]
+    assert [t["cluster_count"] for t in admin.get(f"{VIRT}/cluster-types").json()["cluster_types"]] == [3]
+    assert writer.get(f"{clusters}/{west}").status_code == 404
+    detail = writer.get(f"{clusters}/{hosted}").json()
+    assert [h["id"] for h in detail["hosts"]] == [e["hA"]] and detail["host_count"] == 1 and detail["vm_count"] == 0
+    assert [v["id"] for v in writer.get(f"{clusters}/{east}").json()["virtual_machines"]] == [vm_east]
+    assert _listed(writer, machines, "virtual_machines") == {vm_east, vm_lent}
+    assert _listed(admin, machines, "virtual_machines") == {vm_east, vm_west, vm_lent}
+    assert writer.get(f"{machines}/{vm_west}").status_code == 404
+    assert writer.get(f"{machines}/{vm_lent}").json()["name"] == "db-east"
+    assert writer.get(f"{VIRT}/tenants").json()["tenants"] == [{"id": e["tA"], "name": "east-co"}]
+    assert writer.get(f"{VIRT}/hosts/{e['hB']}/clusters").status_code == 404
+    assert [c["id"] for c in writer.get(f"{VIRT}/hosts/{e['hA']}/clusters").json()["clusters"]] == [hosted]
+
+    # A new VM must be writable: by its tenant or a member host of its cluster.
+    new_vm = {"name": "app-01", "cluster_id": west}
+    assert writer.post(machines, json=new_vm).status_code == 403
+    assert writer.post(machines, json={**new_vm, "cluster_id": east}).status_code == 403
+    assert reader.post(machines, json={**new_vm, "cluster_id": hosted}).status_code == 403
+    assert writer.post(machines, json={**new_vm, "cluster_id": hosted}).status_code == 201
+    assert writer.put(f"{machines}/{vm_east}", json={"tenant_id": e["tB"]}).status_code == 403
+    assert writer.put(f"{machines}/{vm_east}", json={"description": "front end"}).status_code == 200
+    assert reader.delete(f"{machines}/{vm_east}").status_code == 403
+
+    # Clusters: the same rule, and member hosts only from the caller's own.
+    new_cluster = {"name": "cl-new", "cluster_type_id": ctype, "site_id": e["sA"]}
+    assert writer.post(clusters, json=new_cluster).status_code == 403
+    assert writer.post(clusters, json={**new_cluster, "tenant_id": e["tA"]}).status_code == 201
+    assert writer.put(f"{clusters}/{east}", json={"tenant_id": e["tB"]}).status_code == 403
+    assert writer.put(f"{clusters}/{east}", json={"description": "east hall"}).status_code == 200
+    assert reader.put(f"{clusters}/{east}", json={"description": "x"}).status_code == 403
+    assert writer.post(f"{clusters}/{east}/hosts", json={"host_id": e["hB"]}).status_code == 422
+    assert writer.post(f"{clusters}/{east}/hosts", json={"host_id": e["hA"]}).status_code == 201
+    assert writer.delete(f"{clusters}/{hosted}/hosts/{e['hB']}").status_code == 404
+    assert writer.delete(f"{clusters}/{hosted}/hosts/{e['hA']}").status_code == 200
+    assert writer.get(f"{clusters}/{hosted}").status_code == 404  # no member host of theirs is left
