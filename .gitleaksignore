@@ -1,40 +1,40 @@
 # False positive: high-entropy `key:"..."` string inside the vendored,
 # minified vis-network library (legacy SPA asset, since removed from HEAD).
-# Finding exists only in git history at commit 8371c2e.
-8371c2ed51ba58352e52b3691e52d42e00d013f1:netcontrol/static/js/vis-network.min.js:generic-api-key:33
+# Finding exists only in git history at commit fb43d9f.
+fb43d9f65feff5faa31498773200cd06d3cb5212:netcontrol/static/js/vis-network.min.js:generic-api-key:33
 
 # False positives flagged by gitleaks generic-api-key (all exist only in git
 # history at the listed commits; none is a real credential):
 # - tests/test_panorama_topology.py: placeholder Panorama API keys used by
 #   the mocked client in tests ("LUFRPT1-test-key==" style fixtures).
-009e95d1af46836a4431a583fb8dea62693e3849:tests/test_panorama_topology.py:generic-api-key:69
-009e95d1af46836a4431a583fb8dea62693e3849:tests/test_panorama_topology.py:generic-api-key:70
+bb477a4c2c85af51624f0d50b3994eee2f2ab238:tests/test_panorama_topology.py:generic-api-key:69
+bb477a4c2c85af51624f0d50b3994eee2f2ab238:tests/test_panorama_topology.py:generic-api-key:70
 # - netcontrol/integrations/meraki/compliance.py: compliance-check
 #   description strings mentioning "authentication" followed by a quoted
 #   ios_equivalent value on the next line.
-644d1fd67e5a1447ebd57819666c70b83f5de6af:netcontrol/integrations/meraki/compliance.py:generic-api-key:880
-644d1fd67e5a1447ebd57819666c70b83f5de6af:netcontrol/integrations/meraki/compliance.py:generic-api-key:1077
-5c161e1517ebb219da55d90d47bd7f05cbad35d6:netcontrol/integrations/meraki/compliance.py:generic-api-key:1053
+5f2ee98b93ce70bea233ddeccfd4faae66d405a4:netcontrol/integrations/meraki/compliance.py:generic-api-key:880
+5f2ee98b93ce70bea233ddeccfd4faae66d405a4:netcontrol/integrations/meraki/compliance.py:generic-api-key:1077
+d24757cafcb334e0374ce69336d4ce0ba776b34c:netcontrol/integrations/meraki/compliance.py:generic-api-key:1053
 # - netcontrol/integrations/meraki/sample.py: the SSID auth-mode value
 #   (802.1X/RADIUS) in the built-in sample dataset.
-d490454e3d77ce7337967c619d81ddd9b2f607a5:netcontrol/integrations/meraki/sample.py:generic-api-key:210
+275ab039fdfc6070cd22029e9e5b8922e282bff5:netcontrol/integrations/meraki/sample.py:generic-api-key:210
 # - tests/test_mcp_redact.py, tests/test_mcp_tools_configs.py: invented PEM
 #   blocks (armor lines around made-up body text) fed to the AI access
 #   masking tests to prove a key body is never returned.
-22c913676b4da770a511697ebf9d485851107be4:tests/test_mcp_tools_configs.py:private-key:138
-22c913676b4da770a511697ebf9d485851107be4:tests/test_mcp_redact.py:private-key:500
-22c913676b4da770a511697ebf9d485851107be4:tests/test_mcp_redact.py:private-key:539
+a4ff9c67103e720020a5192659a762d7cfc607ee:tests/test_mcp_tools_configs.py:private-key:138
+a4ff9c67103e720020a5192659a762d7cfc607ee:tests/test_mcp_redact.py:private-key:500
+a4ff9c67103e720020a5192659a762d7cfc607ee:tests/test_mcp_redact.py:private-key:539
 # - tests/test_opnsense_drift.py: the invented secret values (API key and
 #   secret, base64 key blobs, passwords) of the sample config.xml the
 #   OPNsense masking tests prove never reach any output.
-4e6aa522d3f5ab30525860b47eb272938c466e1f:tests/test_opnsense_drift.py:generic-api-key:35
-4e6aa522d3f5ab30525860b47eb272938c466e1f:tests/test_opnsense_drift.py:generic-api-key:38
-4e6aa522d3f5ab30525860b47eb272938c466e1f:tests/test_opnsense_drift.py:generic-api-key:39
-4e6aa522d3f5ab30525860b47eb272938c466e1f:tests/test_opnsense_drift.py:generic-api-key:43
-4e6aa522d3f5ab30525860b47eb272938c466e1f:tests/test_opnsense_drift.py:generic-api-key:46
-4e6aa522d3f5ab30525860b47eb272938c466e1f:tests/test_opnsense_drift.py:generic-api-key:48
-4e6aa522d3f5ab30525860b47eb272938c466e1f:tests/test_opnsense_drift.py:generic-api-key:49
-4e6aa522d3f5ab30525860b47eb272938c466e1f:tests/test_opnsense_drift.py:generic-api-key:50
-4e6aa522d3f5ab30525860b47eb272938c466e1f:tests/test_opnsense_drift.py:generic-api-key:59
-4e6aa522d3f5ab30525860b47eb272938c466e1f:tests/test_opnsense_drift.py:generic-api-key:60
-4e6aa522d3f5ab30525860b47eb272938c466e1f:tests/test_opnsense_drift.py:private-key:36
+6cb236194cd5fbd1476dcf3268b3ba3c648bc7d8:tests/test_opnsense_drift.py:generic-api-key:35
+6cb236194cd5fbd1476dcf3268b3ba3c648bc7d8:tests/test_opnsense_drift.py:generic-api-key:38
+6cb236194cd5fbd1476dcf3268b3ba3c648bc7d8:tests/test_opnsense_drift.py:generic-api-key:39
+6cb236194cd5fbd1476dcf3268b3ba3c648bc7d8:tests/test_opnsense_drift.py:generic-api-key:43
+6cb236194cd5fbd1476dcf3268b3ba3c648bc7d8:tests/test_opnsense_drift.py:generic-api-key:46
+6cb236194cd5fbd1476dcf3268b3ba3c648bc7d8:tests/test_opnsense_drift.py:generic-api-key:48
+6cb236194cd5fbd1476dcf3268b3ba3c648bc7d8:tests/test_opnsense_drift.py:generic-api-key:49
+6cb236194cd5fbd1476dcf3268b3ba3c648bc7d8:tests/test_opnsense_drift.py:generic-api-key:50
+6cb236194cd5fbd1476dcf3268b3ba3c648bc7d8:tests/test_opnsense_drift.py:generic-api-key:59
+6cb236194cd5fbd1476dcf3268b3ba3c648bc7d8:tests/test_opnsense_drift.py:generic-api-key:60
+6cb236194cd5fbd1476dcf3268b3ba3c648bc7d8:tests/test_opnsense_drift.py:private-key:36
