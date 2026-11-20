@@ -2,7 +2,8 @@
 
 ## Unreleased
 
-- SAML metadata import by URL (`docs/sso-saml.md`): the address now passes the outbound SSRF guard (`net_guard`, the one webhooks, notification channels and secrets providers use) before Plexus fetches it, so a link-local address such as the cloud instance-metadata endpoint is refused, and private ranges too when `APP_SSRF_BLOCK_PRIVATE=true` (`APP_SSRF_ALLOW` lists exceptions). Found by CodeQL (`py/full-ssrf`).
+- Single sign-on requests pass the outbound SSRF guard (`docs/sso-saml.md`, `docs/sso-oidc.md`): SAML metadata import by URL and every OpenID Connect request (discovery, signing keys, token, userinfo, including the endpoints the discovery document names) now go through `net_guard`, the guard webhooks, notification channels and secrets providers use, before Plexus connects (`sso.guard_provider_url`). A link-local address such as the cloud instance-metadata endpoint is always refused. **Upgrade note:** with `APP_SSRF_BLOCK_PRIVATE=true` and an identity provider on a private or loopback address, add its host name to `APP_SSRF_ALLOW`, or SSO sign-in fails with the `provider` error. Found by CodeQL (`py/full-ssrf`).
+- Outbound SSRF guard: the IPv6 loopback address `::1` is treated as loopback (allowed unless `APP_SSRF_BLOCK_PRIVATE=true`), as documented. It was refused as a reserved address, so a webhook, notification channel or lab identity provider on `localhost` failed on a host where `localhost` resolves to `::1`. New `tests/test_net_guard.py`.
 
 ## 1.1.0 - 2026-11-19
 

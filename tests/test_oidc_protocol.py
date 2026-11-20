@@ -194,6 +194,24 @@ async def test_loopback_http_issuer_is_allowed():
     assert meta.issuer == "http://localhost:8080/realms/lab"
 
 
+async def test_outbound_guard_refuses_a_link_local_issuer():
+    # The cloud instance-metadata address: refused before any request.
+    idp = FakeIdP("https://169.254.169.254")
+    err = await _expect("provider", _client(idp).discover("https://169.254.169.254"))
+    assert "not allowed" in err.step and idp.calls["discovery"] == 0
+
+
+async def test_outbound_guard_covers_endpoints_named_by_discovery():
+    # The discovery document is the provider's: an endpoint it names goes
+    # through the guard like the issuer the admin typed.
+    idp = FakeIdP()
+    idp.discovery["jwks_uri"] = "https://169.254.169.254/keys"
+    client = _client(idp)
+    meta = await client.discover(ISSUER)
+    err = await _expect("provider", client.jwks(meta))
+    assert "not allowed" in err.step and idp.calls["jwks"] == 0
+
+
 async def test_discovery_endpoint_must_be_https():
     idp = FakeIdP()
     idp.discovery["token_endpoint"] = "http://idp.example.com/token"

@@ -38,7 +38,7 @@ Settings > Authentication > **Single sign-on (OpenID Connect)**:
 | Field | Default | Meaning |
 |-------|---------|---------|
 | Enabled | off | Offer SSO on the login page |
-| Issuer | | The provider's issuer URL. It must equal the `issuer` of its discovery document (`<issuer>/.well-known/openid-configuration`) exactly and be `https` (plain `http` only on `localhost`, `127.0.0.1` or `::1`, for a lab). |
+| Issuer | | The provider's issuer URL. It must equal the `issuer` of its discovery document (`<issuer>/.well-known/openid-configuration`) exactly and be `https` (plain `http` only on `localhost`, `127.0.0.1` or `::1`, for a lab). Every request to the provider (discovery, signing keys, token, userinfo) first passes the same outbound guard as webhooks: link-local addresses such as the cloud metadata endpoint are always refused, and private and loopback ranges too when `APP_SSRF_BLOCK_PRIVATE=true`. With that setting on and a provider on a private address, list its host name in `APP_SSRF_ALLOW` or sign-in fails with the `provider` error. |
 | Client ID / Client Secret | | From the registration. The secret is stored encrypted (the same AES-256-GCM helper as stored credentials and the Meraki webhook secret) and is shown masked; empty means a public client. |
 | Token Endpoint Auth | `client_secret_basic` | Or `client_secret_post` |
 | Scopes | `openid profile email` | `openid` is always sent |
