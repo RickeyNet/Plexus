@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Security maintenance: access-control, input-handling or resource-limit updates; detailed review notes are maintained privately. **Upgrade note:** with `APP_SSRF_BLOCK_PRIVATE=true` and an identity provider on a private or loopback address, add its host name to `APP_SSRF_ALLOW`, or SSO sign-in fails with the `provider` error. Found by CodeQL (`py/full-ssrf`).
 - Security maintenance: access-control, input-handling or resource-limit updates; detailed review notes are maintained privately.
 
 ## 1.1.0 - 2026-11-19

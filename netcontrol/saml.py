@@ -56,7 +56,6 @@ from signxml import InvalidCertificate, SignatureConfiguration, XMLVerifier
 from signxml.exceptions import SignXMLException
 
 from netcontrol.integrations.safe_xml import DoctypeRefused, parse_xml
-from netcontrol.routes.outbound_http import OutboundRequestError, guard_url
 from netcontrol.sso import (
     MAX_RESPONSE_BYTES,
     SsoError,
@@ -64,6 +63,7 @@ from netcontrol.sso import (
     clean_display_name,
     clean_username,
     group_values,
+    guard_provider_url,
     http_client,
     is_allowed_url,
     log_safe,
@@ -210,10 +210,7 @@ async def fetch_metadata(url: str, ca_cert_file: str = "", transport: httpx.Asyn
     every other URL an admin has Plexus fetch."""
     if not is_allowed_url(url):
         raise SamlError("provider", "the IdP metadata URL must be an https URL")
-    try:
-        await guard_url(url)
-    except OutboundRequestError as exc:
-        raise SamlError("provider", f"the IdP metadata address is not allowed ({exc})") from exc
+    await guard_provider_url(url, SamlError)
     try:
         async with http_client(transport, ca_cert_file, SamlError) as client:
             resp = await client.get(url, headers={"Accept": "application/samlmetadata+xml, application/xml, text/xml"})

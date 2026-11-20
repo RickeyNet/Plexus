@@ -12,7 +12,8 @@ This module holds what does not depend on the protocol:
 - URL and redirect-target rules (``https`` only, same-site return paths);
 - log-safe text, username and group-value cleaning;
 - the HTTP client used to fetch provider documents (TLS verified, optional
-  private CA bundle, no redirects, 10 s timeout).
+  private CA bundle, no redirects, 10 s timeout) and the outbound SSRF
+  guard every provider address passes before a request is sent.
 """
 
 from __future__ import annotations
@@ -24,6 +25,8 @@ from typing import Any
 from urllib.parse import urlsplit
 
 import httpx
+
+from netcontrol.routes.outbound_http import OutboundRequestError, guard_url
 
 # Codes a sign-in failure may put in ``/login?sso_error=``. The login page
 # maps each to a fixed sentence; nothing else from the provider is echoed.
@@ -82,6 +85,19 @@ def is_allowed_url(url: str) -> bool:
     if parts.scheme == "https":
         return True
     return parts.scheme == "http" and parts.hostname.lower() in _LOOPBACK_HOSTS
+
+
+async def guard_provider_url(url: str, error: type[SsoError] = SsoError, code: str = "provider") -> None:
+    """The outbound SSRF guard for an identity provider address, the one
+    webhooks and notification channels use (``net_guard``): link-local
+    addresses such as the cloud instance-metadata endpoint are always
+    refused, private and loopback ranges when ``APP_SSRF_BLOCK_PRIVATE`` is
+    on. It covers the URL an admin typed and every endpoint a provider
+    document names. Raises ``error(code)``."""
+    try:
+        await guard_url(url)
+    except OutboundRequestError as exc:
+        raise error(code, f"the identity provider address is not allowed ({exc})") from exc
 
 
 def safe_next(value: str | None) -> str:

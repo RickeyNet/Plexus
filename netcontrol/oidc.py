@@ -57,6 +57,7 @@ from netcontrol.sso import (
     clean_display_name,
     clean_username,
     group_values,
+    guard_provider_url,
     http_client,
     is_allowed_url,
     log_safe,
@@ -216,6 +217,9 @@ class OidcClient:
         return http_client(self._transport, ca_cert_file, OidcError)
 
     async def _send(self, what: str, code: str, ca_cert_file: str, method: str, url: str, **kwargs) -> dict:
+        # Every request, not only discovery: the token, JWKS and userinfo
+        # addresses come from the provider's own document.
+        await guard_provider_url(url, OidcError, code)
         try:
             async with self._http(ca_cert_file) as client:
                 resp = await client.request(method, url, **kwargs)

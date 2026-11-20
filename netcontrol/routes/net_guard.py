@@ -59,6 +59,10 @@ def _ip_is_blocked(ip: ipaddress.IPv4Address | ipaddress.IPv6Address, *, block_p
     # block link-local plus multicast/reserved/unspecified. Loopback and
     # private ranges are permitted by default (legit on-prem / sidecar targets)
     # and only blocked when the operator opts into APP_SSRF_BLOCK_PRIVATE.
+    # Loopback is judged first: ``::1`` lies in the reserved ``::/8`` block,
+    # so ``is_reserved`` alone would refuse ``localhost`` on a dual-stack host.
+    if ip.is_loopback:
+        return block_private
     if ip.is_link_local or ip.is_multicast or ip.is_reserved or ip.is_unspecified:
         return True
     if block_private and (ip.is_private or ip.is_loopback):
