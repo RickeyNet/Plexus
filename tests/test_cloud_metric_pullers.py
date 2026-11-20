@@ -22,6 +22,32 @@ class _DummyRequest:
         self.state = type("State", (), {"correlation_id": correlation_id})()
 
 
+@pytest.mark.parametrize("use_service_principal", [True, False])
+def test_azure_metrics_client_accepts_both_credential_types(monkeypatch, use_service_principal):
+    identity = MagicMock()
+    query = MagicMock()
+    monkeypatch.setitem(sys.modules, "azure.identity", identity)
+    monkeypatch.setitem(sys.modules, "azure.monitor.query", query)
+    auth = {"tenant_id": " tenant ", "client_id": " client ", "client_secret": " fixture "}
+    if not use_service_principal:
+        auth = {}
+
+    result = pullers_mod._build_azure_metrics_client(auth)
+
+    if use_service_principal:
+        identity.ClientSecretCredential.assert_called_once_with(
+            tenant_id="tenant", client_id="client", client_secret="fixture"
+        )
+        identity.DefaultAzureCredential.assert_not_called()
+        credential = identity.ClientSecretCredential.return_value
+    else:
+        identity.DefaultAzureCredential.assert_called_once_with()
+        identity.ClientSecretCredential.assert_not_called()
+        credential = identity.DefaultAzureCredential.return_value
+    query.MetricsQueryClient.assert_called_once_with(credential)
+    assert result is query.MetricsQueryClient.return_value
+
+
 @pytest.mark.parametrize(
     ("metric_name", "expected"),
     [

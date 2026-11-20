@@ -430,7 +430,7 @@ async def pull_azure_traffic_metrics(account: dict, *, lookback_minutes: int = _
 def _build_azure_metrics_client(auth: dict):
     from azure.monitor.query import MetricsQueryClient
 
-    credential = None
+    credential: ClientSecretCredential | DefaultAzureCredential | None = None
     client_id = str(auth.get("client_id") or "").strip()
     client_secret = str(auth.get("client_secret") or "").strip()
     tenant_id = str(auth.get("tenant_id") or "").strip()

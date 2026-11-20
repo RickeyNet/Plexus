@@ -1,7 +1,7 @@
 # Versioning and Release
 
 - Plexus follows Semantic Versioning (`MAJOR.MINOR.PATCH`).
-- Current version is `1.0.0`.
+- The declared release version is `_FALLBACK_VERSION` in `netcontrol/version.py`; it must match the latest numbered entry in `CHANGELOG.md`.
 - Check runtime version with:
 ```bash
 python templates/run.py --version

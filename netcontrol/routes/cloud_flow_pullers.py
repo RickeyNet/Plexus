@@ -476,18 +476,18 @@ def _build_azure_blob_client(auth: dict, storage_account: str):
 
     account_key = str(auth.get("storage_account_key") or "").strip()
     account_url = f"https://{storage_account}.blob.core.windows.net"
-    timeouts = {"connection_timeout": 10, "read_timeout": 60}
+    credential: str | DefaultAzureCredential
     if account_key:
-        return BlobServiceClient(account_url=account_url, credential=account_key, **timeouts)
+        credential = account_key
+    else:
+        # Fall back to DefaultAzureCredential (managed identity / env vars).
+        try:
+            from azure.identity import DefaultAzureCredential
 
-    # Fall back to DefaultAzureCredential (managed identity / env vars).
-    try:
-        from azure.identity import DefaultAzureCredential
-
-        credential = DefaultAzureCredential()
-        return BlobServiceClient(account_url=account_url, credential=credential, **timeouts)
-    except ImportError:
-        raise ImportError("azure-identity is required when storage_account_key is not provided")
+            credential = DefaultAzureCredential()
+        except ImportError:
+            raise ImportError("azure-identity is required when storage_account_key is not provided")
+    return BlobServiceClient(account_url=account_url, credential=credential, connection_timeout=10, read_timeout=60)
 
 
 def _azure_day_partitions(start: datetime, end: datetime) -> list[str]:
