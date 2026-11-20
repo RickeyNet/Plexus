@@ -24,7 +24,7 @@ RUN npm run build
 # ──────────────────────────────────────────────────────────────────────────────
 # Stage 2: runtime image
 # ──────────────────────────────────────────────────────────────────────────────
-FROM python:3.14-slim
+FROM python:3.15-slim
 
 ENV PYTHONUNBUFFERED=1
 WORKDIR /app
