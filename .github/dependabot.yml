@@ -27,8 +27,24 @@ updates:
       frontend-dependencies:
         patterns:
           - "*"
+    ignore:
+      # typescript-eslint 8.x declares peer typescript ">=4.8.4 <6.1.0", so a
+      # TypeScript 7 bump makes `npm ci` fail (ERESOLVE) and takes the whole
+      # group pull request down with it. Remove this once typescript-eslint
+      # publishes a release whose peer range includes TypeScript 7.
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: "docker"
     directory: "/"
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 3
+    ignore:
+      # The interpreter version is one coordinated change, not an image bump:
+      # CI tests only the version the Dockerfile ships (ci.yml matrix,
+      # release*.yml, wiki.yml, mypy.ini) and requirements-lock.txt is
+      # compiled for it. The image also installs the lock without a C++
+      # toolchain, so every compiled pin needs a wheel for the new version
+      # first (google-re2 had none for 3.15 when this was added).
+      - dependency-name: "python"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
