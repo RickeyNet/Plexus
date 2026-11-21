@@ -747,6 +747,8 @@ describe("opnsense collection options", () => {
       "Rule counters (unused firewall rules)",
       "Health and services",
       "Alias tables (URL tables, GeoIP, host names)",
+      "Certificates (expiry alerts)",
+      "IDS alerts (Suricata)",
       "Store config.xml as a config backup (the firewall must be an inventory host)",
       "Correlate with Plexus inventory",
     ]);

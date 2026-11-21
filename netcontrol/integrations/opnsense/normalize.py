@@ -58,6 +58,14 @@ block (``health_summary``); the services the configuration enables are the
 ``online`` while it runs, ``offline`` when not), which availability tracking
 reads as ``service`` entities of the firewall. A nearly full file system or
 a state table near its limit is an informational warning.
+
+The certificates and CAs of the trust store are the "Certificates" section
+and the snapshot's ``certificates`` (``certificates.certificate_records``:
+expiry, days left at the collection time, tier, whether it is tracked);
+availability tracking reads the tracked ones (in use, or a CA a tracked
+certificate depends on) as ``certificate`` entities of the firewall, and a
+tracked certificate that expires within 30 days, or has expired, is an
+informational warning.
 """
 
 from __future__ import annotations
@@ -81,6 +89,7 @@ from netcontrol.integrations.meraki.normalize import (
     kv_section,
     table_section,
 )
+from netcontrol.integrations.opnsense.certificates import certificate_records, days_text
 from netcontrol.integrations.opnsense.collector import LEASE_BACKENDS, info_warning
 from netcontrol.integrations.remote_users import DIRECTORY_KEY, directory_entry
 from netcontrol.integrations.software.versions import canonical_version
@@ -116,6 +125,7 @@ SECTION_NDP = "NDP table"
 SECTION_LEASES = "DHCP leases"
 SECTION_HEALTH = "Health"
 SECTION_SERVICES = "Services"
+SECTION_CERTIFICATES = "Certificates"
 # Section titles of the gateway, tunnel peer and OpenVPN server nodes.
 SECTION_GATEWAY = "Gateway"
 SECTION_IPSEC_PEER = "IPsec peer"
@@ -961,6 +971,7 @@ class _Builder:
         self.clients = raw.get("clients") if isinstance(raw.get("clients"), dict) else None
         self.health = raw.get("health") if isinstance(raw.get("health"), dict) else None
         self.services = service_records(self.health)
+        self.certificates_raw = raw.get("certificates") if isinstance(raw.get("certificates"), dict) else None
         self.nodes: dict[str, dict] = {}
         self.edges: list[dict] = []
         self.warnings: list[dict] = []
@@ -1096,6 +1107,7 @@ class _Builder:
         _add(sections, self._ha_table())
         _add(sections, self._health_section())
         _add(sections, self._services_table())
+        _add(sections, self._certificates_table())
         for table in self._client_tables():
             _add(sections, table)
         self._firmware_sections(sections, version)
@@ -1513,6 +1525,62 @@ class _Builder:
             for s in self.services
         ]
 
+    # ── Certificates ───────────────────────────────────────────────────────
+
+    def certificates(self) -> list[dict[str, Any]] | None:
+        """The firewall's certificates and CAs (``certificate_records`` at
+        the collection time). ``None`` when not read."""
+        return certificate_records(self.certificates_raw, self.now)
+
+    def _certificates_table(self) -> dict | None:
+        rows = [
+            [
+                c["name"],
+                "CA" if c["kind"] == "authority" else c["type"],
+                c["common_name"],
+                c["issuer"],
+                c["valid_to"][:10],
+                days_text(c),
+                "Yes" if c["in_use"] else ("User" if c["user"] else "No"),
+                c["tier"] if c["tracked"] else f"{c['tier']} (not alerted)",
+            ]
+            for c in self.certificates() or []
+        ]
+        return table_section(
+            SECTION_CERTIFICATES,
+            ["Name", "Type", "Common name", "Issuer", "Expires", "Days left", "In use", "State"],
+            rows,
+        )
+
+    def certificate_states(self) -> list[dict[str, Any]] | None:
+        """The snapshot's ``certificates``: every record, with the firewall
+        as ``device`` (availability tracking turns the tracked ones into
+        ``certificate`` entities of the firewall). ``None`` when not read."""
+        records = self.certificates()
+        if records is None:
+            return None
+        return [
+            {
+                **c,
+                "device": self.firewall_id,
+                "site": self.site_id,
+                "model": "OPNsense CA" if c["kind"] == "authority" else "OPNsense certificate",
+            }
+            for c in records
+        ]
+
+    def certificate_warnings(self) -> None:
+        # Informational: the expiry is tracked as entities of its own.
+        due = [
+            f"{c['name']} ({days_text(c)})"
+            for c in self.certificates() or []
+            if c["tracked"] and c["tier"] in ("expiring", "critical", "expired")
+        ]
+        if due:
+            self.warnings.append(
+                info_warning("certificates", "/trust/cert/search", f"Certificates expiring or expired: {', '.join(due)}")
+            )
+
     def health_warnings(self) -> None:
         # Informational: they report what the firewall said, not a failed call.
         if self.health is None:
@@ -1892,6 +1960,8 @@ def build_snapshot(raw: dict, inventory: InventoryIndex | None = None) -> dict[s
     builder.firmware_warnings(version)
     builder.ha_warnings()
     builder.health_warnings()
+    builder.certificate_warnings()
+    certificates = builder.certificate_states()
     builder.build_edge_sections()
 
     site_members = [n for n in builder.nodes.values() if n["site"] == builder.site_id]
@@ -1970,6 +2040,10 @@ def build_snapshot(raw: dict, inventory: InventoryIndex | None = None) -> dict[s
             "services_stopped": sum(1 for s in builder.services if not s["running"])
             if builder.services is not None
             else None,
+            "certificates": len(certificates) if certificates is not None else None,
+            "certificates_due": sum(1 for c in certificates if c["tracked"] and c["tier"] not in ("valid", "unknown"))
+            if certificates is not None
+            else None,
         },
         "collection": {
             "sources": [SOURCE],
@@ -1983,5 +2057,6 @@ def build_snapshot(raw: dict, inventory: InventoryIndex | None = None) -> dict[s
         **({"ha": ha} if (ha := ha_block(builder.carp, builder.firewall_id)) is not None else {}),
         **({"health": health_summary(builder.health)} if builder.health is not None else {}),
         **({"services": services} if (services := builder.service_states()) is not None else {}),
+        **({"certificates": certificates} if certificates is not None else {}),
         **({DIRECTORY_KEY: builder.user_directory} if builder.user_directory is not None else {}),
     }

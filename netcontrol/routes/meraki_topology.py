@@ -1324,8 +1324,17 @@ async def _validate_opnsense(org: dict, secret: str) -> dict:
 
 
 async def _collect_opnsense(org: dict, secret: str, options: dict, progress) -> dict:
+    ids_state = None
+    if options.get("include_ids_alerts"):
+        # Imported here: opnsense_ids imports this module's client helper.
+        from netcontrol.routes.opnsense_ids import read_state
+
+        # Only the IDS alerts newer than the newest one stored are read.
+        ids_state = await read_state(org["id"])
     async with _opnsense_client(org, secret, options) as client:
-        raw = await collect_opnsense(client, options, progress)
+        raw = await collect_opnsense(client, options, progress, ids_state=ids_state)
+    # What the IDS read started from (``opnsense_collection`` drops it).
+    raw["ids_state"] = ids_state
     # The snapshot is named after the entry.
     raw["firewall"]["name"] = org["name"]
     return raw

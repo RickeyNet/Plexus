@@ -27,11 +27,18 @@ traffic rates since their last reading (``topology_traffic.record_poll_traffic``
 so a rate survives an IPsec rekey: readings every poll interval, not every
 collection. A failed VPN read loses only that part.
 
+With the ``include_ids_alerts`` option on, the session also reads the
+intrusion detection alerts newer than the newest one stored and stores
+them as security events of the source, with their alerts
+(``netcontrol.routes.opnsense_ids``), so an IDS alert arrives within a
+poll interval. A source whose last read found the IDS disabled is skipped
+until a collection finds it enabled. A failed IDS read loses only that part.
+
 Which host belongs to which source is kept in memory: refreshed from the
 newest snapshot of each source (its summary's ``inventory_host_id``, written
 by ``record_inventory_host`` at every collection) at most every
 ``SOURCES_TTL_SECONDS``, and at once when a collection stores it. A source
-whose ``include_health`` and ``include_vpn`` options are both off, whose
+whose ``include_health``, ``include_vpn`` and ``include_ids_alerts`` options are all off, whose
 automatic collection is off or that has no key is not read. Best-effort: a failure is logged and the
 poll goes on without it.
 """
@@ -54,6 +61,7 @@ from netcontrol.integrations.opnsense.collector import (
 )
 from netcontrol.integrations.opnsense.normalize import PROVIDER, health_summary, vpn_traffic_blocks
 from netcontrol.integrations.traffic import parse_time
+from netcontrol.routes import opnsense_ids
 from netcontrol.routes.topology_traffic import record_poll_traffic
 from netcontrol.telemetry import configure_logging, redact_value
 
@@ -78,7 +86,7 @@ def _eligible(org: dict) -> bool:
         str(org.get("provider") or "") == PROVIDER
         and bool(org.get("has_api_key"))
         and bool(org.get("auto_collect", True))
-        and bool(options["include_health"] or options["include_vpn"])
+        and bool(options["include_health"] or options["include_vpn"] or options["include_ids_alerts"])
     )
 
 
@@ -105,10 +113,12 @@ async def _host_sources() -> dict[int, int]:
 
 
 def forget_sources() -> None:
-    """Read the host map again at the next poll (tests, a source deleted)."""
+    """Read the host map again at the next poll (tests, a source deleted),
+    and the IDS of every source too."""
     global _loaded_at
     _loaded_at = 0.0
     _HOST_SOURCES.clear()
+    opnsense_ids.forget()
 
 
 def record_inventory_host(snapshot: dict, org_ref: int, host: dict | None) -> None:
@@ -135,12 +145,14 @@ def merge_health(result: dict, summary: dict[str, Any]) -> None:
         result["poll_error"] = ""
 
 
-async def read_firewall(org: dict, secret: str) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
-    """``(health summary, VPN payloads)`` of one source's firewall, read in
-    one session: each ``None`` when its option is off or nothing of it
-    answered. Raises ``OpnsenseApiError`` for a rejected key or an
-    unreachable firewall during the health read; a failure of the VPN read
-    only loses the VPN part."""
+async def read_firewall(
+    org: dict, secret: str
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None, tuple[dict[str, Any], dict[str, Any]] | None]:
+    """``(health summary, VPN payloads, (IDS read, its state))`` of one
+    source's firewall, read in one session: each ``None`` when its option
+    is off or nothing of it answered. Raises ``OpnsenseApiError`` for a
+    rejected key or an unreachable firewall during the health read; a
+    failure of the VPN or IDS read only loses that part."""
     # Imported here: meraki_topology imports the routes of every source.
     from netcontrol.routes.meraki_topology import _opnsense_client
 
@@ -148,6 +160,7 @@ async def read_firewall(org: dict, secret: str) -> tuple[dict[str, Any] | None, 
     errors: list[dict[str, Any]] = []
     summary: dict[str, Any] | None = None
     vpn: dict[str, Any] | None = None
+    ids: tuple[dict[str, Any], dict[str, Any]] | None = None
     async with _opnsense_client(org, secret, options, max_retries=1, timeout=POLL_TIMEOUT_SECONDS) as client:
         if options["include_health"]:
             raw, answered = await collect_health(client, errors, POLL_HEALTH_PARTS)
@@ -159,10 +172,18 @@ async def read_firewall(org: dict, secret: str) -> tuple[dict[str, Any] | None, 
                 LOGGER.warning(
                     "opnsense vpn counters: %s not read: %s", org.get("name") or org.get("id"), type(exc).__name__
                 )
+        if options["include_ids_alerts"] and opnsense_ids.poll_wanted(int(org["id"])):
+            try:
+                found, state = await opnsense_ids.read_in_session(client, int(org["id"]), errors)
+                ids = (found, state) if found is not None else None
+            except Exception as exc:  # noqa: BLE001 - the health part stands on its own
+                LOGGER.warning(
+                    "opnsense ids alerts: %s not read: %s", org.get("name") or org.get("id"), type(exc).__name__
+                )
     for error in errors:
         if not error.get("info"):
             LOGGER.debug("opnsense poll: %s", redact_value(str(error.get("message") or "")))
-    return summary, vpn
+    return summary, vpn, ids
 
 
 async def _record_vpn(org_ref: int, vpn: dict[str, Any]) -> int:
@@ -180,7 +201,8 @@ async def _record_vpn(org_ref: int, vpn: dict[str, Any]) -> int:
 async def add_to_poll(host: dict, result: dict) -> bool:
     """Read the health of ``host`` when it is the firewall of an OPNsense
     source and merge it into its poll ``result``, and store its tunnels'
-    traffic rates. Returns whether the health was merged. Never raises."""
+    traffic rates and its IDS alerts. Returns whether the health was
+    merged. Never raises."""
     try:
         org_ref = (await _host_sources()).get(int(host["id"]))
         if org_ref is None:
@@ -191,7 +213,7 @@ async def add_to_poll(host: dict, result: dict) -> bool:
         secret = await db.get_meraki_org_api_key(org_ref)
         if not secret:
             return False
-        summary, vpn = await read_firewall(org, secret)
+        summary, vpn, ids = await read_firewall(org, secret)
     except OpnsenseApiError as exc:
         LOGGER.warning(
             "opnsense health: %s not read: %s", host.get("hostname") or host.get("id"), redact_value(str(exc))
@@ -202,6 +224,8 @@ async def add_to_poll(host: dict, result: dict) -> bool:
         return False
     if vpn is not None:
         await _record_vpn(int(org_ref), vpn)
+    if ids is not None:
+        await opnsense_ids.record(int(org_ref), str(org.get("name") or ""), ids[0], host, ids[1])
     if summary is None:
         return False
     merge_health(result, summary)

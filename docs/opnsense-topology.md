@@ -79,8 +79,8 @@ default) as described in [Scheduled collection](meraki-topology.md#scheduled-col
    a page and its API calls, including the calls that change it. Plexus only
    sends the read calls listed under [What is collected](#what-is-collected),
    plus the one call that starts the security audit (the IPsec phase 2
-   search is a `POST` too, but it only reads: OPNsense takes its connection
-   from the request body).
+   search and the IDS alert search are a `POST` too, but they only read:
+   OPNsense takes the connection or the page from the request body).
 3. In the user's **API keys** section, click **+** to create a key. The
    browser downloads a file with the key and the secret. Enter them in
    Plexus's **API key** and **API secret** fields.
@@ -104,6 +104,9 @@ default) as described in [Scheduled collection](meraki-topology.md#scheduled-col
 | Diagnostics: NDP Table | the NDP (IPv6 neighbour) table (same option) |
 | Diagnostics: System Activity | the header lines of `top`, for the CPU use (only with **Health and services** on) |
 | Status: Services | the services and whether each runs (same option) |
+| System: Trust: Certificates | the certificates and their expiry (only with **Certificates** on; 24.7+) |
+| System: Trust: Authorities | the certificate authorities and their expiry (same option) |
+| Services: Intrusion Detection (`api/ids/*`) | whether the IDS is enabled, its alerts and the classtype of each alerting rule (only with **IDS alerts** on) |
 | Status: DHCP leases / Status: DHCPv6 leases | ISC DHCP leases (same option; only if the firewall runs ISC DHCP) |
 | the Kea DHCP leases page (v4 and v6) | Kea DHCP leases (same option; only if the firewall runs Kea) |
 | the Dnsmasq DNS/DHCP leases page | Dnsmasq DHCP leases (same option; 25.1+, only if the firewall runs Dnsmasq DHCP) |
@@ -121,6 +124,22 @@ table, deleting one and flushing a table. Plexus only lists the tables and
 reads their entries; it never sends those calls, nor the bogon update.
 Leave the privilege out (or turn **Alias tables** off) if you do not accept
 that: the aliases it would resolve stay unresolved in the trace.
+
+**System: Trust: Certificates** and **System: Trust: Authorities** also
+allow creating, importing, deleting and downloading certificates, private
+keys included, and the search Plexus reads answers with every field of each
+certificate, its private key too. Plexus keeps only the fields listed
+under [Certificates](#certificates) and drops the rest as soon as the
+answer arrives; it never sends the other calls. Leave both out (or turn
+**Certificates** off) if you do not accept that: certificate expiry is then
+not tracked.
+
+**Services: Intrusion Detection** is the only IDS privilege: it also
+allows changing the IDS settings and rules, updating and reloading the
+rule sets, starting and stopping Suricata and deleting its alert logs.
+Plexus only reads the service status, the alert search and the rule of a
+signature (see [IDS alerts](#ids-alerts)); it never sends the other calls.
+Leave it out (or turn **IDS alerts** off) if you do not accept that.
 
 Two of these privileges allow more than reading, and a stolen key could use
 them:
@@ -318,6 +337,13 @@ and alerts, the same way as for every other source:
   not. It belongs to the firewall like a CARP group (alerted on its
   inventory host, covered by muting or removing the firewall); see
   [Health and services](#health-and-services)
+- each certificate in use and each CA a tracked certificate or a service
+  depends on, as a certificate named after the firewall and the
+  certificate (`cert:<refid>`, `ca:<refid>`): up while valid, degraded
+  from 30 days before its end and once expired (never down: an expiring
+  certificate is no downtime). It belongs to the firewall like a service,
+  and alerts on its expiry, not on its state; see
+  [Certificates](#certificates)
 
 When a CARP group's role changes between `MASTER` and `BACKUP` from one
 collection to the next, a failover warning is raised (on the inventory
@@ -508,6 +534,153 @@ firewall imported into the inventory is read from the collection after
 the import. A firewall that is not in the inventory still shows its health
 in its details and still has its services tracked, but its numbers are not
 stored (import it to keep them).
+
+## Certificates
+
+With **Certificates** on (`include_certificates`, the default), each
+collection reads the certificates and certificate authorities of **System →
+Trust** (`trust/cert/search` and `trust/ca/search`, OPNsense 24.7+). Of each
+it keeps the reference id (`refid`, what services point at), the
+description, the common name, the issuing CA, the type (server, client),
+the start and end of validity, whether it is in use and whether it is a
+user's certificate, and for a CA how many places reference it. The private
+key, the certificate and signing request bodies and every other field of
+the answer are dropped at once and never stored.
+
+They are shown in the firewall's **Certificates** section: name, type,
+common name, issuer, expiry date, days left (at the collection time), in
+use, and the state: `valid`, `expiring` (30 days or less left), `critical`
+(7 days or less), `expired`, with "(not alerted)" for those only listed.
+
+### What alerts
+
+A certificate is alerted on when OPNsense reports it **in use**: anything
+other than a user or the certificate itself references it (the web GUI,
+OpenVPN, IPsec, the captive portal, a plugin). A CA is alerted on when a
+certificate alerted on was issued by it (or by a CA below it), or when
+something other than the certificates and CAs it issued references it (an
+OpenVPN server that trusts it). Everything else is only listed: unused
+certificates, user certificates no service uses, CAs nothing alerted on
+depends on, and certificates waiting for a signature.
+
+Each certificate alerted on is tracked as a certificate entity of the
+firewall (see [Availability tracking](#availability-tracking)) and raises:
+
+| When | Severity |
+|---|---|
+| 30 days or less before its end (`expiring`) | warning |
+| 7 days or less before its end (`critical`) | critical |
+| after its end (`expired`) | critical |
+
+Each tier alerts once, on the firewall's inventory host when it has one,
+else to the notification channels ("Certificate fw1 Web GUI at fw1
+(OPNsense fw1) expires in 20 days (valid until 2026-12-04)"); the same tier
+does not alert again at the next collections. A worse tier replaces the
+open alert of the tier before it, so a certificate has one open expiry
+alert at most. Unlike a state alert, a
+certificate seen for the first time alerts at once when it is already in a
+tier, so a firewall added with an expired certificate in use is reported.
+A certificate renewed in place (reissued, or renewed by the ACME client:
+same reference id, new end) goes back to `valid` and its open expiry alerts
+are resolved. A certificate replaced by a new one is no longer in use: at
+the next collection without warnings its entity is removed and its alerts
+are resolved, and the new certificate is tracked from then on. Muting the
+firewall, or its site, mutes its certificates; each can also be muted
+alone. An expiring or expired certificate is degraded, never down, so it
+counts as available in uptime and SLA figures. The days left are worked
+out at each collection, so an alert comes with the first collection past
+its threshold.
+
+The certificates that are due are also listed as one informational
+collection warning. A refused call (403) is a warning that names the
+privilege; the tracked certificates are then kept as missing (no alert,
+none removed) until a collection reads them again.
+
+### Releases without the trust API
+
+OPNsense 24.1 and older have no `trust/cert/search` (both calls answer
+404). Plexus then reads the `<cert>` and `<ca>` sections of the
+`config.xml` the collection downloads (with **Config backup** on): only the
+public certificate is parsed, never the private key, and "in use" and the
+reference counts are worked out from the configuration the way OPNsense
+does. An informational warning says so. Without `config.xml`, an
+informational warning says that certificate expiry is not tracked.
+
+## IDS alerts
+
+With **IDS alerts** on (`include_ids_alerts`, the default), Plexus reads
+the alerts of the firewall's intrusion detection (**Services → Intrusion
+Detection**, Suricata) and keeps them as **security events**: listed under
+**Monitoring → Security**, and alerted through the normal alert pipeline.
+
+What is read (privilege **Services: Intrusion Detection**):
+
+1. `GET ids/service/status`: whether the IDS is enabled. A disabled IDS
+   reads nothing more and the firewall's **IDS alerts** section says so; a
+   release without the IDS API (404) is skipped quietly.
+2. `POST ids/service/query_alerts` (`queryAlerts` before 25.7), body
+   `{"rowCount": 200, "current": <page>}`: the alerts of Suricata's
+   `eve.json`, newest first. It is a search that only reads: OPNsense takes
+   the page from the request body. Only the alerts newer than the newest
+   one already stored are read (the pages stop at the first older one), at
+   most 5 pages of 200 a read; the rotated logs are not read.
+3. `GET ids/settings/get_rule_info/<sid>` (`getRuleInfo`) for each new
+   signature: its rule's `classtype`. The alert search drops the record's
+   category and severity, so the priority comes from the classtype and
+   Suricata's default `classification.config` (for example
+   `trojan-activity` 1, `attempted-recon` 2, `misc-activity` 3). At most 20
+   lookups a read; a signature seen before keeps the classtype stored with
+   it.
+
+Each alert becomes one event: when it happened, the signature (id, text,
+category, priority), the severity (priority 1 **critical**, 2 **warning**,
+3 and up **info**, no known classtype **unknown**), what Suricata did
+(**blocked** in IPS mode, else **detected only**), source and destination
+address and port, protocol, application protocol, interface and flow id.
+The same alert read twice is stored once. Every text is cut to a bound and
+stripped of control characters before it is stored: it comes from network
+traffic and rule files.
+
+When they are read:
+
+- every collection of the source; the firewall's details get an **IDS
+  alerts** section (status, what the read stored, the counts of the last 24
+  hours, whether alerts go to an inventory host) and a **Newest IDS
+  alerts** table (the newest 5);
+- every monitoring poll, when the firewall is an inventory host, in the
+  poll's API session: events arrive within one poll interval. A firewall
+  whose last read found the IDS disabled is not read by the poll until a
+  collection finds it enabled;
+- a Suricata alert line forwarded over syslog (see [Syslog](#syslog)):
+  only the IDS alerts are read, within seconds.
+
+### What alerts
+
+Not every event: one alert per firewall and signature, for the new events
+of priority 1 (critical) and 2 (warning) that happened less than an hour
+before they were read (the backlog a first read finds is stored only).
+Info and unknown events are stored only. The message names the signature,
+its id, classtype and priority, how many events there were, whether
+Suricata **blocked** them, only **detected** them or blocked some ("2 of 5
+blocked"), and the last flow.
+
+- A firewall that is an inventory host gets a monitoring alert on that host
+  (type `security_event`, metric `ids_alert`, dedup key
+  `security:opnsense:<source>:ids_alert:<sid>`), counted on every read that
+  brings new events of the signature while it is open.
+- Another firewall's alert goes to the notification channels, once per open
+  period.
+- An alert ends on its own once its signature has had no new event for an
+  hour (**auto-resolved (quiet)**), or when acknowledged.
+- A mute of the firewall (or its site) on the Availability tab covers these
+  alerts: nothing is raised while it lasts, and creating it acknowledges
+  the open ones. A monitoring suppression of the host (all metrics or
+  `ids_alert`) covers them too.
+
+Events are kept as long as the monitoring retention (**Retention days**)
+and at most 50,000 per source (the oldest go first), and are deleted with
+their source. `GET /api/monitoring/security-events` lists them (see
+[api-reference.md](api-reference.md#security-events)).
 
 ## ARP, NDP and DHCP leases
 
@@ -977,13 +1150,18 @@ seconds instead of at the next scheduled collection.
 | IPsec (charon) | An IKE SA established or deleted, a child SA closed, collects the source |
 | OpenVPN | A site-to-site client instance (or a server instance) up, restarting or stopping collects the source |
 | Configuration / audit | A configuration save collects the source (config.xml backup and drift right away); failed web GUI and SSH logins count for the **Repeated login failures** rule |
+| Intrusion Detection (suricata) | An alert line (IDS **Enable syslog alerts**, `[1:<sid>:<rev>] ...`, `[Drop]` in IPS mode) or an eve alert record (**Enable eve syslog output**) reads the source's [IDS alerts](#ids-alerts) only, not a collection |
 
 The collection is the normal one (availability tracking, config backup,
 software refresh); the gateway, tunnel and CARP alerts stay the
 availability tracker's, so a message never raises a second alert for the
 same condition. At most one collection per firewall a minute and 6 an
 hour, 5 seconds after the first message; the switch is **Re-collect OPNsense on a state
-change** in the receiver settings. Details:
+change** in the receiver settings. A Suricata alert line reads only the IDS
+alerts (a few API calls), at most once a minute per firewall, and is not
+one of the hour's 6 collections, so an attack that logs an alert a second
+neither collects the firewall over and over nor holds back the collection
+a gateway alarm asks for. Details:
 [Syslog Rules](syslog-rules.md#opnsense-re-collect-trigger).
 
 Limits:
@@ -1072,6 +1250,11 @@ firewalls when you edit the advisory.
 | CPU use (the `CPU:` header line of `top`; the process list is dropped) | `GET diagnostics/activity/get_activity` (`getActivity`) | Health and services |
 | State table: entries and limit | `GET diagnostics/firewall/pf_states` (`pfStates`) | Health and services |
 | Services the configuration enables, running or not | `GET core/service/search` | Health and services |
+| Certificates: name, common name, issuer, validity, in use (the private key and PEM bodies are dropped; see [Certificates](#certificates)) | `GET trust/cert/search` | Certificates |
+| Certificate authorities: name, issuer, validity, reference count | `GET trust/ca/search` | Certificates |
+| Whether the IDS is enabled | `GET ids/service/status` | IDS alerts |
+| IDS alerts newer than the newest stored (see [IDS alerts](#ids-alerts)) | `POST ids/service/query_alerts` (`queryAlerts`), body `{"rowCount": 200, "current": <page>}` | IDS alerts |
+| The classtype of each new signature | `GET ids/settings/get_rule_info/<sid>` (`getRuleInfo`) | IDS alerts |
 | The pf tables of the aliases `config.xml` cannot resolve (see [Alias tables](#alias-tables)) | `GET firewall/alias_util/aliases`, then `GET firewall/alias_util/list/<alias>` per table | Alias tables (with Config backup) |
 | ARP table | `GET diagnostics/interface/search_arp` (`searchArp`; `get_arp` / `getArp` on older releases) | ARP, NDP and DHCP leases |
 | NDP table | `GET diagnostics/interface/search_ndp` (`searchNdp`; `get_ndp` / `getNdp`) | ARP, NDP and DHCP leases |
@@ -1080,7 +1263,7 @@ firewalls when you edit the advisory.
 The options are `verify_tls`, `include_gateways`, `include_vpn`,
 `include_ha`, `include_routes`, `include_firmware_audit`,
 `include_clients`, `include_rule_stats`, `include_health`, `include_alias_tables`,
-`config_backup` and `inventory_enrich`, all on by default.
+`include_certificates`, `include_ids_alerts`, `config_backup` and `inventory_enrich`, all on by default.
 
 Calls are sent one at a time and spaced out. A rate-limit or server error
 answer is retried after a pause (honouring `Retry-After`); a refused call is
@@ -1094,7 +1277,9 @@ description, enable flag, address type, address, prefix, MTU and gateway
 firmware status keeps its product and update fields (the mirror and the
 licence details are dropped, a business licence keeps its expiry), and
 keys named like secrets, passwords or pre-shared keys are dropped
-everywhere.
+everywhere. The certificate rows keep only the fields listed under
+[Certificates](#certificates): their private keys never leave the
+collector.
 
 ## Limits
 
@@ -1134,6 +1319,30 @@ Not read:
 - a service the configuration does not enable: `core/service/search`
   lists only enabled ones, so a service turned off on purpose is removed,
   not alerted
+- certificate expiry between two collections: the days left are worked
+  out at each collection, so an alert comes with the first collection past
+  a threshold (30 days, 7 days, the end). The thresholds are fixed
+- certificates of plugins that keep their own store (not in **System →
+  Trust**), the chain of an externally issued certificate whose CA is not
+  imported, revocation (CRLs, OCSP), and certificates other devices present
+  to the firewall; an unused or user certificate is listed, not alerted.
+  The trust answers were checked against the OPNsense source, not against
+  a firewall
+- IDS alerts beyond one read's 5 pages of 200 (a burst larger than that
+  between two reads loses its oldest part, and the section says so), the
+  rotated alert logs, alerts older than the newest one stored (an alert
+  logged late with an older time), and the rest of Suricata's eve records
+  (flows, HTTP, TLS, DNS, files, the payload)
+- the severity Suricata logged: the alert search drops it, so the priority
+  comes from the rule's classtype and Suricata's default
+  `classification.config`; a custom classification file, a rule without a
+  classtype or a signature past the 20 lookups of a read is **unknown**
+  (stored, not alerted, until a later read looks it up for new events)
+- the IDS more often than the monitoring poll for a firewall that is no
+  inventory host: its collections (and a forwarded Suricata syslog line)
+  read it. A firewall the poll found with the IDS disabled is read again
+  by the poll only after a collection finds it enabled. The IDS answers
+  were checked against the OPNsense source, not against a firewall
 - any change to the firewall: Plexus never applies updates, reboots,
   starts or stops a service or edits anything
 
@@ -1151,5 +1360,7 @@ An OPNsense firewall uses the source endpoints listed in
 | `POST` | `/api/sources/{id}/build` | Start a collection; returns `job_id` |
 | `POST` | `/api/sources/sample?provider=opnsense` | Add or refresh the demo firewall |
 | `GET` | `/api/topology` | OPNsense nodes carry a `meraki` reference whose `provider` is `opnsense` |
+| `GET` | `/api/availability/topology/summary?provider=opnsense&entity_type=certificate` | The tracked certificates and CAs with their state; `raw_status` is the expiry tier (`valid`, `expiring`, `critical`, `expired`) |
 | `GET` | `/api/opnsense/hosts/{host_id}/rules` | The rule view of the firewall's newest config backup (Config Backups feature), with each rule's firewall log evidence (`log_evidence`) and the sizes of the collected alias tables (`alias_tables`); see [api-reference.md](api-reference.md#opnsense-firewall-rules) |
+| `GET` | `/api/monitoring/security-events` | The stored [IDS alerts](#ids-alerts) (Monitoring feature): `?hours=&severity=&action=&q=&host_id=&org_ref=&provider=&kind=&limit=&offset=`; see [api-reference.md](api-reference.md#security-events) |
 | `GET` | `/api/opnsense/hosts/{host_id}/rules/diff` | Rule, alias and NAT changes between two backups (`?from_backup=&to_backup=`, default: the newest two) |

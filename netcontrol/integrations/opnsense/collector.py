@@ -81,6 +81,23 @@ the API reference at docs.opnsense.org:
                                                  An endpoint that answers 404 is
                                                  left out with one ``info``
                                                  warning naming all of them
+  - certificates (``collect_certificates``; 24.7+, see ``certificates``):
+    ``trust/cert/search``, ``trust/ca/search``   the certificates and CAs
+                                                 with their expiry; the rows
+                                                 carry the private keys, so
+                                                 only a few fields are kept.
+                                                 Without the API (both 404)
+                                                 the ``<cert>`` / ``<ca>`` of
+                                                 config.xml are parsed instead
+  - IDS alerts (``collect_ids_alerts``, see ``ids``):
+    ``ids/service/status``,                      whether the IDS is enabled;
+    ``ids/service/query_alerts`` (POST),         then its alerts, newest first,
+    ``ids/settings/get_rule_info/{sid}``         only those newer than the
+                                                 newest one stored, and the
+                                                 classtype of each new
+                                                 signature. Bounded by
+                                                 ``ids.IDS_*``; an IDS that is
+                                                 off reads nothing more
   - ``core/firmware/running``, ``core/firmware/audit`` (POST),
     ``core/firmware/upgradestatus``              the security audit
                                                  (``pkg audit -F``), run in the
@@ -135,8 +152,25 @@ from typing import Any
 from urllib.parse import quote, urlsplit
 
 from netcontrol.integrations.meraki.collector import scrub_secrets
+from netcontrol.integrations.opnsense.certificates import CERTIFICATE_PARTS, certificates_from_config, keep_rows
 from netcontrol.integrations.opnsense.client import OpnsenseApiError, OpnsenseClient
+from netcontrol.integrations.opnsense.ids import (
+    IDS_MAX_PAGES,
+    IDS_MAX_RULE_LOOKUPS,
+    IDS_PAGE_ROWS,
+    IDS_PRIVILEGE,
+    PATH_IDS_ALERTS,
+    PATH_IDS_RULE_INFO,
+    PATH_IDS_STATUS,
+    STATUS_DISABLED,
+    STATUS_UNAVAILABLE,
+    alert_rows,
+    row_sid,
+    row_time,
+    rule_classtype,
+)
 from netcontrol.integrations.pathtrace.opnsense_config import parse_document
+from netcontrol.integrations.traffic import parse_time
 from netcontrol.telemetry import configure_logging
 
 LOGGER = configure_logging("plexus.opnsense")
@@ -165,6 +199,12 @@ DEFAULT_OPTIONS: dict[str, Any] = {
     # The pf tables of the aliases config.xml cannot resolve (URL tables,
     # GeoIP, host names), for the path trace. Needs config.xml.
     "include_alias_tables": True,
+    # The certificates and CAs of the trust store with their expiry (no key,
+    # no PEM), for expiry alerts; config.xml on a release without the API.
+    "include_certificates": True,
+    # The intrusion detection (Suricata) alerts, kept as security events,
+    # when the IDS is enabled. Also read by the monitoring poll.
+    "include_ids_alerts": True,
     # Store config.xml as a configuration backup of the matching inventory host.
     "config_backup": True,
     # Attach data Plexus already collected over SNMP/SSH for the inventory
@@ -186,6 +226,8 @@ PHASE_HA = "opnsense ha"
 PHASE_CLIENTS = "opnsense clients"
 PHASE_RULES = "opnsense rules"
 PHASE_HEALTH = "opnsense health"
+PHASE_CERTIFICATES = "opnsense certificates"
+PHASE_IDS = "opnsense ids alerts"
 PHASE_FIRMWARE = "opnsense firmware"
 PHASE_CONFIG = "opnsense config"
 PHASE_ALIAS_TABLES = "opnsense alias tables"
@@ -507,10 +549,14 @@ async def collect_opnsense(
     progress: ProgressCallback | None = None,
     *,
     want_config: bool | None = None,
+    ids_state: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Collect one firewall. Raises ``OpnsenseApiError`` only when the key
     is rejected, the firewall cannot be reached, or no call answered.
-    ``want_config`` (default: the ``config_backup`` option) reads config.xml."""
+    ``want_config`` (default: the ``config_backup`` option) reads config.xml.
+    ``ids_state``: what the IDS read starts from (``{"since", "classtypes"}``,
+    see ``collect_ids_alerts``); without it every alert of the first pages
+    is read."""
     opts = sanitize_options(options)
     if want_config is None:
         want_config = bool(opts["config_backup"])
@@ -520,6 +566,9 @@ async def collect_opnsense(
     total += (2 + len(LEASE_BACKENDS)) * int(opts["include_clients"])
     total += int(opts["include_rule_stats"])
     total += len(HEALTH_PARTS) * int(opts["include_health"])
+    total += len(CERTIFICATE_PARTS) * int(opts["include_certificates"])
+    # The IDS status; its pages and rule lookups are added as they are made.
+    total += int(opts["include_ids_alerts"])
     done = 0
     answered = 0
     first_error: OpnsenseApiError | None = None
@@ -621,6 +670,28 @@ async def collect_opnsense(
         answered += answered_health
         report(PHASE_HEALTH, services=len(health["services"] or []))
 
+    certificates: dict[str, Any] | None = None
+    no_trust_api = False
+    if opts["include_certificates"]:
+        report(PHASE_CERTIFICATES)
+        certificates, answered_certificates, no_trust_api = await collect_certificates(client, errors)
+        done += len(CERTIFICATE_PARTS)
+        answered += answered_certificates
+        if certificates is not None:
+            report(PHASE_CERTIFICATES, certificates=len(certificates["certificates"]))
+
+    ids_alerts: dict[str, Any] | None = None
+    if opts["include_ids_alerts"]:
+        report(PHASE_IDS)
+        state = ids_state or {}
+        ids_alerts, ids_calls, answered_ids = await collect_ids_alerts(
+            client, errors, since=state.get("since"), classtypes=state.get("classtypes")
+        )
+        total += ids_calls - 1
+        done += ids_calls
+        answered += answered_ids
+        report(PHASE_IDS, alerts=len((ids_alerts or {}).get("rows") or []))
+
     audit: dict[str, Any] | None = None
     if opts["include_firmware_audit"]:
         report(PHASE_FIRMWARE)
@@ -675,6 +746,9 @@ async def collect_opnsense(
         # No alias needs a table: none is stored (any older ones are dropped).
         alias_tables = await _collect_alias_tables(plan_alias_tables([], []), best_effort, errors)
 
+    if no_trust_api:
+        certificates = await _certificates_fallback(config_xml, errors)
+
     if not answered and first_error is not None:
         raise first_error
 
@@ -704,6 +778,9 @@ async def collect_opnsense(
         "clients": clients,
         "rule_stats": rule_stats,
         "health": health,
+        "certificates": certificates,
+        # Never part of the snapshot: the caller stores them as security events.
+        "ids_alerts": ids_alerts,
         "audit": audit,
         # Never part of the snapshot: the caller stores it as a config backup.
         "config_xml": config_xml,
@@ -911,6 +988,168 @@ async def collect_health(
             )
         )
     return health, answered
+
+
+async def collect_certificates(
+    client: OpnsenseClient, errors: list[dict[str, Any]]
+) -> tuple[dict[str, Any] | None, int, bool]:
+    """The certificates and CAs of the trust store (``CERTIFICATE_PARTS``,
+    each row with only the fields ``certificates.keep_rows`` keeps: the
+    answers carry the private keys, which are dropped here), how many calls
+    answered, and whether the release has no trust API (both answered 404:
+    the caller falls back to config.xml). ``None`` when nothing answered. A
+    refused call is a warning that names the privilege it needs. A rejected
+    key or an unreachable firewall raises."""
+    found: dict[str, Any] = {"source": "api", "certificates": [], "authorities": []}
+    answered = missing = 0
+    for key, paths, privilege in CERTIFICATE_PARTS:
+        try:
+            _path, body = await client.get_first(paths)
+        except OpnsenseApiError as exc:
+            if exc.transport or exc.status_code == 401:
+                raise
+            if exc.status_code == 404:
+                missing += 1
+                continue
+            warning = _error("certificates", exc, paths=paths)
+            if exc.status_code == 403:
+                warning["message"] += f"; privilege needed: {privilege}"
+            errors.append(warning)
+            continue
+        answered += 1
+        found[key] = scrub_secrets(keep_rows(body, key))
+    if not answered:
+        return None, 0, missing == len(CERTIFICATE_PARTS)
+    return found, answered, False
+
+
+async def _certificates_fallback(config_xml: str | None, errors: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """The certificates of ``config_xml`` for a release without the trust
+    API, with an ``info`` warning that says where they came from, or that
+    they were not read (no config.xml)."""
+    path = "/" + CERTIFICATE_PARTS[0][1][0]
+    found = await asyncio.to_thread(certificates_from_config, config_xml) if config_xml else None
+    if found is None:
+        errors.append(
+            info_warning(
+                "certificates",
+                path,
+                "This OPNsense release has no trust API (24.7+) and config.xml was not read: "
+                "certificate expiry is not tracked",
+            )
+        )
+        return None
+    errors.append(
+        info_warning(
+            "certificates",
+            path,
+            "This OPNsense release has no trust API (24.7+): the certificates were read from config.xml",
+        )
+    )
+    return found
+
+
+async def collect_ids_alerts(
+    client: OpnsenseClient,
+    errors: list[dict[str, Any]],
+    *,
+    since: str | None = None,
+    classtypes: dict[int, str] | None = None,
+) -> tuple[dict[str, Any] | None, int, int]:
+    """The intrusion detection alerts (see ``ids``), how many calls were
+    made and how many answered.
+
+    The IDS status first: an IDS that is ``disabled`` reads nothing more, and
+    a firewall without the IDS API (404) is ``unavailable``, quietly. Then
+    the alerts, newest first, ``IDS_PAGE_ROWS`` a page, until a row older
+    than ``since`` (the newest event stored, UTC text; ``None``: no stop), a
+    short page or ``IDS_MAX_PAGES`` (``truncated``: older new alerts were
+    left unread). Then the classtype of each new signature not in
+    ``classtypes`` (sid -> classtype already known), at most
+    ``IDS_MAX_RULE_LOOKUPS`` (``lookups_skipped``: how many were left).
+    ``None`` when the status call was refused or failed; a refused page or
+    lookup keeps what was read with a warning. A rejected key or an
+    unreachable firewall raises."""
+    calls = answered = 0
+
+    def refused(exc: OpnsenseApiError, paths: tuple[str, ...]) -> None:
+        warning = _error("ids", exc, paths=paths)
+        if exc.status_code == 403:
+            warning["message"] += f"; privilege needed: {IDS_PRIVILEGE}"
+        errors.append(warning)
+
+    try:
+        calls += 1
+        _path, body = await client.get_first(PATH_IDS_STATUS)
+    except OpnsenseApiError as exc:
+        if exc.transport or exc.status_code == 401:
+            raise
+        if exc.status_code == 404:
+            return {"status": STATUS_UNAVAILABLE, "rows": [], "classtypes": {}}, calls, answered
+        refused(exc, PATH_IDS_STATUS)
+        return None, calls, answered
+    answered += 1
+    status = str((body.get("status") if isinstance(body, dict) else "") or "unknown").strip().lower()[:20]
+    found: dict[str, Any] = {
+        "status": status,
+        "read_at": datetime.now(UTC).isoformat(timespec="seconds"),
+        "since": since,
+        "rows": [],
+        "classtypes": {},
+        "pages": 0,
+        "truncated": False,
+        "lookups_skipped": 0,
+    }
+    if status == STATUS_DISABLED:
+        return found, calls, answered
+    cutoff = parse_time(since) if since else None
+    for page in range(1, IDS_MAX_PAGES + 1):
+        try:
+            calls += 1
+            _path, body = await client.post_first(PATH_IDS_ALERTS, {"rowCount": IDS_PAGE_ROWS, "current": page})
+        except OpnsenseApiError as exc:
+            if exc.transport or exc.status_code == 401:
+                raise
+            refused(exc, PATH_IDS_ALERTS)
+            break
+        answered += 1
+        found["pages"] = page
+        rows = alert_rows(body)
+        older = False
+        for row in rows:
+            at = row_time(row)
+            if cutoff is not None and at is not None and at < cutoff:
+                older = True
+                break
+            found["rows"].append(row)
+        if older or len(rows) < IDS_PAGE_ROWS:
+            break
+    else:
+        found["truncated"] = True
+    known = classtypes or {}
+    wanted: list[int] = []
+    for row in found["rows"]:
+        sid = row_sid(row)
+        alert = row.get("alert")
+        if sid is None or sid in known or sid in wanted or (isinstance(alert, dict) and alert.get("category")):
+            continue
+        wanted.append(sid)
+    for position, sid in enumerate(wanted[:IDS_MAX_RULE_LOOKUPS]):
+        paths = tuple(f"{path}{sid}" for path in PATH_IDS_RULE_INFO)
+        try:
+            calls += 1
+            _path, body = await client.get_first(paths)
+        except OpnsenseApiError as exc:
+            if exc.transport or exc.status_code == 401:
+                raise
+            refused(exc, paths)
+            found["lookups_skipped"] = len(wanted) - position - 1
+            break
+        answered += 1
+        found["classtypes"][sid] = rule_classtype(body)
+    else:
+        found["lookups_skipped"] = max(0, len(wanted) - IDS_MAX_RULE_LOOKUPS)
+    return found, calls, answered
 
 
 async def _run_audit(client: OpnsenseClient, errors: list[dict[str, Any]]) -> dict[str, Any] | None:

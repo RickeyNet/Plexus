@@ -191,6 +191,7 @@ describe('mute wording', () => {
     expect(muteEntityChoiceLabel('uplink')).toBe('This uplink only');
     expect(muteEntityChoiceLabel('vpn_connection')).toBe('This VPN connection only');
     expect(muteEntityChoiceLabel('service')).toBe('This service only');
+    expect(muteEntityChoiceLabel('certificate')).toBe('This certificate only');
   });
   it('says a site unmute covers the whole site', () => {
     expect(unmuteConfirmMessage('Branch-12 MX', { scope: 'entity' }, 'Branch-12')).toBe('Unmute Branch-12 MX?');

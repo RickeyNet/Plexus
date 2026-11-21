@@ -20,9 +20,12 @@ to the older one on 403 or 404.
 Scope
 -----
 Read-only: ``GET`` only, besides ``POST core/firmware/audit``, which starts
-the built-in security audit (``pkg audit -F``), and ``POST
+the built-in security audit (``pkg audit -F``), ``POST
 ipsec/sessions/search_phase2``, a search that reads the connection it lists
-from the POST body. Neither changes a setting. The ARP / NDP tables
+from the POST body, and ``POST ids/service/query_alerts``, the IDS alert
+search, which reads its page from the POST body. None changes a setting;
+no other IDS action (reconfigure, rule updates, service start / stop,
+``drop_alert_log``) is ever called. The ARP / NDP tables
 (``diagnostics/interface/search_arp``, ``search_ndp``; ``get_arp``,
 ``get_ndp`` on older releases) and the DHCP leases
 (``dhcpv4/leases/search_lease``, ``dhcpv6/leases/search_lease``,

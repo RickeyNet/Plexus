@@ -21,7 +21,12 @@ that recovers to ``up`` can alert again. A member of a redundancy group
 (``meta["role"]``: an OPNsense CARP group) whose role changes between
 MASTER and BACKUP from one collection to the next raises a failover
 warning the same way (``failovers``), although both roles are healthy; it
-honours the same mutes. The latency, jitter and loss a
+honours the same mutes. A tracked certificate (an OPNsense firewall's)
+alerts on its expiry tier instead of its state (``certificate_changes``): a
+warning when it expires within 30 days, critical within 7 days and once
+expired, each tier once (``expiry_dedup_key``), also on first sight; a
+worse tier replaces the open alert of the tier before it, and a renewal
+(a better tier) acknowledges the open expiry alerts. The latency, jitter and loss a
 vendor reports for an entity (``EntityState.metrics``) are stored as a time
 series with daily rollups (``record_topology_entity_metrics``) for the SLA
 targets of topology entities (``netcontrol.routes.topology_sla``). An entity seen for the first time
@@ -36,7 +41,16 @@ from typing import Any
 
 import routes.database as db
 
-from netcontrol.integrations.availability import FAILOVER_ROLES, clean_entity_types, extract_entity_states
+from netcontrol.integrations.availability import (
+    CERTIFICATE_CRITICAL_DAYS,
+    CERTIFICATE_TIER_RANK,
+    CERTIFICATE_TIER_SEVERITY,
+    CERTIFICATE_WARNING_DAYS,
+    FAILOVER_ROLES,
+    certificate_expiry_text,
+    clean_entity_types,
+    extract_entity_states,
+)
 from netcontrol.routes import notification_channels
 from netcontrol.telemetry import configure_logging
 
@@ -64,6 +78,7 @@ TYPE_LABELS = {
     "peering": "Peering",
     "link": "Link",
     "service": "Service",
+    "certificate": "Certificate",
 }
 
 
@@ -78,13 +93,50 @@ def failover_dedup_key(t: dict, role: str) -> str:
     return f"{dedup_key(t)}:failover:{role}"
 
 
+def expiry_dedup_key(t: dict, tier: str) -> str:
+    """The dedup key of a certificate's expiry alert of ``tier``: one per
+    tier, so a certificate that gets closer to its end (expiring, critical,
+    expired) alerts again, and one in the same tier does not."""
+    return f"{dedup_key(t)}:expiry:{tier}"
+
+
 def alert_keys(row: dict) -> list[str]:
     """Every dedup key an entity's open alerts may have: its state alert's
-    and, for a role-tracked entity, its failover alerts'."""
+    and, for a role-tracked entity, its failover alerts', for a
+    certificate its expiry alerts'."""
     keys = [dedup_key(row)]
     if "role" in (row.get("meta") or {}):
         keys += [failover_dedup_key(row, role) for role in FAILOVER_ROLES]
+    if row.get("entity_type") == "certificate":
+        keys += [expiry_dedup_key(row, tier) for tier in CERTIFICATE_TIER_SEVERITY]
     return keys
+
+
+def certificate_changes(entities: list[dict], stored: list[dict]) -> tuple[list[dict], list[dict]]:
+    """The certificate entities whose expiry tier (``raw_status``, see
+    ``availability.certificate_tier``) got worse since the stored state
+    (``raised``: alert them) or better (``improved``: a renewal; resolve
+    their open alerts of the worse tiers), each with ``old_tier`` and
+    ``new_tier``. Unlike a state alert, a certificate seen for the first
+    time compares with ``valid``: a firewall added with an expired
+    certificate in use alerts at once. An ``unknown`` tier (no expiry
+    date) changes nothing. Pure."""
+    before = {(str(r["entity_type"]), str(r["entity_id"])): str(r.get("raw_status") or "") for r in stored}
+    raised, improved = [], []
+    for entity in entities:
+        if entity.get("entity_type") != "certificate":
+            continue
+        new = str(entity.get("raw_status") or "")
+        if new not in CERTIFICATE_TIER_RANK or new == "unknown":
+            continue
+        old = before.get((str(entity["entity_type"]), str(entity["entity_id"])), "") or "valid"
+        old = old if old in CERTIFICATE_TIER_RANK else "valid"
+        change = {**entity, "old_tier": old, "new_tier": new}
+        if CERTIFICATE_TIER_RANK[new] > CERTIFICATE_TIER_RANK[old]:
+            raised.append(change)
+        elif CERTIFICATE_TIER_RANK[new] < CERTIFICATE_TIER_RANK[old]:
+            improved.append(change)
+    return raised, improved
 
 
 def failovers(entities: list[dict], stored: list[dict]) -> list[dict]:
@@ -222,11 +274,56 @@ async def _raise_failover(t: dict) -> str:
     )
 
 
+def _expiry_message(t: dict) -> str:
+    meta = t.get("meta") or {}
+    noun = "CA" if meta.get("kind") == "authority" else "Certificate"
+    when = certificate_expiry_text(meta.get("days_left"), t["new_tier"]) or t["new_tier"]
+    until = str(meta.get("valid_to") or "")[:10]
+    return f"{noun} {_subject(t)} {when}" + (f" (valid until {until})" if until else "")
+
+
+async def _raise_expiry(t: dict) -> str:
+    """Raise the alert of one certificate tier change (``certificate_changes``):
+    a warning when it starts to expire, critical from
+    ``CERTIFICATE_CRITICAL_DAYS`` and once expired, through the same path as
+    a state alert. Returns how (see ``deliver_alert``)."""
+    days = (t.get("meta") or {}).get("days_left")
+    critical = t["new_tier"] != "expiring"
+    return await deliver_alert(
+        host_id=t.get("host_id"),
+        name=t["name"],
+        alert_type=ALERT_TYPE,
+        metric="topology certificate",
+        message=_expiry_message(t),
+        severity=CERTIFICATE_TIER_SEVERITY[t["new_tier"]],
+        dedup_key=expiry_dedup_key(t, t["new_tier"]),
+        value=float(days) if isinstance(days, int) and not isinstance(days, bool) else None,
+        threshold=float(CERTIFICATE_CRITICAL_DAYS if critical else CERTIFICATE_WARNING_DAYS),
+    )
+
+
+async def _resolve_expiry(t: dict) -> int:
+    """After a certificate changed tier: acknowledge its open expiry alerts
+    of every other tier as ``auto-resolved``, so one certificate has at most
+    one open expiry alert (a worse tier replaces the older alert; a renewal
+    clears the alerts of the worse tiers). Never raises."""
+    resolved = 0
+    for tier in CERTIFICATE_TIER_SEVERITY:
+        if tier == t["new_tier"]:
+            continue
+        try:
+            resolved += await db.resolve_monitoring_alerts(expiry_dedup_key(t, tier), "auto-resolved")
+        except Exception as exc:  # noqa: BLE001 - best effort
+            LOGGER.warning("topology availability: clearing %s failed: %s", dedup_key(t), type(exc).__name__)
+    return resolved
+
+
 async def _stored_roles(provider: str, org_ref: int, entities: list[dict]) -> list[dict]:
-    """The stored state rows ``failovers`` compares with: only read when
-    the collection reports a role-tracked entity. Never raises (``[]``:
-    no failover is detected this time)."""
-    if not any("role" in (e.get("meta") or {}) for e in entities):
+    """The stored state rows ``failovers`` and ``certificate_changes``
+    compare with: only read when the collection reports a role-tracked
+    entity or a certificate. Never raises (``[]``: no failover is detected
+    this time; a certificate compares with ``valid``)."""
+    if not any("role" in (e.get("meta") or {}) or e.get("entity_type") == "certificate" for e in entities):
         return []
     try:
         return await db.list_topology_entity_states(provider, org_ref)
@@ -299,6 +396,7 @@ async def record_snapshot_states(
             "muted_alerts": 0,
             "removed": 0,
             "failovers": [],
+            "expiries": [],
         }
     await _record_metrics(provider, org_ref, entities, now)
     removed = await finish_removal(result["removed"])
@@ -306,9 +404,12 @@ async def record_snapshot_states(
         await _drop_site_mutes_of_gone_sites(provider, org_ref, snapshot)
     alerted = muted = 0
     changes = failovers(entities, roles_before)
-    index = await _mute_index(provider, org_ref) if result["alerts"] or changes else None
+    expiries, renewed = certificate_changes(entities, roles_before)
+    index = await _mute_index(provider, org_ref) if result["alerts"] or changes or expiries else None
     metas = {(e["entity_type"], e["entity_id"]): e.get("meta") or {} for e in entities} if index else {}
     for t in result["alerts"]:
+        if t["entity_type"] == "certificate":
+            continue  # its expiry tier alerts instead (below)
         if index and index.match({**t, "meta": metas.get((t["entity_type"], t["entity_id"]), {})}):
             # Muted: the transition and alert_state are stored; nothing is raised.
             muted += 1
@@ -336,6 +437,23 @@ async def record_snapshot_states(
             LOGGER.warning(
                 "topology availability: failover alert for %s failed: %s", dedup_key(change), type(exc).__name__
             )
+    for change in expiries:
+        LOGGER.info(
+            "topology availability: %s certificate %s (was %s)", dedup_key(change), change["new_tier"], change["old_tier"]
+        )
+        if index and index.match(change):
+            muted += 1
+            continue
+        try:
+            await _raise_expiry({**change, "org_name": org_name})
+            alerted += 1
+            await _resolve_expiry(change)  # the alert of the tier it left
+        except Exception as exc:  # noqa: BLE001 - delivery must never break the collection
+            LOGGER.warning(
+                "topology availability: expiry alert for %s failed: %s", dedup_key(change), type(exc).__name__
+            )
+    for change in renewed:
+        await _resolve_expiry(change)
     for t in result["recoveries"]:
         LOGGER.info("topology availability: %s recovered (%s -> up)", dedup_key(t), t["old_state"])
     if result["transitions"]:
@@ -347,7 +465,14 @@ async def record_snapshot_states(
             sum(1 for t in result["transitions"] if not t["baseline"]),
             alerted,
         )
-    return {**result, "alerted": alerted, "muted_alerts": muted, "removed": removed, "failovers": changes}
+    return {
+        **result,
+        "alerted": alerted,
+        "muted_alerts": muted,
+        "removed": removed,
+        "failovers": changes,
+        "expiries": expiries,
+    }
 
 
 # ── Mutes ────────────────────────────────────────────────────────────────────
@@ -358,15 +483,23 @@ MUTED_BY = "muted"
 async def mute_entities(mute: dict) -> int:
     """After ``mute`` was created: acknowledge as ``muted`` the open alerts of
     every entity of its source the mutes now cover (the tracker's ``topo:``
-    alerts and, for Meraki, the open Meraki alerts of those devices and
-    networks). Returns how many monitoring alerts were acknowledged."""
+    alerts, the security event alerts of a muted device's source and, for
+    Meraki, the open Meraki alerts of those devices and networks). Returns
+    how many monitoring alerts were acknowledged."""
     provider, org_ref = str(mute["provider"]), int(mute["org_ref"])
     index = await db.load_topology_mute_index(provider, org_ref)
     acknowledged = 0
+    device_muted = False
     for row in await db.list_topology_entity_states(provider, org_ref):
         if index.match(row):
+            device_muted = device_muted or row.get("entity_type") == "device"
             for key in alert_keys(row):
                 acknowledged += await db.resolve_monitoring_alerts(key, MUTED_BY)
+    if device_muted:
+        # The security event (IDS) alerts of the source's device.
+        from netcontrol.routes.security_events import mute_source_alerts
+
+        acknowledged += await mute_source_alerts(provider, org_ref)
     if provider == "meraki":
         # Imported here: meraki_alerts imports this package's routes.
         from netcontrol.routes import meraki_alerts

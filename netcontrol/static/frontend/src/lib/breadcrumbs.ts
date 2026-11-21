@@ -52,6 +52,7 @@ const LABELS: Record<string, string> = {
   '/monitoring': 'Monitoring',
   '/monitoring/alerts': 'Monitoring · Alerts',
   '/monitoring/events': 'Monitoring · Events',
+  '/monitoring/security': 'Monitoring · Security',
   '/monitoring/sla': 'Monitoring · SLA',
   '/monitoring/availability': 'Monitoring · Availability',
   '/monitoring/capacity': 'Monitoring · Capacity',

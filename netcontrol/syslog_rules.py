@@ -588,6 +588,18 @@ OPNSENSE_RECOLLECT: tuple[tuple[str, tuple[Matcher, ...]], ...] = (
             _p("audit", text=r"^user .{1,200}? changed configuration to "),
         ),
     ),
+    (
+        "ids",
+        # Suricata's alert lines (IDS "Enable syslog alerts", alert-syslog.c:
+        # "[Drop] [1:sid:rev] signature [Classification: ...] [Priority: n]
+        # {PROTO} src -> dst") and its eve records over syslog ("Enable eve
+        # syslog output": JSON with "event_type":"alert"). Not a
+        # re-collection: only the source's IDS alerts are read
+        # (``opnsense_ids.read_source_now``).
+        (
+            _p("suricata", text=r'^(?:\[w?Drop\] )?\[\d+:\d+:\d+\] |"event_type": ?"alert"'),
+        ),
+    ),
 )
 RECOLLECT_REASONS: tuple[str, ...] = tuple(reason for reason, _matchers in OPNSENSE_RECOLLECT)
 # The program names (and prefixes) of those matchers: a message whose head
@@ -600,8 +612,9 @@ _RECOLLECT_PROGRAMS: tuple[str, ...] = tuple(
 
 
 def recollect_reason(parsed: ParsedSyslog) -> str:
-    """``gateway``, ``carp``, ``vpn``, ``config`` or "" for a message that
-    does not start an OPNsense re-collection."""
+    """``gateway``, ``carp``, ``vpn``, ``config``, ``ids`` (a read of the
+    IDS alerts only) or "" for a message that does not start an OPNsense
+    re-collection."""
     if not parsed.program:
         return ""
     for reason, matchers in OPNSENSE_RECOLLECT:

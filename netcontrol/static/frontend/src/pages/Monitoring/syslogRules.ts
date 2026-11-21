@@ -73,6 +73,8 @@ const RECOLLECT_REASONS: Record<string, string> = {
 
 /** What a recollect reason from the test endpoint means. */
 export function recollectLabel(reason: string | undefined): string {
+  // A Suricata alert line reads the IDS alerts only, not the whole source.
+  if (reason === 'ids') return 'From an OPNsense firewall: reads its IDS alerts in 5 s (a Suricata alert)';
   const why = reason ? RECOLLECT_REASONS[reason] : undefined;
   return why ? `From an OPNsense firewall: collects its topology source in 5 s (${why})` : '';
 }

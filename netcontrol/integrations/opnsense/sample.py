@@ -211,6 +211,126 @@ def alias_table_answers() -> dict[str, Any]:
     }
 
 
+# ── IDS (Suricata) alerts ─────────────────────────────────────────────────────
+
+# Invented signatures (ids in the local range 9,000,000+) with the classtype
+# their rule would have.
+IDS_RULES: dict[int, str] = {
+    9100001: "trojan-activity",  # priority 1: critical
+    9100002: "attempted-recon",  # priority 2: warning
+    9100003: "misc-activity",  # priority 3: info
+}
+
+
+def _ids_alert(
+    timestamp: str,
+    sid: int,
+    signature: str,
+    action: str,
+    src: tuple[str, int],
+    dest: tuple[str, int],
+    *,
+    flow_id: int,
+    proto: str = "TCP",
+    iface: str = "vtnet0",
+) -> dict[str, Any]:
+    """A ``ids/service/query_alerts`` row: an eve.json alert record as
+    ``queryAlertLog.py`` flattens it (``alert`` is the signature text)."""
+    return {
+        "timestamp": timestamp,
+        "flow_id": flow_id,
+        "in_iface": iface,
+        "event_type": "alert",
+        "src_ip": src[0],
+        "src_port": src[1],
+        "dest_ip": dest[0],
+        "dest_port": dest[1],
+        "proto": proto,
+        "app_proto": "http" if dest[1] == 80 else "failed",
+        "direction": "to_server",
+        "payload_printable": "GET / HTTP/1.1",
+        "alert_sid": sid,
+        "alert_action": action,
+        "alert": signature,
+        "filepos": 1000 + flow_id % 1000,
+        "fileid": "",
+    }
+
+
+def ids_alert_rows() -> list[dict[str, Any]]:
+    """The sample firewall's IDS alerts, newest first (as the log is read)."""
+    return [
+        _ids_alert(
+            "2026-11-20T10:15:30.512301+0000",
+            9100001,
+            "PLEXUS SAMPLE Trojan beacon to example C2",
+            "blocked",
+            ("192.0.2.50", 51234),
+            ("203.0.113.66", 80),
+            flow_id=1500000000000001,
+        ),
+        _ids_alert(
+            "2026-11-20T10:15:02.100000+0000",
+            9100001,
+            "PLEXUS SAMPLE Trojan beacon to example C2",
+            "allowed",
+            ("192.0.2.51", 51300),
+            ("203.0.113.66", 80),
+            flow_id=1500000000000002,
+        ),
+        _ids_alert(
+            "2026-11-20T10:12:45.000000+0000",
+            9100002,
+            "PLEXUS SAMPLE Port scan from outside",
+            "allowed",
+            ("198.51.100.99", 40000),
+            ("203.0.113.10", 22),
+            flow_id=1500000000000003,
+            iface="vtnet1",
+        ),
+        _ids_alert(
+            "2026-11-20T10:10:00.000000+0000",
+            9100003,
+            "PLEXUS SAMPLE Unusual user agent",
+            "allowed",
+            ("192.0.2.60", 52000),
+            ("2001:db8::80", 443),
+            flow_id=1500000000000004,
+        ),
+    ]
+
+
+def ids_api_answers(status: str = "running") -> dict[str, Any]:
+    """What the IDS API answers for the sample firewall: the service
+    status, the alerts (one page) and the rule of each signature
+    (``get_rule_info/{sid}``, a sorted row of the installed rule)."""
+    rows = ids_alert_rows()
+    return {
+        "ids/service/status": {"status": status, "widget": {"caption_start": "Start"}},
+        "ids/service/query_alerts": {
+            "filters": {},
+            "rows": rows,
+            "origin": "eve.json",
+            "rowCount": len(rows),
+            "total": len(rows),
+            "current": 1,
+        },
+        **{
+            f"ids/settings/get_rule_info/{sid}": {
+                "action": "alert",
+                "classtype": classtype,
+                "enabled": True,
+                "gid": "1",
+                "msg": next(r["alert"] for r in rows if r["alert_sid"] == sid),
+                "rev": "1",
+                "sid": str(sid),
+                "source": "plexus-sample.rules",
+            }
+            for sid, classtype in IDS_RULES.items()
+        },
+    }
+
+
 def _interface(
     identifier: str,
     device: str,
@@ -585,6 +705,107 @@ def _health_answers() -> dict[str, Any]:
     }
 
 
+# The trust store (``trust/cert/search``, ``trust/ca/search``): refids of the
+# certificates and CAs, and the fields the search answers carry that must
+# never be kept (the private key and the PEM bodies; invented strings).
+CA_INTERNAL = "6a1f00000000a"
+CA_OLD_LAB = "6a1f00000000b"
+CERT_WEBGUI = "6a1f000000001"
+CERT_OPENVPN = "6a1f000000002"
+CERT_IPSEC = "6a1f000000003"
+CERT_OLD_PORTAL = "6a1f000000004"
+CERT_USER = "6a1f000000005"
+SAMPLE_KEY_MATERIAL = "SAMPLE-PRIVATE-KEY-NOT-REAL"
+_KEY_FIELDS = {
+    "crt": "U0FNUExFLUNFUlRJRklDQVRFLU5PVC1SRUFM",
+    "prv": "U0FNUExFLVBSSVZBVEUtS0VZLU5PVC1SRUFM",
+    "csr": "",
+    "crt_payload": "SAMPLE-CERTIFICATE-NOT-REAL",
+    "prv_payload": SAMPLE_KEY_MATERIAL,
+    "csr_payload": "",
+}
+
+
+def _trust_row(
+    index: int,
+    refid: str,
+    descr: str,
+    common_name: str,
+    valid: tuple[int, int],
+    *,
+    caref: str = "",
+    **fields: Any,
+) -> dict[str, Any]:
+    """One search row as the trust controllers answer it (raw values, and
+    ``%field`` with the description where it differs)."""
+    ca_names = {CA_INTERNAL: "Example Internal CA", CA_OLD_LAB: "Old lab CA"}
+    row: dict[str, Any] = {
+        "uuid": f"c0000000-0000-4000-8000-{index:012d}",
+        "refid": refid,
+        "descr": descr,
+        "caref": caref,
+        "commonname": common_name,
+        "name": f"/C=NL/O=Example/CN={common_name}",
+        "valid_from": str(valid[0]),
+        "valid_to": str(valid[1]),
+        "country": "NL",
+        "organization": "Example",
+        **_KEY_FIELDS,
+        **fields,
+    }
+    if caref:
+        row["%caref"] = ca_names[caref]
+    return row
+
+
+def _trust_answers() -> dict[str, Any]:
+    """The answers of the trust store searches (collection at
+    2026-11-14 09:00 UTC): the web GUI, OpenVPN server and IPsec
+    certificates (in use, valid: the demo raises no alert), an old portal
+    certificate nothing uses (expired) and a user's certificate (expiring
+    in 5 days, used by no service); the internal CA that issued the user's
+    and the three in use, and an old lab CA nothing references (expired).
+    Neither of those two expired ones nor the user's is alerted."""
+
+    def cert(index: int, refid: str, descr: str, cn: str, valid: tuple[int, int], **fields: Any) -> dict:
+        kind = fields.pop("cert_type", "server_cert")
+        label = {"server_cert": "Server Certificate", "usr_cert": "Client Certificate"}[kind]
+        return _trust_row(index, refid, descr, cn, valid, cert_type=kind, **{"%cert_type": label}, **fields)
+
+    issued = {"caref": CA_INTERNAL, "is_user": "0"}
+    certs = [
+        # Until 2027-06-01, 2027-02-01 12:00 and 2027-03-01 12:00.
+        cert(1, CERT_WEBGUI, "Web GUI", "fw-edge-1.example.com", (1763596800, 1811808000), in_use="1", **issued),
+        cert(2, CERT_OPENVPN, "OpenVPN server", "vpn.example.com", (1764590400, 1801483200), in_use="1", **issued),
+        cert(3, CERT_IPSEC, "IPsec branches", "ipsec.example.com", (1763467200, 1803902400), in_use="1", **issued),
+        # Expired on 2026-01-31; nothing uses it.
+        cert(4, CERT_OLD_PORTAL, "Old portal", "portal.example.com", (1748736000, 1769817600), in_use="0", is_user="0"),
+        # A user's certificate, until 2026-11-20.
+        cert(
+            5,
+            CERT_USER,
+            "alice",
+            "alice",
+            (1763596800, 1795132800),
+            caref=CA_INTERNAL,
+            in_use="0",
+            is_user="1",
+            cert_type="usr_cert",
+        ),
+    ]
+    cas = [
+        # Issued the four certificates above, and the OpenVPN server trusts it.
+        _trust_row(10, CA_INTERNAL, "Example Internal CA", "Example Internal CA", (1451606400, 2082758400), refcount="5"),
+        # Expired on 2026-03-01; nothing references it.
+        _trust_row(11, CA_OLD_LAB, "Old lab CA", "Old lab CA", (1614556800, 1772323200), refcount="0"),
+    ]
+    page = {"rowCount": 0, "current": 1}
+    return {
+        "trust/cert/search": {**page, "total": len(certs), "rowCount": len(certs), "rows": certs},
+        "trust/ca/search": {**page, "total": len(cas), "rowCount": len(cas), "rows": cas},
+    }
+
+
 def sample_api_answers() -> dict[str, Any]:
     """API path (as the collector names it, newest form) -> the answer."""
     interfaces = [
@@ -924,6 +1145,7 @@ def sample_api_answers() -> dict[str, Any]:
         },
         **_client_answers(),
         **_health_answers(),
+        **_trust_answers(),
         # The filter rule counters by rule uuid (``filter rule stats``).
         "firewall/filter_util/rule_stats": {
             "status": "ok",
@@ -956,6 +1178,7 @@ def build_sample_raw() -> dict[str, Any]:
     demo entry is no inventory host)."""
     # Imported here: the collector's scrubbers shape the sample like a collection.
     from netcontrol.integrations.meraki.collector import scrub_secrets
+    from netcontrol.integrations.opnsense.certificates import CERTIFICATE_PARTS, keep_rows
     from netcontrol.integrations.opnsense.collector import (
         _UUID,
         DEFAULT_OPTIONS,
@@ -996,6 +1219,10 @@ def build_sample_raw() -> dict[str, Any]:
         },
         "rule_stats": answers["firewall/filter_util/rule_stats"],
         "health": {key: _health_part(key, answers[paths[0]]) for key, paths, _privilege in HEALTH_PARTS},
+        "certificates": {
+            "source": "api",
+            **{key: keep_rows(answers[paths[0]], key) for key, paths, _privilege in CERTIFICATE_PARTS},
+        },
         "audit": {"ran_at": "2026-11-14T09:00:05+00:00", **parse_audit_log(AUDIT_LOG)},
         "config_xml": None,
         "alias_tables": None,

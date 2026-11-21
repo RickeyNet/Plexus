@@ -105,6 +105,11 @@ tunnel since its previous reading, under the tunnel's integration entity
 of a firewall in the inventory gets a traffic sample every poll, not
 only every collection.
 
+With the source's **IDS alerts** option on, the poll also reads the
+firewall's intrusion detection (Suricata) alerts newer than the newest one
+stored and keeps them as security events (see [Security](#security)), so
+an IDS alert reaches Plexus within one poll interval.
+
 ## Using the Monitoring page
 
 ### Devices
@@ -207,6 +212,33 @@ Syslog from inventory hosts can also raise alerts, start a config backup
 and drift check, and trigger an immediate re-poll: see
 [Syslog Rules](syslog-rules.md).
 
+### Security
+
+The security events integrations read from a device: today the intrusion
+detection (Suricata) alerts of OPNsense firewalls
+([IDS alerts](opnsense-topology.md#ids-alerts)), read with every
+collection of the firewall's topology source, every monitoring poll of a
+firewall that is an inventory host, and right away when the firewall
+forwards a Suricata alert over syslog. Filter by **Window** (last hour,
+24 hours, 7 or 30 days), **Severity** (critical: priority 1, warning:
+priority 2, info: priority 3 and up, unknown), **Action** (**Blocked** or
+**Detected only**) and **Search** (signature, signature id, category or
+address); the tiles count the matching events by severity and how many
+were blocked. The list shows 100 events a page, newest first, and
+refreshes every minute.
+
+Alerting happens on the server, not in this list: one alert per firewall
+and signature for critical and warning events (alert type
+`security_event`, metric `ids_alert`), on the firewall's host in the
+**Alerts** tab when it is an inventory host, else to the notification
+channels. It is counted on every read that brings new events of the
+signature, says whether the traffic was blocked or only detected, and
+resolves after an hour without a new event of the signature. A mute of the
+firewall in the Availability tab, or a suppression of its host (all
+metrics or `ids_alert`), covers these alerts. Events older than the
+monitoring retention (**Retention days**) are deleted, and at most 50,000
+are kept per source.
+
 ### Availability
 
 Choose the **Period** (**Last 24h**, **Last 7 days**, **Last 30 days**).
@@ -218,7 +250,11 @@ changes state; an outage with no end is **Ongoing**.
 
 Below it, **Integrations and cloud** shows the same for the entities that
 Meraki, Cato, FMC, Panorama, Appgate, OPNsense, AWS, Azure and GCP report; see
-[Availability tracking](meraki-topology.md#availability-tracking). Its
+[Availability tracking](meraki-topology.md#availability-tracking). An
+OPNsense firewall's certificates in use are listed there too (type
+**Certificate**), degraded from 30 days before they expire and alerted per
+expiry tier (warning from 30 days, critical from 7 days and once expired;
+see [Certificates](opnsense-topology.md#certificates)). Its
 **Avg traffic** column gives the mean traffic in and out of the entities
 whose vendor reports byte counters (OPNsense tunnels and OpenVPN servers,
 see [Tunnel traffic](opnsense-topology.md#tunnel-traffic)), and
@@ -311,6 +347,7 @@ The full list is in [API reference](api-reference.md).
 | `GET/POST /api/monitoring/suppressions`, `DELETE /api/monitoring/suppressions/{id}` | Suppressions |
 | `POST /api/monitoring/poll-now` | Poll every host now |
 | `GET /api/availability/summary?days=`, `/outages`, `/transitions` | Host availability |
+| `GET /api/monitoring/security-events?hours=&severity=&action=&q=&host_id=&limit=&offset=` | Security events (IDS alerts), newest first, with counts |
 | `GET/PUT /api/admin/monitoring` | Polling settings (admin) |
 
 Create a rule for one group:
