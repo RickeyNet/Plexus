@@ -299,6 +299,12 @@ export interface EventReceiverSettings {
   syslog_tls_port: number;
   /** Mutual TLS: only devices with a certificate the stored client CA signed may connect. */
   syslog_tls_require_client_cert: boolean;
+  /**
+   * With client certificates required: the certificate must also name the
+   * inventory host at the source address (SAN IP address, or SAN DNS name or
+   * common name equal to its hostname).
+   */
+  syslog_tls_match_client_cert: boolean;
   /** Off: syslog over UDP is stored but raises no alert and starts no trigger. */
   syslog_udp_actions: boolean;
 }
@@ -342,6 +348,8 @@ export interface EventReceiverConfig extends EventReceiverSettings {
   syslog_tls_connections?: number;
   syslog_tcp_connections_refused?: number;
   syslog_tls_connections_refused?: number;
+  /** TLS connections closed after the handshake because the client certificate did not name the host. */
+  syslog_tls_connections_cert_refused?: number;
   /** Why an enabled stream listener is not running; '' when fine. */
   syslog_tcp_error?: string;
   syslog_tls_error?: string;

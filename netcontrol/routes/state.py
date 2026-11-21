@@ -891,6 +891,10 @@ EVENT_RECEIVER_DEFAULTS = {
     "syslog_tls_port": 6514,
     # Mutual TLS: only devices with a certificate the stored client CA signed.
     "syslog_tls_require_client_cert": False,
+    # With client certificates required: the certificate must also name the
+    # inventory host at the source address (SAN IP, or SAN DNS / CN equal to
+    # its hostname), so one device's key cannot send as another device.
+    "syslog_tls_match_client_cert": False,
     # Act on syslog that arrived over UDP; off: UDP syslog is stored only.
     "syslog_udp_actions": True,
 }
@@ -906,6 +910,7 @@ _EVENT_RECEIVER_BOOL_KEYS = (
     "syslog_tcp_enabled",
     "syslog_tls_enabled",
     "syslog_tls_require_client_cert",
+    "syslog_tls_match_client_cert",
     "syslog_udp_actions",
 )
 _EVENT_RECEIVER_PORT_KEYS = ("syslog_port", "trap_port", "syslog_tcp_port", "syslog_tls_port")

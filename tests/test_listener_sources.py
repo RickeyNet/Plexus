@@ -188,7 +188,7 @@ async def test_the_set_is_loaded_from_inventory_and_shared_with_the_flow_collect
 async def test_a_stale_set_refreshes_in_the_background_never_per_packet(monkeypatch):
     calls: list[int] = []
 
-    async def fake_map() -> dict[str, int]:
+    async def fake_map(hostnames: dict[int, str] | None = None) -> dict[str, int]:
         calls.append(1)
         await asyncio.sleep(0)
         return {STRANGER: 9}

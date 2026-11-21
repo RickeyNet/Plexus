@@ -9,8 +9,10 @@ re-collection) how often it fired; the messages of inventory hosts no rule
 or trigger acted on, grouped by event tag (else program), each with a hint
 of the built-in rule it looks related to; the source addresses that are no
 inventory host; and how the inventory hosts' messages arrived (UDP, TCP or
-TLS), so an admin can see who still sends UDP. Computed on demand, nothing stored, nothing on the
-receive path. ``docs/syslog-rules.md`` "Checking the rules against received
+TLS), so an admin can see who still sends UDP. A UDP message that meets a
+rule or trigger while UDP messages are not acted on is counted apart
+(``udp_stored_only``), not as a match. Computed on demand, nothing stored,
+nothing on the receive path. ``docs/syslog-rules.md`` "Checking the rules against received
 traffic" describes it; the API is ``GET /api/monitoring/syslog-rules/activity``.
 """
 
@@ -113,38 +115,46 @@ class _Tally:
     # Inventory host messages per transport, and the hosts that sent over UDP.
     transports: dict[str, int] = field(default_factory=lambda: {"udp": 0, "tcp": 0, "tls": 0})
     udp_hosts: set[int] = field(default_factory=set)
+    # Messages a rule or trigger meets that arrived over UDP while UDP
+    # messages are not acted on (counted in neither matched nor unmatched).
+    udp_stored_only: int = 0
 
 
 def _later(a: str, b: str) -> str:
     return a if a >= b else b
 
 
-def _host_message(tally: _Tally, rules: list[Rule], row: dict, parsed: ParsedSyslog) -> None:
+def _host_message(tally: _Tally, rules: list[Rule], row: dict, parsed: ParsedSyslog, acted: bool) -> None:
+    """Count one message of an inventory host. ``acted`` False: it arrived
+    over UDP while UDP messages are not acted on, so a rule or trigger it
+    meets counts in ``udp_stored_only`` and not as a match."""
     host_id = int(row["host_id"])
     at = str(row["received_at"] or "")
-    matched = False
-    for rule in rules:
-        found = syslog_rules.evaluate_rule(rule, parsed)
-        if found is None:
-            continue
-        matched = True
-        stat = tally.rules.setdefault(rule.key, _RuleStat())
-        if found["action"] == "raise":
-            stat.raised += 1
-        else:
-            stat.cleared += 1
-        stat.hosts.add(host_id)
-        stat.last_at = _later(stat.last_at, at)
-    for name, fired in (
-        ("config_change", syslog_rules.is_config_change(parsed)),
-        ("repoll", bool(syslog_rules.repoll_reason(parsed))),
-        ("recollect", bool(syslog_rules.recollect_reason(parsed))),
-    ):
-        if fired:
-            tally.triggers[name] += 1
-            matched = True
-    if matched:
+    found = [(rule, hit) for rule in rules if (hit := syslog_rules.evaluate_rule(rule, parsed)) is not None]
+    fired = [
+        name
+        for name, on in (
+            ("config_change", syslog_rules.is_config_change(parsed)),
+            ("repoll", bool(syslog_rules.repoll_reason(parsed))),
+            ("recollect", bool(syslog_rules.recollect_reason(parsed))),
+        )
+        if on
+    ]
+    if (found or fired) and not acted:
+        tally.udp_stored_only += 1
+        return
+    if found or fired:
         tally.matched += 1
+        for rule, hit in found:
+            stat = tally.rules.setdefault(rule.key, _RuleStat())
+            if hit["action"] == "raise":
+                stat.raised += 1
+            else:
+                stat.cleared += 1
+            stat.hosts.add(host_id)
+            stat.last_at = _later(stat.last_at, at)
+        for name in fired:
+            tally.triggers[name] += 1
         return
     tally.unmatched += 1
     program = "" if parsed.tag else parsed.program.lower()
@@ -160,8 +170,9 @@ def _host_message(tally: _Tally, rules: list[Rule], row: dict, parsed: ParsedSys
     group.last_at = _later(group.last_at, at)
 
 
-def _aggregate(tally: _Tally, rules: list[Rule], rows: Iterable[dict]) -> None:
-    """Add one page of messages to ``tally`` (pure CPU, run in a thread)."""
+def _aggregate(tally: _Tally, rules: list[Rule], rows: Iterable[dict], udp_actions: bool) -> None:
+    """Add one page of messages to ``tally`` (pure CPU, run in a thread).
+    ``udp_actions``: the **Act on UDP messages** switch."""
     for row in rows:
         tally.scanned += 1
         at = str(row["received_at"] or "")
@@ -177,7 +188,8 @@ def _aggregate(tally: _Tally, rules: list[Rule], rows: Iterable[dict]) -> None:
         tally.transports[transport] = tally.transports.get(transport, 0) + 1
         if transport == "udp":
             tally.udp_hosts.add(int(row["host_id"]))
-        _host_message(tally, rules, row, syslog_rules.parse_syslog_message(str(row["message"] or "")))
+        parsed = syslog_rules.parse_syslog_message(str(row["message"] or ""))
+        _host_message(tally, rules, row, parsed, udp_actions or transport != "udp")
 
 
 def _group_payload(group: _Group) -> dict:
@@ -200,7 +212,7 @@ def _group_payload(group: _Group) -> dict:
     }
 
 
-def _result(tally: _Tally, rules: list[Rule], hours: int, limit: int, truncated: bool) -> dict:
+def _result(tally: _Tally, rules: list[Rule], hours: int, limit: int, truncated: bool, udp_actions: bool) -> dict:
     groups = sorted(tally.groups.values(), key=lambda g: (-g.count, g.tag, g.program))[:UNMATCHED_TOP]
     sources = sorted(tally.sources.items(), key=lambda kv: (-kv[1].count, kv[0]))[:UNKNOWN_SOURCES_TOP]
     return {
@@ -214,7 +226,8 @@ def _result(tally: _Tally, rules: list[Rule], hours: int, limit: int, truncated:
         "unknown_source": tally.unknown_source,
         "transports": dict(tally.transports),
         "udp_hosts": len(tally.udp_hosts),
-        "udp_actions": syslog_rules.receiver_flag("syslog_udp_actions"),
+        "udp_actions": udp_actions,
+        "udp_stored_only": tally.udp_stored_only,
         "rules": [
             {
                 "key": rule.key,
@@ -237,8 +250,15 @@ async def analyze(hours: int, group_ids: Iterable[int] | None = None) -> dict:
     the syslog messages received in the last ``hours``, newest first, at
     most ``SCAN_LIMIT`` of them (``truncated`` when the window held more).
     ``group_ids``: only the messages of hosts in those inventory groups
-    (object scope; messages from unknown sources are left out)."""
+    (object scope; messages from unknown sources are left out).
+
+    While **Act on UDP messages** is off, a message that arrived over UDP
+    and meets a rule or trigger is counted in ``udp_stored_only`` instead
+    of as a match, as the receiver stores it and does nothing more. The
+    switch is read now: the scan does not know what it was when a message
+    arrived."""
     rules = await syslog_rules.get_rules()
+    udp_actions = syslog_rules.receiver_flag("syslog_udp_actions")
     limit = SCAN_LIMIT
     seconds = int(hours) * 3600
     tally = _Tally()
@@ -252,8 +272,8 @@ async def analyze(hours: int, group_ids: Iterable[int] | None = None) -> dict:
             break
         page = await db.list_syslog_messages_since(seconds, before_id=before_id, limit=want, group_ids=group_ids)
         if page:
-            await asyncio.to_thread(_aggregate, tally, rules, page)
+            await asyncio.to_thread(_aggregate, tally, rules, page, udp_actions)
             before_id = int(page[-1]["id"])
         if len(page) < want:
             break
-    return _result(tally, rules, hours, limit, truncated)
+    return _result(tally, rules, hours, limit, truncated, udp_actions)

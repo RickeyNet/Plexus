@@ -188,7 +188,22 @@ def _found(message: str) -> dict:
             "ports",
         ),
         ("00419 auth: Invalid user name/password on SSH session", "AOSS-00419", "00419 auth", None, "auth"),
-        ("<14>sw-lab-2 00064 system: System Booted", "AOSS-00064", "00064 system", "System Booted", "system"),
+        ("<14>sw-lab-2 00066 system: System Booted", "AOSS-00066", "00066 system", "System Booted", "system"),
+        (
+            aoss("00070", "chassis", "Fan failure: Fan: 1  Failures: 1"),
+            "AOSS-00070",
+            "00070 chassis",
+            "Fan failure: Fan: 1  Failures: 1",
+            "chassis",
+        ),
+        # AOS-CX BGP: the text starts with the peer address.
+        (
+            aoscx(2902, "LOG_WARN", "203.0.113.9: Peer down. error-code: 4, error-sub-code: 0. vrf-name: default"),
+            "AOSCX-2902",
+            "Event|2902|LOG_WARN",
+            "203.0.113.9: Peer down. error-code: 4, error-sub-code: 0. vrf-name: default",
+            "hpe-intfd",
+        ),
         # Facilities are written in either case and may start with a digit.
         (
             aoss("00331", "FFI", "port 5-Excessive link state transitions"),
@@ -354,6 +369,38 @@ SAMPLES = [
         "clear",
         "",
     ),
+    (
+        aoscx(2401, "LOG_INFO", "AdjChg: Nbr 198.51.100.2 on vlan10(0.0.0.0): Full -> Down", daemon="hpe-ospf"),
+        "ospf_neighbor",
+        "raise",
+        "198.51.100.2",
+    ),
+    (
+        aoscx(2404, "LOG_INFO", "AdjChg: Nbr 198.51.100.2 on 1/1/1: Loading -> Full (LoadingDone)", daemon="hpe-ospf"),
+        "ospf_neighbor",
+        "clear",
+        "198.51.100.2",
+    ),
+    (
+        aoscx(2404, "LOG_INFO", "AdjChg: Nbr 198.51.100.2 on 1/1/1: Full -> Down (InactivityTimer)", daemon="hpe-ospf"),
+        "ospf_neighbor",
+        "raise",
+        "198.51.100.2",
+    ),
+    (
+        aoss("02703", "ospf", "ADJCHG: Neighbor with Router ID 198.51.100.3 on vlan-20 moved to Down state - adj lost"),
+        "ospf_neighbor",
+        "raise",
+        "198.51.100.3",
+    ),
+    (
+        aoss(
+            "02703", "ospf", "ADJCHG: Neighbor with Router ID 198.51.100.3 on vlan-20 moved to Full state - adj formed"
+        ),
+        "ospf_neighbor",
+        "clear",
+        "198.51.100.3",
+    ),
     # bgp_neighbor.
     (
         fgt(
@@ -401,6 +448,31 @@ SAMPLES = [
         "clear",
         "203.0.113.10",
     ),
+    (
+        aoscx(
+            2902,
+            "LOG_WARN",
+            "203.0.113.11: Peer down. error-code: 4, error-sub-code: 0. vrf-name: default",
+            daemon="hpe-bgp",
+        ),
+        "bgp_neighbor",
+        "raise",
+        "203.0.113.11",
+    ),
+    (
+        aoscx(2901, "LOG_INFO", "203.0.113.11: Peer up. vrf-name: default", daemon="hpe-bgp"),
+        "bgp_neighbor",
+        "clear",
+        "203.0.113.11",
+    ),
+    (
+        aoscx(2902, "LOG_WARN", "2001:db8::11: Peer down. error-code: 6, error-sub-code: 2. vrf-name: red"),
+        "bgp_neighbor",
+        "raise",
+        "2001:db8::11",
+    ),
+    (aoss("03073", "bgp", "BGP: Peer down"), "bgp_neighbor", "raise", ""),
+    (aoss("03072", "bgp", "BGP: Peer up"), "bgp_neighbor", "clear", ""),
     # power_supply.
     (
         fgt(
@@ -420,6 +492,27 @@ SAMPLES = [
         "clear",
         "",
     ),
+    (
+        fgt("0100022114", "system", "warning", "Power supply failed warning", 'msg="PSU [1] input lost"'),
+        "power_supply",
+        "raise",
+        "",
+    ),
+    (
+        fgt("0100022115", "system", "notice", "Power supply restored notification", 'msg="PSU [1] restored"'),
+        "power_supply",
+        "clear",
+        "",
+    ),
+    (aoss("00071", "chassis", "Power Supply failure:  Supply: Main- Failures: 1"), "power_supply", "raise", "Main"),
+    (aoss("00071", "chassis", "Power Supply OK:  Supply: Main- Failures: 1"), "power_supply", "clear", "Main"),
+    (
+        aoss("02797", "chassis", "Internal power supply 2 is faulted. Total fault count: 1."),
+        "power_supply",
+        "raise",
+        "2",
+    ),
+    (aoss("02797", "chassis", "Internal power supply 2 is ok. Total fault count: 1."), "power_supply", "clear", "2"),
     (pan_system("hw", "ps-failure", "critical", "Alarm on Power Supply #2"), "power_supply", "raise", "2"),
     (
         aoscx(304, "LOG_ERR", "PSU 1/2 faulted. Total fault count: 1", daemon="hpe-powerd"),
@@ -457,6 +550,16 @@ SAMPLES = [
     ("Thermostat: %ENVMON-3-FANFAILED: Fan1/1 failure detected", "fan", "raise", "Fan1/1"),
     ("Thermostat: %ENVMON-3-FANOK: Fan1/1 has recovered", "fan", "clear", "Fan1/1"),
     (pan_system("hw", "fan-failure", "critical", "Alarm on Fan Tray #1"), "fan", "raise", "1"),
+    (fgt("0100022108", "system", "warning", "Fan anomaly", 'msg="Fan 2 speed is too low"'), "fan", "raise", ""),
+    (fgt("0100022151", "system", "notice", "Fan normal", 'msg="Fan 2 is back to normal"'), "fan", "clear", ""),
+    (
+        aoscx(214, "LOG_ERR", "fan_check: Fan 1/1/2 faulted, reason: speed below minimum.", daemon="hpe-fand"),
+        "fan",
+        "raise",
+        "1/1/2",
+    ),
+    (aoss("00070", "chassis", "Fan failure: Fan: 2  Failures: 1"), "fan", "raise", "2"),
+    (aoss("00070", "chassis", "Fan OK: Fan: 2  Failures: 1"), "fan", "clear", "2"),
     # auth_failure.
     (FGT_LOGIN_FAILED, "auth_failure", "raise", ""),
     (
@@ -551,7 +654,22 @@ def test_each_vendor_form_matches_its_rule(message, key, action, instance):
             'msg="Power Supply is not detected: PSU [1] LOST"',
         ),
         fgt("0103020300", "router", "warning", "BGP neighbor status changed", 'msg="BGP: neighbor status"'),
+        # FortiOS 6.4 uses the 7.2 "restored" id for a redundancy failure: no clear.
+        fgt("0100022115", "system", "critical", "Power redundancy failure", 'msg="Power redundancy failure"'),
         "%ENVMON-3-FAN_TRAY_MISSING: Fan tray removed",
+        # OSPF transitions that neither lose nor complete an adjacency.
+        aoscx(2401, "LOG_INFO", "AdjChg: Nbr 198.51.100.2 on vlan10(0.0.0.0): Init -> 2-Way", daemon="hpe-ospf"),
+        aoscx(2404, "LOG_INFO", "AdjChg: Nbr 198.51.100.2 on 1/1/1: Down -> Init (HelloReceived)", daemon="hpe-ospf"),
+        aoss("02702", "ospf", "ADJCHG: Neighbor with Router ID 198.51.100.3 on vlan-20 moved from Full to Down - x"),
+        # A peer an operator disabled, a PSU state or fan status without a
+        # documented value, an interface set down by an operator.
+        aoscx(2912, "LOG_INFO", "203.0.113.11: Peer admin disabled. vrf-name: default", daemon="hpe-bgp"),
+        aoscx(2902, "LOG_WARN", "Peer down without an address", daemon="hpe-bgp"),
+        aoscx(301, "LOG_INFO", "PSU 1/1 changed state to OK", daemon="hpe-powerd"),
+        aoscx(215, "LOG_INFO", "1/1/1 fan is ok.", daemon="hpe-fand"),
+        aoscx(402, "LOG_INFO", "Interface port_admin set to down for 1/1/7 interface"),
+        aoss("02796", "chassis", "Internal power supply 2 removed. Total fault count: 1."),
+        aoss("03079", "bgp", "BGP: Peer deleted"),
     ],
 )
 def test_near_misses_raise_nothing(message):
@@ -564,9 +682,13 @@ def test_the_families_name_the_new_vendors():
             sr.BUILTIN_BY_KEY[key].families
         )
     for key in ("ospf_neighbor", "bgp_neighbor"):
-        assert {"Fortinet FortiOS", "Palo Alto PAN-OS"} <= set(sr.BUILTIN_BY_KEY[key].families)
-    assert "Arista EOS" in sr.BUILTIN_BY_KEY["power_supply"].families
-    assert "Arista EOS" in sr.BUILTIN_BY_KEY["fan"].families
+        assert {"Fortinet FortiOS", "Palo Alto PAN-OS", "HPE Aruba AOS-CX", "HPE Aruba AOS-Switch"} <= set(
+            sr.BUILTIN_BY_KEY[key].families
+        )
+    assert {"Arista EOS", "HPE Aruba AOS-Switch"} <= set(sr.BUILTIN_BY_KEY["power_supply"].families)
+    assert {"Arista EOS", "Fortinet FortiOS", "HPE Aruba AOS-CX", "HPE Aruba AOS-Switch"} <= set(
+        sr.BUILTIN_BY_KEY["fan"].families
+    )
     assert "Arista EOS" in sr.BUILTIN_BY_KEY["auth_failure"].families
 
 
@@ -593,6 +715,19 @@ def test_the_families_name_the_new_vendors():
         ("PAN-CONFIG", "config_change"),
         ("FGT-0100032138", "repoll"),
         ("AOSS-00064", "repoll"),
+        ("AOSS-00066", "repoll"),
+        ("AOSCX-706", "repoll"),
+        ("AOSCX-1236", "repoll"),
+        ("AOSS-03125", "config_change"),
+        ("AOSCX-2404", "ospf_neighbor"),
+        ("AOSS-02703", "ospf_neighbor"),
+        ("AOSCX-2901", "bgp_neighbor"),
+        ("AOSS-03073", "bgp_neighbor"),
+        ("FGT-0100022115", "power_supply"),
+        ("AOSS-02797", "power_supply"),
+        ("FGT-0100022108", "fan"),
+        ("AOSCX-214", "fan"),
+        ("AOSS-00070", "fan"),
         ("PAN-TRAFFIC", ""),
         ("AOSCX-403", ""),
     ],
@@ -617,6 +752,8 @@ def test_tag_owner_knows_the_vendor_tags(tag, owner):
         # The end of the commit job in the SYSTEM log.
         pan_system("general", "general", "informational", "Commit job succeeded"),
         pan_system("general", "general", "informational", "Commit job succeeded for user ops"),
+        # AOS-Switch: the startup configuration saved.
+        aoss("03125", "mgr", "new Startup Config Seq Num = 12 by CLI."),
     ],
 )
 def test_vendor_configuration_changes(message):
@@ -636,6 +773,9 @@ def test_vendor_configuration_changes(message):
         # An execute command.
         fgt("0100044548", "system", "information", "Action performed", 'action="execute"'),
         aoscx(404, "LOG_INFO", "Link status for interface 1/1/7 is down"),
+        # AOS-Switch: another Manager event; AOS-CX copies of configs are left out.
+        aoss("02612", "mgr", "mgr subsystem saved the whole running config to startup config."),
+        aoscx(6801, "LOG_INFO", "Copying configs from: running-config to: startup-config", daemon="hpe-config"),
     ],
 )
 def test_vendor_messages_that_are_no_configuration_change(message):
@@ -679,9 +819,21 @@ def test_vendor_messages_that_are_no_configuration_change(message):
             "reload",
         ),
         (aoss("00063", "system", "System went down: 01/10/26 10:00:00"), "reload"),
+        (aoscx(706, "LOG_INFO", "Initiating system reboot", daemon="hpe-sysmond"), "reload"),
+        (aoscx(707, "LOG_CRIT", "Initiating chassis thermal reboot", daemon="hpe-sysmond"), "reload"),
         (fgt("0100032009", "system", "information", "FortiGate started", 'msg="Fortigate started"'), "restart"),
-        (aoss("00064", "system", "System Booted"), "restart"),
+        (aoss("00066", "system", "System Booted"), "restart"),
+        (aoss("00064", "system", "Software exception in ISR at queues.c:123"), "restart"),
+        (
+            aoscx(1206, "LOG_INFO", "Module rebooted. Reason: Reboot requested by user, Boot-ID: 1a2b", daemon="hpe-x"),
+            "restart",
+        ),
+        (
+            aoscx(1236, "LOG_CRIT", "Module unexpected reboot. Reason : Kernel panic, Boot-ID : 3c4d", daemon="hpe-x"),
+            "restart",
+        ),
         (aoss("00076", "ports", "port 3 is now on-line"), ""),
+        (aoscx(1235, "LOG_INFO", "Switch boot count is : 4", daemon="hpe-x"), ""),
     ],
 )
 def test_vendor_repoll_reasons(message, reason):
@@ -723,6 +875,28 @@ async def test_a_panos_bgp_peer_raises_and_clears(engine):
     assert key in await _open(host_id)
     assert (await sr.process_syslog_batch([(host_id, up)]))["resolved"] == 1
     assert key not in await _open(host_id)
+
+
+async def test_aruba_bgp_peer_and_fan_raise_and_clear(engine):
+    _clock, _repolls, _changes = engine
+    _gid, host_id = await _host("sw-lab-4", "192.0.2.25", "aruba_aoscx")
+    down = aoscx(2902, "LOG_WARN", "203.0.113.12: Peer down. error-code: 4, error-sub-code: 0. vrf-name: default")
+    up = aoscx(2901, "LOG_INFO", "203.0.113.12: Peer up. vrf-name: default")
+    assert (await sr.process_syslog_batch([(host_id, down)]))["raised"] == 1
+    key = f"syslog:bgp_neighbor:{host_id}:203.0.113.12"
+    assert key in await _open(host_id)
+    assert (await sr.process_syslog_batch([(host_id, up)]))["resolved"] == 1
+    assert key not in await _open(host_id)
+    _gid, switch_id = await _host("sw-lab-5", "192.0.2.26", "aruba_aos_s")
+    assert (await sr.process_syslog_batch([(switch_id, aoss("00070", "chassis", "Fan failure: Fan: 1  Failures: 1"))]))[
+        "raised"
+    ] == 1
+    fan_key = f"syslog:fan:{switch_id}:1"
+    assert fan_key in await _open(switch_id)
+    assert (await sr.process_syslog_batch([(switch_id, aoss("00070", "chassis", "Fan OK: Fan: 1  Failures: 1"))]))[
+        "resolved"
+    ] == 1
+    assert fan_key not in await _open(switch_id)
 
 
 async def test_vendor_triggers_reach_the_engine(engine):

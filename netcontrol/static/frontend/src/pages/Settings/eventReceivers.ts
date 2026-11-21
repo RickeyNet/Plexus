@@ -58,6 +58,7 @@ export function receiverSettings(cfg: EventReceiverConfig): EventReceiverSetting
     syslog_tls_enabled: cfg.syslog_tls_enabled,
     syslog_tls_port: cfg.syslog_tls_port,
     syslog_tls_require_client_cert: cfg.syslog_tls_require_client_cert,
+    syslog_tls_match_client_cert: cfg.syslog_tls_match_client_cert,
     syslog_udp_actions: cfg.syslog_udp_actions,
   };
 }
@@ -103,7 +104,11 @@ export function validateReceiverPorts(s: EventReceiverSettings): Partial<Record<
 /** What the TLS certificate section holds, as far as the receiver settings depend on it. */
 export type TlsStored = Pick<SyslogTlsState, 'has_certificate' | 'has_client_ca'>;
 
-type GuardField = 'syslog_tls_enabled' | 'syslog_tls_require_client_cert' | 'syslog_udp_actions';
+type GuardField =
+  | 'syslog_tls_enabled'
+  | 'syslog_tls_require_client_cert'
+  | 'syslog_tls_match_client_cert'
+  | 'syslog_udp_actions';
 
 /**
  * The server's refusals that the form can see coming, keyed by the switch
@@ -129,6 +134,10 @@ export function receiverGuards(
     && !tls.has_client_ca
   ) {
     errors.syslog_tls_require_client_cert = 'Store a client CA under Client certificates before requiring client certificates.';
+  }
+  if (draft.syslog_tls_match_client_cert && !draft.syslog_tls_require_client_cert) {
+    errors.syslog_tls_match_client_cert =
+      'Require client certificates before requiring that the certificate names the host.';
   }
   if (!draft.syslog_udp_actions && !draft.syslog_tcp_enabled && !draft.syslog_tls_enabled) {
     errors.syslog_udp_actions = 'Turn on the syslog TCP or TLS receiver before turning off actions on UDP messages.';
@@ -169,6 +178,14 @@ export function receiverCounters(cfg: EventReceiverConfig, kind: ReceiverKind, n
     { label: 'Open connections', value: formatCount(cfg[`${kind}_connections`]) },
     { label: 'Connections refused', value: formatCount(cfg[`${kind}_connections_refused`]) },
   );
+  if (kind === 'syslog_tls') {
+    const certRefused = cfg.syslog_tls_connections_cert_refused ?? 0;
+    items.push({
+      label: 'Certificate not for host',
+      value: formatCount(certRefused),
+      tone: certRefused > 0 ? 'warning' : undefined,
+    });
+  }
   return items;
 }
 

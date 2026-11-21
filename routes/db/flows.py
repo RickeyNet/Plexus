@@ -259,9 +259,12 @@ async def cleanup_old_flow_records(hours: int = 48) -> int:
     )
 
 
-async def get_exporter_host_map() -> dict[str, int]:
+async def get_exporter_host_map(hostnames: dict[int, str] | None = None) -> dict[str, int]:
     """Return ``{ip_address: host_id}`` for every host with a non-empty IP,
     plus every recorded interface address of a host (``host_ip_aliases``).
+    ``hostnames``, when given, is filled from the same read with
+    ``{host_id: hostname}`` of every host (the syslog TLS receiver matches a
+    client certificate against it).
 
     Used by the flow collector at startup and on host CRUD to resolve
     incoming exporter IPs to inventory hosts without a per-packet DB hit.
@@ -277,11 +280,13 @@ async def get_exporter_host_map() -> dict[str, int]:
     """
     db = await _dbcore.get_db(read_only=True)
     try:
-        cursor = await db.execute("SELECT id, ip_address FROM hosts WHERE ip_address IS NOT NULL AND ip_address != ''")
+        cursor = await db.execute("SELECT id, hostname, ip_address FROM hosts")
         rows = await cursor.fetchall()
         mapping: dict[str, int] = {}
         for r in rows:
             d = dict(r)
+            if hostnames is not None:
+                hostnames[int(d["id"])] = str(d.get("hostname") or "")
             ip = (d.get("ip_address") or "").strip()
             if ip:
                 mapping[ip] = int(d["id"])

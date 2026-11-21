@@ -25,6 +25,8 @@ loaded from the database by :func:`refresh_inventory`: when a listener
 starts, after every inventory host change (``flow_collector.on_host_changed``)
 and at most every ``INVENTORY_REFRESH_SECONDS`` in the background while
 datagrams arrive. A datagram never waits for, or causes, a database query.
+The same refresh loads each host's hostname (``INVENTORY_HOSTNAMES``), which
+the syslog TLS receiver compares with a client certificate.
 
 A dropped datagram is counted per listener and reason (``source``, ``rate``,
 and ``community`` for a trap whose community is wrong) and logged at most
@@ -164,26 +166,33 @@ def apply_config(cfg: dict[str, Any]) -> dict[str, Any]:
 # address -> host id: every host's primary IP and recorded interface IPs.
 # The flow collector's exporter cache is this same dict.
 INVENTORY_ADDRESSES: dict[str, int] = {}
+# host id -> hostname, from the same refresh (the syslog TLS receiver
+# matches a client certificate against it).
+INVENTORY_HOSTNAMES: dict[int, str] = {}
 _inventory_loaded_at = float("-inf")
 _refresh_task: asyncio.Task | None = None
 
 
 async def refresh_inventory() -> int:
-    """Reload ``INVENTORY_ADDRESSES`` (``db.get_exporter_host_map``). A
-    failed load keeps the previous set. Returns the number of addresses.
+    """Reload ``INVENTORY_ADDRESSES`` and ``INVENTORY_HOSTNAMES``
+    (``db.get_exporter_host_map``). A failed load keeps the previous sets.
+    Returns the number of addresses.
 
     No lock: the swap after the query runs without an ``await``, so two
     refreshes at once each install a complete set (a lock held by a refresh
     whose event loop closed would block every later one)."""
     global _inventory_loaded_at
+    hostnames: dict[int, str] = {}
     try:
-        mapping = await db.get_exporter_host_map()
+        mapping = await db.get_exporter_host_map(hostnames=hostnames)
     except Exception as exc:  # noqa: BLE001 - keep the old set, retry later
         LOGGER.warning("listener sources: inventory address refresh failed: %s", type(exc).__name__)
         _inventory_loaded_at = _clock()
         return len(INVENTORY_ADDRESSES)
     INVENTORY_ADDRESSES.clear()
     INVENTORY_ADDRESSES.update(mapping)
+    INVENTORY_HOSTNAMES.clear()
+    INVENTORY_HOSTNAMES.update(hostnames)
     _inventory_loaded_at = _clock()
     return len(INVENTORY_ADDRESSES)
 
@@ -213,6 +222,13 @@ def _canonical(address: str) -> str:
 def inventory_host_id(address: str) -> int | None:
     """The inventory host whose address (primary or interface) ``address`` is."""
     return INVENTORY_ADDRESSES.get(_canonical(address))
+
+
+def inventory_hostname(address: str) -> str:
+    """The hostname of the inventory host at ``address`` ("" when the
+    address is no inventory host or the host has no hostname)."""
+    host_id = inventory_host_id(address)
+    return INVENTORY_HOSTNAMES.get(host_id, "") if host_id is not None else ""
 
 
 def source_allowed(address: str) -> bool:

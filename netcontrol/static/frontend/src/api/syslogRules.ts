@@ -175,7 +175,7 @@ export interface SyslogActivity {
   hours: number;
   /** The most messages one scan reads (the newest ones). */
   limit: number;
-  /** `matched + unmatched + unknown_source`. */
+  /** `matched + unmatched + unknown_source + udp_stored_only`. */
   scanned: number;
   /** The window held more than `limit` messages. */
   truncated: boolean;
@@ -197,6 +197,11 @@ export interface SyslogActivity {
   udp_hosts: number;
   /** The Act on UDP messages setting: off, UDP messages are stored but not acted on. */
   udp_actions: boolean;
+  /**
+   * Messages a rule or trigger meets that arrived over UDP while `udp_actions`
+   * is off: stored, not acted on, and counted in neither `matched` nor `unmatched`.
+   */
+  udp_stored_only: number;
 }
 
 /**

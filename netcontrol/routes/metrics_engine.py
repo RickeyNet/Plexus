@@ -1293,12 +1293,15 @@ async def _apply_stream_listeners(cfg: dict) -> None:
     or rebound only when its own on/off or port, or (TLS) the stored
     certificate, client CA or client certificate mode, differs from what is
     running. A TLS listener without a usable certificate is logged, keeps
-    the reason in its ``error`` and stays stopped."""
+    the reason in its ``error`` and stays stopped. With
+    ``syslog_tls_match_client_cert`` the TLS listener checks that each
+    client certificate names the inventory host at its source address."""
     require_client_cert = bool(cfg.get("syslog_tls_require_client_cert"))
+    match_client_cert = require_client_cert and bool(cfg.get("syslog_tls_match_client_cert"))
     for transport, listener in _STREAM_LISTENERS.items():
         enabled = bool(cfg.get(f"syslog_{transport}_enabled"))
         port = int(cfg.get(f"syslog_{transport}_port") or 0)
-        key = syslog_tls.material_key(require_client_cert) if transport == "tls" else ""
+        key = syslog_tls.material_key(require_client_cert, match_client_cert) if transport == "tls" else ""
         if listener.running and (not enabled or listener.port != port or listener.config_key != key):
             listener.stop()
         if not enabled:
@@ -1307,6 +1310,7 @@ async def _apply_stream_listeners(cfg: dict) -> None:
         if listener.running:
             continue
         context = None
+        peer_check = None
         if transport == "tls":
             try:
                 context = syslog_tls.server_context(require_client_cert)
@@ -1314,7 +1318,16 @@ async def _apply_stream_listeners(cfg: dict) -> None:
                 listener.error = str(exc)
                 LOGGER.warning("metrics: syslog TLS receiver not started: %s", exc)
                 continue
-        await listener.start(_RECEIVER_BIND_HOST, port, context, key)
+            if match_client_cert:
+                peer_check = _client_cert_names_host
+        await listener.start(_RECEIVER_BIND_HOST, port, context, key, peer_check)
+
+
+def _client_cert_names_host(source_ip: str, peercert: dict | None) -> str:
+    """The syslog TLS peer check: "" when the client certificate names the
+    sender (a SAN IP equal to ``source_ip``, or a SAN DNS name or common
+    name matching the hostname of the inventory host at it), else why not."""
+    return syslog_tls.peer_mismatch(peercert, source_ip, listener_sources.inventory_hostname(source_ip))
 
 
 async def apply_event_receiver_config(new_cfg: dict) -> dict:
@@ -1373,6 +1386,9 @@ def event_receiver_snapshot() -> dict:
         snapshot[f"{prefix}_started_at"] = _epoch_iso(stats.started_at)
         snapshot[f"{prefix}_connections"] = listener.connections
         snapshot[f"{prefix}_connections_refused"] = listener.refused
+        if transport == "tls":
+            # Closed because the client certificate did not name the host.
+            snapshot[f"{prefix}_connections_cert_refused"] = listener.cert_refused
         snapshot[f"{prefix}_error"] = listener.error
     snapshot["source_policy"] = listener_sources.CONFIG.get("policy")
     snapshot["events_dropped"] = _trap_events_dropped_total
@@ -1800,6 +1816,7 @@ class EventReceiverConfigRequest(BaseModel):
     syslog_tls_enabled: bool | None = None
     syslog_tls_port: int | None = Field(default=None, ge=1, le=65535)
     syslog_tls_require_client_cert: bool | None = None
+    syslog_tls_match_client_cert: bool | None = None
     syslog_udp_actions: bool | None = None
 
 
@@ -1814,6 +1831,8 @@ def _receiver_config_error(cfg: dict) -> str:
         return "Store or generate a server certificate before turning on the syslog TLS receiver."
     if cfg["syslog_tls_require_client_cert"] and not syslog_tls.has_client_ca():
         return "Store a client CA before requiring client certificates."
+    if cfg["syslog_tls_match_client_cert"] and not cfg["syslog_tls_require_client_cert"]:
+        return "Require client certificates before requiring that the certificate names the host."
     if not cfg["syslog_udp_actions"] and not (tcp or tls):
         return "Turn on the syslog TCP or TLS receiver before turning off actions on UDP messages."
     return ""
@@ -1843,6 +1862,7 @@ async def _save_event_receiver_config(cfg: dict, request: Request, action: str) 
             f"syslog_tcp={'on' if sanitized['syslog_tcp_enabled'] else 'off'}:{sanitized['syslog_tcp_port']} "
             f"syslog_tls={'on' if sanitized['syslog_tls_enabled'] else 'off'}:{sanitized['syslog_tls_port']} "
             f"syslog_tls_require_client_cert={sanitized['syslog_tls_require_client_cert']} "
+            f"syslog_tls_match_client_cert={sanitized['syslog_tls_match_client_cert']} "
             f"syslog_udp_actions={sanitized['syslog_udp_actions']}"
         ),
         correlation_id=_corr_id(request),

@@ -33,6 +33,11 @@ them from ``state.EVENT_RECEIVER_CONFIG``.
   handshake is the event loop's own from the first byte: upgrading an
   accepted stream (``start_tls``) loses the ClientHello under uvloop,
   which reads it before the upgrade runs.
+- **Peer check**: a listener started with a ``peer_check`` calls it once per
+  connection after the TLS handshake, before reading, with the source
+  address and the peer certificate. A refusal closes the connection unread
+  and is counted in ``cert_refused``. ``metrics_engine`` supplies it (the
+  certificate must name the inventory host); this module knows neither.
 """
 
 from __future__ import annotations
@@ -55,6 +60,10 @@ TRANSPORTS: tuple[str, ...] = ("tcp", "tls")
 LABELS = {"tcp": "syslog TCP", "tls": "syslog TLS"}
 # Parses and queues one message: (frame, source address).
 Handler = Callable[[bytes, str], None]
+# Checks a connection after the TLS handshake: (source address, peer
+# certificate as ``getpeercert()`` gives it, None without one) -> "" to
+# accept, else the reason to close it.
+PeerCheck = Callable[[str, dict | None], str]
 
 # The longest frame accepted (RFC 6587 / RFC 5425 receivers must take at
 # least 2048 octets; devices send far less).
@@ -191,6 +200,9 @@ class StreamListener:
         # Why the enabled listener is not running ("" when it is).
         self.error = ""
         self.refused = 0
+        # Connections closed after the handshake because ``peer_check`` refused them.
+        self.cert_refused = 0
+        self._peer_check: PeerCheck | None = None
 
     @property
     def running(self) -> bool:
@@ -201,10 +213,17 @@ class StreamListener:
         return len(self._connections)
 
     async def start(
-        self, host: str, port: int, ssl_context: ssl.SSLContext | None = None, config_key: str = ""
+        self,
+        host: str,
+        port: int,
+        ssl_context: ssl.SSLContext | None = None,
+        config_key: str = "",
+        peer_check: PeerCheck | None = None,
     ) -> bool:
         """Listen on ``host``:``port``. True when it is (already) listening;
-        a failed bind is logged, kept in ``error`` and returns False."""
+        a failed bind is logged, kept in ``error`` and returns False.
+        ``peer_check`` (see :data:`PeerCheck`) vets each connection before
+        anything is read from it."""
         if self._server is not None:
             return True
         try:
@@ -215,10 +234,12 @@ class StreamListener:
             return False
         self._server = sock
         self._ssl = ssl_context
+        self._peer_check = peer_check
         self.port = port
         self.config_key = config_key
         self.error = ""
         self.refused = 0
+        self.cert_refused = 0
         self.stats.reset(time.time())
         self._accept_task = asyncio.get_running_loop().create_task(self._accept_loop(sock))
         # The source allowlist needs the inventory addresses from the first connection.
@@ -304,6 +325,12 @@ class StreamListener:
                 self.stats.errors += 1
                 LOGGER.debug("%s: connection from %s not set up: %s", self.label, source_ip, exc)
                 return
+            if self._peer_check is not None:
+                reason = self._peer_check(source_ip, writer.get_extra_info("peercert"))
+                if reason:
+                    self.cert_refused += 1
+                    LOGGER.debug("%s: closing the connection from %s: %s", self.label, source_ip, reason)
+                    return
             await self._read(reader, source_ip)
         except FramingError as exc:
             self.stats.errors += 1

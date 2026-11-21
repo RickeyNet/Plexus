@@ -33,12 +33,14 @@ async def _sql(statement: str, params: tuple = ()) -> None:
         await conn.close()
 
 
-async def _store(message: str, host_id: int | None, ago: int = 0, source_ip: str = "192.0.2.10") -> None:
+async def _store(
+    message: str, host_id: int | None, ago: int = 0, source_ip: str = "192.0.2.10", transport: str = "udp"
+) -> None:
     """A stored syslog message received ``ago`` seconds before now."""
     await _sql(
-        "INSERT INTO trap_syslog_events (source_ip, host_id, event_type, message, received_at) "
-        "VALUES (?, ?, 'syslog', ?, datetime('now', ?))",
-        (source_ip, host_id, message, f"-{int(ago)} seconds"),
+        "INSERT INTO trap_syslog_events (source_ip, host_id, event_type, message, received_at, transport) "
+        "VALUES (?, ?, 'syslog', ?, datetime('now', ?), ?)",
+        (source_ip, host_id, message, f"-{int(ago)} seconds", transport),
     )
 
 
@@ -329,6 +331,29 @@ async def test_unknown_sources_and_the_top_lists(fresh_rules, monkeypatch):
     assert [g["tag"] for g in out["unmatched_tags"]] == ["B-TWO"]
     # Messages of unknown sources are not run through the rules.
     assert out["rules"] == [] and out["triggers"]["repoll"] == 0
+
+
+async def test_udp_messages_are_stored_only_while_udp_actions_are_off(fresh_rules, monkeypatch):
+    _gid, host_id = await _host()
+    await _store(DOWN, host_id, ago=50)
+    await _store(CONFIG, host_id, ago=40)
+    await _store("%A-1-ONE: x", host_id, ago=30)
+    await _store(DOWN, host_id, ago=20, transport="tcp")
+    await _store(CONFIG, host_id, ago=10, transport="tls")
+    out = await activity.analyze(24)
+    assert (out["udp_actions"], out["udp_stored_only"], out["matched"], out["unmatched"]) == (True, 0, 4, 1)
+    assert out["transports"] == {"udp": 3, "tcp": 1, "tls": 1} and out["udp_hosts"] == 1
+
+    monkeypatch.setitem(state.EVENT_RECEIVER_CONFIG, "syslog_udp_actions", False)
+    out = await activity.analyze(24)
+    # The UDP link down and configuration message meet a rule and a trigger
+    # but are not acted on: neither a match nor unmatched.
+    assert (out["udp_actions"], out["udp_stored_only"], out["matched"], out["unmatched"]) == (False, 2, 2, 1)
+    assert out["scanned"] == out["matched"] + out["unmatched"] + out["unknown_source"] + out["udp_stored_only"]
+    assert [(r["key"], r["raised"], r["hosts"]) for r in out["rules"]] == [("link_flap", 1, 1)]
+    assert out["triggers"] == {"config_change": 1, "repoll": 1, "recollect": 0}
+    # An unmatched UDP message is still listed: the rules would miss it over any transport.
+    assert [g["tag"] for g in out["unmatched_tags"]] == ["A-ONE"]
 
 
 async def test_the_scan_stops_at_its_limit(fresh_rules, monkeypatch):

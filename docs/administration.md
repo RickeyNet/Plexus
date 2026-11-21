@@ -482,11 +482,15 @@ POST   /api/admin/metrics/receivers/tls/generate {"common_name": "syslog.example
 ```
 
 The receiver `PUT` also takes `syslog_tcp_enabled`, `syslog_tcp_port`,
-`syslog_tls_enabled`, `syslog_tls_port`, `syslog_tls_require_client_cert`
-and `syslog_udp_actions`; the `GET` answer adds, for `syslog_tcp` and
-`syslog_tls`, `<listener>_running`, `_listening_port`, `_received`,
+`syslog_tls_enabled`, `syslog_tls_port`, `syslog_tls_require_client_cert`,
+`syslog_tls_match_client_cert` (only with `syslog_tls_require_client_cert`
+on: the client certificate must name the inventory host at the source
+address) and `syslog_udp_actions`; the `GET` answer adds, for `syslog_tcp`
+and `syslog_tls`, `<listener>_running`, `_listening_port`, `_received`,
 `_errors`, `_last_message_at`, `_started_at`, `_connections`,
-`_connections_refused` and `_error`. The `tls` routes answer
+`_connections_refused` and `_error`, and for `syslog_tls`
+`syslog_tls_connections_cert_refused` (connections closed because the
+certificate did not name the host). The `tls` routes answer
 `has_certificate`, `certificate` (`subject`, `issuer`, `not_before`,
 `not_after`, `sha256_fingerprint`, `sans`, `self_signed`, or null),
 `cert_pem`, `has_client_ca`, `client_ca` (`subject`, `not_after` of each

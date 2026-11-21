@@ -270,10 +270,13 @@ export { countLabel };
  * runs: several configuration messages start one backup, and re-polls are
  * rate limited per host.
  */
-export function activitySummary(a: Pick<SyslogActivity, 'scanned' | 'matched' | 'unmatched' | 'unknown_source' | 'triggers'>): string {
+export function activitySummary(
+  a: Pick<SyslogActivity, 'scanned' | 'matched' | 'unmatched' | 'unknown_source' | 'udp_stored_only' | 'triggers'>,
+): string {
   const t = a.triggers;
+  const storedOnly = a.udp_stored_only > 0 ? `${formatCount(a.udp_stored_only)} stored only (UDP), ` : '';
   return (
-    `${countLabel(a.scanned, 'message', 'messages')} scanned: ${formatCount(a.matched)} matched, ` +
+    `${countLabel(a.scanned, 'message', 'messages')} scanned: ${formatCount(a.matched)} matched, ${storedOnly}` +
     `${formatCount(a.unmatched)} unmatched, ${formatCount(a.unknown_source)} from unknown sources. ` +
     `Trigger messages: ${formatCount(t.config_change)} configuration change, ` +
     `${formatCount(t.repoll)} re-poll, ${formatCount(t.recollect)} OPNsense re-collection.`
@@ -289,23 +292,29 @@ export function transportSummary(a: Pick<SyslogActivity, 'transports'>): string 
 
 /**
  * What the scan says about syslog over UDP, or null for nothing:
- * - `ignored`: Act on UDP messages is off and UDP messages arrived (stored, not acted on).
+ * - `ignored`: Act on UDP messages is off and UDP messages arrived (stored, not
+ *   acted on), with how many of them a rule or trigger would have acted on.
  * - `remaining`: UDP is still acted on, some hosts already send over TCP or TLS,
  *   and these hosts still send over UDP. A UDP-only deployment gets no note.
  */
 export function udpTransportNote(
-  a: Pick<SyslogActivity, 'transports' | 'udp_hosts' | 'udp_actions'>,
+  a: Pick<SyslogActivity, 'transports' | 'udp_hosts' | 'udp_actions' | 'udp_stored_only'>,
 ): { kind: 'ignored' | 'remaining'; text: string } | null {
   const { udp, tcp, tls } = a.transports;
   const hosts = countLabel(a.udp_hosts, 'host', 'hosts');
   if (!a.udp_actions) {
     if (udp === 0) return null;
     const verb = udp === 1 ? 'was' : 'were';
+    const met =
+      a.udp_stored_only === 0
+        ? 'None of them meets a rule or trigger.'
+        : `${formatCount(a.udp_stored_only)} of them ${a.udp_stored_only === 1 ? 'meets' : 'meet'} a rule or trigger `
+          + 'and would have been acted on.';
     return {
       kind: 'ignored',
       text:
         `${countLabel(udp, 'message', 'messages')} from ${hosts} arrived over UDP and ${verb} stored but not acted on, `
-        + 'because Act on UDP messages is off.',
+        + `because Act on UDP messages is off. ${met}`,
     };
   }
   if (tcp + tls === 0 || a.udp_hosts === 0) return null;

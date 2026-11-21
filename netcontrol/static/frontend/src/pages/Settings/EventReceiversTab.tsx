@@ -96,7 +96,26 @@ export function EventReceiversTab() {
                   'Mutual TLS: only devices holding a certificate the client CA signed can connect. Store the client CA under Client certificates below.'
                 )
               }
-              onChange={(v) => setDraft({ ...draft, syslog_tls_require_client_cert: v })}
+              onChange={(v) =>
+                setDraft({
+                  ...draft,
+                  syslog_tls_require_client_cert: v,
+                  // The host check needs client certificates; it goes off with them.
+                  syslog_tls_match_client_cert: v && draft.syslog_tls_match_client_cert,
+                })}
+            />
+            <CheckboxField
+              label="Certificate must name the host"
+              checked={draft.syslog_tls_match_client_cert}
+              disabled={!draft.syslog_tls_require_client_cert && !draft.syslog_tls_match_client_cert}
+              help={
+                errors.syslog_tls_match_client_cert ? (
+                  <FieldError>{errors.syslog_tls_match_client_cert}</FieldError>
+                ) : (
+                  'The client certificate must carry the source address as a SAN IP address, or the hostname of the inventory host at that address as a SAN DNS name or common name. Otherwise the connection is closed before any message is read.'
+                )
+              }
+              onChange={(v) => setDraft({ ...draft, syslog_tls_match_client_cert: v })}
             />
           </CheckboxRow>
         )}

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime as dt
+import ipaddress
 import json
 import socket
 import ssl
@@ -348,10 +349,12 @@ def _ca() -> tuple[ec.EllipticCurvePrivateKey, x509.Certificate]:
     return key, cert
 
 
-def _client_pem(ca_key, ca_cert, name: str = "edge-r1.example.com") -> tuple[str, str]:
+def _client_pem(
+    ca_key, ca_cert, name: str = "edge-r1.example.com", sans: list[x509.GeneralName] | None = None
+) -> tuple[str, str]:
     key = ec.generate_private_key(ec.SECP256R1())
     now = dt.datetime.now(dt.UTC)
-    cert = (
+    builder = (
         x509.CertificateBuilder()
         .subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, name)]))
         .issuer_name(ca_cert.subject)
@@ -359,8 +362,10 @@ def _client_pem(ca_key, ca_cert, name: str = "edge-r1.example.com") -> tuple[str
         .serial_number(x509.random_serial_number())
         .not_valid_before(now - dt.timedelta(minutes=5))
         .not_valid_after(now + dt.timedelta(days=30))
-        .sign(ca_key, hashes.SHA256())
     )
+    if sans:
+        builder = builder.add_extension(x509.SubjectAlternativeName(sans), critical=False)
+    cert = builder.sign(ca_key, hashes.SHA256())
     key_pem = key.private_bytes(
         serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()
     ).decode()
@@ -462,6 +467,193 @@ def test_a_tls_round_trip_on_uvloop():
     finally:
         loop.close()
     assert frames == [(b"<13>over tls on uvloop", "127.0.0.1")] * 5
+
+
+# ── Client certificate names the host ────────────────────────────────────────
+
+
+def _peercert(cn: str = "", dns: tuple[str, ...] = (), ips: tuple[str, ...] = ()) -> dict:
+    """A peer certificate as ``SSLSocket.getpeercert()`` gives it."""
+    cert: dict = {"subject": ((("organizationName", "Example"),), (("commonName", cn),)) if cn else ()}
+    sans = tuple(("DNS", d) for d in dns) + tuple(("IP Address", i) for i in ips)
+    if sans:
+        cert["subjectAltName"] = sans
+    return cert
+
+
+@pytest.mark.parametrize(
+    ("cert", "source", "hostname"),
+    [
+        (_peercert(ips=("192.0.2.10",)), "192.0.2.10", ""),  # SAN IP, no inventory host
+        (_peercert(ips=("192.0.2.10",)), "::ffff:192.0.2.10", ""),  # IPv4-mapped source
+        (_peercert(ips=("2001:DB8:0:0:0:0:0:1",)), "2001:db8::1", ""),  # IPv6 written out
+        (_peercert(dns=("core-sw1.example.com",)), "192.0.2.10", "core-sw1.example.com"),
+        (_peercert(dns=("CORE-SW1.Example.com.",)), "192.0.2.10", "core-sw1.example.com"),
+        (_peercert(cn="core-sw1.example.com"), "192.0.2.10", "core-sw1.example.com"),
+        (_peercert(cn="core-sw1"), "192.0.2.10", "core-sw1.example.com"),  # bare name in the certificate
+        (_peercert(dns=("core-sw1.example.com",)), "192.0.2.10", "core-sw1"),  # bare inventory hostname
+        (_peercert(cn="other", dns=("x.example.com", "core-sw1")), "192.0.2.10", "CORE-SW1"),
+        (_peercert(cn="192.0.2.10"), "192.0.2.10", "192.0.2.10"),  # a host named by its address
+    ],
+)
+def test_a_certificate_that_names_the_host_matches(cert, source, hostname):
+    assert syslog_tls.peer_mismatch(cert, source, hostname) == ""
+
+
+@pytest.mark.parametrize(
+    ("cert", "source", "hostname", "reason"),
+    [
+        (_peercert(cn="core-sw2.example.com"), "192.0.2.10", "core-sw1.example.com", "core-sw1.example.com"),
+        (_peercert(ips=("192.0.2.11",)), "192.0.2.10", "core-sw1.example.com", "192.0.2.10"),
+        (_peercert(dns=("*.example.com",)), "192.0.2.10", "core-sw1.example.com", "match neither"),
+        (_peercert(cn="*"), "192.0.2.10", "core-sw1", "match neither"),
+        # Both names carry a domain: no first-label match across domains.
+        (_peercert(cn="core-sw1.example.net"), "192.0.2.10", "core-sw1.example.com", "match neither"),
+        (_peercert(cn="core-sw1"), "192.0.2.10", "core-sw10.example.com", "match neither"),
+        # A host named by its address: "192" is not its first label.
+        (_peercert(cn="192"), "192.0.2.10", "192.0.2.10", "match neither"),
+        # No inventory host at the source: only a SAN IP is accepted.
+        (_peercert(cn="core-sw1.example.com", dns=("core-sw1.example.com",)), "198.51.100.7", "", "no inventory host"),
+        (None, "192.0.2.10", "core-sw1", "no client certificate"),
+        ({}, "192.0.2.10", "core-sw1", "no client certificate"),
+    ],
+)
+def test_a_certificate_that_names_another_host_does_not_match(cert, source, hostname, reason):
+    assert reason in syslog_tls.peer_mismatch(cert, source, hostname)
+
+
+def test_the_names_of_a_peer_certificate():
+    cert = _peercert(cn="core-sw1", dns=("core-sw1.example.com",), ips=("192.0.2.10",))
+    cert["subjectAltName"] += (("email", "ops@example.com"), ("bad",))
+    assert syslog_tls.peer_names(cert) == (["core-sw1.example.com"], ["192.0.2.10"], ["core-sw1"])
+    assert syslog_tls.peer_names(None) == ([], [], [])
+    assert not syslog_tls.host_name_matches("", "core-sw1") and not syslog_tls.host_name_matches("core-sw1", "")
+
+
+def test_the_inventory_hostname_of_an_address(monkeypatch):
+    monkeypatch.setitem(ls.INVENTORY_ADDRESSES, "192.0.2.10", 41)
+    monkeypatch.setitem(ls.INVENTORY_HOSTNAMES, 41, "core-sw1.example.com")
+    assert ls.inventory_hostname("192.0.2.10") == "core-sw1.example.com"
+    assert ls.inventory_hostname("::ffff:192.0.2.10") == "core-sw1.example.com"
+    assert ls.inventory_hostname("198.51.100.7") == ""
+
+
+def _mutual_tls(monkeypatch, hostname: str = "edge-r1.example.com"):
+    """A stored server certificate and client CA; loopback is the inventory
+    host ``hostname``. Returns (server cert PEM, CA key, CA cert)."""
+    server_cert = _store_generated_certificate()
+    ca_key, ca_cert = _ca()
+    syslog_tls.MATERIAL["client_ca_pem"] = ca_cert.public_bytes(serialization.Encoding.PEM).decode()
+    if hostname:
+        monkeypatch.setitem(ls.INVENTORY_ADDRESSES, "127.0.0.1", 41)
+        monkeypatch.setitem(ls.INVENTORY_HOSTNAMES, 41, hostname)
+    return server_cert, ca_key, ca_cert
+
+
+async def _checked_listener() -> tuple[StreamListener, _Recorder]:
+    recorder = _Recorder()
+    listener = StreamListener("tls", recorder, me._ReceiverStats())
+    assert await listener.start(
+        "127.0.0.1", _free_tcp_port(), syslog_tls.server_context(True), peer_check=me._client_cert_names_host
+    )
+    return listener, recorder
+
+
+async def test_a_certificate_naming_the_host_is_accepted(monkeypatch):
+    server_cert, ca_key, ca_cert = _mutual_tls(monkeypatch)
+    listener, recorder = await _checked_listener()
+    try:
+        # The bare name in the common name; the inventory has the FQDN.
+        cert_pem, key_pem = _client_pem(ca_key, ca_cert, "edge-r1")
+        _reader, writer = await _tls_connect(listener.port, _client_context(server_cert, cert_pem, key_pem))
+        writer.write(b"<13>from the named host\n")
+        await writer.drain()
+        assert await _wait_for(lambda: recorder.frames == [(b"<13>from the named host", "127.0.0.1")])
+        writer.close()
+
+        # A SAN IP of the source address, whatever the names say.
+        cert_pem, key_pem = _client_pem(
+            ca_key, ca_cert, "unrelated.example.net", [x509.IPAddress(ipaddress.ip_address("127.0.0.1"))]
+        )
+        _reader, writer = await _tls_connect(listener.port, _client_context(server_cert, cert_pem, key_pem))
+        writer.write(b"<13>by address\n")
+        await writer.drain()
+        assert await _wait_for(lambda: len(recorder.frames) == 2)
+        assert listener.cert_refused == 0
+        writer.close()
+    finally:
+        listener.stop()
+
+
+async def test_a_certificate_naming_another_host_is_closed_unread(monkeypatch):
+    server_cert, ca_key, ca_cert = _mutual_tls(monkeypatch)
+    listener, recorder = await _checked_listener()
+    try:
+        cert_pem, key_pem = _client_pem(ca_key, ca_cert, "core-sw2.example.com", [x509.DNSName("core-sw2.example.com")])
+        try:
+            reader, writer = await _tls_connect(listener.port, _client_context(server_cert, cert_pem, key_pem))
+            writer.write(b"<13>sent as another host\n")
+            await writer.drain()
+            assert await _closed_by_server(reader)
+            writer.close()
+        except ssl.SSLError, ConnectionError:
+            pass
+        assert await _wait_for(lambda: listener.cert_refused == 1 and listener.connections == 0)
+        assert recorder.frames == [] and listener.stats.received == 0 and listener.stats.errors == 0
+    finally:
+        listener.stop()
+
+
+async def test_a_source_that_is_no_inventory_host_needs_a_san_ip(monkeypatch):
+    server_cert, ca_key, ca_cert = _mutual_tls(monkeypatch, hostname="")  # policy any: loopback is no host
+    listener, recorder = await _checked_listener()
+    try:
+        cert_pem, key_pem = _client_pem(ca_key, ca_cert, "edge-r1.example.com", [x509.DNSName("edge-r1.example.com")])
+        try:
+            reader, writer = await _tls_connect(listener.port, _client_context(server_cert, cert_pem, key_pem))
+            writer.write(b"<13>no host here\n")
+            await writer.drain()
+            assert await _closed_by_server(reader)
+            writer.close()
+        except ssl.SSLError, ConnectionError:
+            pass
+        assert await _wait_for(lambda: listener.cert_refused == 1)
+        assert recorder.frames == []
+    finally:
+        listener.stop()
+
+
+def test_the_host_check_on_uvloop(monkeypatch):
+    """The peer certificate is read from the connection the same way under
+    uvloop (uvicorn's event loop where it installs)."""
+    uvloop = pytest.importorskip("uvloop")
+    server_cert, ca_key, ca_cert = _mutual_tls(monkeypatch)
+    good = _client_pem(ca_key, ca_cert, "edge-r1.example.com")
+    bad = _client_pem(ca_key, ca_cert, "core-sw2.example.com")
+
+    async def run() -> tuple[list[tuple[bytes, str]], int]:
+        listener, recorder = await _checked_listener()
+        try:
+            for cert_pem, key_pem in (good, bad):
+                try:
+                    _reader, writer = await _tls_connect(listener.port, _client_context(server_cert, cert_pem, key_pem))
+                    writer.write(b"<13>over tls on uvloop\n")
+                    await writer.drain()
+                    writer.close()
+                except ssl.SSLError, ConnectionError:
+                    pass
+            await _wait_for(lambda: len(recorder.frames) == 1 and listener.cert_refused == 1)
+        finally:
+            listener.stop()
+            await asyncio.sleep(0)
+        return recorder.frames, listener.cert_refused
+
+    loop = uvloop.new_event_loop()
+    try:
+        frames, refused = loop.run_until_complete(run())
+    finally:
+        loop.close()
+    assert frames == [(b"<13>over tls on uvloop", "127.0.0.1")] and refused == 1
 
 
 # ── Certificates (netcontrol.syslog_tls) ─────────────────────────────────────
@@ -575,6 +767,8 @@ def test_the_server_context_needs_its_material():
 def test_the_material_key_changes_with_the_material_and_mode():
     before = syslog_tls.material_key(False)
     assert syslog_tls.material_key(True) != before
+    assert syslog_tls.material_key(True, True) != syslog_tls.material_key(True)
+    assert syslog_tls.material_key(False, False) == before
     _store_generated_certificate()
     assert syslog_tls.material_key(False) != before
     assert syslog_tls.sanitize({"cert_pem": 1, "other": "x"}) == {"cert_pem": "", "key_pem": "", "client_ca_pem": ""}
@@ -644,7 +838,27 @@ async def test_apply_starts_stops_and_rebinds_the_stream_listeners(stream_receiv
     assert me.event_receiver_snapshot()["syslog_tls_running"] is False
 
 
-async def test_the_snapshot_reports_each_stream_listener(stream_receivers):
+async def test_turning_the_host_check_on_or_off_rebuilds_the_tls_listener(stream_receivers, monkeypatch):
+    _mutual_tls(monkeypatch)
+    port = _free_tcp_port()
+    base = {"syslog_tls_enabled": True, "syslog_tls_port": port, "syslog_tls_require_client_cert": True}
+    await me.apply_event_receiver_config(_cfg(**base))
+    tls = me._STREAM_LISTENERS["tls"]
+    first = tls._server
+    assert first is not None and tls._peer_check is None
+
+    await me.apply_event_receiver_config(_cfg(**base, syslog_tls_match_client_cert=True))
+    second = tls._server
+    assert second is not first and tls._peer_check is me._client_cert_names_host
+
+    await me.apply_event_receiver_config(_cfg(**base, syslog_tls_match_client_cert=True))
+    assert tls._server is second  # unchanged: not rebuilt
+
+    await me.apply_event_receiver_config(_cfg(**base))
+    assert tls._server is not second and tls._peer_check is None
+
+
+async def test_the_snapshot_reports_each_stream_listener(stream_receivers, monkeypatch):
     port = _free_tcp_port()
     await me.apply_event_receiver_config(_cfg(syslog_tcp_enabled=True, syslog_tcp_port=port))
     _reader, writer = await asyncio.open_connection("127.0.0.1", port)
@@ -666,6 +880,11 @@ async def test_the_snapshot_reports_each_stream_listener(stream_receivers):
         ):
             assert f"syslog_{transport}_{suffix}" in snap
     assert snap["syslog_tcp_connections"] == 1 and snap["syslog_tcp_connections_refused"] == 0
+    # Refused for a client certificate that does not name the host: TLS only.
+    assert snap["syslog_tls_connections_cert_refused"] == 0
+    assert "syslog_tcp_connections_cert_refused" not in snap
+    monkeypatch.setattr(me._STREAM_LISTENERS["tls"], "cert_refused", 3)
+    assert me.event_receiver_snapshot()["syslog_tls_connections_cert_refused"] == 3
     assert snap["syslog_tcp_last_message_at"] and snap["syslog_tcp_started_at"]
     # The existing keys are kept.
     for key in ("syslog_running", "syslog_received", "syslog_dropped_source", "trap_running", "events_dropped"):
@@ -839,6 +1058,7 @@ def test_the_receiver_settings_refuse_invalid_combinations(monkeypatch, request)
         ),
         ({"syslog_tls_enabled": True}, "server certificate"),
         ({"syslog_tls_require_client_cert": True}, "client CA"),
+        ({"syslog_tls_match_client_cert": True}, "Require client certificates before"),
         ({"syslog_udp_actions": False}, "TCP or TLS receiver"),
     ]
     for body, message in cases:

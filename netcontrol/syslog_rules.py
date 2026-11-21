@@ -411,7 +411,8 @@ INTERFACE_DOWN: tuple[Matcher, ...] = (
     _m("PAN-SYSTEM-LINK-CHANGE", text=r":(?: MAC)? Down\b", instance=r"^(?:Port )?([^\s:,]+):"),
     # AOS-CX 404: "Link status for interface 1/1/1 is down".
     _m("AOSCX-404", text=r"\bis down\b", instance=rf"\binterface {_IFACE} is down"),
-    # AOS-Switch 77: "port 1 is now off-line" (stacked: "port 2/16").
+    # AOS-Switch 77: "port 1 is now off-line" (stacked: "port 2/16"). A port
+    # disabled in the configuration logs the same message, so it counts too.
     _m("AOSS-00077", text=r"\bis now off-line\b", instance=rf"\bport {_IFACE} is now off-line"),
 )
 
@@ -425,6 +426,22 @@ _BGP_TAGS = ("BGP-ADJCHANGE", "ROUTING-BGP-ADJCHANGE", "FGT-0103020300")
 # neighbor port1:192.0.2.1-192.0.2.2 Down" (the neighbor is IF:local-remote).
 _FGT_OSPF = "FGT-0103020302"
 _PAN_BGP_PEER = r"\bpeer IP: ([^\s,]+)"
+# AOS-CX 2401 / 2404: "AdjChg: Nbr <router-id> on <interface>[(<area>)]:
+# <old state> -> <new state>[ (<event>)]"; the new state is the last one.
+_AOSCX_OSPF = ("AOSCX-2401", "AOSCX-2404")
+_AOSCX_OSPF_NBR = r"\bNbr (\S+) on "
+# AOS-CX 2901 / 2902: "<peer address>: Peer up. vrf-name: <vrf>" / "...:
+# Peer down. error-code: ...".
+_AOSCX_BGP_PEER = r"^(\S+): Peer (?:up|down)\b"
+# AOS-Switch 2703: "ADJCHG: Neighbor with Router ID <id> on <interface>
+# moved to <state> state - adj formed" (or "- adj lost").
+_AOSS_OSPF_NBR = r"\bRouter ID (\S+) on "
+# AOS-Switch 70: "Fan failure: Fan: 1  Failures: 1" (or "Fan OK: ...");
+# 71: "Power Supply failure:  Supply: Main- Failures: 1" (Main or RPS);
+# 2797: "Internal power supply 2 is faulted. Total fault count: 1" (or "is ok").
+_AOSS_FAN = r"\bFan: ([A-Za-z0-9/]+)"
+_AOSS_SUPPLY = r"\bSupply: ([A-Za-z0-9/]+)"
+_AOSS_INTERNAL_PSU = r"\bInternal power supply (\S+) is\b"
 _ARISTA_PSU = r"\b(PowerSupply\d+)"
 _ARISTA_FAN = r"\b(Fan\d+(?:/\d+)?)"
 
@@ -466,6 +483,8 @@ BUILTIN_RULES: tuple[BuiltinRule, ...] = (
             "Juniper Junos",
             "Fortinet FortiOS",
             "Palo Alto PAN-OS",
+            "HPE Aruba AOS-CX",
+            "HPE Aruba AOS-Switch",
         ),
         severity="critical",
         raise_on=(
@@ -477,6 +496,8 @@ BUILTIN_RULES: tuple[BuiltinRule, ...] = (
             # PAN-OS (legacy routing engine): the description names no
             # neighbor, so one alert per firewall.
             _m("PAN-SYSTEM-ROUTED-OSPF-NEIGHBOR-DOWN"),
+            _m(*_AOSCX_OSPF, text=r"\bDown\s*(?:\([^)]*\))?$", instance=_AOSCX_OSPF_NBR),
+            _m("AOSS-02703", text=r"\badj lost\b", instance=_AOSS_OSPF_NBR),
         ),
         clear_on=(
             _m(*_OSPF_TAGS, text=r"\bto FULL\b", instance=rf"Nbr {_IFACE}"),
@@ -485,6 +506,8 @@ BUILTIN_RULES: tuple[BuiltinRule, ...] = (
             _m("RPD_OSPF_NBRUP", text=r"\bto Full\b", instance=rf"neighbor {_IFACE}"),
             _m(_FGT_OSPF, text=r"\bADJCHANGE: neighbor \S+ Up\b", instance=rf"\bADJCHANGE: neighbor {_IFACE}"),
             _m("PAN-SYSTEM-ROUTED-OSPF-NEIGHBOR-FULL"),
+            _m(*_AOSCX_OSPF, text=r"\bFull\s*(?:\([^)]*\))?$", instance=_AOSCX_OSPF_NBR),
+            _m("AOSS-02703", text=r"\badj formed\b", instance=_AOSS_OSPF_NBR),
         ),
     ),
     BuiltinRule(
@@ -499,6 +522,8 @@ BUILTIN_RULES: tuple[BuiltinRule, ...] = (
             "Juniper Junos",
             "Fortinet FortiOS",
             "Palo Alto PAN-OS",
+            "HPE Aruba AOS-CX",
+            "HPE Aruba AOS-Switch",
         ),
         severity="critical",
         raise_on=(
@@ -515,12 +540,17 @@ BUILTIN_RULES: tuple[BuiltinRule, ...] = (
                 instance=r"peer ([^\s,+]+)",
             ),
             _m("PAN-SYSTEM-ROUTED-BGP-PEER-LEFT-ESTABLISHED", instance=_PAN_BGP_PEER),
+            _m("AOSCX-2902", text=r"^\S+: Peer down\b", instance=_AOSCX_BGP_PEER),
+            # AOS-Switch 3073 "BGP: Peer down" names no peer: one alert per switch.
+            _m("AOSS-03073", text=r"\bPeer down\b"),
         ),
         clear_on=(
             _m(*_BGP_TAGS, text=r"neighbor \S+(?: vpn vrf \S+)? Up\b", instance=rf"neighbor {_IFACE}"),
             _m("BGP-ADJCHANGE", text=r"\bnew state Established\b", instance=rf"peer {_IFACE}"),
             _m("RPD_BGP_NEIGHBOR_STATE_CHANGED", text=r"\bto Established\b", instance=r"peer ([^\s,+]+)"),
             _m("PAN-SYSTEM-ROUTED-BGP-PEER-ENTER-ESTABLISHED", instance=_PAN_BGP_PEER),
+            _m("AOSCX-2901", text=r"^\S+: Peer up\b", instance=_AOSCX_BGP_PEER),
+            _m("AOSS-03072", text=r"\bPeer up\b"),
         ),
     ),
     BuiltinRule(
@@ -536,6 +566,7 @@ BUILTIN_RULES: tuple[BuiltinRule, ...] = (
             "Fortinet FortiOS",
             "Palo Alto PAN-OS",
             "HPE Aruba AOS-CX",
+            "HPE Aruba AOS-Switch",
         ),
         severity="critical",
         raise_on=(
@@ -551,12 +582,15 @@ BUILTIN_RULES: tuple[BuiltinRule, ...] = (
             _m("PWRMGMT-PSU_STATUS_FAILED", "PWRMGMT-INPUT_POWER_LOSS", instance=_ARISTA_PSU),
             # FortiOS 22105 "Power supply failed" (msg "PSU [2] not detected";
             # 22104 "Power supply restored" names no supply in a known form,
-            # so one alert per firewall).
-            _m("FGT-0100022105"),
+            # so one alert per firewall) and, from 7.2, 22114 "Power supply
+            # failed warning" (6.4: "power redundancy degrade").
+            _m("FGT-0100022105", "FGT-0100022114"),
             # PAN-OS ps-failure: "Alarm on Power Supply #2".
             _m("PAN-SYSTEM-PS-FAILURE", instance=r"\bPower Supply #(\d+)"),
-            # AOS-CX 304: "PSU 1/1 faulted."
+            # AOS-CX 304: "PSU 1/1 faulted. Total fault count: 1"
             _m("AOSCX-304", instance=r"\bPSU (\S+?) faulted"),
+            _m("AOSS-00071", text=r"\bPower Supply failure\b", instance=_AOSS_SUPPLY),
+            _m("AOSS-02797", text=r"\bis faulted\b", instance=_AOSS_INTERNAL_PSU),
         ),
         clear_on=(
             _m("IOSXE_PEM-PEMOK", instance=rf"slot {_IFACE}"),
@@ -564,7 +598,14 @@ BUILTIN_RULES: tuple[BuiltinRule, ...] = (
             _m("PLATFORM-PS_OK", instance=r"Power supply (\d+)"),
             _m(prefixes=("CHASSISD_SNMP_TRAP",), text=r"Power Supply OK", instance=_JUNOS_FRU),
             _m("PWRMGMT-PSU_STATUS_OK", instance=_ARISTA_PSU),
+            # FortiOS 22104 "Power supply restored" (to 7.4; not in 7.6) and,
+            # from 7.2, 22115 "Power supply restored notification". In 6.4
+            # 22115 is "power redundancy failure": a message that says so
+            # must not resolve the alert.
             _m("FGT-0100022104"),
+            _m("FGT-0100022115", exclude=r"\bfail|\bredundan|\bdegrad"),
+            _m("AOSS-00071", text=r"\bPower Supply OK\b", instance=_AOSS_SUPPLY),
+            _m("AOSS-02797", text=r"\bis ok\b", instance=_AOSS_INTERNAL_PSU),
         ),
         auto_resolve_minutes=1440,
     ),
@@ -579,7 +620,10 @@ BUILTIN_RULES: tuple[BuiltinRule, ...] = (
             "Cisco NX-OS",
             "Arista EOS",
             "Juniper Junos",
+            "Fortinet FortiOS",
             "Palo Alto PAN-OS",
+            "HPE Aruba AOS-CX",
+            "HPE Aruba AOS-Switch",
         ),
         severity="warning",
         raise_on=(
@@ -597,6 +641,12 @@ BUILTIN_RULES: tuple[BuiltinRule, ...] = (
             _m("ENVMON-FANFAILED", instance=_ARISTA_FAN),
             # PAN-OS fan-failure: "Alarm on Fan Tray #1".
             _m("PAN-SYSTEM-FAN-FAILURE", instance=r"\bFan Tray #(\d+)"),
+            # FortiOS 22108 "Fan anomaly" (the msg names the fan in no
+            # documented form, so one alert per firewall).
+            _m("FGT-0100022108"),
+            # AOS-CX 214: "<function>: Fan 1/1/1 faulted, reason: <reason>."
+            _m("AOSCX-214", instance=r"\bFan (\S+) faulted\b"),
+            _m("AOSS-00070", text=r"\bFan failure\b", instance=_AOSS_FAN),
         ),
         clear_on=(
             _m("IOSXE_PEM-FANOK", instance=rf"slot {_IFACE}"),
@@ -604,6 +654,9 @@ BUILTIN_RULES: tuple[BuiltinRule, ...] = (
             _m(prefixes=("CHASSISD_SNMP_TRAP",), text=r"Fan(?:/Blower)? OK", instance=_JUNOS_FRU),
             _m("ENVMON-FAN_OK", instance=r"\bFan (\d+)"),
             _m("ENVMON-FANOK", instance=_ARISTA_FAN),
+            # FortiOS 22151 "Fan normal".
+            _m("FGT-0100022151"),
+            _m("AOSS-00070", text=r"\bFan OK\b", instance=_AOSS_FAN),
         ),
         auto_resolve_minutes=1440,
     ),
@@ -692,19 +745,25 @@ CONFIG_CHANGE: tuple[Matcher, ...] = (
     # the SYSTEM log reports the job's end ("Commit job succeeded[ for user
     # NAME]").
     _m("PAN-SYSTEM-GENERAL", text=r"^Commit job succeeded\b"),
+    # AOS-Switch 3125 "new Startup Config Seq Num = <n> by <UI>": the
+    # startup configuration was saved (write memory).
+    _m("AOSS-03125", text=r"\bnew Startup Config Seq Num\b"),
 )
 # Messages a device logs when it is about to reload.
 RELOAD: tuple[Matcher, ...] = (
     _m("SYS-RELOAD", "ASA-199001", "UI_REBOOT_EVENT", "PLATFORM-PFM_SYSTEM_RESET"),
     # FortiOS 32138 "Device rebooted", 32200 "Device shutdown"; AOS-Switch 63
-    # "System went down".
-    _m("FGT-0100032138", "FGT-0100032200", "AOSS-00063"),
+    # "SYSTEM went down: <reason>"; AOS-CX 706 "Initiating system reboot",
+    # 707 "Initiating chassis thermal reboot".
+    _m("FGT-0100032138", "FGT-0100032200", "AOSS-00063", "AOSCX-706", "AOSCX-707"),
 )
 # Messages a device logs once it is back up.
 RESTART: tuple[Matcher, ...] = (
     _m("SYS-RESTART", "SYS-BOOTTIME", "ASA-199002", "SNMPD_TRAP_COLD_START"),
-    # FortiOS 32009 "FortiGate started"; AOS-Switch 64 "System Booted".
-    _m("FGT-0100032009", "AOSS-00064"),
+    # FortiOS 32009 "FortiGate started"; AOS-Switch 66 "System Booted" and
+    # 64 (the crash reason of a switch that went down); AOS-CX 1206 "Module
+    # rebooted. Reason: ...", 1236 "Module unexpected reboot. Reason: ...".
+    _m("FGT-0100032009", "AOSS-00066", "AOSS-00064", "AOSCX-1206", "AOSCX-1236"),
 )
 
 

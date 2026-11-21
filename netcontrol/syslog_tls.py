@@ -13,6 +13,8 @@ this module through :func:`public_view`.
 :func:`server_context` builds the listener's ``ssl.SSLContext``: TLS 1.2 or
 later, and, with ``require_client_cert``, ``CERT_REQUIRED`` against the
 client CA, so only a device holding a certificate that CA signed can send.
+:func:`peer_mismatch` checks, with ``syslog_tls_match_client_cert``, that
+such a certificate also names the host it connects as.
 """
 
 from __future__ import annotations
@@ -87,7 +89,7 @@ def has_client_ca(material: dict[str, str] | None = None) -> bool:
     return bool(material.get("client_ca_pem"))
 
 
-def material_key(require_client_cert: bool) -> str:
+def material_key(require_client_cert: bool, match_client_cert: bool = False) -> str:
     """A digest of what a TLS listener is built from: a different one means
     the listener must be rebuilt."""
     digest = hashlib.sha256()
@@ -95,7 +97,88 @@ def material_key(require_client_cert: bool) -> str:
         digest.update(MATERIAL.get(key, "").encode("utf-8"))
         digest.update(b"\x00")
     digest.update(b"1" if require_client_cert else b"0")
+    digest.update(b"1" if match_client_cert else b"0")
     return digest.hexdigest()
+
+
+# ── Client certificate to host binding ───────────────────────────────────────
+
+
+def peer_names(peercert: Any) -> tuple[list[str], list[str], list[str]]:
+    """The names of a peer certificate in ``ssl.SSLSocket.getpeercert()``
+    form: ``(SAN DNS names, SAN IP addresses, subject common names)``. Empty
+    lists for no certificate."""
+    dns: list[str] = []
+    ips: list[str] = []
+    common_names: list[str] = []
+    if not isinstance(peercert, dict):
+        return dns, ips, common_names
+    for entry in peercert.get("subjectAltName") or ():
+        if not isinstance(entry, (tuple, list)) or len(entry) != 2:
+            continue
+        kind, value = entry
+        if kind == "DNS":
+            dns.append(str(value))
+        elif kind == "IP Address":
+            ips.append(str(value).strip())
+    for rdn in peercert.get("subject") or ():
+        for attribute in rdn if isinstance(rdn, (tuple, list)) else ():
+            if isinstance(attribute, (tuple, list)) and len(attribute) == 2 and attribute[0] == "commonName":
+                common_names.append(str(attribute[1]))
+    return dns, ips, common_names
+
+
+def _ip(text: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
+    """An address, an IPv4-mapped IPv6 one as IPv4; None when ``text`` is none."""
+    try:
+        ip = ipaddress.ip_address(str(text or "").strip().split("%", 1)[0])
+    except ValueError:
+        return None
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+        return ip.ipv4_mapped
+    return ip
+
+
+def host_name_matches(name: str, hostname: str) -> bool:
+    """Whether a certificate name stands for ``hostname``: equal ignoring
+    case (and a trailing dot), or one of the two is a name without a dot
+    that equals the first label of the other (``core-sw1`` and
+    ``core-sw1.example.com``). A name with ``*`` never matches, and an IP
+    address used as a name has no first label (``192`` does not stand for
+    a host named ``192.0.2.10``)."""
+    a = str(name or "").strip().rstrip(".").lower()
+    b = str(hostname or "").strip().rstrip(".").lower()
+    if not a or not b or "*" in a or "*" in b:
+        return False
+    if a == b:
+        return True
+    if _ip(a) is not None or _ip(b) is not None:
+        return False
+    if "." not in a:
+        return a == b.split(".", 1)[0]
+    if "." not in b:
+        return b == a.split(".", 1)[0]
+    return False
+
+
+def peer_mismatch(peercert: Any, source_ip: str, hostname: str) -> str:
+    """Why a client certificate does not name the sender ("" when it does).
+    Accepted: a SAN IP address equal to ``source_ip``, or a SAN DNS name or
+    the common name matching ``hostname`` (:func:`host_name_matches`), the
+    hostname of the inventory host at ``source_ip`` ("" for a source that
+    is no inventory host, which so needs the SAN IP)."""
+    if not isinstance(peercert, dict) or not peercert:
+        return "no client certificate"
+    dns, ips, common_names = peer_names(peercert)
+    source = _ip(source_ip)
+    if source is not None and any(_ip(value) == source for value in ips):
+        return ""
+    if hostname and any(host_name_matches(name, hostname) for name in dns + common_names):
+        return ""
+    names = ", ".join(dns + ips + common_names) or "none"
+    if hostname:
+        return f"certificate names ({names}) match neither {source_ip} nor host {hostname}"
+    return f"certificate names ({names}) do not include {source_ip}, which is no inventory host"
 
 
 # ── Parsing and validation ───────────────────────────────────────────────────

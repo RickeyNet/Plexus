@@ -34,6 +34,7 @@ function config(over: Partial<EventReceiverConfig> = {}): EventReceiverConfig {
     syslog_tls_enabled: false,
     syslog_tls_port: 6514,
     syslog_tls_require_client_cert: false,
+    syslog_tls_match_client_cert: false,
     syslog_udp_actions: true,
     syslog_running: true,
     trap_running: true,
@@ -65,6 +66,7 @@ describe('receiverSettings', () => {
       syslog_tls_enabled: false,
       syslog_tls_port: 6514,
       syslog_tls_require_client_cert: false,
+      syslog_tls_match_client_cert: false,
       syslog_udp_actions: true,
     });
   });
@@ -130,6 +132,14 @@ describe('receiverGuards', () => {
     expect(receiverGuards(draft, config(), stored)).toEqual({});
   });
 
+  it('needs client certificates required before the certificate must name the host', () => {
+    const draft = config({ syslog_tls_match_client_cert: true });
+    expect(receiverGuards(draft, config(), stored).syslog_tls_match_client_cert).toBe(
+      'Require client certificates before requiring that the certificate names the host.',
+    );
+    expect(receiverGuards({ ...draft, syslog_tls_require_client_cert: true }, config(), stored)).toEqual({});
+  });
+
   it('keeps UDP actions on unless TCP or TLS is on', () => {
     const off = config({ syslog_udp_actions: false });
     expect(receiverGuards(off, config(), stored).syslog_udp_actions).toBe(
@@ -190,9 +200,25 @@ describe('receiverCounters', () => {
       'syslog_tls',
       now,
     );
-    expect(items.map((i) => i.label)).toEqual(['Received', 'Last message', 'Errors', 'Open connections', 'Connections refused']);
-    expect(items.map((i) => i.value)).toEqual(['40', 'None yet', '1', '6', '2']);
+    expect(items.map((i) => i.label)).toEqual([
+      'Received',
+      'Last message',
+      'Errors',
+      'Open connections',
+      'Connections refused',
+      'Certificate not for host',
+    ]);
+    expect(items.map((i) => i.value)).toEqual(['40', 'None yet', '1', '6', '2', '0']);
     expect(items[2].tone).toBe('warning');
+  });
+
+  it('adds the connections refused for a certificate that does not name the host on TLS only', () => {
+    const cfg = config({ syslog_tls_connections_refused: 2, syslog_tls_connections_cert_refused: 3 });
+    const tls = receiverCounters(cfg, 'syslog_tls', now);
+    expect(tls.map((i) => i.label).slice(-2)).toEqual(['Connections refused', 'Certificate not for host']);
+    expect(tls[tls.length - 1]).toMatchObject({ value: '3', tone: 'warning' });
+    expect(receiverCounters(config(), 'syslog_tls', now).at(-1)).toMatchObject({ value: '0', tone: undefined });
+    expect(receiverCounters(cfg, 'syslog_tcp', now).map((i) => i.label)).not.toContain('Certificate not for host');
   });
 });
 

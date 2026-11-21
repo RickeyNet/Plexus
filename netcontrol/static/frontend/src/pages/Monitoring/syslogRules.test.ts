@@ -241,6 +241,7 @@ describe('syslog rule activity', () => {
       matched: 120,
       unmatched: 200,
       unknown_source: 25,
+      udp_stored_only: 0,
       triggers: { config_change: 1, repoll: 10, recollect: 0 },
     });
     expect(line).toBe(
@@ -248,13 +249,26 @@ describe('syslog rule activity', () => {
         + 'Trigger messages: 1 configuration change, 10 re-poll, 0 OPNsense re-collection.',
     );
   });
+
+  it('counts apart the UDP messages that were stored only', () => {
+    const line = activitySummary({
+      scanned: 1345,
+      matched: 120,
+      unmatched: 200,
+      unknown_source: 25,
+      udp_stored_only: 1000,
+      triggers: { config_change: 0, repoll: 0, recollect: 0 },
+    });
+    expect(line).toContain('1,345 messages scanned: 120 matched, 1,000 stored only (UDP), 200 unmatched, 25 from unknown sources.');
+  });
 });
 
 describe('syslog transports', () => {
-  const scan = (udp: number, tcp: number, tls: number, udpHosts: number, udpActions: boolean) => ({
+  const scan = (udp: number, tcp: number, tls: number, udpHosts: number, udpActions: boolean, storedOnly = 0) => ({
     transports: { udp, tcp, tls },
     udp_hosts: udpHosts,
     udp_actions: udpActions,
+    udp_stored_only: storedOnly,
   });
 
   it('counts the messages per transport', () => {
@@ -263,12 +277,19 @@ describe('syslog transports', () => {
   });
 
   it('says how many UDP messages were stored but not acted on while UDP actions are off', () => {
-    expect(udpTransportNote(scan(1200, 40, 0, 3, false))).toEqual({
+    expect(udpTransportNote(scan(1200, 40, 0, 3, false, 85))).toEqual({
       kind: 'ignored',
-      text: '1,200 messages from 3 hosts arrived over UDP and were stored but not acted on, because Act on UDP messages is off.',
+      text:
+        '1,200 messages from 3 hosts arrived over UDP and were stored but not acted on, because Act on UDP messages is off. '
+        + '85 of them meet a rule or trigger and would have been acted on.',
     });
-    expect(udpTransportNote(scan(1, 0, 5, 1, false))?.text).toBe(
-      '1 message from 1 host arrived over UDP and was stored but not acted on, because Act on UDP messages is off.',
+    expect(udpTransportNote(scan(1, 0, 5, 1, false, 1))?.text).toBe(
+      '1 message from 1 host arrived over UDP and was stored but not acted on, because Act on UDP messages is off. '
+        + '1 of them meets a rule or trigger and would have been acted on.',
+    );
+    expect(udpTransportNote(scan(7, 0, 5, 2, false))?.text).toBe(
+      '7 messages from 2 hosts arrived over UDP and were stored but not acted on, because Act on UDP messages is off. '
+        + 'None of them meets a rule or trigger.',
     );
     expect(udpTransportNote(scan(0, 40, 5, 0, false))).toBeNull();
   });

@@ -84,17 +84,18 @@ severity; the patterns, threshold and auto-resolve time are fixed.
 | Rule (metric) | Raised by | Resolved by | Threshold | Auto-resolve | Severity | Device families |
 |---|---|---|---|---|---|---|
 | Interface flapping (`syslog_link_flap`) | An interface going down: `LINK-3-UPDOWN` and `LINEPROTO-5-UPDOWN` ... `changed state to down`, IOS XR `PKT_INFRA-LINK-3-UPDOWN` / `PKT_INFRA-LINEPROTO-5-UPDOWN`, ASA `411002`, NX-OS `ETHPORT-5-IF_DOWN_LINK_FAILURE` / `IF_DOWN_ERROR_DISABLED` / `IF_DOWN_PORT_CHANNEL_MEMBERS_DOWN`, Junos `SNMP_TRAP_LINK_DOWN` with `ifAdminStatus up`, FortiOS `FGT-0100020099` (Interface status changed) `Interface <name> was turned down`, PAN-OS `link-change` `<port>: Down ...`, AOS-CX `AOSCX-404` `Link status for interface <name> is down`, AOS-Switch `AOSS-00077` `port <name> is now off-line` | Time only | 3 within 10 min, per interface | 30 min | warning | Cisco IOS / IOS XE, IOS XR, NX-OS, ASA, Arista EOS, Juniper Junos, Fortinet FortiOS, Palo Alto PAN-OS, HPE Aruba AOS-CX, AOS-Switch |
-| OSPF neighbor down (`syslog_ospf_neighbor`) | `OSPF-5-ADJCHG` / `OSPFv3-5-ADJCHG` / IOS XR `ROUTING-OSPF-5-ADJCHG` ... `to DOWN`, NX-OS `OSPF-5-NBRSTATE` ... `to DOWN` and `OSPF-5-ADJCHANGE` ... `went DOWN`, EOS `OSPF-4-OSPF_ADJACENCY_TEARDOWN`, Junos `RPD_OSPF_NBRDOWN`, FortiOS `FGT-0103020302` (OSPF neighbor status changed) `ADJCHANGE: neighbor <if:local-remote> Down`, PAN-OS `routed-OSPF-neighbor-down` (one alert per firewall: the message names no neighbor) | The same tags ... `to FULL` / `went FULL`, EOS `OSPF_ADJACENCY_ESTABLISHED`, Junos `RPD_OSPF_NBRUP`, FortiOS `... neighbor <if:local-remote> Up`, PAN-OS `routed-OSPF-neighbor-full` | Every match, per neighbor | Clear message only | critical | Cisco IOS / IOS XE, IOS XR, NX-OS, Arista EOS, Juniper Junos, Fortinet FortiOS, Palo Alto PAN-OS |
-| BGP neighbor down (`syslog_bgp_neighbor`) | `BGP-5-ADJCHANGE` / IOS XR `ROUTING-BGP-5-ADJCHANGE` / FortiOS `FGT-0103020300` (BGP neighbor status changed) `neighbor X Down`, `BGP-5-NBR_RESET`, EOS `BGP-5-ADJCHANGE` `old state Established ... new state` other than Established, Junos `RPD_BGP_NEIGHBOR_STATE_CHANGED` `from Established to` another state, PAN-OS `routed-BGP-peer-left-established` | `neighbor X Up`, EOS `new state Established`, Junos `to Established`, PAN-OS `routed-BGP-peer-enter-established` | Every match, per neighbor | Clear message only | critical | Cisco IOS / IOS XE, IOS XR, NX-OS, Arista EOS, Juniper Junos, Fortinet FortiOS, Palo Alto PAN-OS |
-| Power supply fault (`syslog_power_supply`) | IOS XE `IOSXE_PEM-3-PEMFAIL`, Catalyst 9000 `PLATFORM_FEP-1-FRU_PS_SIGNAL_FAULTY`, Catalyst 3750-X / 3560-X `PLATFORM_ENV-1-FRU_PS_SIGNAL_FAULTY`, NX-OS `PLATFORM-2-PS_FAIL`, EOS `PWRMGMT-3-PSU_STATUS_FAILED` and `PWRMGMT-4-INPUT_POWER_LOSS`, Junos `CHASSISD_SNMP_TRAP*` `Power Supply failed`, FortiOS `FGT-0100022105` (Power supply failed), PAN-OS `ps-failure` `Alarm on Power Supply #<n>`, AOS-CX `AOSCX-304` `PSU <name> faulted` | `IOSXE_PEM-6-PEMOK`, `PLATFORM_FEP-6-FRU_PS_SIGNAL_OK`, `PLATFORM-2-PS_OK`, EOS `PWRMGMT-3-PSU_STATUS_OK`, Junos `Power Supply OK`, FortiOS `FGT-0100022104` (Power supply restored); PAN-OS and AOS-CX by time only | Every match, per power supply (FortiOS and 3750-X: per device) | 24 h | critical | Cisco IOS XE (ASR 1000, ISR 4000, Catalyst 9000), Catalyst 3750-X / 3560-X, NX-OS, Arista EOS, Juniper Junos, Fortinet FortiOS, Palo Alto PAN-OS, HPE Aruba AOS-CX |
-| Fan fault (`syslog_fan`) | IOS XE `IOSXE_PEM-3-FANFAIL`, Catalyst 2960 / 3560 / 3750 `HARDWARE-2-FAN_ERROR`, Catalyst 3750-X / 3560-X `PLATFORM_ENV-1-FAN` and `PLATFORM_ENV-1-FRU_PS_FAN_FAILED`, ISR G2 `ENVMON-3-FAN_FAIL` (older ISRs `FAN_FAILED`), NX-OS `PLATFORM-2-FANMOD_FAN_FAIL`, EOS `ENVMON-3-FANFAILED`, Junos `CHASSISD_SNMP_TRAP*` `Fan/Blower failed`, PAN-OS `fan-failure` `Alarm on Fan Tray #<n>` | `IOSXE_PEM-6-FANOK`, ISR G2 `ENVMON-3-FAN_OK`, `PLATFORM-2-FANMOD_FAN_OK`, EOS `ENVMON-3-FANOK`, Junos `Fan/Blower OK`; the classic Catalyst and PAN-OS forms by time only | Every match, per fan | 24 h | warning | Cisco IOS XE (ASR 1000, ISR 4000), Catalyst 2960 / 3560 / 3750 (classic IOS), ISR G2, NX-OS, Arista EOS, Juniper Junos, Palo Alto PAN-OS |
+| OSPF neighbor down (`syslog_ospf_neighbor`) | `OSPF-5-ADJCHG` / `OSPFv3-5-ADJCHG` / IOS XR `ROUTING-OSPF-5-ADJCHG` ... `to DOWN`, NX-OS `OSPF-5-NBRSTATE` ... `to DOWN` and `OSPF-5-ADJCHANGE` ... `went DOWN`, EOS `OSPF-4-OSPF_ADJACENCY_TEARDOWN`, Junos `RPD_OSPF_NBRDOWN`, FortiOS `FGT-0103020302` (OSPF neighbor status changed) `ADJCHANGE: neighbor <if:local-remote> Down`, PAN-OS `routed-OSPF-neighbor-down` (one alert per firewall: the message names no neighbor), AOS-CX `AOSCX-2401` / `AOSCX-2404` `AdjChg: Nbr <router-id> on <interface>...: <state> -> Down`, AOS-Switch `AOSS-02703` `ADJCHG: Neighbor with Router ID <id> on <interface> moved to <state> state - adj lost` | The same tags ... `to FULL` / `went FULL`, EOS `OSPF_ADJACENCY_ESTABLISHED`, Junos `RPD_OSPF_NBRUP`, FortiOS `... neighbor <if:local-remote> Up`, PAN-OS `routed-OSPF-neighbor-full`, AOS-CX `... -> Full`, AOS-Switch `... - adj formed` | Every match, per neighbor | Clear message only | critical | Cisco IOS / IOS XE, IOS XR, NX-OS, Arista EOS, Juniper Junos, Fortinet FortiOS, Palo Alto PAN-OS, HPE Aruba AOS-CX, AOS-Switch |
+| BGP neighbor down (`syslog_bgp_neighbor`) | `BGP-5-ADJCHANGE` / IOS XR `ROUTING-BGP-5-ADJCHANGE` / FortiOS `FGT-0103020300` (BGP neighbor status changed) `neighbor X Down`, `BGP-5-NBR_RESET`, EOS `BGP-5-ADJCHANGE` `old state Established ... new state` other than Established, Junos `RPD_BGP_NEIGHBOR_STATE_CHANGED` `from Established to` another state, PAN-OS `routed-BGP-peer-left-established`, AOS-CX `AOSCX-2902` `<peer>: Peer down. ...`, AOS-Switch `AOSS-03073` `BGP: Peer down` (one alert per switch: the message names no peer) | `neighbor X Up`, EOS `new state Established`, Junos `to Established`, PAN-OS `routed-BGP-peer-enter-established`, AOS-CX `AOSCX-2901` `<peer>: Peer up. ...`, AOS-Switch `AOSS-03072` `BGP: Peer up` | Every match, per neighbor | Clear message only | critical | Cisco IOS / IOS XE, IOS XR, NX-OS, Arista EOS, Juniper Junos, Fortinet FortiOS, Palo Alto PAN-OS, HPE Aruba AOS-CX, AOS-Switch |
+| Power supply fault (`syslog_power_supply`) | IOS XE `IOSXE_PEM-3-PEMFAIL`, Catalyst 9000 `PLATFORM_FEP-1-FRU_PS_SIGNAL_FAULTY`, Catalyst 3750-X / 3560-X `PLATFORM_ENV-1-FRU_PS_SIGNAL_FAULTY`, NX-OS `PLATFORM-2-PS_FAIL`, EOS `PWRMGMT-3-PSU_STATUS_FAILED` and `PWRMGMT-4-INPUT_POWER_LOSS`, Junos `CHASSISD_SNMP_TRAP*` `Power Supply failed`, FortiOS `FGT-0100022105` (Power supply failed) and `FGT-0100022114` (Power supply failed warning), PAN-OS `ps-failure` `Alarm on Power Supply #<n>`, AOS-CX `AOSCX-304` `PSU <name> faulted`, AOS-Switch `AOSS-00071` `Power Supply failure: Supply: <Main or RPS>- ...` and `AOSS-02797` `Internal power supply <bay> is faulted` | `IOSXE_PEM-6-PEMOK`, `PLATFORM_FEP-6-FRU_PS_SIGNAL_OK`, `PLATFORM-2-PS_OK`, EOS `PWRMGMT-3-PSU_STATUS_OK`, Junos `Power Supply OK`, FortiOS `FGT-0100022104` (Power supply restored) and `FGT-0100022115` (Power supply restored notification), AOS-Switch `Power Supply OK: ...` and `Internal power supply <bay> is ok`; PAN-OS and AOS-CX by time only | Every match, per power supply (FortiOS and 3750-X: per device) | 24 h | critical | Cisco IOS XE (ASR 1000, ISR 4000, Catalyst 9000), Catalyst 3750-X / 3560-X, NX-OS, Arista EOS, Juniper Junos, Fortinet FortiOS, Palo Alto PAN-OS, HPE Aruba AOS-CX, AOS-Switch |
+| Fan fault (`syslog_fan`) | IOS XE `IOSXE_PEM-3-FANFAIL`, Catalyst 2960 / 3560 / 3750 `HARDWARE-2-FAN_ERROR`, Catalyst 3750-X / 3560-X `PLATFORM_ENV-1-FAN` and `PLATFORM_ENV-1-FRU_PS_FAN_FAILED`, ISR G2 `ENVMON-3-FAN_FAIL` (older ISRs `FAN_FAILED`), NX-OS `PLATFORM-2-FANMOD_FAN_FAIL`, EOS `ENVMON-3-FANFAILED`, Junos `CHASSISD_SNMP_TRAP*` `Fan/Blower failed`, PAN-OS `fan-failure` `Alarm on Fan Tray #<n>`, FortiOS `FGT-0100022108` (Fan anomaly), AOS-CX `AOSCX-214` `...: Fan <name> faulted, reason: ...`, AOS-Switch `AOSS-00070` `Fan failure: Fan: <n> ...` | `IOSXE_PEM-6-FANOK`, ISR G2 `ENVMON-3-FAN_OK`, `PLATFORM-2-FANMOD_FAN_OK`, EOS `ENVMON-3-FANOK`, Junos `Fan/Blower OK`, FortiOS `FGT-0100022151` (Fan normal), AOS-Switch `Fan OK: Fan: <n> ...`; the classic Catalyst, PAN-OS and AOS-CX forms by time only | Every match, per fan (FortiOS: per device) | 24 h | warning | Cisco IOS XE (ASR 1000, ISR 4000), Catalyst 2960 / 3560 / 3750 (classic IOS), ISR G2, NX-OS, Arista EOS, Juniper Junos, Fortinet FortiOS, Palo Alto PAN-OS, HPE Aruba AOS-CX, AOS-Switch |
 | Repeated login failures (`syslog_auth_failure`) | `SEC_LOGIN-4-LOGIN_FAILED`, IOS XR `SECURITY-LOGIN-4-AUTHEN_FAILED`, NX-OS `AUTHPRIV-3-SYSTEM_MSG` with `Authentication failed`, ASA `113005`, `113015`, `605004`, `611102`, Junos `SSHD_LOGIN_FAILED`, `LOGIN_FAILED`, program `sshd` `Failed password for ...` / `Failed keyboard-interactive/pam for ...` (Arista EOS and other OpenSSH hosts), OPNsense program `audit` `user ... could not authenticate for ...` (web GUI, and SSH through the firewall's authentication), FortiOS `FGT-0100032002` (Admin login failed), PAN-OS `auth-fail` (not the ones about the authentication server: `Time clock does not match ...`, `Wrong realm ...`, `Server certificate: ...`, `KDC Spoofing ...`), AOS-CX `AOSCX-5210` and `AOSCX-5216` (SSH login failed), AOS-Switch `AOSS-00419` (invalid user name / password) and `AOSS-03345` (SSH login failed) | Time only | 5 within 5 min, per device (from any source) | 30 min | warning | Cisco IOS / IOS XE, IOS XR, NX-OS, ASA, Arista EOS, Juniper Junos, OPNsense, Fortinet FortiOS, Palo Alto PAN-OS, HPE Aruba AOS-CX, AOS-Switch |
 
 A single interface down is not an alert: access ports go down all day. An
 interface an operator shut down (`LINK-5-CHANGED ... administratively
 down`, NX-OS `IF_DOWN_ADMIN_DOWN`, Junos `ifAdminStatus down`) is not
 counted (except on AOS-Switch, whose disabled ports also log `port ... is
-now off-line`). OSPF and BGP neighbor alerts are critical because a lost
+now off-line`; the event log reference gives no other message for them).
+OSPF and BGP neighbor alerts are critical because a lost
 adjacency changes where traffic goes; they stay open until the neighbor
 is back (or someone acknowledges the alert), since a time-out would hide
 a neighbor that is still down.
@@ -168,6 +169,12 @@ messages received in the last 24 hours (or up to 7 days):
   (nor one of its recorded interface addresses), with their message
   counts (top 20). Their messages are stored only; add the device to the
   inventory, or record the address it sends from, to have it acted on.
+- **Stored only (UDP)**: while **Act on UDP messages** is off (see
+  [Transports](#transports)), a message that arrived over UDP and meets a
+  rule or trigger is counted here and not as a match, because the receiver
+  stores it and does nothing more. The count uses the switch as it is set
+  now, not as it was when the message arrived. A UDP message no rule meets
+  is still listed under unmatched messages.
 
 The analysis reads the stored messages when you open it (nothing extra is
 stored), newest first, at most 50,000 of them: when the window holds more,
@@ -183,9 +190,11 @@ to 168, needs **monitoring**) returns `scanned`, `truncated`, `matched`,
 `related`, `known_tag`), `unknown_sources` (`source_ip`, `count`,
 `last_at`), `transports` (the scanned messages of inventory hosts per
 transport: `{"udp": n, "tcp": n, "tls": n}`), `udp_hosts` (how many
-inventory hosts sent at least one message over UDP in the window) and
+inventory hosts sent at least one message over UDP in the window),
 `udp_actions` (the **Act on UDP messages** switch, see
-[Transports](#transports)).
+[Transports](#transports)) and `udp_stored_only` (the UDP messages that
+meet a rule or trigger while that switch is off; in neither `matched` nor
+`unmatched`).
 
 ## Configuration change trigger
 
@@ -200,7 +209,8 @@ These messages start a backup and drift check of the host:
 | Juniper Junos | `UI_COMMIT_COMPLETED` |
 | Fortinet FortiOS | `FGT-0100044544` (Path configured), `FGT-0100044545` (Object configured), `FGT-0100044546` (Attribute configured), `FGT-0100044547` (Object attribute configured): FortiOS applies each change at once. `44548` (Action performed, an `execute` command) is no change |
 | Palo Alto PAN-OS | A CONFIG log of a `commit` whose result is `Succeeded`, or the SYSTEM log `Commit job succeeded` that ends the commit job (`PAN-SYSTEM-GENERAL`). Candidate edits (`set`, `edit`, `delete` ...) change nothing until the commit, and a `Submitted` or `Failed` commit is left out |
-| HPE Aruba AOS-CX, AOS-Switch | None yet: the event id of a configuration change was not confirmed against the vendor's reference, see [Known gaps](#known-gaps) |
+| HPE Aruba AOS-Switch | `AOSS-03125` `new Startup Config Seq Num = <n> by <UI>`: the startup configuration was saved (`write memory`). A change to the running configuration that is never saved logs nothing the reference lists, see [Known gaps](#known-gaps) |
+| HPE Aruba AOS-CX | None: the event log reference has no configuration change event, see [Known gaps](#known-gaps) |
 
 - **Debounce**: one configuration session logs several messages, so the
   run starts 60 seconds after the host's last configuration message, but
@@ -227,8 +237,8 @@ The configuration change trigger does not depend on monitoring being on.
 | Message | Re-poll after |
 |---|---|
 | An interface going down (every form in the Interface flapping row above, from the first one) | 5 s |
-| Reload: `SYS-5-RELOAD`, ASA `199001`, NX-OS `PLATFORM-2-PFM_SYSTEM_RESET`, Junos `UI_REBOOT_EVENT`, FortiOS `FGT-0100032138` (Device rebooted) and `FGT-0100032200` (Device shutdown), AOS-Switch `AOSS-00063` (System went down) | 30 s (the device logs it before it goes down) |
-| Restart: `SYS-5-RESTART`, `SYS-6-BOOTTIME`, ASA `199002`, Junos `SNMPD_TRAP_COLD_START`, FortiOS `FGT-0100032009` (FortiGate started), AOS-Switch `AOSS-00064` (System Booted) | 5 s |
+| Reload: `SYS-5-RELOAD`, ASA `199001`, NX-OS `PLATFORM-2-PFM_SYSTEM_RESET`, Junos `UI_REBOOT_EVENT`, FortiOS `FGT-0100032138` (Device rebooted) and `FGT-0100032200` (Device shutdown), AOS-Switch `AOSS-00063` (SYSTEM went down), AOS-CX `AOSCX-706` (Initiating system reboot) and `AOSCX-707` (Initiating chassis thermal reboot) | 30 s (the device logs it before it goes down) |
+| Restart: `SYS-5-RESTART`, `SYS-6-BOOTTIME`, ASA `199002`, Junos `SNMPD_TRAP_COLD_START`, FortiOS `FGT-0100032009` (FortiGate started), AOS-Switch `AOSS-00066` (System Booted) and `AOSS-00064` (the crash reason of a switch that went down), AOS-CX `AOSCX-1206` (Module rebooted) and `AOSCX-1236` (Module unexpected reboot) | 5 s |
 
 A re-poll is the full monitoring poll of that one host, so its state,
 availability, charts and poll alerts catch up. A host is re-polled at most
@@ -306,6 +316,7 @@ devices can move one by one. Every stored message records how it arrived
 | **TCP** (RFC 6587) | 1514 | A forged source address: a TCP connection needs the reply to the address it claims. A host on the path between the device and Plexus can still read and change the messages |
 | **TLS** (RFC 5425) | 6514 | A forged source address, and reading or changing the messages on the way: the connection is encrypted and the device checks Plexus's server certificate |
 | **TLS with client certificates** (mutual TLS) | 6514 | All of the above, and a sender that has no certificate from your device CA: with **Require client certificates** on, only a device holding a certificate the stored client CA signed can connect |
+| **TLS with the host named in the certificate** | 6514 | All of the above, and one device's certificate used to send as another device: with **Certificate must name the host** on, the certificate must name the inventory host at the connection's source address |
 
 TCP and UDP can use the same port number. The TCP and TLS listeners
 cannot share a port.
@@ -322,6 +333,19 @@ cannot share a port.
   the device belongs to you, and the connection's source address (which
   TCP does not let anyone forge) still decides which inventory host a
   message is from.
+- **Certificate names the host**: with **Require client certificates** on,
+  **Certificate must name the host** also checks each connection, after
+  the handshake and before any message is read. The certificate is
+  accepted when a subject alternative name IP address equals the source
+  address (an IPv4-mapped IPv6 address counts as IPv4), or when a SAN DNS
+  name or the subject common name matches the hostname of the inventory
+  host at that address: equal ignoring case, or one is a name without a
+  dot equal to the first label of the other (`core-sw1` matches
+  `core-sw1.example.com`). Wildcard names never match. A source that is no
+  inventory host (admitted by an extra network or the `any` policy) needs
+  the SAN IP address. A refused connection is closed and counted
+  (**Certificate not for host**); without the check, the certificate of
+  one device could send from another device's address as that device.
 - **Limits**: at most 1024 open connections, 8 per source address; a
   connection over a limit is closed and counted (**Refused**). The TLS
   handshake must finish within 10 seconds. There is no idle timeout,
@@ -330,7 +354,9 @@ cannot share a port.
 - **Status**: each listener shows whether it runs and on which port, the
   messages received, errors (unreadable messages, framing errors and
   failed TLS handshakes), the last message, the connections open now and
-  the connections refused, since it last started. A TLS listener that is
+  the connections refused (and, for TLS, those refused because the
+  certificate did not name the host), since it last started. A TLS
+  listener that is
   on but cannot start (no certificate) shows why.
 
 ### Act on UDP messages
@@ -370,7 +396,11 @@ Syslog & Traps:
 - **Client CA**: for mutual TLS, the PEM certificate(s) of the CA that
   signs your devices' client certificates. **Require client certificates**
   can be turned on only while a client CA is stored, and the CA cannot be
-  removed while it is on.
+  removed while it is on. **Certificate must name the host** can be turned
+  on only while client certificates are required; issue each device a
+  certificate with its address as a SAN IP address or its inventory
+  hostname as a SAN DNS name or common name. Turning it on or off restarts
+  the TLS listener, so open connections reconnect and are checked.
 
 The private key is encrypted at rest and never shown again, in the
 settings, the API or the audit log. Saving a new certificate or client CA
@@ -476,34 +506,66 @@ with `logging source-interface` on Cisco IOS.
   samples only. **Received messages** under Monitoring > Configure >
   Syslog Rules shows whether your devices' messages match them (a **Tag
   of** row means a known tag whose text did not match).
-- **Fortinet FortiOS**: no fan rule (no fan failure log id was confirmed),
-  and only the "Link monitor: Interface ... was turned down" form of
-  `FGT-0100020099` counts as a link down. The OSPF clear form (`neighbor
-  ... Up`) is assumed from the BGP form and not confirmed. A power supply
-  alert is one per firewall, since the restore message names no supply in
-  a known form.
+- **Fortinet FortiOS**: the FortiOS Log Message Reference lists each log
+  id with its `logdesc` and fields but not the text of its `msg`, so the
+  forms that test the `msg` are not confirmed by it: the OSPF Down / Up
+  wording of `FGT-0103020302` (taken from the BGP form) and the "Link
+  monitor: Interface ... was turned down" form of `FGT-0100020099`, the
+  only form of that id that counts as a link down. Log id `20090`
+  (Interface link status changed, fields `intf` and `status`) is not
+  built in, because the reference gives no values for `status`. Power
+  supply and fan alerts are one per firewall, since their messages name
+  the unit in no documented form. Power supply ids differ by release:
+  `22104` (Power supply restored) is listed up to 7.4 and not in 7.6;
+  `22114` / `22115` mean "Power supply failed warning" / "Power supply
+  restored notification" from 7.2, but "power redundancy degrade" /
+  "power redundancy failure" in 6.4. A `22115` message whose text says
+  fail, redundancy or degrade therefore does not resolve the alert; the
+  reference gives no text for either release, so a 6.4 message worded
+  otherwise would.
 - **Palo Alto PAN-OS**: only the default (CSV) log format is read. OSPF
-  and BGP events are those of the legacy routing engine; the Advanced
-  Routing Engine's event ids are not built in. A failed power supply or
-  fan tray has no recovery event in the reference, so those alerts resolve
-  after 24 hours. No reload or restart message is built in. `auth-fail`
-  is logged for every authentication the firewall rejects, VPN and
-  portal users as well as administrators, so on a busy VPN gateway
-  raise the threshold of **Repeated login failures** or turn the rule
-  off. The `Commit job succeeded` form is taken from a log sample of an
-  old release, not from the reference.
-- **HPE Aruba AOS-CX**: no configuration change, fan, BGP, OSPF, reload or
-  restart message is built in, and the PSU fault (`AOSCX-304`) has no
-  clear message, because their event ids were not confirmed against the
-  AOS-CX Event Log Message Reference. Write a custom **Tag** rule
-  (`AOSCX-<event id>`) for the ones your switches log.
-- **HPE Aruba AOS-Switch**: no configuration change (`logging notify
-  running-config-change`), power supply, fan or routing message is built
-  in, for the same reason. A port disabled in the configuration also logs
-  `port ... is now off-line` and counts as a link down.
+  and BGP events are those of the legacy routing engine; the PAN-OS
+  system log reference lists no event ids of the Advanced Routing Engine,
+  so its neighbor changes are not built in. A failed power supply or fan
+  tray has no recovery event in the reference, so those alerts resolve
+  after 24 hours. The reference lists no reload or restart event, so none
+  is built in. `auth-fail` is logged for every authentication the firewall
+  rejects, VPN and portal users as well as administrators, with the same
+  event id and subtype; its description names the auth profile, vsys and
+  admin role but nothing the reference defines as telling an
+  administrator login apart. On a busy VPN gateway raise the threshold of
+  **Repeated login failures** or turn the rule off. The `Commit job
+  succeeded` form is taken from a log sample of an old release; the
+  current reference does not list it.
+- **HPE Aruba AOS-CX**: the AOS-CX Event Log Message Reference (10.17) has
+  no configuration change event (event `6801` `Copying configs from: ...
+  to: ...` reports a copy, such as `write memory`, and is not built in).
+  The PSU fault (`AOSCX-304`) and fan fault (`AOSCX-214`) have no
+  documented recovery message (`301` `PSU <name> changed state to
+  <state>` and `216` `Status of fan <name> has changed from <old> to
+  <new>` give no state values), so those alerts resolve after 24 hours.
+  The OSPF forms match the new state `Down` / `Full` (RFC 2328 state
+  names, ignoring case); the reference shows the template without state
+  values. Write a custom **Tag** rule (`AOSCX-<event id>`) for other
+  events your switches log.
+- **HPE Aruba AOS-Switch**: the forms follow the Event Log Message
+  Reference for ArubaOS-Switch 16.09 (the newest release found). It lists
+  no running configuration change event (`logging notify
+  running-config-change` is not in it), so only a saved startup
+  configuration (`AOSS-03125`) starts a backup. `BGP: Peer down` / `Peer
+  up` name no peer, so one alert per switch: a peer coming up resolves it
+  while another may still be down. OSPF and BGP events of other ids
+  (`2702` state moves, `3077` Peer timeout) are not built in. A port
+  disabled in the configuration also logs `port ... is now off-line`
+  (event `77`; the reference gives no separate message) and counts as a
+  link down.
 - **Classic Cisco hardware**: the classic Catalyst fan and power supply
   forms have no recovery message (their alerts resolve after 24 hours),
-  and ISR G2 power supply messages are not built in.
+  and ISR G2 power supply messages are not built in: no Cisco reference
+  that names their `ENVMON` power supply mnemonics was found (the ISR G2
+  troubleshooting guide and the Cisco IOS system message guides could not
+  be retrieved). Write a custom **Tag** rule for the power supply message
+  your routers log.
 - **Netgear and APC** send syslog in their own formats; no built-in rule
   or trigger matches them. Custom rules work on them.
 - API-polled platforms (Cato, AWS, Azure, GCP, Meraki, Cisco FMC,
@@ -530,7 +592,9 @@ with `logging source-interface` on Cisco IOS.
   what a forged message can start (one backup per host every 5 minutes,
   one re-poll per host a minute, 6 OPNsense re-collections per source an
   hour). Plain TCP stops forged source addresses but not a host on the
-  path between the device and Plexus; TLS stops that too, and mutual TLS
-  also refuses senders without a device certificate. Restrict the ports
+  path between the device and Plexus; TLS stops that too, mutual TLS
+  also refuses senders without a device certificate, and **Certificate
+  must name the host** refuses a device certificate used from another
+  inventory host's address. Restrict the ports
   to your device networks in the firewall
   ([deploy/FIREWALL.md](../deploy/FIREWALL.md)).
