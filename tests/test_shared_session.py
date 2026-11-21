@@ -409,6 +409,45 @@ def test_run_show_command_uses_caller_supplied_command(fake_netmiko):
     assert conn.disconnect_called == 1
 
 
+def test_run_show_commands_reads_every_command_in_one_session(fake_netmiko, monkeypatch):
+    from netcontrol.routes.shared import _run_show_commands
+
+    host = {"ip_address": "192.0.2.1", "device_type": "cisco_xe"}
+    creds = {"username": "u", "password": "p", "secret": ""}
+    real_send = _FakeNetConnect.send_command
+
+    def send(self, cmd, *args, **kwargs):
+        if cmd == "show broken":
+            raise TimeoutError("no prompt")
+        return real_send(self, cmd, *args, **kwargs)
+
+    monkeypatch.setattr(_FakeNetConnect, "send_command", send)
+
+    outputs = _run_show_commands(host, creds, ("show one", "show broken", "show two"), read_timeout=7)
+
+    conn = fake_netmiko["conn"]
+    # One bad command does not lose the rest, and the session is closed once.
+    assert outputs == {
+        "show one": "<output of show one>",
+        "show broken": "(command failed: TimeoutError)",
+        "show two": "<output of show two>",
+    }
+    assert conn.command_kwargs == [{"read_timeout": 7}, {"read_timeout": 7}]
+    assert conn.disconnect_called == 1
+
+
+def test_run_show_commands_passes_session_options(fake_netmiko, monkeypatch):
+    from netcontrol.routes.shared import _run_show_commands
+
+    _no_enable_mode_netmiko(monkeypatch, fake_netmiko)
+    host = {"ip_address": "192.0.2.1", "device_type": "cisco_xe"}
+    creds = {"username": "u", "password": "p", "secret": "s"}
+
+    outputs = _run_show_commands(host, creds, ("upsabout",), autodetect=False, enable_optional=True)
+
+    assert outputs == {"upsabout": "<output of upsabout>"}
+
+
 # ── _push_config_to_device ─────────────────────────────────────────────────
 
 

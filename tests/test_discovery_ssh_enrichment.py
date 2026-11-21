@@ -286,23 +286,37 @@ async def test_snmp_identified_platform_without_cli_is_not_logged_into(monkeypat
 
 
 class _FakeNmcShow(_FakeShow):
-    """An APC Network Management Card: no `show version`, answers `upsabout`.
-    Output shapes as confirmed on an NMC3 in a Smart-UPS SRT; values invented."""
+    """An APC Network Management Card: no `show version`; `upsabout` and
+    `about` are read in one session (``_run_show_commands``). Output shapes
+    as confirmed on an NMC3 in a Smart-UPS SRT; values invented."""
 
-    def __init__(self, upsabout: str) -> None:
+    def __init__(self, upsabout: str, about: str = "") -> None:
         super().__init__("")
-        self.upsabout = upsabout
+        self.outputs = {"upsabout": upsabout, "about": about or ABOUT_CARD}
+        self.sessions: list[tuple[dict, dict, tuple[str, ...], dict]] = []
 
     async def __call__(self, host, credentials, command, **kwargs):
         self.calls.append((host, credentials, command, kwargs))
-        if command == "upsabout":
-            return self.upsabout
         return "E101: Command Not Found\n"
+
+    def run_commands(self, host, credentials, commands, **kwargs) -> dict[str, str]:
+        self.sessions.append((host, credentials, tuple(commands), kwargs))
+        return {command: self.outputs.get(command, "E101: Command Not Found\n") for command in commands}
+
+    def install(self, monkeypatch) -> None:
+        monkeypatch.setattr(inventory, "_run_show_command", self)
+        monkeypatch.setattr(inventory, "_run_show_commands", self.run_commands)
 
 
 UPSABOUT_SRT = (
     "E000: Success\nModel: Smart-UPS SRT 6000\nSerial Number: ZA0000000001\n"
     "Firmware Revision: UPS 11.7 (ID1022)\nManufacture Date: \nApparent Power Rating: 6000 VA\n"
+)
+ABOUT_CARD = (
+    "E000: Success\nHardware Factory\n---------------\nModel Number: AP9641\nSerial Number: ZA0000000002\n\n"
+    "Application Module\n---------------\nName: su\nVersion: v2.5.0.6\n\n"
+    "APC OS(AOS)\n---------------\nName: aos\nVersion: v2.5.0.8\n\n"
+    "APC Boot Monitor\n---------------\nName: bootmon\nVersion: v1.4.2\n"
 )
 
 
@@ -311,18 +325,24 @@ async def test_unknown_ssh_device_that_is_an_apc_card_is_identified(monkeypatch)
     # No SNMP profile yet: the platform is unknown, so a Cisco session runs
     # `show version`, which the card answers with an NMC status code.
     show = _FakeNmcShow(UPSABOUT_SRT)
-    monkeypatch.setattr(inventory, "_run_show_command", show)
+    show.install(monkeypatch)
     host = _ssh_probe_hit("192.0.2.30")
     host["device_type"] = "unknown"
     host["discovery"].update(banner="SSH-2.0-example", vendor="unknown", os="unknown")
 
     await inventory._enrich_with_show_version(host, SERVICE)
 
-    assert [call[2] for call in show.calls] == ["show version", "upsabout"]
+    assert [call[2] for call in show.calls] == ["show version"]
+    # The UPS and the card are read in one more login, not one per command.
+    assert [session[2] for session in show.sessions] == [("upsabout", "about")]
     assert all(call[3]["enable_optional"] is True for call in show.calls)
+    assert show.sessions[0][3]["enable_optional"] is True and show.sessions[0][3]["autodetect"] is False
     assert host["device_type"] == "apc_ups"
     assert host["model"] == "Smart-UPS SRT 6000"
     assert host["serial_number"] == "ZA0000000001"
+    # The host's version is the card's firmware (AOS), as SNMP discovery
+    # takes it from the sysDescr: without it Inventory showed no software.
+    assert host["software_version"] == "2.5.0.8"
     assert host["device_category"] == "ups"
     assert host["discovery"]["device_type_source"] == "ssh"
     assert host["discovery"]["vendor"] == "apc"
@@ -339,7 +359,7 @@ async def test_unknown_ssh_device_that_is_an_apc_card_is_identified(monkeypatch)
 )
 async def test_apc_card_without_a_ups_is_not_taken_for_one(monkeypatch, upsabout):
     show = _FakeNmcShow(upsabout)
-    monkeypatch.setattr(inventory, "_run_show_command", show)
+    show.install(monkeypatch)
     host = _ssh_probe_hit("192.0.2.31")
     host["device_type"] = "unknown"
 
@@ -347,6 +367,30 @@ async def test_apc_card_without_a_ups_is_not_taken_for_one(monkeypatch, upsabout
 
     assert host["device_type"] == "unknown"
     assert host["discovery"]["ssh"]["ok"] is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("about", "version"),
+    [
+        # An embedded NMC3 as confirmed: no AOS section. Its one firmware
+        # image is the application module's version.
+        ("Application Module\n---------------\nName: su\nVersion: v2.0.0.5\n", "2.0.0.5"),
+        ("(command failed: ReadTimeout)", None),  # `about` not answered: the UPS is still added
+        ("E101: Command Not Found\n", None),
+    ],
+)
+async def test_apc_card_version_falls_back_and_never_blocks_the_ups(monkeypatch, about, version):
+    show = _FakeNmcShow(UPSABOUT_SRT, about)
+    show.install(monkeypatch)
+    host = _ssh_probe_hit("192.0.2.32")
+    host["device_type"] = "unknown"
+
+    await inventory._enrich_with_show_version(host, SERVICE)
+
+    assert host["device_type"] == "apc_ups"
+    assert host["serial_number"] == "ZA0000000001"
+    assert host.get("software_version") == version
 
 
 @pytest.mark.asyncio

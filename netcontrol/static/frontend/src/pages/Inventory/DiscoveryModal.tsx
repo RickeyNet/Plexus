@@ -1,3 +1,4 @@
+import { useQueryClient } from '@tanstack/react-query';
 import { FormEvent, useEffect, useId, useRef, useState } from 'react';
 
 import { useAuthStatus } from '@/api/auth';
@@ -69,6 +70,7 @@ export function DiscoveryModal({ mode, group, groups, onClose }: Props) {
   const isSync = mode === 'sync';
   const isGlobal = mode === 'global';
   const { confirm } = useDialogs();
+  const queryClient = useQueryClient();
   const onboard = useOnboardDiscoveredHosts();
   const testSnmp = useTestGroupSnmpProfile();
   const isAdmin = useAuthStatus().data?.role === 'admin';
@@ -224,6 +226,7 @@ export function DiscoveryModal({ mode, group, groups, onClose }: Props) {
       try {
         let finalSync: SyncResult | null = null;
         await streamSyncInventoryGroup(
+          queryClient,
           targetGroupId,
           parsedCidrs,
           buildOpts(),

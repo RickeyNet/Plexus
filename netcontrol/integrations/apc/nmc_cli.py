@@ -166,6 +166,13 @@ def parse_upsabout(output: str | None) -> UpsAbout:
 
 _NMC2_MODELS = re.compile(r"^AP963\d", re.IGNORECASE)
 _NMC3_MODELS = re.compile(r"^AP964\d", re.IGNORECASE)
+# The card's operating system section: named ``aos``, titled "APC OS(AOS)".
+_AOS_NAME = "aos"
+_AOS_TITLE_RE = re.compile(r"\baos\b|\bapc os\b", re.IGNORECASE)
+
+
+def _version_number(text: str) -> str:
+    return text.strip().lstrip("vV")
 
 
 @dataclass(frozen=True)
@@ -174,6 +181,15 @@ class NmcAbout:
     app_name: str
     app_version: str
     model_number: str
+    aos_version: str = ""  # the card's operating system (AOS) release
+
+    @property
+    def firmware(self) -> str:
+        """The card's firmware, the version of an ``apc_ups`` host (the
+        ``PF`` field of its sysDescr over SNMP): the AOS release, else the
+        application module's when the output has no AOS section (an NMC3
+        runs one image, so the two are the same there)."""
+        return self.aos_version or self.app_version
 
 
 def parse_about(output: str | None) -> NmcAbout:
@@ -181,11 +197,14 @@ def parse_about(output: str | None) -> NmcAbout:
     model_number = ""
     app_name = ""
     app_version = ""
-    for _title, values in sections:
+    aos_version = ""
+    for title, values in sections:
         model_number = model_number or _first(values, "model number", "model")
         name = values.get("name", "").strip().lower()
         if name in (NMC2_APP, NMC3_APP) and not app_name:
             app_name, app_version = name, values.get("version", "")
+        elif (name == _AOS_NAME or (not name and _AOS_TITLE_RE.search(title))) and not aos_version:
+            aos_version = _version_number(values.get("version", ""))
     if not app_name:
         for title, values in sections:
             if "application" in title.lower():
@@ -205,8 +224,9 @@ def parse_about(output: str | None) -> NmcAbout:
     return NmcAbout(
         generation=generation,
         app_name=app_name,
-        app_version=app_version.strip().lstrip("vV"),
+        app_version=_version_number(app_version),
         model_number=model_number,
+        aos_version=aos_version,
     )
 
 
