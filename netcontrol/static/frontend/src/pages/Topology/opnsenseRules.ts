@@ -3,6 +3,7 @@ import type {
   OpnsenseAliasTables,
   OpnsenseAnalyzedRule,
   OpnsenseRuleEndpoint,
+  OpnsenseRuleFinding,
   OpnsenseRuleFlag,
 } from '@/api/opnsenseRules';
 import type { Tone } from '@/lib/severity';
@@ -13,6 +14,7 @@ export const FLAG_LABELS: Record<OpnsenseRuleFlag, string> = {
   disabled: 'Disabled',
   missing_alias: 'Missing alias',
   unused: 'Unused',
+  unused_90d: 'Unused long-term',
 };
 
 export const FLAG_TONES: Record<OpnsenseRuleFlag, Tone> = {
@@ -21,7 +23,21 @@ export const FLAG_TONES: Record<OpnsenseRuleFlag, Tone> = {
   disabled: 'neutral',
   missing_alias: 'danger',
   unused: 'info',
+  unused_90d: 'warning',
 };
+
+function daysText(days: number): string {
+  return `${days.toLocaleString()} ${days === 1 ? 'day' : 'days'}`;
+}
+
+/**
+ * The name of a flag on the summary chips and filters: the long-term unused
+ * flag names the server's threshold (`Unused 90 days`).
+ */
+export function flagName(flag: OpnsenseRuleFlag, unusedDays: number | undefined): string {
+  if (flag === 'unused_90d' && unusedDays) return `Unused ${daysText(unusedDays)}`;
+  return FLAG_LABELS[flag];
+}
 
 /** Whether a host's device type is an OPNsense firewall. */
 export function isOpnsenseDevice(deviceType: string | null | undefined): boolean {
@@ -42,7 +58,32 @@ export function flagLabel(rule: OpnsenseAnalyzedRule, flag: OpnsenseRuleFlag): s
   if (flag === 'missing_alias' && rule.missing_aliases.length) {
     return `Missing alias: ${rule.missing_aliases.join(', ')}`;
   }
+  if (flag === 'unused_90d' && rule.history) {
+    return `No hit in ${daysText(rule.history.idle_days)}`;
+  }
   return FLAG_LABELS[flag];
+}
+
+/**
+ * A rule's counter history as short lines: when it last matched (or that it
+ * never did while tracked) and how long it has been tracked, with how many
+ * days are left before the long-term unused check can flag it. [] without
+ * history.
+ */
+export function historyLines(rule: OpnsenseAnalyzedRule, unusedDays: number | undefined): string[] {
+  const history = rule.history;
+  if (!history) return [];
+  const lines = [
+    history.last_hit_at
+      ? `last hit ${history.idle_days ? `${daysText(history.idle_days)} ago` : 'today'}`
+      : `no hit since tracking began`,
+  ];
+  const short = unusedDays != null && history.tracked_days < unusedDays;
+  lines.push(
+    `tracked for ${daysText(history.tracked_days)}` +
+      (short ? ` (${daysText(unusedDays - history.tracked_days)} before the ${unusedDays}-day check)` : ''),
+  );
+  return lines;
 }
 
 /** A rule side as one line: `! lan net port 443`. */
@@ -117,6 +158,24 @@ export function countersText(rule: OpnsenseAnalyzedRule): string {
   if (stats.packets != null) parts.push(`${stats.packets.toLocaleString()} pkts`);
   if (stats.states != null) parts.push(`${stats.states.toLocaleString()} states`);
   return parts.join(' · ');
+}
+
+/** A side of a rule finding as one line: `lan net port 443`. */
+function findingSide(text: string, port: string): string {
+  return port && port !== 'any' ? `${text || 'any'} port ${port}` : text || 'any';
+}
+
+/**
+ * A rule a configuration change made any-to-any or shadowed, as one line of
+ * the backup comparison (what the rule change alert says).
+ */
+export function findingText(finding: OpnsenseRuleFinding): string {
+  const rule =
+    `#${finding.number} ${finding.action} ${findingSide(finding.source, finding.source_port)} → ` +
+    `${findingSide(finding.destination, finding.destination_port)} ${finding.description}`.trimEnd();
+  if (finding.kind === 'any_any') return `any to any: ${rule}`;
+  const how = finding.shadow === 'conflicting' ? 'conflicting' : 'redundant';
+  return `shadowed by #${finding.shadowed_by ?? '?'} (${how}): ${rule}`;
 }
 
 /** A changed value of a diff as text. */

@@ -15,6 +15,11 @@ contacted here.
     ``opnsense_collection.attach_rule_stats``); the live pass / block
     evidence of each rule from the firewall log the host sends to the
     syslog receiver (``log_evidence``, ``opnsense_filterlog.rules_evidence``).
+    The counter history the collections stored for the host
+    (``opnsense_rule_counters``) gives each rule its ``history`` (first
+    seen, last hit, tracked and idle days, totals across counter resets)
+    and the ``unused_90d`` flag; ``unused_days`` is that threshold and
+    ``history_available`` whether the history was read.
     ``alias_tables``: the pf tables of aliases the collection read for the
     path trace (``read_at``, and per alias ``entry_count``, ``total``,
     ``truncated``; never the entries), so the view can say which aliases
@@ -26,6 +31,9 @@ contacted here.
     the rules, aliases and NAT that changed between two backups of the host
     (``rules.diff``); without the two ids, between the newest backup and
     the one before it (``available`` false when there are not two).
+    ``findings``: the rules the change made any-to-any or shadowed and the
+    ones it no longer flags (``rules.rule_change_findings``, what the rule
+    change alerts raise and resolve on).
 
 Registered with Config Backups access (the rules are read from its
 backups) and checks the caller's inventory group scope on the host. Only
@@ -40,7 +48,7 @@ from typing import Any
 import routes.database as db
 from fastapi import APIRouter, HTTPException, Query, Request
 
-from netcontrol.integrations.opnsense.rules import analyze, diff
+from netcontrol.integrations.opnsense.rules import analyze, diff, rule_change_findings
 from netcontrol.integrations.pathtrace.opnsense_config import OpnsenseConfig, parse_document
 from netcontrol.object_scope import require_host, scoped
 from netcontrol.routes.opnsense_filterlog import rules_evidence
@@ -140,8 +148,13 @@ async def get_host_rules(host_id: int, request: Request) -> dict[str, Any]:
     except Exception as exc:  # noqa: BLE001 - the rules are shown without counters
         LOGGER.warning("opnsense: rule counters of host %s not read: %s", host_id, type(exc).__name__)
         stats = None
+    try:
+        history = await db.get_opnsense_rule_counters(host_id)
+    except Exception as exc:  # noqa: BLE001 - the rules are shown without the counter history
+        LOGGER.warning("opnsense: rule counter history of host %s not read: %s", host_id, type(exc).__name__)
+        history = None
     answer.update(available=True, stats_collected_at=stats["collected_at"] if stats else None)
-    view = {**answer, **analyze(config, stats["rules"] if stats else None)}
+    view = {**answer, **analyze(config, stats["rules"] if stats else None, history=history)}
     try:
         view["alias_tables"] = await alias_tables_for_host(host_id)
     except Exception as exc:  # noqa: BLE001 - the rules are shown without the table sizes
@@ -172,11 +185,13 @@ async def get_host_rules_diff(
         from_backup = from_backup or int(next(b["id"] for b in recent if int(b["id"]) != to_backup))
     before = await _backup_of(host_id, from_backup)
     after = await _backup_of(host_id, to_backup)
+    old, new = _parse(before), _parse(after)
     return {
         "host_id": host_id,
         "available": True,
         "message": "",
         "from_backup": _backup_meta(before),
         "to_backup": _backup_meta(after),
-        **diff(_parse(before), _parse(after)),
+        **diff(old, new),
+        "findings": rule_change_findings(old, new),
     }

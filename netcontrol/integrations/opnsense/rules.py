@@ -22,12 +22,23 @@ resolved, and flags each one:
   collection) show the enabled rule matched no packet since they were last
   reset. Without counters for a rule the flag is not set. The counters are
   keyed by the rule's pf label (``FilterRule.label``: the uuid of an MVC
-  rule, the hash of a legacy one), and by its uuid as a fallback.
+  rule, the hash of a legacy one), and by its uuid as a fallback;
+- ``unused_90d``: the stored counter history (``history``: the
+  ``opnsense_rule_counters`` rows of the host by label, looked up as the
+  counters are) shows the enabled rule was tracked for at least
+  ``UNUSED_DAYS`` and its packet counter did not grow in the last
+  ``UNUSED_DAYS`` of that tracking, across counter resets. Both spans end
+  at the last read (or ``now`` when that is earlier), so a pause in the
+  collections never counts as idle time. Each rule's ``history``
+  (``rule_history``) says how long it was tracked, when it last matched
+  and what it counted; ``None`` without a row.
 
 ``diff`` compares two configurations of the same firewall: rules matched
 by their uuid (a legacy rule without one by what it matches), aliases by
 name, port forwards, outbound and 1:1 NAT rules by uuid or what they match,
-and the outbound NAT mode.
+and the outbound NAT mode. ``rule_change_findings`` says which rules of
+two configurations became any-to-any or shadowed (and which no longer
+are), for the rule change alerts.
 
 ``parse_rule_stats`` reads the answer of ``firewall/filter_util/rule_stats``.
 
@@ -38,6 +49,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import asdict
+from datetime import UTC, datetime
 from typing import Any
 
 from netcontrol.integrations.meraki.forwarding import ANY
@@ -49,10 +61,23 @@ from netcontrol.integrations.pathtrace.opnsense_config import (
     OpnsenseConfig,
     rule_bindings,
 )
+from netcontrol.integrations.traffic import parse_time
 
-__all__ = ["FLAGS", "analyze", "diff", "parse_rule_stats", "rule_view"]
+__all__ = [
+    "FINDING_KINDS",
+    "FLAGS",
+    "UNUSED_DAYS",
+    "analyze",
+    "diff",
+    "parse_rule_stats",
+    "rule_change_findings",
+    "rule_history",
+    "rule_view",
+]
 
-FLAGS = ("any_any", "shadowed", "disabled", "missing_alias", "unused")
+FLAGS = ("any_any", "shadowed", "disabled", "missing_alias", "unused", "unused_90d")
+# Days of counter history with no packet before an enabled rule is ``unused_90d``.
+UNUSED_DAYS = 90
 _USERINFO = re.compile(r"(\w+://)[^/@\s]+@")
 # The counters kept of a rule's statistics.
 _COUNTERS = ("evaluations", "packets", "bytes", "states", "pf_rules")
@@ -238,19 +263,63 @@ def _any_any(rule: FilterRule) -> bool:
     )
 
 
-def _counters_of(rule: FilterRule, stats: dict[str, dict[str, int]]) -> dict[str, int] | None:
-    """A rule's counters: by its pf label, else by its uuid."""
+def _counters_of(rule: FilterRule, stats: dict[str, Any]) -> Any:
+    """A rule's counters (or counter history): by its pf label, else by its uuid."""
     for key in (rule.label, rule.uuid):
         if key and key in stats:
             return stats[key]
     return None
 
 
-def analyze(config: OpnsenseConfig, stats: dict[str, dict[str, int]] | None = None) -> dict[str, Any]:
+def rule_history(row: dict[str, Any] | None, now: datetime) -> dict[str, Any] | None:
+    """A rule's counter history as the rules view shows it, from its stored
+    row (``routes.db.opnsense_rule_counters``): when it was first and last
+    read, when its packet counter last grew (``None`` when never),
+    ``tracked_days`` (first read to last read), ``idle_days`` (last hit, else
+    first read, to last read) and the packets and bytes counted, across
+    resets. The spans end at ``now`` when the last read is later."""
+    if not row:
+        return None
+    first = parse_time(row.get("first_seen_at"))
+    if first is None:
+        return None
+    last_seen = parse_time(row.get("last_seen_at")) or first
+    last_hit = parse_time(row.get("last_hit_at"))
+    until = max(min(now, last_seen), first)
+    return {
+        "first_seen_at": row.get("first_seen_at"),
+        "last_seen_at": row.get("last_seen_at") or None,
+        "last_hit_at": row.get("last_hit_at") or None,
+        "tracked_days": (until - first).days,
+        "idle_days": max((until - (last_hit or first)).days, 0),
+        "total_packets": int(row.get("total_packets") or 0),
+        "total_bytes": int(row.get("total_bytes") or 0),
+    }
+
+
+def _unused_for_days(rule: FilterRule, history: dict[str, Any] | None) -> bool:
+    return (
+        history is not None
+        and not rule.disabled
+        and history["tracked_days"] >= UNUSED_DAYS
+        and history["idle_days"] >= UNUSED_DAYS
+    )
+
+
+def analyze(
+    config: OpnsenseConfig,
+    stats: dict[str, dict[str, int]] | None = None,
+    *,
+    history: dict[str, dict[str, Any]] | None = None,
+    now: datetime | None = None,
+) -> dict[str, Any]:
     """The rules view of a configuration: interfaces, rules in evaluation
-    order with their flags and counters, aliases, NAT and a summary."""
+    order with their flags, counters and counter history, aliases, NAT and
+    a summary. ``history``: the stored counter rows of the host by label
+    (``None`` when not read); ``now`` defaults to the current time."""
     rules: list[dict[str, Any]] = []
     counted = stats is not None
+    moment = now or datetime.now(UTC)
     for rule in config.rules:
         view = rule_view(rule, config)
         flags: list[str] = []
@@ -273,6 +342,9 @@ def analyze(config: OpnsenseConfig, stats: dict[str, dict[str, int]] | None = No
         view["stats"] = counters
         if counters is not None and not rule.disabled and counters.get("packets", 1) == 0:
             flags.append("unused")
+        view["history"] = rule_history(_counters_of(rule, history or {}), moment)
+        if _unused_for_days(rule, view["history"]):
+            flags.append("unused_90d")
         view["flags"] = flags
         rules.append(view)
     summary = {flag: sum(1 for r in rules if flag in r["flags"]) for flag in FLAGS}
@@ -297,6 +369,8 @@ def analyze(config: OpnsenseConfig, stats: dict[str, dict[str, int]] | None = No
         "nat": _nat_view(config),
         "notes": list(config.notes),
         "stats_available": counted,
+        "history_available": history is not None,
+        "unused_days": UNUSED_DAYS,
         "summary": summary,
     }
 
@@ -466,3 +540,67 @@ def diff(before: OpnsenseConfig, after: OpnsenseConfig) -> dict[str, Any]:
         "nat": sum(len(v) for part in parts.values() for v in part.values()) + (1 if mode else 0),
     }
     return {"rules": rules, "aliases": aliases, "nat": {"outbound_mode": mode, **parts}, "summary": counts}
+
+
+# ── Rule change findings ─────────────────────────────────────────────────────
+
+# The flags a configuration change is alerted on when it brings them in
+# (``netcontrol.routes.opnsense_rule_alerts``).
+FINDING_KINDS = ("any_any", "shadowed")
+
+
+def _finding(view: dict[str, Any], kind: str, keys: dict[int, str]) -> dict[str, Any]:
+    """One flagged rule of an ``analyze`` view as a finding: the parsed rule
+    fields an operator needs, never alias contents."""
+    shadowed = kind == "shadowed"
+    return {
+        "kind": kind,
+        "key": view["key"],
+        "number": view["number"],
+        "interfaces": list(view["interfaces"]),
+        "direction": view["direction"],
+        "family": view["family"],
+        "protocol": view["protocol"],
+        "action": view["action"],
+        "source": view["source"]["text"],
+        "source_port": view["source"]["port"],
+        "destination": view["destination"]["text"],
+        "destination_port": view["destination"]["port"],
+        "description": view["description"],
+        "shadowed_by": view["shadowed_by"] if shadowed else None,
+        "shadowed_by_key": keys.get(view["shadowed_by"]) if shadowed else None,
+        "shadow": view["shadow"] if shadowed else "",
+    }
+
+
+def _findings(config: OpnsenseConfig) -> dict[tuple[str, str], dict[str, Any]]:
+    """The any-to-any and shadowed rules of a configuration by (kind, rule
+    key), in evaluation order. Disabled rules carry neither flag."""
+    views = analyze(config)["rules"]
+    keys = {view["number"]: view["key"] for view in views}
+    return {
+        (kind, str(view["key"])): _finding(view, kind, keys)
+        for view in views
+        for kind in FINDING_KINDS
+        if kind in view["flags"]
+    }
+
+
+def rule_change_findings(before: OpnsenseConfig, after: OpnsenseConfig) -> dict[str, Any]:
+    """The risky flags a change from ``before`` to ``after`` brings in or
+    takes away, rules matched by their key as ``diff`` matches them:
+
+    - ``new``: the rules any-to-any in ``after`` and not in ``before`` (a new
+      rule, or one widened or enabled), and the rules shadowed in ``after``
+      and not in ``before`` (a new rule shadowed on arrival, or a rule a new,
+      moved or widened rule now covers), numbered as in ``after``;
+    - ``gone``: the findings of ``before`` that ``after`` no longer has,
+      numbered as in ``before``;
+    - ``summary``: how many new findings of each kind."""
+    old, new = _findings(before), _findings(after)
+    added = [finding for key, finding in new.items() if key not in old]
+    return {
+        "new": added,
+        "gone": [finding for key, finding in old.items() if key not in new],
+        "summary": {kind: sum(1 for f in added if f["kind"] == kind) for kind in FINDING_KINDS},
+    }

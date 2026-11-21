@@ -143,7 +143,8 @@ firmware status only its product and update fields (a business licence
 keeps its expiry, nothing else). ``config.xml`` holds password hashes,
 private keys and pre-shared keys: it is returned under ``config_xml`` for
 the caller to store as a configuration backup and is never part of the
-snapshot.
+snapshot. Its DNS names and DHCP reservations (``names.names_from_config``:
+no secrets) are returned under ``names`` for IPAM.
 """
 
 from __future__ import annotations
@@ -173,6 +174,7 @@ from netcontrol.integrations.opnsense.ids import (
     row_time,
     rule_classtype,
 )
+from netcontrol.integrations.opnsense.names import names_from_config
 from netcontrol.integrations.pathtrace.opnsense_config import parse_document, parse_xml
 from netcontrol.integrations.traffic import parse_time
 from netcontrol.telemetry import configure_logging
@@ -765,6 +767,10 @@ async def collect_opnsense(
     if no_trust_api:
         certificates = await _certificates_fallback(config_xml, errors)
 
+    # The DNS names and DHCP reservations for IPAM (see ``names``): parsed
+    # while the XML is in hand (CPU work, off the event loop); none without it.
+    names = await asyncio.to_thread(names_from_config, config_xml) if config_xml else None
+
     if not answered and first_error is not None:
         raise first_error
 
@@ -802,6 +808,8 @@ async def collect_opnsense(
         "config_xml": config_xml,
         # Never part of the snapshot: the caller stores it for the path trace.
         "alias_tables": alias_tables,
+        # Never part of the snapshot: the caller stores them as IPAM allocations.
+        "names": names,
         "errors": errors,
         "stats": dict(client.stats),
         "options": opts,

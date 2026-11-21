@@ -630,7 +630,7 @@ async def get_ipam_subnet_detail(
         alloc_sql, alloc_params = allocation_scope or ("", ())
         if include_external:
             cursor = await db.execute(
-                """SELECT a.id, a.address, a.dns_name, a.description, a.metadata_json,
+                """SELECT a.id, a.address, a.dns_name, a.status, a.description, a.metadata_json,
                           a.tenant_id, tn.name AS tenant_name,
                           s.provider, s.name AS source_name
                    FROM ipam_allocations a
@@ -711,6 +711,9 @@ async def get_ipam_subnet_detail(
                     "hostname": ea.get("dns_name") or "",
                     "group_name": ea.get("source_name") or "",
                     "description": ea.get("description") or "",
+                    # The source's status ("reserved" for a DHCP reservation
+                    # an OPNsense collection read; NetBox's statuses).
+                    "status": ea.get("status") or "",
                     "is_reserved": ip_s in reserved_ips,
                     "allocation_id": ea.get("id"),
                     "tenant_id": ea.get("tenant_id"),

@@ -185,7 +185,9 @@ async def source_muted(provider: str, org_ref: int) -> bool:
         return False
 
 
-async def _suppressed(host: dict | None, metric: str) -> bool:
+async def host_suppressed(host: dict | None, metric: str) -> bool:
+    """Whether a monitoring suppression of the inventory host (all metrics
+    or ``metric``) is active now. A failure means "not suppressed"."""
     if not host:
         return False
     try:
@@ -241,7 +243,7 @@ async def record_events(
         device = (host or {}).get("hostname") or source_name or f"{provider} {org_ref}"
         for group in groups:
             metric = metric_of(group["kind"])
-            if await _suppressed(host, metric):
+            if await host_suppressed(host, metric):
                 outcome["muted"] += 1
                 continue
             if host_id is None:

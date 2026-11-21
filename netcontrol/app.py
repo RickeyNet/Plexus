@@ -1355,7 +1355,8 @@ async def _ipam_sync_loop() -> None:
             continue
         for source in sources:
             source_id = source.get("id")
-            if not source_id:
+            # An OPNsense collection fills its own source: never synced here.
+            if not source_id or is_collection_fed(source.get("provider")):
                 continue
             try:
                 auth_config = await db.get_ipam_source_auth_config(source_id)

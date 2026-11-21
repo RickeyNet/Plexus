@@ -27,9 +27,11 @@ from netcontrol.object_scope import (
 from netcontrol.routes.custom_fields import attach_custom_data, matching_keys
 from netcontrol.routes.device_model import check_device_values
 from netcontrol.routes.ipam_adapters import (
+    COLLECTION_FED_MESSAGE,
     IpamAdapterError,
     collect_ipam_snapshot,
     get_ipam_provider_catalog,
+    is_collection_fed,
     normalize_ipam_provider,
 )
 from netcontrol.routes.ipam_model import resolve_prefix_namespace
@@ -411,7 +413,10 @@ async def ipam_sources_api(
     enabled_only: bool = Query(default=False),
 ):
     try:
-        normalized_provider = normalize_ipam_provider(provider) if provider else None
+        if provider and is_collection_fed(provider):
+            normalized_provider: str | None = provider.strip().lower()
+        else:
+            normalized_provider = normalize_ipam_provider(provider) if provider else None
     except ValueError:
         raise HTTPException(status_code=400, detail="Unsupported IPAM provider") from None
     rows = await db.list_ipam_sources(provider=normalized_provider, enabled_only=enabled_only)
@@ -458,6 +463,17 @@ async def update_ipam_source_api(source_id: int, body: IpamSourceUpdate, request
     if not existing:
         raise HTTPException(status_code=404, detail="IPAM source not found")
     updates = body.model_dump(exclude_none=True)
+    if is_collection_fed(existing.get("provider")):
+        # Its collection finds it by provider and address and fills it: only
+        # its name, notes and enabled switch are the administrator's; it is
+        # never pushed to.
+        if str(updates.pop("provider", existing.get("provider")) or "").strip().lower() != existing.get("provider"):
+            raise HTTPException(status_code=400, detail="Unsupported IPAM provider")
+        fixed = sorted(set(updates) - {"name", "notes", "enabled", "push_enabled"})
+        if fixed or updates.get("push_enabled"):
+            raise HTTPException(
+                status_code=400, detail=f"{COLLECTION_FED_MESSAGE}; only name, notes and enabled change"
+            )
     if "provider" in updates:
         try:
             updates["provider"] = normalize_ipam_provider(updates["provider"])
@@ -505,6 +521,8 @@ async def validate_ipam_source_api(source_id: int):
     source = await db.get_ipam_source(source_id)
     if not source:
         raise HTTPException(status_code=404, detail="IPAM source not found")
+    if is_collection_fed(source.get("provider")):
+        raise HTTPException(status_code=409, detail=COLLECTION_FED_MESSAGE)
     try:
         auth_config = await db.get_ipam_source_auth_config(source_id)
         snapshot = await collect_ipam_snapshot(source, auth_config)
@@ -521,6 +539,9 @@ async def sync_ipam_source_api(source_id: int, request: Request):
     source = await db.get_ipam_source(source_id)
     if not source:
         raise HTTPException(status_code=404, detail="IPAM source not found")
+    if is_collection_fed(source.get("provider")):
+        # Never contacted and never marked failed: its collection fills it.
+        raise HTTPException(status_code=409, detail=COLLECTION_FED_MESSAGE)
     session = _get_session(request) or {}
     try:
         auth_config = await db.get_ipam_source_auth_config(source_id)
@@ -927,6 +948,11 @@ async def allocate_ip_api(body: IpamAllocateRequest, request: Request):
         ipaddress.ip_network(body.subnet, strict=False)
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid subnet CIDR") from None
+    if body.source_id:
+        target = await db.get_ipam_source(int(body.source_id))
+        if target is not None and is_collection_fed(target.get("provider")):
+            # Its next collection would drop the committed allocation.
+            raise HTTPException(status_code=400, detail=COLLECTION_FED_MESSAGE)
 
     session = _get_session(request) or {}
     try:

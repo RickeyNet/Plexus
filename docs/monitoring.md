@@ -144,6 +144,7 @@ Alerts come from these sources:
 | Route table changed between full reads | `route_churn` | Warning, critical for a change of 10 routes or more |
 | Alert rules | the rule's metric | the rule's severity |
 | SLA targets (of hosts, and of integration entities such as OPNsense gateways) | `sla_<metric>` | see [SLA monitoring](sla-monitoring.md) |
+| A configuration change of an OPNsense firewall that made a filter rule any-to-any or shadowed | `opnsense_rule_any_any`, `opnsense_rule_shadowed` | Warning, info for a redundant shadow; see [Rule change alerts](opnsense-topology.md#rule-change-alerts) |
 | Baseline deviations, Meraki alerts, Cato egress and shared host findings, integration entities | various | see the linked guides |
 
 While an alert is unacknowledged, the same condition on the same host only

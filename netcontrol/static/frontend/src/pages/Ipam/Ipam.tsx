@@ -55,6 +55,7 @@ import {
   useRunReconcile,
   useSyncDhcpServer,
   useSyncIpamSource,
+  useUpdateIpamSource,
   useUpdateIpamSyncConfig,
 } from '@/api/ipam';
 import { useInventoryGroups } from '@/api/compliance';
@@ -72,6 +73,7 @@ import {
   driftLabel,
   filterSubnetsByCustomData,
   formatSubnetPreview,
+  isCollectionFed,
   providerLabel,
   searchSubnets,
 } from './helpers';
@@ -968,8 +970,20 @@ function SourcesCard({
   const sync = useSyncIpamSource();
   const reconcile = useRunReconcile();
   const remove = useDeleteIpamSource();
+  const update = useUpdateIpamSource();
   const syncing = usePendingKeys<number>();
   const reconciling = usePendingKeys<number>();
+
+  // A collection-fed source has no connection to edit: only its switch.
+  const handleToggle = (src: IpamSource) =>
+    update.mutate(
+      { id: src.id, payload: { enabled: !src.enabled } },
+      {
+        onError: (e) => {
+          void alert({ message: (e as Error).message, variant: 'error' });
+        },
+      },
+    );
 
   const handleSync = (id: number) =>
     syncing.run(id, async () => {
@@ -1065,7 +1079,9 @@ function SourcesCard({
               <div>
                 <div style={{ fontWeight: 600 }}>{src.name}</div>
                 <div className="text-muted" style={{ fontSize: '0.85em' }}>
-                  {src.provider} · {src.base_url}
+                  {isCollectionFed(src.provider)
+                    ? `${providerLabel(src.provider)} names and DHCP reservations · ${src.base_url}`
+                    : `${src.provider} · ${src.base_url}`}
                 </div>
               </div>
               <div
@@ -1106,22 +1122,36 @@ function SourcesCard({
                 flexWrap: 'wrap',
               }}
             >
-              <BusyButton
-                className="btn btn-secondary btn-sm"
-                onClick={() => void handleSync(src.id)}
-                busy={syncing.isPending(src.id)}
-                busyLabel="Syncing…"
-              >
-                Sync Now
-              </BusyButton>
-              <KebabMenu label={`Actions for ${src.name}`}>
-                <MenuItem
-                  onSelect={() => void handleReconcile(src.id)}
-                  disabled={reconciling.isPending(src.id)}
+              {isCollectionFed(src.provider) ? (
+                <span className="text-muted" style={{ fontSize: '0.85em', alignSelf: 'center' }}>
+                  Updated by its Map source
+                </span>
+              ) : (
+                <BusyButton
+                  className="btn btn-secondary btn-sm"
+                  onClick={() => void handleSync(src.id)}
+                  busy={syncing.isPending(src.id)}
+                  busyLabel="Syncing…"
                 >
-                  Reconcile
-                </MenuItem>
-                <MenuItem onSelect={() => onEditSource(src)}>Edit</MenuItem>
+                  Sync Now
+                </BusyButton>
+              )}
+              <KebabMenu label={`Actions for ${src.name}`}>
+                {isCollectionFed(src.provider) ? (
+                  <MenuItem onSelect={() => handleToggle(src)} disabled={update.isPending}>
+                    {src.enabled ? 'Disable' : 'Enable'}
+                  </MenuItem>
+                ) : (
+                  <>
+                    <MenuItem
+                      onSelect={() => void handleReconcile(src.id)}
+                      disabled={reconciling.isPending(src.id)}
+                    >
+                      Reconcile
+                    </MenuItem>
+                    <MenuItem onSelect={() => onEditSource(src)}>Edit</MenuItem>
+                  </>
+                )}
                 <MenuSeparator />
                 <MenuItem danger onSelect={() => handleDelete(src.id, src.name)}>
                   Delete
@@ -1483,7 +1513,7 @@ function DhcpCard({
                   <td>{s.lease_count ?? 0}</td>
                   <td>{formatBackendDateTime(s.last_sync_at, 'Never')}</td>
                   <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
-                    {s.provider === 'opnsense' ? (
+                    {isCollectionFed(s.provider) ? (
                       <span className="text-muted" style={{ fontSize: '0.85em' }}>
                         Updated by its Map source
                       </span>
