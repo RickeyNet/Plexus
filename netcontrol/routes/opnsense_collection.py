@@ -71,6 +71,10 @@ is stored:
     knows to read that host's health over this source's API
     (``netcontrol.routes.opnsense_health``); the "Health" section says
     whether it is stored.
+  - ``opnsense_ids.store_collected``: the intrusion detection alerts
+    (``ids_alerts``, popped from the raw collection) become security
+    events of the source, with their alerts; the "IDS alerts" sections say
+    what was stored.
 
 All are best-effort: a failure is logged and noted in the snapshot, and
 the collection is stored anyway.
@@ -416,6 +420,18 @@ async def after_collection(raw: dict, snapshot: dict, org_ref: int) -> None:
         await note_health_host(raw, snapshot, org_ref)
     except Exception as exc:  # noqa: BLE001 - the snapshot is stored anyway
         LOGGER.warning("opnsense: health host not noted: %s", type(exc).__name__)
+    try:
+        # Imported here: opnsense_ids imports this module's helpers.
+        from netcontrol.routes.opnsense_ids import store_collected
+
+        if "ids_alerts" in raw:
+            await store_collected(raw, snapshot, org_ref, await matching_host(snapshot))
+    except Exception as exc:  # noqa: BLE001 - the snapshot is stored anyway
+        LOGGER.warning("opnsense: IDS alerts not stored: %s", type(exc).__name__)
+    finally:
+        # The alerts are stored as security events, never in the snapshot.
+        raw.pop("ids_alerts", None)
+        raw.pop("ids_state", None)
 
 
 async def note_health_host(raw: dict, snapshot: dict, org_ref: int) -> dict | None:

@@ -31,6 +31,12 @@ owns those conditions (persistence, SLA, mutes).
   A source whose collection is already running (scheduled or by hand) is
   retried after ``BUSY_RETRY_SECONDS``: two collections of one source never
   run at once.
+- **IDS alerts.** A Suricata alert line (reason ``ids``) does not collect
+  the source: it reads only its IDS alerts
+  (``netcontrol.routes.opnsense_ids.read_source_now``), with the same
+  debounce and interval, but outside the hour's ``MAX_RUNS_PER_HOUR``
+  (``READ_ONLY_REASONS``), so an attack logging an alert a second neither
+  re-collects the firewall nor uses up the runs a gateway alarm needs.
 - **Failure.** A failed collection is logged (and recorded on the source
   like any failed build); it never touches the stored syslog events.
 
@@ -72,6 +78,10 @@ MAP_RETRY_SECONDS = 10.0
 # must not grow the map without bound).
 MAP_MAX_ADDRESSES = 8192
 _LAST_RUN_MAX = 1024
+# Reasons that read one part of the source instead of collecting it (the
+# IDS alerts): such a run waits for the debounce and the interval like any
+# other, but is not one of the hour's MAX_RUNS_PER_HOUR collections.
+READ_ONLY_REASONS = frozenset({"ids"})
 
 # Monotonic clock and sleep, replaced in tests.
 _clock: Callable[[], float] = time.monotonic
@@ -223,7 +233,8 @@ def note_recollect(org_ref: int, reason: str) -> bool:
     if last is not None:
         due = max(due, last + MIN_INTERVAL_SECONDS)
     recent = _run_times.get(org_ref)
-    if recent is not None and len(recent) >= MAX_RUNS_PER_HOUR:
+    read_only = _reasons[org_ref] <= READ_ONLY_REASONS
+    if recent is not None and len(recent) >= MAX_RUNS_PER_HOUR and not read_only:
         due = max(due, recent[0] + HOUR_SECONDS)
     _due[org_ref] = due
     task = _tasks.get(org_ref)
@@ -241,12 +252,27 @@ async def _waiter(org_ref: int) -> None:
                 continue
             del _due[org_ref]
             reasons = _reasons.pop(org_ref, set())
+            used = _run_times.get(org_ref)
+            if (
+                not reasons <= READ_ONLY_REASONS
+                and used is not None
+                and len(used) >= MAX_RUNS_PER_HOUR
+                and used[0] + HOUR_SECONDS > _clock()
+            ):
+                # A collection joined a pending read while the hour's runs
+                # are used up: it waits for the hour, the read runs now.
+                _reasons.setdefault(org_ref, set()).update(reasons - READ_ONLY_REASONS)
+                _due[org_ref] = used[0] + HOUR_SECONDS
+                reasons = reasons & READ_ONLY_REASONS
+                if not reasons:
+                    continue
             previous = _last_run.get(org_ref)
             # Counted from the start: messages logged during the run leave
             # one trailing run a full interval after this one started.
             started = _last_run[org_ref] = _clock()
             recent = _run_times.setdefault(org_ref, deque(maxlen=MAX_RUNS_PER_HOUR))
-            recent.append(started)
+            if not (reasons and reasons <= READ_ONLY_REASONS):
+                recent.append(started)  # a read is not one of the hour's runs
             try:
                 outcome = await run_recollect(org_ref, reasons)
             except Exception as exc:  # noqa: BLE001 - one source's run must not stop the waiter
@@ -281,9 +307,16 @@ def _prune() -> None:
 async def run_recollect(org_ref: int, reasons: set[str]) -> str:
     """Collect source ``org_ref`` now. Returns the collection's status,
     ``busy`` when one is already running, or ``skipped`` when the source is
-    gone, is no OPNsense source or has no API key."""
+    gone, is no OPNsense source or has no API key. With ``READ_ONLY_REASONS``
+    alone (a Suricata alert line), only the source's IDS alerts are read
+    (``opnsense_ids.read_source_now``)."""
     from netcontrol.routes import meraki_topology as topology
 
+    if reasons and reasons <= READ_ONLY_REASONS:
+        # A Suricata alert line: only the IDS alerts are read, not the source.
+        from netcontrol.routes.opnsense_ids import read_source_now
+
+        return await read_source_now(org_ref)
     org = await db.get_meraki_org(org_ref)
     if not org or topology._provider_of(org) != PROVIDER or not org.get("has_api_key"):
         return "skipped"

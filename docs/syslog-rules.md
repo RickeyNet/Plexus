@@ -217,7 +217,15 @@ default). These messages start that collection within seconds instead:
 | VPN | `charon` | IPsec phase 1: `IKE_SA <name>[<n>] established between ...`, `deleting IKE_SA ...`, `IKE_SA deleted`, and `CHILD_SA <name>{<n>} closed` |
 | VPN | `openvpn_server<n>`, `openvpn_client<n>` | An instance's `Initialization Sequence Completed` and `SIGUSR1[...] / SIGHUP[...] / SIGTERM[...] received, process restarting / exiting` (not the lines of one client of a server instance) |
 | Configuration | `config`, `audit` | `config-event: new_config <backup file>` and `user <name> changed configuration to ...` |
+| IDS (a read, not a collection) | `suricata` | An alert line `[1:<sid>:<rev>] <signature> [Classification: ...] [Priority: <n>] ...` (`[Drop] ` first in IPS mode) and an eve record over syslog with `"event_type":"alert"` |
 
+- **IDS alerts**: a Suricata alert does not collect the source; it reads
+  only its IDS alerts (the ones newer than the newest stored, see
+  [IDS alerts](opnsense-topology.md#ids-alerts)), with the same 5-second
+  delay and once-a-minute interval, but it is not one of the hour's 6
+  collections and is not held back by them. A collection asked for while
+  the hour's runs are used up waits for the hour; an IDS read pending at
+  the same time runs on its own.
 - **Which source**: the message's source address is matched to the
   OPNsense source(s) of the firewall: through the inventory host it
   resolves to (the host the newest collection matched the firewall to),

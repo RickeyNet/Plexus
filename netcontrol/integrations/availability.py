@@ -18,7 +18,9 @@ each, see ``ha_entity_states``) or service
 (the snapshot's ``services``, see ``cloud_services.service_states``: an
 AWS, Azure or GCP database, load balancer, private endpoint...; an OPNsense
 firewall's services, which name their ``device``; each with its
-state already in the node vocabulary), with that status mapped
+state already in the node vocabulary) or certificate (the snapshot's
+``certificates``: an OPNsense firewall's certificates and CAs that are
+tracked, see ``certificate_entity_states``), with that status mapped
 to ``up`` / ``degraded`` / ``down`` / ``unknown``, and the latency / jitter /
 loss / traffic rate reported for it (``metrics``, see ``METRIC_KEYS``). Pure: no
 database, no network.
@@ -45,7 +47,18 @@ from netcontrol.integrations.gcp.normalize import _LINK_LABELS as _GCP_LINK_LABE
 from netcontrol.integrations.meraki.normalize import _STATUS_RANK, _UPLINK_STATUS
 
 STATES = ("up", "degraded", "down", "unknown")
-ENTITY_TYPES = ("device", "site", "uplink", "tunnel", "vpn_connection", "circuit", "peering", "link", "service")
+ENTITY_TYPES = (
+    "device",
+    "site",
+    "uplink",
+    "tunnel",
+    "vpn_connection",
+    "circuit",
+    "peering",
+    "link",
+    "service",
+    "certificate",
+)
 CLOUD_PROVIDERS = ("aws", "azure", "gcp")
 # Sites carry a status of their own (not one derived from their devices).
 _SITE_PROVIDERS = ("cato", "appgate")
@@ -83,6 +96,52 @@ METRIC_KEYS: dict[str, str] = {
 # between which a change is a failover: the tracker alerts on it although
 # both are healthy (``topology_availability.failovers``).
 FAILOVER_ROLES = ("master", "backup")
+
+# Certificate expiry (the snapshot's ``certificates``, see
+# ``certificate_entity_states``): a tracked certificate is ``expiring`` from
+# ``CERTIFICATE_WARNING_DAYS`` before its end (a warning), ``critical`` from
+# ``CERTIFICATE_CRITICAL_DAYS`` and ``expired`` after it (both critical
+# alerts). The tier is the entity's ``raw_status``; the tracker alerts on a
+# tier getting worse (``topology_availability.certificate_changes``), not on
+# the state. Every tier but ``valid`` is the state ``degraded``: an
+# expiring or expired certificate is a problem to fix, not downtime, and
+# ``degraded`` counts as available in uptime and SLA figures.
+CERTIFICATE_WARNING_DAYS = 30
+CERTIFICATE_CRITICAL_DAYS = 7
+CERTIFICATE_TIER_RANK: dict[str, int] = {"unknown": 0, "valid": 0, "expiring": 1, "critical": 2, "expired": 3}
+CERTIFICATE_TIER_SEVERITY: dict[str, str] = {"expiring": "warning", "critical": "critical", "expired": "critical"}
+_CERTIFICATE_STATES = {"valid": "up", "expiring": "degraded", "critical": "degraded", "expired": "degraded"}
+
+
+def certificate_tier(valid_to: float | None, now: float | None) -> str:
+    """The expiry tier of a certificate valid until ``valid_to`` at ``now``
+    (both Unix seconds): ``valid``, ``expiring``, ``critical``, ``expired``,
+    or ``unknown`` when either is not known."""
+    if valid_to is None or now is None:
+        return "unknown"
+    left = valid_to - now
+    if left <= 0:
+        return "expired"
+    if left <= CERTIFICATE_CRITICAL_DAYS * 86400:
+        return "critical"
+    if left <= CERTIFICATE_WARNING_DAYS * 86400:
+        return "expiring"
+    return "valid"
+
+
+def certificate_expiry_text(days_left: Any, tier: str) -> str:
+    """``expires in 12 days`` / ``expires today`` / ``expired 3 days ago``
+    (``days_left``: whole days to the end, negative once expired); ``""``
+    without a number."""
+    if not isinstance(days_left, int) or isinstance(days_left, bool):
+        return ""
+    if tier == "expired":
+        ago = -days_left
+        return "expired today" if ago <= 0 else f"expired {ago} day{'s' if ago != 1 else ''} ago"
+    if days_left <= 0:
+        return "expires today"
+    return f"expires in {days_left} day{'s' if days_left != 1 else ''}"
+
 
 _SKIPPED_NODE_KINDS = frozenset({"wan", "external", "users", "user", "vpc", "vpn_peer"})
 _USER_KINDS = frozenset({"users", "user"})
@@ -322,6 +381,53 @@ def ha_entity_states(
     return found
 
 
+def certificate_entity_states(
+    provider: str, org_ref: int, snapshot: dict, nodes: dict[str, dict], site_name: Callable[[str], str]
+) -> list[EntityState]:
+    """The tracked records of the snapshot's ``certificates`` (an OPNsense
+    firewall's, see ``opnsense.certificates.certificate_records``; those
+    only listed are left out) as ``certificate`` entities: state ``up``
+    while valid, ``degraded`` from ``expiring`` on (``_CERTIFICATE_STATES``),
+    ``unknown`` without an expiry date; ``raw_status`` the tier;
+    ``host_id`` and site of the ``device`` that holds them, ``meta["a"]``
+    that device, so muting or removing it covers them."""
+    found: list[EntityState] = []
+    for record in snapshot.get("certificates") or []:
+        if not isinstance(record, dict) or not record.get("tracked") or not _text(record.get("id")):
+            continue
+        device_id = _text(record.get("device"))
+        device = nodes.get(device_id) or {}
+        label = _text(device.get("label")) or device_id
+        kind = _text(record.get("kind")) or "certificate"
+        tier = _text(record.get("tier")) or "unknown"
+        noun = "CA" if kind == "authority" else "certificate"
+        days = record.get("days_left")
+        meta: dict[str, Any] = {
+            "kind": kind,
+            "common_name": _text(record.get("common_name")),
+            "valid_to": _text(record.get("valid_to")),
+            "days_left": days if isinstance(days, int) and not isinstance(days, bool) else None,
+        }
+        if device_id:
+            meta["a"] = device_id
+        found.append(
+            EntityState(
+                provider=provider,
+                org_ref=org_ref,
+                entity_type="certificate",
+                entity_id=_text(record.get("id")),
+                name=f"{label} {_text(record.get('name'))}".strip(),
+                state=_CERTIFICATE_STATES.get(tier, "unknown"),
+                raw_status=tier,
+                site=site_name(_text(device.get("site"))) if device else "",
+                model=_text(record.get("model")) or noun,
+                host_id=_host_id(device),
+                meta=meta,
+            )
+        )
+    return found
+
+
 def extract_entity_states(provider: str, org_ref: int, snapshot: dict | None) -> list[EntityState]:
     """The tracked entities of one snapshot with their availability state."""
     snapshot = snapshot or {}
@@ -427,6 +533,9 @@ def extract_entity_states(provider: str, org_ref: int, snapshot: dict | None) ->
         )
 
     for entity in ha_entity_states(provider, org_ref, snapshot, nodes, site_name):
+        add(entity)
+
+    for entity in certificate_entity_states(provider, org_ref, snapshot, nodes, site_name):
         add(entity)
 
     for service in snapshot.get("services") or []:

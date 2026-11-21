@@ -859,6 +859,16 @@ async def _downsampling_loop() -> None:
             except Exception as exc:
                 LOGGER.warning("metrics: syslog alert auto-resolve failed: %s", redact_value(str(exc)))
 
+            # Security event (IDS) alerts whose signature went quiet.
+            try:
+                from netcontrol.routes.security_events import resolve_quiet_alerts
+
+                resolved = await resolve_quiet_alerts()
+                if resolved:
+                    LOGGER.info("metrics: auto-resolved %d security event alerts", resolved)
+            except Exception as exc:
+                LOGGER.warning("metrics: security event alert auto-resolve failed: %s", type(exc).__name__)
+
         except asyncio.CancelledError:
             raise
         except Exception as exc:

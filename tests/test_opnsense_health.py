@@ -548,13 +548,16 @@ async def test_a_source_with_health_off_is_not_read(firewall_source):
     org_ref = await _source_with_host(host_id)
     await db.update_meraki_org(org_ref, options={"include_health": False})
     result = await _poll_host_monitoring(await db.get_host(host_id), None, {"enabled": False})
-    # Only the VPN counters are read (``include_vpn``: tunnel traffic).
+    # Only the VPN counters (``include_vpn``: tunnel traffic) and the IDS
+    # status (``include_ids_alerts``; this firewall has no IDS API) are read.
     assert "opnsense_health" not in result
     assert firewall_source.calls and all(
-        c.startswith(("ipsec/", "wireguard/", "openvpn/")) for c in firewall_source.calls
+        c.startswith(("ipsec/", "wireguard/", "openvpn/", "ids/")) for c in firewall_source.calls
     )
     firewall_source.calls.clear()
-    await db.update_meraki_org(org_ref, options={"include_health": False, "include_vpn": False})
+    await db.update_meraki_org(
+        org_ref, options={"include_health": False, "include_vpn": False, "include_ids_alerts": False}
+    )
     health_poll.forget_sources()
     result = await _poll_host_monitoring(await db.get_host(host_id), None, {"enabled": False})
     assert "opnsense_health" not in result and firewall_source.calls == []

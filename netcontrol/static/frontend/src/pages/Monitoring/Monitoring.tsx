@@ -8,13 +8,14 @@ import { usePathTab } from '@/lib/usePathTab';
 import { DevicesTab } from './DevicesTab';
 import { AlertsTab } from './AlertsTab';
 import { EventsTab } from './EventsTab';
+import { SecurityTab } from './SecurityTab';
 import { SlaTab } from './SlaTab';
 import { AvailabilityTab } from './AvailabilityTab';
 import { CapacityTab } from './CapacityTab';
 import { ConfigureTab } from './ConfigureTab';
 import { CONFIGURE_FEATURES } from './configureTabs';
 
-type Tab = 'devices' | 'alerts' | 'events' | 'sla' | 'availability' | 'capacity' | 'configure';
+type Tab = 'devices' | 'alerts' | 'events' | 'security' | 'sla' | 'availability' | 'capacity' | 'configure';
 
 const BASE = '/monitoring';
 
@@ -27,6 +28,7 @@ const TABS: { key: Tab; label: string; feature: string | string[] }[] = [
   { key: 'devices', label: 'Devices', feature: 'monitoring' },
   { key: 'alerts', label: 'Alerts', feature: 'monitoring' },
   { key: 'events', label: 'Events', feature: 'monitoring' },
+  { key: 'security', label: 'Security', feature: 'monitoring' },
   { key: 'sla', label: 'SLA', feature: 'monitoring' },
   { key: 'availability', label: 'Availability', feature: 'monitoring' },
   { key: 'capacity', label: 'Capacity', feature: 'monitoring' },
@@ -55,7 +57,7 @@ export function Monitoring() {
         guide="Monitoring"
         pageKey="monitoring"
         title="Real-Time Device Monitoring"
-        text="Track CPU, memory, response time, packet loss, and interface status. Includes alerts, the syslog and SNMP trap event log, SLA tracking, availability history and capacity planning trends. The Configure tab holds the setup behind them: alert rules, suppressions, SLA targets, custom OID profiles, and graph / host templates and graph trees."
+        text="Track CPU, memory, response time, packet loss, and interface status. Includes alerts, the syslog and SNMP trap event log, the IDS alerts of OPNsense firewalls (Security), SLA tracking, availability history and capacity planning trends. The Configure tab holds the setup behind them: alert rules, suppressions, SLA targets, custom OID profiles, and graph / host templates and graph trees."
       />
 
       <TabBar tabs={shownTabs} active={tab} onChange={selectTab} aria-label="Monitoring sections" />
@@ -63,6 +65,7 @@ export function Monitoring() {
       {tab === 'devices' && <DevicesTab />}
       {tab === 'alerts' && <AlertsTab />}
       {tab === 'events' && <EventsTab />}
+      {tab === 'security' && <SecurityTab />}
       {tab === 'sla' && <SlaTab />}
       {tab === 'availability' && <AvailabilityTab />}
       {tab === 'capacity' && <CapacityTab />}

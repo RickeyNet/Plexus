@@ -345,6 +345,7 @@ from netcontrol.routes.routing import router as routing_router
 from netcontrol.routes.scope_rules import router as scope_rules_router
 from netcontrol.routes.secret_variables import router as secret_variables_router
 from netcontrol.routes.secrets_providers import router as secrets_providers_router
+from netcontrol.routes.security_events import router as security_events_router
 from netcontrol.routes.snmp import (
     PYSMNP_AVAILABLE,
     _build_snmp_auth,
@@ -2724,6 +2725,11 @@ app.include_router(
     dependencies=[Depends(require_admin)],
 )
 app.include_router(meraki_webhook_router)
+# Security events (IDS alerts of OPNsense firewalls): monitoring access.
+app.include_router(
+    security_events_router,
+    dependencies=[Depends(require_auth), Depends(require_feature_method("monitoring"))],
+)
 # ChatOps (docs/chatops.md): the Slack, Webex and Teams endpoints check each
 # platform's request signature (404 until a bot is set up); bots, user
 # mappings, job presets and the command log are admin-only.

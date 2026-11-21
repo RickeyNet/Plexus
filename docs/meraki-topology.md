@@ -645,6 +645,17 @@ How it behaves:
   open alert until it is acknowledged; a group seen for the first time, or
   coming back from `INIT`, `DISABLED` or a missing collection, raises none.
   Mutes apply to it like to any other alert.
+- A certificate (an OPNsense firewall's certificates in use and the CAs
+  they depend on; entity type `certificate`) is `up` while valid and
+  `degraded` from 30 days before its end and once expired, never `down`,
+  so it adds no downtime. It alerts on its expiry tier instead of its state
+  (metric `topology certificate`, dedup key
+  `topo:<provider>:<org_ref>:certificate:<entity_id>:expiry:<tier>`): a
+  warning at `expiring` (30 days or less left), critical at `critical` (7
+  days or less) and `expired`, each tier once, also when the certificate
+  is first seen. A worse tier replaces the open alert of the tier before
+  it, and a renewal (a better tier) resolves its open expiry alerts;
+  see [OPNsense certificates](opnsense-topology.md#certificates).
 - Transitions older than the monitoring retention (`retention_days`) are
   deleted, and so are entities no collection has reported for that long.
 - Collections are what drive it: AWS, Azure and GCP follow the cloud

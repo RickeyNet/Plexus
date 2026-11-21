@@ -441,6 +441,13 @@ Near-real-time Meraki alerts from the assurance-alert poll and the webhook recei
 | POST   | `/api/monitoring/meraki-alerts/poll` | Admin, audited. Poll every enabled Meraki source now, ignoring back-off and the poll switch; returns per-source results |
 | POST   | `/api/webhooks/meraki` | Meraki's webhook receiver (no session, no CSRF). JSON only, at most 256 KiB; `sharedSecret` in the body must match. `200 {"ok": true}` when accepted (the alert work runs after the response), `401` on a wrong or missing secret, `404` while the receiver is off, `400` / `413` / `415` on a malformed, oversized or non-JSON body, `429` when the source IP passes its rate limit |
 
+### Security events
+The security events integrations read from a device, today the intrusion detection (Suricata) alerts of OPNsense firewalls. Stored and alerted on the server; see [opnsense-topology.md](opnsense-topology.md#ids-alerts) and [monitoring.md](monitoring.md#security).
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET    | `/api/monitoring/security-events` | `monitoring` feature, read only. The events of the last `hours` (1 to 8760, default 24), newest first: `severity` (`critical`, `warning`, `info`, `unknown`), `action` (`blocked`, `allowed`), `q` (up to 200 characters: signature, signature id, category, source or destination address), `host_id` (one inventory host; `404` when unknown or outside the caller's scope), `org_ref` (one source), `provider` and `kind` (`ids_alert`), `limit` (1 to 500, default 100), `offset` (0 to 100000). Answers `events` (each with `id`, `provider`, `org_ref`, `source_name`, `host_id`, `hostname`, `kind`, `occurred_at` and `received_at` (UTC), `severity`, `priority`, `signature_id`, `signature`, `category`, `action`, `protocol`, `src_ip`, `src_port`, `dest_ip`, `dest_port`, `interface`, `flow_id`, `app_proto`), `total` (all matching), `counts` (per severity and `blocked`), `since`, `hours`, `limit`, `offset`. A scoped caller sees the events of the hosts it may read only; an event of a device that is no inventory host is left out for it. Invalid parameters answer `422` |
+
 ### Event webhooks
 Outbound requests sent when a tracked object is created, updated or deleted. Admin only; every write is audited. Payload, headers and signature: see [webhooks.md](webhooks.md).
 

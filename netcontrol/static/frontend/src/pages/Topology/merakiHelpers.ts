@@ -313,6 +313,8 @@ export const FALLBACK_OPNSENSE_OPTIONS: OpnsenseBuildOptions = {
   include_rule_stats: true,
   include_health: true,
   include_alias_tables: true,
+  include_certificates: true,
+  include_ids_alerts: true,
   config_backup: true,
   inventory_enrich: true,
 };
@@ -369,6 +371,16 @@ export const OPNSENSE_OPTION_TOGGLES: {
     key: "include_alias_tables",
     label: "Alias tables (URL tables, GeoIP, host names)",
     hint: "The pf tables of the aliases config.xml cannot resolve, so a path trace can decide the rules that name them. Needs config.xml; the bogon tables are never read.",
+  },
+  {
+    key: "include_certificates",
+    label: "Certificates (expiry alerts)",
+    hint: "The certificates and CAs of System > Trust with their expiry: one in use alerts 30 days before it ends, critically from 7 days and once expired. Private keys are never kept (OPNsense 24.7+; older releases use config.xml).",
+  },
+  {
+    key: "include_ids_alerts",
+    label: "IDS alerts (Suricata)",
+    hint: "The intrusion detection alerts, when the IDS is enabled, kept as security events (Monitoring > Security). One alert per signature for priority 1 and 2 events. An inventory host is also read every monitoring poll. Needs the privilege Services: Intrusion Detection.",
   },
   {
     key: "config_backup",

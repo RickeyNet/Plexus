@@ -177,6 +177,7 @@ export const TOPOLOGY_ENTITY_TYPES: readonly { key: string; label: string; plura
   { key: 'peering', label: 'Peering', plural: 'Peerings' },
   { key: 'link', label: 'Link', plural: 'Links' },
   { key: 'service', label: 'Service', plural: 'Services' },
+  { key: 'certificate', label: 'Certificate', plural: 'Certificates' },
 ];
 
 /** Reads the `?type=` value; null when absent or not one of TOPOLOGY_ENTITY_TYPES. */

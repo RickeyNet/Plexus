@@ -64,6 +64,22 @@ TRIGGERS = [
         "in /api/routes/gateway/set ops@198.51.100.7 made changes",
         "config",
     ),
+    # Suricata alerts (IDS "syslog alerts", IPS drop, eve over syslog): a read of the IDS alerts only.
+    (
+        "suricata[4711]: [1:9100002:1] PLEXUS SAMPLE Port scan from outside [Classification: Attempted "
+        "Information Leak] [Priority: 2] {TCP} 198.51.100.99:40000 -> 203.0.113.10:22",
+        "ids",
+    ),
+    (
+        "suricata[4711]: [Drop] [1:9100001:3] PLEXUS SAMPLE Trojan beacon [Classification: A Network Trojan "
+        "was detected] [Priority: 1] {TCP} 192.0.2.50:51234 -> 203.0.113.66:80",
+        "ids",
+    ),
+    (
+        f'{HDR} suricata 4711 - - {{"timestamp":"2026-11-20T10:15:30.512301+0000","event_type":"alert",'
+        '"src_ip":"192.0.2.50","alert":{"signature_id":9100001,"severity":1}}',
+        "ids",
+    ),
 ]
 
 NOT_TRIGGERS = [
@@ -86,6 +102,9 @@ NOT_TRIGGERS = [
     # Cisco and plain messages.
     "%LINK-3-UPDOWN: Interface GigabitEthernet0/7, changed state to down",
     "cron[99]: (root) CMD (/usr/local/sbin/configctl -d syslog archive)",
+    # Suricata's own status lines and its other eve records are no alert.
+    "suricata[4711]: [100171] <Notice> -- rule reload complete",
+    'suricata[4711]: {"timestamp":"2026-11-20T10:15:30+0000","event_type":"stats"}',
 ]
 
 

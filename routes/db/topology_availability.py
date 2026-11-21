@@ -128,10 +128,10 @@ def _state_row(row: dict) -> dict:
 # ── Mutes ────────────────────────────────────────────────────────────────────
 
 MUTE_SCOPES = ("entity", "site")
-# Edge entities, and services that run on a device (an OPNsense firewall's):
-# muting the device at either end (meta ``a`` / ``b``) mutes them, as
-# removing that device removes them.
-_EDGE_TYPES = ("uplink", "tunnel", "link", "service")
+# Edge entities, and services and certificates that belong to a device (an
+# OPNsense firewall's): muting the device at either end (meta ``a`` / ``b``)
+# mutes them, as removing that device removes them.
+_EDGE_TYPES = ("uplink", "tunnel", "link", "service", "certificate")
 # What an entity of the availability summary carries of the mute covering it.
 _ENTITY_MUTE_FIELDS = ("id", "scope", "site", "reason", "created_by", "created_at")
 _MUTE_COLUMNS = "id, provider, org_ref, scope, entity_type, entity_id, site, reason, created_by, created_at"

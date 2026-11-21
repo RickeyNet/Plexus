@@ -167,6 +167,10 @@ export interface OpnsenseBuildOptions {
   include_health: boolean;
   /** The pf tables of the aliases config.xml cannot resolve (URL tables, GeoIP, host names), for path tracing. */
   include_alias_tables: boolean;
+  /** Certificates and CAs with their expiry (never the keys), for expiry alerts. */
+  include_certificates: boolean;
+  /** The intrusion detection (Suricata) alerts, kept as security events with their alerts. */
+  include_ids_alerts: boolean;
   /** Store config.xml as a config backup of the matching inventory host. */
   config_backup: boolean;
   inventory_enrich: boolean;

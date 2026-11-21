@@ -230,6 +230,11 @@ async def delete_meraki_org(org_ref: int) -> bool:
         await db.execute("DELETE FROM meraki_clients WHERE org_ref = ?", (org_ref,))
         # The last tunnel counter readings of the source (migration 0125).
         await db.execute("DELETE FROM topology_traffic_counters WHERE org_ref = ?", (org_ref,))
+        # The security events of the source (migration 0126).
+        await db.execute(
+            "DELETE FROM security_events WHERE org_ref = ? AND provider = (SELECT provider FROM meraki_orgs WHERE id = ?)",
+            (org_ref, org_ref),
+        )
         cursor = await db.execute("DELETE FROM meraki_orgs WHERE id = ?", (org_ref,))
         await db.commit()
         return cursor.rowcount > 0

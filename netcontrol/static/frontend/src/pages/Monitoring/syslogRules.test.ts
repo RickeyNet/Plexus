@@ -74,6 +74,7 @@ describe('syslog rule labels', () => {
     expect(recollectLabel('carp')).toContain('CARP');
     expect(recollectLabel('vpn')).toContain('VPN');
     expect(recollectLabel('config')).toContain('configuration');
+    expect(recollectLabel('ids')).toBe('From an OPNsense firewall: reads its IDS alerts in 5 s (a Suricata alert)');
     expect(recollectLabel('')).toBe('');
     expect(recollectLabel(undefined)).toBe('');
   });

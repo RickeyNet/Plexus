@@ -95,6 +95,7 @@ below. Admins and the API token pass every feature check.
 | `monitoring` | `GET/POST /api/availability/topology/mutes`, `DELETE /api/availability/topology/mutes/{mute_id}` (mute and unmute an integration entity or site; the writes need `monitoring.write`, like acknowledging an alert; audited as `topology.muted` / `topology.unmuted`) | monitoring |
 | `monitoring` | `/api/metrics/*` | metrics_engine |
 | `monitoring` | `GET /api/monitoring/meraki-alerts` (the Meraki alert list) | meraki_alerts |
+| `monitoring` | `GET /api/monitoring/security-events` (the security event list: OPNsense IDS alerts; read only, bounded: `hours` 1 to 8760, `limit` 1 to 500, `offset` up to 100,000, `q` up to 200 characters; object scope: a scoped caller sees the events of its readable hosts only, never a host-less device's, and `host_id` out of scope answers `404`) | security_events |
 | `upgrades` | `/api/upgrades/*` | upgrades |
 | `upgrades` | `POST /api/upgrades/campaigns/{campaign_id}/devices/{device_id}/logic-reset-confirm` (record that the manual Logic Reset of an APC Smart-UPS Ultra was done; write scope on the campaign like the device cancel, `409` while a step runs; audited as `upgrades` / `logic_reset_confirm`) | upgrades |
 | `inventory` | `POST /api/tags`, `GET/PUT /api/hosts/{host_id}/custom-data`, `GET/PUT /api/inventory/{group_id}/custom-data`, `POST /api/hosts/bulk-tags` | custom_fields (inventory_router) |
