@@ -12,6 +12,18 @@ def _norm(raw: dict) -> dict:
     return inventory_module._normalize_discovered_entry(raw)
 
 
+def _count_software_refreshes(monkeypatch) -> list[int]:
+    """Stand in for the software tracker refresh a sync ends with; the list
+    gains a ``1`` per refresh."""
+    calls: list[int] = []
+
+    async def fake_software_changed():
+        calls.append(1)
+
+    monkeypatch.setattr(inventory_module, "_software_changed", fake_software_changed)
+    return calls
+
+
 # ── Multi-interface device dedup (planner is pure / no I/O) ──────────────────
 
 
@@ -436,12 +448,31 @@ async def test_run_discovery_sync_once_runs_profiles(monkeypatch):
     monkeypatch.setattr(inventory_module, "_discover_hosts", fake_discover)
     monkeypatch.setattr(app_module, "_sync_group_hosts", fake_sync_group_hosts)
     monkeypatch.setattr(inventory_module, "_sync_group_hosts", fake_sync_group_hosts)
+    software_refreshes = _count_software_refreshes(monkeypatch)
 
     result = await inventory_module._run_discovery_sync_once()
     assert result["enabled"] is True
     assert result["profiles"] == 1
     assert result["synced_groups"] == 1
     assert result["errors"] == 0
+    # The versions the sync read reach the software tracker, once per run.
+    assert software_refreshes == [1]
+
+
+@pytest.mark.asyncio
+async def test_run_discovery_sync_once_leaves_the_software_tracker_when_nothing_synced(monkeypatch):
+    sync_cfg = {"enabled": True, "interval_seconds": 900, "profiles": [{"group_id": 9, "cidrs": ["192.0.2.0/30"]}]}
+    monkeypatch.setattr(state_module, "DISCOVERY_SYNC_CONFIG", sync_cfg)
+
+    async def missing_group(_group_id):
+        return None
+
+    monkeypatch.setattr(inventory_module.db, "get_group", missing_group)
+    software_refreshes = _count_software_refreshes(monkeypatch)
+
+    result = await inventory_module._run_discovery_sync_once()
+    assert result["synced_groups"] == 0 and result["errors"] == 1
+    assert software_refreshes == []
 
 
 def test_sanitize_snmp_discovery_config_bounds_and_defaults():
@@ -539,6 +570,7 @@ async def test_discovery_onboard_returns_sync_summary(monkeypatch):
     monkeypatch.setattr(inventory_module, "_sync_group_hosts", fake_sync_group_hosts)
     monkeypatch.setattr(app_module, "_audit", fake_audit)
     monkeypatch.setattr(inventory_module, "_audit", fake_audit)
+    software_refreshes = _count_software_refreshes(monkeypatch)
 
     body = app_module.DiscoveryOnboardRequest(
         discovered_hosts=[{"hostname": "sw1", "ip_address": "10.0.0.10", "device_type": "cisco_ios"}]
@@ -547,6 +579,7 @@ async def test_discovery_onboard_returns_sync_summary(monkeypatch):
     assert result["group_id"] == 22
     assert result["provided_count"] == 1
     assert result["sync"]["added"] == 1
+    assert software_refreshes == [1]
 
 
 @pytest.mark.asyncio

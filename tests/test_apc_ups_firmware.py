@@ -290,6 +290,22 @@ def test_parse_about():
     assert nmc_cli.parse_about("").generation == ""
 
 
+def test_parse_about_card_firmware():
+    # The card's firmware is its AOS release; the application module's when
+    # the output has no AOS section (one image on an NMC3).
+    nmc2 = nmc_cli.parse_about(ABOUT_NMC2)
+    assert (nmc2.aos_version, nmc2.firmware) == ("6.9.6", "6.9.6")
+    differing = nmc_cli.parse_about(
+        "Application Module\n---\nName: sumx\nVersion: v6.9.6\n\nAPC OS(AOS)\n---\nName: aos\nVersion: v6.9.8\n"
+    )
+    assert (differing.app_version, differing.aos_version, differing.firmware) == ("6.9.6", "6.9.8", "6.9.8")
+    by_title = nmc_cli.parse_about("APC OS(AOS)\n---\nVersion: v7.0.4\n")
+    assert by_title.firmware == "7.0.4"
+    nmc3 = nmc_cli.parse_about(ABOUT_NMC3)
+    assert (nmc3.aos_version, nmc3.firmware) == ("", "2.5.4.4")
+    assert nmc_cli.parse_about("E101: Command Not Found\n").firmware == ""
+
+
 @pytest.mark.parametrize(
     ("output", "count"),
     [

@@ -484,6 +484,97 @@ def test_api_refresh_records_version_changes_and_history(api):
     assert all(h["seen_until"] for h in history)
 
 
+@pytest.mark.parametrize("endpoint", ["discovery/sync", "discovery/sync/stream"])
+def test_discovery_sync_updates_the_tracked_version_and_resolves_its_alert(api, monkeypatch, endpoint):
+    """An upgraded switch: the discovery sync that reads its new version
+    brings the tracker along, with no manual refresh, and the alert of the
+    old version is resolved."""
+    import netcontrol.routes.inventory as inventory_routes
+
+    _seed_hosts()
+    api.get("/api/software/overview")
+    created = api.post(
+        "/api/software/advisories",
+        json={"advisory_id": "cisco-sa-xe-1", "platform": "ios-xe", "affected_versions": ["<17.12.1"]},
+    )
+    assert created.status_code == 201, created.text
+    assert created.json()["alerts"]["open"] == 1
+
+    upgraded = {
+        "hostname": "core-1",
+        "ip_address": "10.9.0.1",
+        "device_type": "cisco_ios",
+        "status": "online",
+        "model": "C9300-48T",
+        "software_version": "17.12.3",
+        "serial_number": "FOC1",
+        "discovery": {"protocol": "ssh"},
+    }
+
+    async def _discover(_body, group_id=None, *, credential=None):
+        return 1, [upgraded]
+
+    async def _scan(_ip, _body, _snmp_cfg, _slots, _credential):
+        return upgraded
+
+    monkeypatch.setattr(inventory_routes, "_discover_hosts", _discover)
+    monkeypatch.setattr(inventory_routes, "_scan_target", _scan)
+    resp = api.post(f"/api/inventory/907/{endpoint}", json={"cidrs": ["10.9.0.1/32"], "use_ssh": False})
+    assert resp.status_code == 200, resp.text
+
+    overview = api.get("/api/software/overview").json()
+    core = _device(overview, "core-1")
+    assert core["version"] == "17.12.3" and core["previous_version"] == "17.9.4a"
+    assert overview["summary"]["open_alerts"] == 0
+
+
+def test_verified_upgrade_updates_the_host_the_tracker_and_its_alert(api):
+    """The upgrade tool verified a switch on its target: the inventory host,
+    the tracker and the alert of the old version follow at once, with no
+    discovery sync and no manual refresh."""
+    import netcontrol.routes.upgrades as upgrades_routes
+
+    _seed_hosts()
+    api.get("/api/software/overview")
+    created = api.post(
+        "/api/software/advisories",
+        json={"advisory_id": "cisco-sa-xe-1", "platform": "ios-xe", "affected_versions": ["<17.12.1"]},
+    )
+    assert created.status_code == 201, created.text
+    assert created.json()["alerts"]["open"] == 1
+
+    async def _upgrade() -> dict:
+        campaign_id = await db_module.create_upgrade_campaign("core upgrade", "", {}, {}, "tester")
+        device_id = await db_module.add_upgrade_device(campaign_id, 9001, "10.9.0.1", "core-1")
+        await upgrades_routes._mark_device_on_target_version(campaign_id, device_id, "17.12.3")
+        return await db_module.get_host(9001)
+
+    host = asyncio.run(_upgrade())
+    assert host["software_version"] == "17.12.3"
+    assert host["model"] == "C9300-48T"
+
+    overview = api.get("/api/software/overview").json()
+    core = _device(overview, "core-1")
+    assert core["version"] == "17.12.3" and core["previous_version"] == "17.9.4a"
+    assert overview["summary"]["open_alerts"] == 0
+
+
+def test_record_host_version_keeps_a_host_that_already_has_the_version(api):
+    """The same release spelled another way is not a change: the richer text
+    a discovery sync stored stays, and the tracker is not rebuilt."""
+    _seed_hosts()
+
+    async def _record() -> tuple[bool, bool, bool, dict]:
+        same = await software_routes.record_host_version(9001, "17.09.4a")
+        unknown_host = await software_routes.record_host_version(424242, "17.12.3")
+        no_version = await software_routes.record_host_version(9001, "unknown")
+        return same, unknown_host, no_version, await db_module.get_host(9001)
+
+    same, unknown_host, no_version, host = asyncio.run(_record())
+    assert (same, unknown_host, no_version) == (False, False, False)
+    assert host["software_version"] == "Version 17.9.4a, RELEASE SOFTWARE"
+
+
 def test_api_advisories_open_acknowledge_and_resolve_alerts(api, monkeypatch):
     _seed_hosts()
     sent: list[dict] = []

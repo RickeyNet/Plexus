@@ -51,7 +51,23 @@ software version. A device drops out of the list when its host is deleted
 or its organization's snapshots are gone.
 
 The tracked set is rebuilt every six hours (configurable), after every
-topology collection, and on **Refresh**. Each rebuild compares every
+topology collection, after every inventory discovery **Sync** or onboard
+(manual or scheduled), when the **Upgrades** tool verifies a device on its
+target version, and on **Refresh**.
+
+The inventory host is the one record of a device's version: the Inventory
+page, this page and its alerts, reports and the API all read it. A device
+upgraded with the **Upgrades** tool needs nothing further: when a device
+passes verification the tool writes the version it read to the device's
+inventory host, the tracked set is rebuilt and the alerts that no longer
+match are resolved, and the open pages refetch. An APC UPS is polled at
+that moment instead, because its UPS firmware is read by the monitoring
+poll (monitoring must be enabled). A campaign device added by IP address
+has no inventory host and is not tracked. After an upgrade done outside
+Plexus, a **Sync** of the device's inventory group reads the new version
+with the same result.
+
+Each rebuild compares every
 device's version with the last one: a change is recorded with the previous
 version and the time (**Recent Version Changes**, and the *was X* note under
 the device), and every version a device has run is kept with the period it

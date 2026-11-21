@@ -88,9 +88,15 @@ def _patched(monkeypatch: pytest.MonkeyPatch):
     async def fake_update(dev_id, **kw):
         db_writes.append(kw)
 
+    shared: list[str] = []
+
+    async def fake_share(cid, did, running_version):
+        shared.append(running_version)
+
     monkeypatch.setattr(upgrades, "_emit", fake_emit)
     monkeypatch.setattr(upgrades, "_emit_device_status", fake_emit_device_status)
     monkeypatch.setattr(upgrades.db, "update_upgrade_device", fake_update)
+    monkeypatch.setattr(upgrades, "_share_running_version", fake_share)
 
     async def fake_resolve_device_type(_dev):
         return "cisco_xe"
@@ -115,7 +121,7 @@ def _patched(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(upgrades, "_wait_for_reboot", fake_wait_for_reboot)
     monkeypatch.setattr(upgrades, "_check_image_exists", fake_check_image_exists)
 
-    return {"emits": emits, "db": db_writes, "status": status_emits, "holder": holder}
+    return {"emits": emits, "db": db_writes, "status": status_emits, "holder": holder, "shared": shared}
 
 
 def _final_verify_state(db_writes: list[dict]) -> tuple[str | None, str | None]:
@@ -158,6 +164,7 @@ async def test_commit_failure_marks_device_failed_not_verified(monkeypatch: pyte
     assert all(w.get("verify_status") != "completed" for w in _patched["db"]), (
         "device was marked completed despite a failed commit"
     )
+    assert _patched["shared"] == [], "an unverified version must not reach the inventory host"
     assert not any(w.get("phase") == "verified" for w in _patched["db"]), (
         "device phase set to verified despite a failed commit"
     )
@@ -179,6 +186,7 @@ async def test_post_commit_rollback_is_detected(monkeypatch: pytest.MonkeyPatch,
     assert _final_status(_patched["db"], "activate_status") == "failed"
     assert err and "post-commit" in err.lower()
     assert all(w.get("verify_status") != "completed" for w in _patched["db"])
+    assert _patched["shared"] == []
 
 
 @pytest.mark.asyncio
@@ -216,6 +224,8 @@ async def test_successful_commit_and_reverify_marks_verified(monkeypatch: pytest
     assert verify == "completed", f"clean upgrade must verify, got {verify!r}"
     assert err == "", f"verified device must clear error_message, got {err!r}"
     assert any(w.get("phase") == "verified" for w in _patched["db"])
+    # The verified version goes to the inventory host, once.
+    assert _patched["shared"] == ["17.15.05"]
 
 
 @pytest.mark.asyncio

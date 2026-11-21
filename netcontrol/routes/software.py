@@ -46,6 +46,7 @@ from netcontrol.integrations.software.versions import (
     SEVERITIES,
     UPS_FIRMWARE_PLATFORM,
     classify_host,
+    compare_versions,
     find_advisory_matches,
     normalize_severity,
     severity_at_least,
@@ -53,6 +54,7 @@ from netcontrol.integrations.software.versions import (
     snapshot_devices,
     validate_version_spec,
     version_spread,
+    version_tokens,
 )
 from netcontrol.object_scope import (
     filter_rows,
@@ -391,7 +393,8 @@ async def refresh_software(*, notify: bool = True) -> dict[str, Any]:
 
 
 async def refresh_after_collection() -> None:
-    """Called when a topology collection was stored. Never raises."""
+    """Called when a topology collection or an inventory discovery sync was
+    stored, or one host's version was recorded. Never raises."""
     try:
         result = await refresh_software(notify=True)
         LOGGER.info(
@@ -402,6 +405,26 @@ async def refresh_after_collection() -> None:
         )
     except Exception as exc:  # noqa: BLE001 - the collection is already stored
         LOGGER.warning("software: refresh after collection failed: %s", type(exc).__name__, exc_info=True)
+
+
+async def record_host_version(host_id: int, version: str) -> bool:
+    """Store the version one device was just seen running on its inventory
+    host, and bring the tracker and its alerts along.
+
+    The host is the record the Inventory page, this tracker, reports and
+    the API all read, so a caller that read a device outside a discovery
+    sync (the upgrade tool, after a verified upgrade) writes it here rather
+    than keeping a copy of its own. Returns whether the host changed: the
+    release the host already has, however it is spelled, costs one read.
+    """
+    if not version_tokens(version):
+        return False
+    host = await db.get_host(host_id)
+    if not host or compare_versions(host.get("software_version"), version) == 0:
+        return False
+    await db.update_host_device_info(host_id, host.get("model") or "", str(version).strip())
+    await refresh_after_collection()
+    return True
 
 
 # ── Cisco PSIRT sync ─────────────────────────────────────────────────────────

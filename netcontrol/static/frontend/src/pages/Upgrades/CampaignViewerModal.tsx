@@ -5,6 +5,7 @@ import {
   type UpgradeDevice,
   type UpgradeOperation,
   type UpgradePhase,
+  applyCampaignCacheEvent,
   useCancelUpgradeCampaign,
   useCancelUpgradeDevices,
   useConfirmUpgradeLogicReset,
@@ -604,12 +605,7 @@ export function CampaignViewerModal({ campaignId, onClose }: Props) {
         return;
       }
 
-      if (msg.type === 'campaign_complete') {
-        // Reload campaign to get fresh device statuses + clear running flags
-        qc.invalidateQueries({ queryKey: ['upgrade-campaign', campaignId] });
-        qc.invalidateQueries({ queryKey: ['upgrade-campaigns'] });
-        return;
-      }
+      if (applyCampaignCacheEvent(qc, campaignId, msg.type)) return;
 
       if (msg.type === 'upgrade_event' && typeof msg.message === 'string') {
         const ts = formatBackendTimestamp(msg.timestamp, '');

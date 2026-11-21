@@ -1,6 +1,32 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { ApiError, apiRequest, getCsrfToken } from './client';
+import { invalidateHostFacts } from './inventory';
+
+/**
+ * Refetches what a campaign websocket event says the server changed.
+ * `campaign_complete`: the campaign and the campaign list (final device
+ * statuses, running flags cleared). `inventory_updated`: a verified
+ * device's version reached its inventory host, so the Inventory page, the
+ * map and the software tracker and its alerts follow. Returns whether the
+ * event was one of these.
+ */
+export function applyCampaignCacheEvent(
+  qc: ReturnType<typeof useQueryClient>,
+  campaignId: number,
+  eventType: string | undefined,
+): boolean {
+  if (eventType === 'campaign_complete') {
+    qc.invalidateQueries({ queryKey: ['upgrade-campaign', campaignId] });
+    qc.invalidateQueries({ queryKey: ['upgrade-campaigns'] });
+    return true;
+  }
+  if (eventType === 'inventory_updated') {
+    invalidateHostFacts(qc);
+    return true;
+  }
+  return false;
+}
 
 export interface ConfigBackup {
   filename: string;
