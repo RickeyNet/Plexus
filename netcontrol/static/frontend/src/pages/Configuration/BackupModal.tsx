@@ -72,6 +72,7 @@ function ConfigView({ query }: { query: ReturnType<typeof useConfigBackupDetail>
         Captured: {formatBackendDateTime(data.captured_at, '')} • Method: {data.capture_method || '-'} • Status:{' '}
         {data.status}
       </div>
+      {data.secrets_masked && <SecretsMaskedNote />}
       <pre className="drift-diff-viewer">{data.config_text || '(empty)'}</pre>
     </>
   );
@@ -101,7 +102,16 @@ function DiffView({ backupId }: { backupId: number | null }) {
         <span className="drift-diff-added">+{data.diff_lines_added || 0}</span>
         <span className="drift-diff-removed">-{data.diff_lines_removed || 0}</span>
       </div>
+      {data.secrets_masked && <SecretsMaskedNote />}
       <UnifiedDiff diffText={data.diff_text} />
     </>
+  );
+}
+
+function SecretsMaskedNote() {
+  return (
+    <div style={{ fontSize: '0.85em', marginBottom: '0.75rem', color: 'var(--text-muted)' }}>
+      Secrets (passwords, keys, SNMP communities) are shown masked.
+    </div>
   );
 }

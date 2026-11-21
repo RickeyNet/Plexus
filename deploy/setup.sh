@@ -2,10 +2,30 @@
 # ═══════════════════════════════════════════════════════════════════════
 # Plexus Deployment Setup Script
 # Run this once on the VM before 'docker compose up'
+#
+# Usage:
+#   bash deploy/setup.sh                    # APP_API_TOKEN left empty
+#   bash deploy/setup.sh --with-api-token   # also generate APP_API_TOKEN
+#   PLEXUS_ENABLE_API_TOKEN=true bash deploy/setup.sh   # same as the flag
+#
+# APP_API_TOKEN is a static, admin-equivalent server secret: a request that
+# carries it skips CSRF, the per-IP API rate limit and the session limits.
+# Only generate it when automation or a federation peer needs it.
 # ═══════════════════════════════════════════════════════════════════════
 
 set -e
 cd "$(dirname "$0")/.."
+
+WITH_API_TOKEN=false
+case "${PLEXUS_ENABLE_API_TOKEN:-}" in
+    1|true|TRUE|True|yes|YES|on|ON) WITH_API_TOKEN=true ;;
+esac
+for arg in "$@"; do
+    case "${arg}" in
+        --with-api-token) WITH_API_TOKEN=true ;;
+        *) echo "Unknown option: ${arg} (supported: --with-api-token)" >&2; exit 2 ;;
+    esac
+done
 
 echo "═══════════════════════════════════════════════════"
 echo "  Plexus Deployment Setup"
@@ -16,8 +36,12 @@ if [ ! -f .env ]; then
     echo ""
     echo "[1/3] Creating .env file..."
 
-    # Generate a random API token
-    API_TOKEN=$(python3 -c "import secrets; print(secrets.token_urlsafe(48))" 2>/dev/null || openssl rand -base64 36)
+    # The static API token is opt-in (--with-api-token or
+    # PLEXUS_ENABLE_API_TOKEN=true); new installs leave it empty.
+    API_TOKEN=""
+    if [ "${WITH_API_TOKEN}" = "true" ]; then
+        API_TOKEN=$(python3 -c "import secrets; print(secrets.token_urlsafe(48))" 2>/dev/null || openssl rand -base64 36)
+    fi
 
     # Generate a random DB password
     DB_PASSWORD=$(python3 -c "import secrets; print(secrets.token_urlsafe(24))" 2>/dev/null || openssl rand -base64 18)
@@ -45,10 +69,14 @@ APP_RELOAD=false
 # Set this to your server's hostname/URL
 APP_CORS_ORIGINS=https://$(hostname -f 2>/dev/null || echo "plexus.local")
 
-# API token for service-to-service access. Disabled by default because
-# the bundled deploy serves browser sessions (cookie-authenticated). Flip
-# to true and add X-API-Token: ${API_TOKEN} to every request if you want
-# to gate the API behind a static token for automation use.
+# Static server API token for automation and federation peers. Empty
+# means disabled (the default). A request that sends it as X-API-Token or
+# Authorization: Bearer acts as an admin and skips CSRF, the per-IP API
+# rate limit and the session limits, so treat it like a root password.
+# To enable it, put a long random value here (for example the output of
+# python3 -c "import secrets; print(secrets.token_urlsafe(48))") and run
+# docker compose up -d. APP_REQUIRE_API_TOKEN=true additionally demands it
+# on every /api/ request, which breaks browser sessions; leave it false.
 APP_REQUIRE_API_TOKEN=false
 APP_API_TOKEN=${API_TOKEN}
 
@@ -76,7 +104,13 @@ EOF
 
     # Holds the DB and first-login admin passwords: owner-only.
     chmod 600 .env
-    echo "  Created .env with random API token, DB password and admin password."
+    if [ -n "${API_TOKEN}" ]; then
+        echo "  Created .env with random API token, DB password and admin password."
+    else
+        echo "  Created .env with random DB password and admin password."
+        echo "  APP_API_TOKEN is empty (disabled); re-run with --with-api-token on a"
+        echo "  new install, or set it in .env, if automation needs it."
+    fi
     echo "  Edit .env to set APP_CORS_ORIGINS to your actual hostname."
 else
     echo "[1/3] .env already exists - skipping."
@@ -108,7 +142,9 @@ else
 fi
 
 # Host side of the in-app update handoff, bind-mounted into the container by
-# docker-compose.yml (deploy/plexus-updater.sh reads requests from it).
+# docker-compose.yml (deploy/plexus-updater.sh reads requests from it). Its
+# status twin, state/update-status, must be root-owned: deploy/bootstrap.sh
+# (or Docker, on first start) creates it, never this unprivileged script.
 mkdir -p state/updates
 
 # ── 3. Verify Docker is available ─────────────────────────────────────

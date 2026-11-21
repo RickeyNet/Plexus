@@ -9,8 +9,8 @@
 - **Method:** static code review in six slices (authentication, authorization,
   injection, SSRF and secrets, inbound surfaces, deploy/dependencies/frontend).
   Nothing was exploited against a running instance and the test suite was not run.
-- **Status:** no code was changed by the audit itself. Findings 1 to 14, 26, 40 and 41
-  have since been fixed in the working tree (see "Fix status"); the rest are open.
+- **Status:** no code was changed by the audit itself. Findings 1 to 30, 40 and 41
+  have since been fixed (see "Fix status"); the rest (31 to 39, 42 to 49) are open.
 
 The "Checked" column says whether the finding was re-read in the code a second time
 after the slice reviewer reported it: **yes** (confirmed), **partial** (the mechanism
@@ -39,8 +39,9 @@ collectors.
 
 ## Fix status
 
-Updated 2026-11-20. Fixed means changed in the working tree with tests; nothing was
-re-tested against a running deployment. Findings not listed are open.
+Updated 2026-11-20. Fixed means changed in the code with tests (1 to 14, 26, 40 and 41
+are committed; 15 to 25 and 27 to 30 are in the working tree); nothing was re-tested
+against a running deployment. Findings not listed are open.
 
 | # | Status | What changed, and what is left |
 |---|---|---|
@@ -58,7 +59,22 @@ re-tested against a running deployment. Findings not listed are open.
 | 12 | Fixed | Lists are priced at what they can return; a hard cap on resolved objects backs the estimate. |
 | 13 | Fixed | Admin-managed image allowlist for non-admin lab users (API only, no settings page yet). |
 | 14 | Fixed | Cookies follow `APP_COOKIE_SECURE` or `APP_HTTPS`. |
+| 15 | Fixed | A v1 / v2c trap from an inventory host is stored and acted on only with that host's stored community; the agent address is used only when the source is an inventory host; APC traps run in the bounded batch writer. SNMPv3 traps are stored, never acted on. There is no separate trap community per host. |
+| 16 | Fixed | Source allowlist (inventory addresses plus admin networks) and per-source rate limits on the trap, syslog and flow listeners; bounded per-source maps; a syslog clear resolves only syslog alerts of the same host; config-change messages cannot postpone a backup past 10 minutes. The allowlist settings are API only (`/api/admin/listener-sources`). |
+| 17 | Fixed | Non-admins launch secret-using jobs only against inventory hosts they may change, re-checked at queue time; output scrubbing covers base64, URL-encoded and hex forms. A per-secret "usable by" list was not added. |
+| 18 | Fixed | Discovery uses the service credential for a non-admin only toward inventory hosts they may change. Inventory collection already reads only such hosts. |
+| 19 | Fixed | Approval follows the groups of the target hosts, at plan and again at execute; lab promote goes through `plan_deployment` and needs `deployments.write`. |
+| 20 | Fixed | `clone_host` needs `config-drift` or `config-backups`. |
+| 21 | Fixed | Metadata addresses always blocked, unresolvable names refused, HTTP senders and SIEM TCP/TLS sinks connect to the approved addresses, federation checked per request. Not pinned: requests through an environment proxy, SIEM UDP beyond the first address, the SSO, git and sync clients (they re-check before each use). |
+| 22 | Fixed | A changed destination refuses the stored secret for federation peers, topology sources, notification channels, SIEM sinks, event webhooks and the RADIUS / TACACS+ / LDAP / OIDC settings. |
+| 23 | Fixed | The named secret paths of `auth_settings` rows are encrypted with `routes/crypto.py`; old rows are encrypted at the first start. An older release cannot read them afterwards. |
+| 24 | Fixed | Read-level users get masked contents, diffs and search results and no raw download; raw access needs `config-backups.write`. |
+| 25 | Fixed | The updater refuses symlinks and non-regular files (`O_NOFOLLOW`, one link, 64 KiB) and writes to a root-owned directory the container mounts read-only; the unit is sandboxed. The sandboxed unit was not exercised on a systemd host. |
 | 26 | Fixed | A key under 32 characters is replaced at start. |
+| 27 | Fixed | Setup leaves `APP_API_TOKEN` empty unless asked. Existing installs keep theirs. |
+| 28 | Fixed | Hash-pinned `requirements-cloud-lock.txt`, `--require-hashes`, pip-audit and SBOM steps, lock check. The image build was not run locally; `pip install --upgrade pip` in the Dockerfile is still unhashed. |
+| 29 | Fixed | Per-username progressive delay (three free failures, then 1 s doubling to 30 s) and a dummy hash for unknown usernames. |
+| 30 | Fixed | External sign-ins use only accounts of their own provider and bound subject; an admin changes an account's provider through the API (audited). |
 | 40 | Fixed | `netcontrol/csv_cells.py` guards report, billing and sweep exports. |
 | 41 | Fixed | Git names that start with `-` are refused. |
 

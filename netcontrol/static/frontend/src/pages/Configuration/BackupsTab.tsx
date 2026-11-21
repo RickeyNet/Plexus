@@ -31,7 +31,7 @@ import { BackupModal } from './BackupModal';
 import { BackupPolicyModal } from './BackupPolicyModal';
 import { RestoreBackupModal } from './RestoreBackupModal';
 import { type BackupView } from './helpers';
-import { useCanWriteHost, writeControl } from './scopeGating';
+import { RAW_BACKUP_REASON, useCanDownloadBackups, useCanWriteHost, writeControl } from './scopeGating';
 
 type SubTab = 'policies' | 'history';
 
@@ -57,6 +57,7 @@ export function BackupsTab() {
   const [editPolicy, setEditPolicy] = useState<ConfigBackupPolicy | null>(null);
   const [viewing, setViewing] = useState<{ id: number; view: BackupView } | null>(null);
   const [restoreId, setRestoreId] = useState<number | null>(null);
+  const canDownload = useCanDownloadBackups();
 
   return (
     <>
@@ -81,7 +82,7 @@ export function BackupsTab() {
             >
               New Policy
             </button>
-          ) : (
+          ) : canDownload ? (
             <a
               className="btn btn-sm btn-secondary"
               href={configBackupBulkDownloadUrl()}
@@ -89,6 +90,10 @@ export function BackupsTab() {
             >
               Download All
             </a>
+          ) : (
+            <button type="button" className="btn btn-sm btn-secondary" disabled title={RAW_BACKUP_REASON}>
+              Download All
+            </button>
           )}
         </div>
       </div>
@@ -325,6 +330,7 @@ function HistoryList({
   const remove = useDeleteBackup();
   const deleting = usePendingKeys<number>();
   const canWriteHost = useCanWriteHost();
+  const canDownload = useCanDownloadBackups();
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return backups;
@@ -404,7 +410,14 @@ function HistoryList({
                       <MenuItem
                         href={configBackupDownloadUrl(b.id)}
                         download
-                        title="Download running-config as .txt"
+                        disabled={!canDownload || !canWrite}
+                        title={
+                          !canDownload
+                            ? RAW_BACKUP_REASON
+                            : canWrite
+                              ? 'Download running-config as .txt'
+                              : writeControl(false).title
+                        }
                       >
                         Download
                       </MenuItem>

@@ -48,10 +48,14 @@ from netcontrol.routes.net_guard import (
     OutboundRequestError,
     validate_outbound_host,
 )
-from netcontrol.routes.outbound_http import guard_url, tls_verify
+from netcontrol.routes.outbound_http import MAX_PINNED_ADDRESSES, send_request, tls_verify
+from netcontrol.secret_fields import SECRET_MASK
 from netcontrol.telemetry import configure_logging
 
 LOGGER = configure_logging("plexus.siem")
+
+# Replaces the network layer of HTTPS sinks (tests); None in production.
+HTTP_TRANSPORT: httpx.AsyncBaseTransport | None = None
 
 # ── Constants ────────────────────────────────────────────────────────────────
 
@@ -249,11 +253,11 @@ def sink_config_to_dict(sc: SinkConfig, *, redact_secrets: bool = True) -> dict:
         "host": sc.host,
         "port": sc.port,
         "url": sc.url,
-        "bearer_token": "••••••••" if redact_secrets and sc.bearer_token else sc.bearer_token,
+        "bearer_token": SECRET_MASK if redact_secrets and sc.bearer_token else sc.bearer_token,
         "tls_verify": sc.tls_verify,
         "tls_ca_pem": sc.tls_ca_pem,
         "tls_client_cert_pem": sc.tls_client_cert_pem,
-        "tls_client_key_pem": "••••••••" if redact_secrets and sc.tls_client_key_pem else sc.tls_client_key_pem,
+        "tls_client_key_pem": SECRET_MASK if redact_secrets and sc.tls_client_key_pem else sc.tls_client_key_pem,
         "severity_floor": sc.severity_floor,
         "queue_size": sc.queue_size,
         "max_retries": sc.max_retries,
@@ -423,14 +427,14 @@ def frame_octet_counting(message: str) -> bytes:
 # ── Sink drivers ─────────────────────────────────────────────────────────────
 
 
-async def _deliver_udp(sink: SinkConfig, message: str) -> None:
+async def _deliver_udp(sink: SinkConfig, message: str, address: str) -> None:
     """Best-effort UDP send. We don't open a long-lived socket because UDP is
     connectionless and per-event create/close is cheap relative to the SIEM
-    latency itself."""
+    latency itself. ``address`` is the IP the SSRF check approved."""
     loop = asyncio.get_running_loop()
     transport, _proto = await loop.create_datagram_endpoint(
         lambda: asyncio.DatagramProtocol(),
-        remote_addr=(sink.host, sink.port),
+        remote_addr=(address, sink.port),
     )
     try:
         transport.sendto(message.encode("utf-8"))
@@ -438,12 +442,29 @@ async def _deliver_udp(sink: SinkConfig, message: str) -> None:
         transport.close()
 
 
-async def _deliver_tcp(sink: SinkConfig, message: str) -> None:
-    """TCP with RFC 6587 octet-counting framing. Reconnects per event."""
-    reader, writer = await asyncio.wait_for(
-        asyncio.open_connection(sink.host, sink.port),
-        timeout=DEFAULT_TCP_TIMEOUT,
-    )
+async def _open_approved(
+    addresses: list[str], port: int, timeout_s: float, **kwargs: Any
+) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
+    """A connection to the first of ``addresses`` (the IPs the SSRF check
+    approved, at most ``MAX_PINNED_ADDRESSES``) that accepts one, so a sink
+    name with an unreachable IPv6 answer still works over IPv4. A TLS
+    failure is not a reason to try another address."""
+    tried = addresses[:MAX_PINNED_ADDRESSES]
+    for index, address in enumerate(tried):
+        try:
+            return await asyncio.wait_for(asyncio.open_connection(address, port, **kwargs), timeout=timeout_s)
+        except ssl.SSLError:
+            raise
+        except OSError:
+            if index == len(tried) - 1:
+                raise
+    raise AssertionError("unreachable")  # pragma: no cover - the loop returns or raises
+
+
+async def _deliver_tcp(sink: SinkConfig, message: str, addresses: list[str]) -> None:
+    """TCP with RFC 6587 octet-counting framing. Reconnects per event, to
+    one of ``addresses`` (the IPs the SSRF check approved)."""
+    reader, writer = await _open_approved(addresses, sink.port, DEFAULT_TCP_TIMEOUT)
     try:
         writer.write(frame_octet_counting(message))
         await asyncio.wait_for(writer.drain(), timeout=DEFAULT_TCP_TIMEOUT)
@@ -495,13 +516,12 @@ def _build_tls_context(sink: SinkConfig) -> ssl.SSLContext:
     return ctx
 
 
-async def _deliver_tls(sink: SinkConfig, message: str) -> None:
-    """RFC 5425: syslog over TLS with octet-counting framing."""
+async def _deliver_tls(sink: SinkConfig, message: str, addresses: list[str]) -> None:
+    """RFC 5425: syslog over TLS with octet-counting framing. Connects to
+    one of ``addresses`` (the IPs the SSRF check approved); the TLS server
+    name and certificate check use the configured host name."""
     ctx = _build_tls_context(sink)
-    reader, writer = await asyncio.wait_for(
-        asyncio.open_connection(sink.host, sink.port, ssl=ctx),
-        timeout=DEFAULT_TLS_TIMEOUT,
-    )
+    reader, writer = await _open_approved(addresses, sink.port, DEFAULT_TLS_TIMEOUT, ssl=ctx, server_hostname=sink.host)
     try:
         writer.write(frame_octet_counting(message))
         await asyncio.wait_for(writer.drain(), timeout=DEFAULT_TLS_TIMEOUT)
@@ -528,12 +548,22 @@ async def _deliver_https(sink: SinkConfig, message: str) -> None:
     else:
         headers["Content-Type"] = "application/json"
 
-    # deliver() has already run the SSRF check on sink.url.
+    # send_request runs the SSRF check and connects to the approved address.
     verify = tls_verify(sink.tls_verify, sink.tls_ca_pem)
-    async with httpx.AsyncClient(timeout=DEFAULT_HTTPS_TIMEOUT, verify=verify) as client:
-        resp = await client.post(sink.url, content=message.encode("utf-8"), headers=headers)
-        if resp.status_code >= 400:
-            raise RuntimeError(f"https sink {sink.id}: HTTP {resp.status_code} {resp.text[:200]}")
+    try:
+        resp = await send_request(
+            "POST",
+            sink.url,
+            content=message.encode("utf-8"),
+            headers=headers,
+            verify=verify,
+            timeout_s=DEFAULT_HTTPS_TIMEOUT,
+            transport=HTTP_TRANSPORT,
+        )
+    except OutboundRequestError as exc:
+        raise RuntimeError(f"siem sink {sink.id}: target rejected: {exc}") from exc
+    if resp.status_code >= 400:
+        raise RuntimeError(f"https sink {sink.id}: HTTP {resp.status_code} {resp.text[:200]}")
 
 
 async def deliver(sink: SinkConfig, event: dict) -> None:
@@ -545,25 +575,28 @@ async def deliver(sink: SinkConfig, event: dict) -> None:
     else:
         message = rendered
 
-    # SSRF guard: reject metadata/link-local/loopback targets for
-    # admin-configured sinks (the raw socket protocols make this an internal
-    # connect primitive otherwise).
+    if sink.protocol == "https":
+        await _deliver_https(sink, message)  # guarded and pinned by send_request
+        return
+
+    # SSRF guard: reject metadata/link-local targets for admin-configured
+    # sinks (the raw socket protocols make this an internal connect
+    # primitive otherwise), then connect to the address it approved so a
+    # second DNS answer cannot redirect the event.
     try:
-        if sink.protocol == "https":
-            await guard_url(sink.url)
-        else:
-            await asyncio.to_thread(validate_outbound_host, sink.host)
+        ips = await asyncio.to_thread(validate_outbound_host, sink.host)
     except OutboundRequestError as exc:
         raise RuntimeError(f"siem sink {sink.id}: target rejected: {exc}") from exc
+    # Only an allow-listed name that does not resolve has no address.
+    addresses = [str(ip) for ip in ips] or [sink.host]
 
     if sink.protocol == "udp":
-        await _deliver_udp(sink, message)
+        # Connectionless: there is no failed connect to fall back from.
+        await _deliver_udp(sink, message, addresses[0])
     elif sink.protocol == "tcp":
-        await _deliver_tcp(sink, message)
+        await _deliver_tcp(sink, message, addresses)
     elif sink.protocol == "tls":
-        await _deliver_tls(sink, message)
-    elif sink.protocol == "https":
-        await _deliver_https(sink, message)
+        await _deliver_tls(sink, message, addresses)
     else:
         raise ValueError(f"unsupported protocol: {sink.protocol}")
 

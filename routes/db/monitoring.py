@@ -544,19 +544,38 @@ async def acknowledge_monitoring_alert(
         await db.close()
 
 
-async def resolve_monitoring_alerts(dedup_key: str, resolved_by: str = "auto-resolved") -> int:
+async def resolve_monitoring_alerts(
+    dedup_key: str,
+    resolved_by: str = "auto-resolved",
+    *,
+    alert_type: str = "",
+    host_id: int | None = None,
+) -> int:
     """Acknowledge the open alerts with ``dedup_key`` as ``resolved_by``: the
-    condition that raised them has cleared. Returns how many were open."""
+    condition that raised them has cleared. With ``alert_type`` and
+    ``host_id`` (always both), only the open alerts of that type on that
+    host: a source that may only clear its own alerts (syslog). Returns how
+    many were open."""
     if not dedup_key:
         return 0
+    if bool(alert_type) != (host_id is not None):
+        raise ValueError("alert_type and host_id go together")
     db = await _dbcore.get_db()
     try:
-        cursor = await db.execute(
-            """UPDATE monitoring_alerts
-               SET acknowledged = 1, acknowledged_by = ?, acknowledged_at = datetime('now')
-               WHERE dedup_key = ? AND acknowledged = 0""",
-            (resolved_by, dedup_key),
-        )
+        if alert_type:
+            cursor = await db.execute(
+                """UPDATE monitoring_alerts
+                   SET acknowledged = 1, acknowledged_by = ?, acknowledged_at = datetime('now')
+                   WHERE dedup_key = ? AND acknowledged = 0 AND alert_type = ? AND host_id = ?""",
+                (resolved_by, dedup_key, alert_type, int(host_id or 0)),
+            )
+        else:
+            cursor = await db.execute(
+                """UPDATE monitoring_alerts
+                   SET acknowledged = 1, acknowledged_by = ?, acknowledged_at = datetime('now')
+                   WHERE dedup_key = ? AND acknowledged = 0""",
+                (resolved_by, dedup_key),
+            )
         await db.commit()
         return cursor.rowcount or 0
     finally:

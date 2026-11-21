@@ -185,8 +185,9 @@ async def test_ldap_claims_preexisting_shadow_user_then_resyncs(monkeypatch):
     await _fresh_db()
     _ldap_state_config(monkeypatch)
 
-    # Pre-provenance shadow account (created before the auth_provider column).
-    await db_module.create_user("legacy", "hash", "salt", role="user")
+    # An existing LDAP-managed account (a local or unmanaged one is never
+    # adopted: tests/test_external_account_adoption.py).
+    await db_module.create_user("legacy", "hash", "salt", role="user", auth_provider="ldap")
 
     user = await app_module.upsert_ldap_user("legacy", _ADMIN_GROUPS)
     assert user["role"] == "admin"
@@ -266,7 +267,7 @@ async def test_radius_claims_preexisting_non_admin_without_default_groups(monkey
     )
     monkeypatch.setattr(app_module.state, "AUTH_CONFIG", cfg)
 
-    await db_module.create_user("legacy", "hash", "salt", role="user")
+    await db_module.create_user("legacy", "hash", "salt", role="user", auth_provider="radius")
 
     user = await app_module.upsert_radius_user("legacy")
     assert user is not None

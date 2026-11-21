@@ -113,8 +113,17 @@ Plexus has two kinds of token. There are no per-user API tokens.
 | Server API token | `APP_API_TOKEN` in the server's `.env` ([deploy/DEPLOYMENT.md](../deploy/DEPLOYMENT.md)) | Sent as `X-API-Token: <token>` or `Authorization: Bearer <token>`. Acts as an admin on every `/api/*` route and needs no CSRF token. Federation peers use it. |
 | AI access (MCP) token | **Settings > AI Access** | Read-only access to the MCP endpoint only, limited to chosen categories and to what its owner may see. See [ai-access.md](ai-access.md). |
 
-Treat the server API token like a root password. `APP_REQUIRE_API_TOKEN=true`
-forces non-session API calls to present it.
+Treat the server API token like a root password. A request that carries it
+skips the CSRF check, the per-IP API rate limit and the session limits (idle
+timeout, sign-out on change). It is off unless set: `deploy/setup.sh` leaves
+`APP_API_TOKEN` empty on a new install. To enable it, run setup with
+`--with-api-token` (or `PLEXUS_ENABLE_API_TOKEN=true`, which
+`deploy/bootstrap.sh` and the air-gap installer pass on), or put a long
+random value in `.env` yourself (`python3 -c "import secrets;
+print(secrets.token_urlsafe(48))"`) and run `docker compose up -d`. Clear the
+line and restart to turn it off. Installs set up before this change keep the
+token they have. `APP_REQUIRE_API_TOKEN=true` forces non-session API calls
+to present it.
 
 ## Tab by tab
 
@@ -132,6 +141,15 @@ forces non-session API calls to present it.
   without a lockout. **Idle timeout (s, 0 = off)** (default 1800, at most
   86400) signs out a session with no requests for that long. Choose
   **Save Login Rules**.
+- **Per-username delay** (fixed, not on the tab). Failed password sign-ins
+  also count against the username, from any address and whether or not
+  the account exists. The first 3 failures cost nothing; each attempt
+  after that waits 1 s, then 2, 4, 8, 16 and at most 30 s before the
+  password is checked. It is a delay, never a lock: the right password
+  still signs in, after at most 30 s. Parallel attempts for one username
+  are spaced by the delay. A successful sign-in, or 15 minutes without a
+  failure, clears it. An unknown username costs the same password hash
+  and gets the same "Invalid username or password" as a wrong password.
 - **Authentication.** **Auth Provider** is **Local**, **RADIUS**,
   **TACACS+** or **LDAP**, each with **Default Access Groups** for new
   users. **Default Credential** is the per-user fallback for jobs launched
@@ -141,6 +159,35 @@ forces non-session API calls to present it.
   [TACACS+](../TACACS_CONFIGURATION_GUIDE.md), LDAP in
   [deploy/DEPLOYMENT.md](../deploy/DEPLOYMENT.md), and OIDC single sign-on,
   set up on this tab as well, in [sso-oidc.md](sso-oidc.md).
+- **Stored secrets.** The RADIUS and TACACS+ secrets, the LDAP bind
+  password and the OIDC client secret are shown masked. Saving the mask
+  keeps a secret only while its server stays the same: a new server or
+  port, changed LDAP TLS settings, or a new OIDC issuer host needs the
+  secret typed again (the save is refused with `400` otherwise). These
+  secrets, the SNMP communities and v3 keys of SNMP profiles, the SIEM sink
+  tokens and the notification channel secrets are stored encrypted in the
+  database (`auth_settings`, with the key in `netcontrol.key`). Rows saved
+  by an older release are encrypted the first time the server starts.
+- **External accounts.** An LDAP, RADIUS, TACACS+, OIDC or SAML sign-in
+  creates its Plexus account on first use and records the provider on it.
+  It signs in to an existing account only when that account was created by
+  (or already belongs to) the same provider, and for OIDC and SAML only
+  with the subject bound to it. A local account, or one another provider
+  manages, with the same username is never taken over: the sign-in is
+  refused with "Invalid username or password" (SSO: the generic sign-in
+  error) and audited as `auth` / `login.adopt_refused`. Local admins keep
+  signing in with their local password (break-glass). An account created
+  by an external sign-in before Plexus recorded providers, and not signed
+  in through it since, looks like a local account and is refused too:
+  delete it (the next sign-in recreates it with the default access groups)
+  or set its provider with `PUT /api/admin/users/{id}` and
+  `{"auth_provider": "ldap"}` (`local`, `ldap`, `radius`, `tacacs`, `oidc`
+  or `saml`; API only). Changing the provider is how an admin hands an
+  existing account to an external sign-in on purpose: it forgets the SSO
+  subject bound to the account (the next OIDC or SAML sign-in binds its
+  own), ends the account's open sessions and is audited as `auth` /
+  `user.provider_change`. `GET /api/admin/users` shows each account's
+  `auth_provider`.
 - **Service Credentials.** **+ Add Service Credential** stores a **Name**,
   **Username**, **Password** and optional **Enable Secret** that only
   admins can create or change.
@@ -229,6 +276,57 @@ changed here needs the matching container port in `docker-compose.yml`, and
 the firewall must let the devices reach the host port
 ([deploy/FIREWALL.md](../deploy/FIREWALL.md)).
 
+#### Listener sources
+
+UDP source addresses can be forged, so the trap receiver, the syslog
+receiver and the flow collector share one source allowlist and a
+per-source rate limit (`netcontrol/listener_sources.py`):
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `policy` | `inventory` | `inventory`: a datagram is processed only when its source is an inventory host address (a host's primary IP or a recorded interface IP). `any`: every source, as before. |
+| `extra_cidrs` | none | Networks (or single addresses) accepted in addition to the inventory hosts, up to 256. For a flow exporter or firewall that is not an inventory host. |
+| `trap_rate_limit` | 100 | SNMP trap datagrams per second per source address. |
+| `syslog_rate_limit` | 1000 | Syslog datagrams per second per source address. |
+| `flow_rate_limit` | 5000 | NetFlow / IPFIX / sFlow datagrams per second per source address. |
+
+A rate limit of 0 turns it off. A source may send a burst of two seconds'
+worth of its limit. The settings have no Settings tab field yet: read and
+change them with `GET` / `PUT /api/admin/listener-sources` (admin only; a
+field left out keeps its saved value, an invalid network or policy is
+refused with 422, and every change is audited as
+`listener_sources.updated`):
+
+```bash
+curl http://localhost:8080/api/admin/listener-sources
+curl -X PUT http://localhost:8080/api/admin/listener-sources \
+  -H "Content-Type: application/json" \
+  -d '{"extra_cidrs": ["198.51.100.0/24"]}'
+```
+
+The inventory addresses are cached in memory: loaded when a listener
+starts, after every host add, edit or delete, and in the background at
+most once a minute while datagrams arrive. A datagram never causes a
+database query.
+
+A dropped datagram is not parsed and not counted as **Received**. Each
+listener counts its drops since Plexus started: `dropped_source` (not an
+allowed source), `dropped_rate` (over the rate limit) and, for traps,
+`dropped_community` (wrong SNMP community, see
+[apc-ups.md](apc-ups.md#snmp-traps)). They are in the GET response above,
+in `GET /api/admin/metrics/receivers/config` (`syslog_dropped_source`,
+`trap_dropped_rate`, `trap_dropped_community`, ...) and in the flow
+collector's `GET /api/flows/status` and `/api/admin/flows/config`. Drops are
+logged at warning level at most once a minute per listener, with the count
+since the last line.
+
+**Upgrading:** sources that are not inventory hosts are dropped by default.
+A device that sends syslog, traps or flows from an address Plexus does not
+know (not its primary IP and not a recorded interface IP) is silent after
+the upgrade until its address is added to the host (or recorded by
+discovery), its network is added to `extra_cidrs`, or `policy` is set to
+`any`. The drop counters and the log line name the case.
+
 ### Notifications
 
 Email, PagerDuty, webhook and Microsoft Teams channels for monitoring
@@ -314,7 +412,7 @@ for the general rules.
 ```
 GET    /api/admin/users
 POST   /api/admin/users
-PUT    /api/admin/users/{id}                 (username, display_name, role, session_never_expires)
+PUT    /api/admin/users/{id}                 (username, display_name, role, session_never_expires, auth_provider)
 PUT    /api/admin/users/{id}/password        {"new_password": "..."}
 PUT    /api/admin/users/{id}/groups          {"group_ids": [2, 5]}
 DELETE /api/admin/users/{id}

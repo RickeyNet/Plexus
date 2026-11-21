@@ -67,6 +67,8 @@ mkdir -p "$INSTALL_DIR"
 cp -r "$BUNDLE_DIR"/repo/. "$INSTALL_DIR"/
 
 # ── 4. Run setup.sh (generates .env + self-signed cert) ──────────────
+# APP_API_TOKEN stays empty unless PLEXUS_ENABLE_API_TOKEN=true is set
+# (sudo PLEXUS_ENABLE_API_TOKEN=true bash install.sh); setup.sh reads it.
 echo ""
 echo "[4/5] Running deploy/setup.sh..."
 cd "$INSTALL_DIR"

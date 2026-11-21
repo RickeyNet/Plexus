@@ -65,9 +65,14 @@ from routes.db.change_events import (
 
 from netcontrol.intended_config import Renderer, check_syntax
 from netcontrol.mcp.redact import redact_value
-from netcontrol.routes.notification_channels import REDACTION_MASK
 from netcontrol.routes.outbound_http import OutboundRequestError, guard_url, send_request, tls_verify
 from netcontrol.routes.shared import _audit, _corr_id, _session_user
+from netcontrol.secret_fields import (
+    SECRET_MASK as REDACTION_MASK,
+    compared_tls_verify,
+    refuse_secret_reuse,
+    url_origin,
+)
 from netcontrol.telemetry import configure_logging
 
 LOGGER = configure_logging("plexus.webhooks")
@@ -271,6 +276,7 @@ async def build_columns(body: WebhookRequest, existing: dict | None) -> dict:
         if cleaned:
             filters[key] = cleaned
     old_headers = _decrypt_headers(existing) if existing else {}
+    kept: list[str] = []  # stored secrets this request keeps without sending them
     headers: dict[str, str] = {}
     for name, value in body.headers.items():
         name = name.strip()
@@ -282,6 +288,7 @@ async def build_columns(body: WebhookRequest, existing: dict | None) -> dict:
             if name not in old_headers:
                 raise ValueError(f"Header '{name}' has no stored value to keep; enter one.")
             value = old_headers[name]
+            kept.append(f"header {name}")
         if any(c in value for c in "\r\n\x00") or len(value) > 4000:
             raise ValueError(f"Header '{name}' has a value that is too long or contains a line break.")
         headers[name] = value
@@ -298,8 +305,29 @@ async def build_columns(body: WebhookRequest, existing: dict | None) -> dict:
             raise ValueError("CA bundle is not a valid PEM certificate bundle.") from exc
     if body.secret is None or body.secret == REDACTION_MASK:
         secret_enc = (existing or {}).get("secret_enc") or ""
+        if secret_enc:
+            kept.append("signing secret")
     else:
         secret_enc = encrypt(body.secret) if body.secret else ""
+    if existing is not None:
+        # The stored header values and secret go to the target URL: one that
+        # changes where they go must send them again.
+        old_verify = bool(existing.get("verify_tls"))
+        refuse_secret_reuse(
+            {
+                "url": url_origin(existing.get("url")),
+                "verify_tls": old_verify,
+                "ca_bundle": str(existing.get("ca_bundle") or "").strip(),
+            },
+            {
+                "url": url_origin(url),
+                "verify_tls": compared_tls_verify(old_verify, body.verify_tls),
+                "ca_bundle": ca_bundle,
+            },
+            ("url", "verify_tls", "ca_bundle"),
+            stored=kept,
+            resent=[],
+        )
     return {
         "name": body.name.strip(),
         "enabled": 1 if body.enabled else 0,

@@ -70,3 +70,61 @@ def test_included_files_are_followed(tmp_path):
     req, lck = _write(tmp_path, "-r base.txt\nalpha-pkg\n")
     problems = lockcheck.check(req, lck)
     assert len(problems) == 1 and "missing-dep" in problems[0]
+
+
+# ── Cloud SDK lock (requirements-cloud-lock.txt) ─────────────────────────────
+
+
+def test_repository_cloud_lock_covers_base_and_cloud_requirements():
+    reqs = [REPO_ROOT / "requirements.txt", REPO_ROOT / "requirements-cloud.txt"]
+    assert lockcheck.check(reqs, REPO_ROOT / "requirements-cloud-lock.txt") == []
+
+
+def test_repository_cloud_lock_matches_the_base_lock():
+    base, cloud = REPO_ROOT / "requirements-lock.txt", REPO_ROOT / "requirements-cloud-lock.txt"
+    assert lockcheck.check_consistent(base, cloud, lockcheck.CLOUD_LOCK_DIVERGENT) == []
+
+
+def test_repository_cloud_lock_is_hashed_and_universal():
+    text = (REPO_ROOT / "requirements-cloud-lock.txt").read_text(encoding="utf-8")
+    assert "--generate-hashes" in text and "--universal" in text and "--python-version 3.14" in text
+    pins = [line for line in text.splitlines() if line[:1].isalnum() and "==" in line]
+    assert pins and all(line.rstrip().endswith("\\") for line in pins)  # every pin carries hashes
+    # No local paths leak into the provenance comments.
+    assert ":/" not in text.replace("https://", "") and "Users" not in text
+
+
+def test_check_accepts_several_requirement_files(tmp_path):
+    req, lck = _write(tmp_path, "alpha-pkg\n")
+    extra = tmp_path / "extra.txt"
+    extra.write_text("beta\nnot-locked\n", encoding="utf-8")
+    problems = lockcheck.check([req, extra], lck)
+    assert len(problems) == 1 and "not-locked" in problems[0]
+
+
+def test_consistency_reports_diverging_shared_pins(tmp_path):
+    base = tmp_path / "base-lock.txt"
+    base.write_text(LOCK, encoding="utf-8")
+    cloud = tmp_path / "cloud-lock.txt"
+    cloud.write_text(
+        LOCK.replace("alpha-pkg==1.2.0", "alpha-pkg==1.3.0") + "delta==1.0 \\\n    --hash=sha256:eeee\n",
+        encoding="utf-8",
+    )
+    problems = lockcheck.check_consistent(base, cloud)
+    assert len(problems) == 1 and "alpha-pkg" in problems[0]
+    assert lockcheck.check_consistent(base, cloud, allowed={"alpha-pkg"}) == []
+
+
+def test_constraints_lists_pins_without_hashes(tmp_path, capsys):
+    lck = tmp_path / "lock.txt"
+    lck.write_text(LOCK, encoding="utf-8")
+    assert lockcheck.constraints(lck, exclude={"Beta"}) == ["alpha-pkg==1.2.0", "gamma[extra]==0.5.1"]
+    assert lockcheck.main(["--constraints", str(lck), "--exclude", "gamma"]) == 0
+    out = capsys.readouterr().out.split()
+    assert out == ["alpha-pkg==1.2.0", "beta==2.0.0", ";", "sys_platform", "!=", "'win32'"]
+
+
+def test_main_without_arguments_checks_both_locks(capsys):
+    assert lockcheck.main([]) == 0
+    out = capsys.readouterr().out
+    assert "requirements-lock.txt" in out and "requirements-cloud-lock.txt" in out

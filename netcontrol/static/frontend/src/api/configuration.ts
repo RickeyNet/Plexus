@@ -78,6 +78,8 @@ export interface ConfigBackup {
 
 export interface ConfigBackupDetail extends ConfigBackup {
   config_text?: string;
+  /** Secrets in the text are masked (no config-backups write access, or OPNsense). */
+  secrets_masked?: boolean;
 }
 
 export interface ConfigBackupDiff {
@@ -88,6 +90,8 @@ export interface ConfigBackupDiff {
   diff_text?: string | null;
   diff_lines_added?: number;
   diff_lines_removed?: number;
+  /** Secrets in the diff are masked (no config-backups write access, or OPNsense). */
+  secrets_masked?: boolean;
 }
 
 export interface ConfigBackupSearchResult {

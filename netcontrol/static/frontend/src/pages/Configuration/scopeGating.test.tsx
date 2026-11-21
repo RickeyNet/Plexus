@@ -12,12 +12,13 @@ import { CaptureSnapshotModal } from './CaptureSnapshotModal';
 import { DriftTab } from './DriftTab';
 import { IntendedDetailModal } from './IntendedDetailModal';
 import { SetBaselineModal } from './SetBaselineModal';
-import { writeControl } from './scopeGating';
+import { RAW_BACKUP_REASON, useCanDownloadBackups, writeControl } from './scopeGating';
 
 // Group 4 (host 40) is read only, group 5 (host 50) is writable; group 6 is
 // not readable at all (the server would not list it).
 const state = vi.hoisted(() => ({
   scope: { restricted: true, write_group_ids: [5] } as { restricted: boolean; write_group_ids: number[] },
+  features: [] as string[],
   inventoryCalls: [] as boolean[],
   detail: undefined as unknown,
 }));
@@ -39,7 +40,9 @@ const GROUPS = [
   { id: 5, name: 'site-b', hosts: [{ id: 50, hostname: 'edge-b', ip_address: '198.51.100.20' }] },
 ];
 
-vi.mock('@/api/auth', () => ({ useAuthStatus: () => ({ data: { role: 'user', object_scope: state.scope } }) }));
+vi.mock('@/api/auth', () => ({
+  useAuthStatus: () => ({ data: { role: 'user', object_scope: state.scope, feature_access: state.features } }),
+}));
 vi.mock('@/api/compliance', () => ({
   useInventoryGroups: (_hosts?: boolean, enabled = true) => {
     state.inventoryCalls.push(enabled);
@@ -109,6 +112,7 @@ function button(html: string, label: string, from = 0): string {
 
 beforeEach(() => {
   state.scope = { restricted: true, write_group_ids: [5] };
+  state.features = [];
   state.inventoryCalls = [];
 });
 
@@ -117,6 +121,17 @@ describe('writeControl', () => {
     expect(writeControl(true)).toEqual({ disabled: false });
     expect(writeControl(true, true)).toEqual({ disabled: true });
     expect(writeControl(false)).toEqual({ disabled: true, title: READ_ONLY_GROUP_REASON });
+  });
+});
+
+describe('Raw backup download', () => {
+  it('needs config-backups write access', () => {
+    state.scope = { restricted: false, write_group_ids: [] };
+    state.features = ['config-backups'];
+    expect(useCanDownloadBackups()).toBe(false);
+    state.features = ['config-backups', 'config-backups.write'];
+    expect(useCanDownloadBackups()).toBe(true);
+    expect(RAW_BACKUP_REASON).toContain('secrets');
   });
 });
 

@@ -9,6 +9,13 @@ Provides:
 
 Object scope: every route is admin only (``require_admin``) and admins are
 unrestricted, so the routes are marked exempt.
+
+Outbound requests: every request to a peer goes through
+``outbound_http.send_request``, which runs the SSRF guard at request time
+(not only when the URL was saved) and connects to the address it approved.
+A peer's stored API token is admin-equivalent on the other instance, so an
+update that changes where it is sent (scheme, host, port, TLS verification)
+must send the token again (``secret_fields.refuse_secret_reuse``).
 """
 
 from __future__ import annotations
@@ -26,9 +33,10 @@ from pydantic import BaseModel, Field
 from routes.crypto import decrypt, encrypt
 
 from netcontrol.object_scope import scope_exempt
-from netcontrol.routes.net_guard import OutboundRequestError, validate_outbound_url
+from netcontrol.routes.outbound_http import OutboundRequestError, guard_url, send_request
 from netcontrol.routes.shared import _audit, _corr_id, _get_session
 from netcontrol.routes.state import _env_flag
+from netcontrol.secret_fields import compared_tls_verify, refuse_secret_reuse, url_origin
 from netcontrol.telemetry import configure_logging
 
 router = APIRouter()
@@ -39,6 +47,8 @@ _require_admin = None
 # Background sync defaults
 _SYNC_INTERVAL_SECONDS = 300  # 5 minutes
 _HTTP_TIMEOUT_SECONDS = 30
+# Replaces the network layer of peer requests (tests); None in production.
+HTTP_TRANSPORT: httpx.AsyncBaseTransport | None = None
 
 
 # ── Late-binding init ────────────────────────────────────────────────────────
@@ -79,8 +89,9 @@ class PeerUpdate(BaseModel):
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 
-def _validate_url(url: str) -> str:
-    """Validate and normalize a peer URL (scheme, hostname, SSRF guard)."""
+def _check_peer_url(url: str) -> str:
+    """Normalize a peer URL and check its scheme and hostname (no lookup).
+    Raises HTTPException(422)."""
     url = url.strip().rstrip("/")
     parsed = urlparse(url)
     if parsed.scheme not in ("http", "https"):
@@ -100,12 +111,41 @@ def _validate_url(url: str) -> str:
         )
     if not parsed.hostname:
         raise HTTPException(status_code=422, detail="Peer URL must include a hostname")
-    # SSRF guard: reject metadata/link-local/loopback targets.
-    try:
-        validate_outbound_url(url)
-    except OutboundRequestError as exc:
-        raise HTTPException(status_code=422, detail=f"Peer URL rejected: {exc}")
     return url
+
+
+async def _validate_url(url: str) -> str:
+    """Validate and normalize a peer URL when it is saved (scheme, hostname,
+    SSRF guard). Every request runs the guard again (``_peer_get``)."""
+    url = _check_peer_url(url)
+    try:
+        await guard_url(url)
+    except OutboundRequestError as exc:
+        raise HTTPException(status_code=422, detail=f"Peer URL rejected: {exc}") from exc
+    return url
+
+
+async def _peer_get(peer, path: str) -> httpx.Response:
+    """GET ``path`` on a peer with its token. The URL is checked again now
+    (scheme policy, SSRF guard) and the connection goes to the approved
+    address. Raises HTTPException(422) for a URL the scheme policy refuses,
+    ``OutboundRequestError`` for a refused target, the httpx error on a
+    transport failure."""
+    base = _check_peer_url(str(peer["url"] or ""))
+    return await send_request(
+        "GET",
+        f"{base}{path}",
+        headers=_build_headers(peer["api_token_enc"]),
+        verify=_peer_tls_verify(peer),
+        timeout_s=_HTTP_TIMEOUT_SECONDS,
+        transport=HTTP_TRANSPORT,
+    )
+
+
+def _peer_destination(url: str, tls_verify: Any) -> dict:
+    """Where a peer's token is sent: what an update may not change while
+    keeping the stored token."""
+    return {"url": url_origin(url), "tls_verify": bool(tls_verify)}
 
 
 def _peer_row_to_dict(row) -> dict:
@@ -166,8 +206,7 @@ async def _fetch_peer_data(peer) -> dict:
     ``result["errors"]`` (section → message) so callers can distinguish an
     unreachable or misconfigured peer from a genuinely empty one.
     """
-    headers = _build_headers(peer["api_token_enc"])
-    base = peer["url"].rstrip("/")
+    _check_peer_url(str(peer["url"] or ""))
     result: dict[str, Any] = {
         "devices": {"total": 0, "up": 0, "down": 0, "groups": 0},
         "alerts": {"active": 0, "critical": 0, "warning": 0},
@@ -175,45 +214,46 @@ async def _fetch_peer_data(peer) -> dict:
         "version": "",
         "errors": {},
     }
-    async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT_SECONDS, verify=_peer_tls_verify(peer)) as client:
 
-        async def _get_json(section: str, path: str):
-            """GET a peer endpoint; on any failure record it and return None."""
-            try:
-                resp = await client.get(f"{base}{path}", headers=headers)
-                if resp.status_code != 200:
-                    raise RuntimeError(f"HTTP {resp.status_code}")
-                return resp.json()
-            except Exception as exc:
-                result["errors"][section] = f"{path}: {exc}"
-                LOGGER.warning("Federation peer %s: %s fetch failed: %s", peer["name"], section, exc)
-                return None
+    async def _get_json(section: str, path: str):
+        """GET a peer endpoint; on any failure record it and return None."""
+        try:
+            resp = await _peer_get(peer, path)
+            if resp.status_code != 200:
+                raise RuntimeError(f"HTTP {resp.status_code}")
+            return resp.json()
+        except OutboundRequestError:
+            raise  # a refused target fails the whole sync, not one section
+        except Exception as exc:
+            result["errors"][section] = f"{path}: {exc}"
+            LOGGER.warning("Federation peer %s: %s fetch failed: %s", peer["name"], section, exc)
+            return None
 
-        groups = await _get_json("groups", "/api/inventory/groups")
-        if isinstance(groups, list):
-            result["devices"]["groups"] = len(groups)
+    groups = await _get_json("groups", "/api/inventory/groups")
+    if isinstance(groups, list):
+        result["devices"]["groups"] = len(groups)
 
-        hosts = await _get_json("hosts", "/api/inventory/hosts")
-        if isinstance(hosts, list):
-            result["devices"]["total"] = len(hosts)
-            result["devices"]["up"] = sum(1 for h in hosts if h.get("status") == "up")
-            result["devices"]["down"] = sum(1 for h in hosts if h.get("status") == "down")
+    hosts = await _get_json("hosts", "/api/inventory/hosts")
+    if isinstance(hosts, list):
+        result["devices"]["total"] = len(hosts)
+        result["devices"]["up"] = sum(1 for h in hosts if h.get("status") == "up")
+        result["devices"]["down"] = sum(1 for h in hosts if h.get("status") == "down")
 
-        data = await _get_json("alerts", "/api/monitoring/alerts")
-        if data is not None:
-            alerts = data if isinstance(data, list) else data.get("alerts", [])
-            active = [a for a in alerts if a.get("state") == "active"]
-            result["alerts"]["active"] = len(active)
-            result["alerts"]["critical"] = sum(1 for a in active if a.get("severity") == "critical")
-            result["alerts"]["warning"] = sum(1 for a in active if a.get("severity") == "warning")
+    data = await _get_json("alerts", "/api/monitoring/alerts")
+    if data is not None:
+        alerts = data if isinstance(data, list) else data.get("alerts", [])
+        active = [a for a in alerts if a.get("state") == "active"]
+        result["alerts"]["active"] = len(active)
+        result["alerts"]["critical"] = sum(1 for a in active if a.get("severity") == "critical")
+        result["alerts"]["warning"] = sum(1 for a in active if a.get("severity") == "warning")
 
-        profiles = await _get_json("compliance", "/api/compliance/profiles")
-        if isinstance(profiles, list):
-            result["compliance"]["total_profiles"] = len(profiles)
+    profiles = await _get_json("compliance", "/api/compliance/profiles")
+    if isinstance(profiles, list):
+        result["compliance"]["total_profiles"] = len(profiles)
 
-        caps = await _get_json("version", "/api/admin/capabilities")
-        if isinstance(caps, dict):
-            result["version"] = caps.get("version", "")
+    caps = await _get_json("version", "/api/admin/capabilities")
+    if isinstance(caps, dict):
+        result["version"] = caps.get("version", "")
 
     return result
 
@@ -250,7 +290,7 @@ async def create_peer(
     _user=Depends(_require_admin_dep),
 ):
     """Register a new federation peer."""
-    url = _validate_url(body.url)
+    url = await _validate_url(body.url)
     token_enc = encrypt(body.api_token) if body.api_token else ""
     session = _get_session(request)
     username = session.get("user", "") if session else ""
@@ -302,7 +342,24 @@ async def update_peer(
     if body.name is not None:
         updates["name"] = body.name
     if body.url is not None:
-        updates["url"] = _validate_url(body.url)
+        updates["url"] = await _validate_url(body.url)
+    try:
+        refuse_secret_reuse(
+            _peer_destination(existing["url"], _peer_tls_verify(existing)),
+            _peer_destination(
+                str(updates.get("url", existing["url"])),
+                compared_tls_verify(
+                    _peer_tls_verify(existing),
+                    body.tls_verify if body.tls_verify is not None else _peer_tls_verify(existing),
+                ),
+            ),
+            ("url", "tls_verify"),
+            stored=["API token"] if existing["api_token_enc"] else [],
+            # Sending the token (or "" to clear it) reuses nothing.
+            resent=["API token"] if body.api_token is not None else [],
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"Peer: {exc}") from exc
     if body.api_token is not None:
         updates["api_token_enc"] = encrypt(body.api_token) if body.api_token else ""
     if body.description is not None:
@@ -377,12 +434,9 @@ async def delete_peer(peer_id: int, request: Request, _user=Depends(_require_adm
 async def test_peer(peer_id: int, request: Request, _user=Depends(_require_admin_dep)):
     """Test connectivity to a remote peer."""
     peer = await _get_peer_or_404(peer_id)
-    url = peer["url"].rstrip("/")
-    headers = _build_headers(peer["api_token_enc"])
 
     try:
-        async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT_SECONDS, verify=_peer_tls_verify(peer)) as client:
-            resp = await client.get(f"{url}/api/admin/capabilities", headers=headers)
+        resp = await _peer_get(peer, "/api/admin/capabilities")
         if resp.status_code == 200:
             caps = resp.json()
             return {
@@ -395,6 +449,10 @@ async def test_peer(peer_id: int, request: Request, _user=Depends(_require_admin
             "message": f"Remote returned HTTP {resp.status_code}",
             "response_code": resp.status_code,
         }
+    except HTTPException as exc:
+        return {"status": "error", "message": str(exc.detail)}
+    except OutboundRequestError as exc:
+        return {"status": "error", "message": f"Peer URL rejected: {exc}"}
     except httpx.ConnectError:
         return {"status": "error", "message": "Connection refused or unreachable"}
     except httpx.TimeoutException:

@@ -185,26 +185,47 @@ missing:
 ## SNMP traps
 
 The card sends a trap the moment the UPS changes state. Plexus's SNMP trap
-receiver stores every trap (Monitoring > Events) and, for a PowerNet-MIB
-trap (enterprise `1.3.6.1.4.1.318`, SNMPv1 or SNMPv2c) from a UPS in the
-inventory, acts on it at once:
+receiver stores every trap it accepts (Monitoring > Events) and, for a
+PowerNet-MIB trap (enterprise `1.3.6.1.4.1.318`, SNMPv1 or SNMPv2c) from a
+UPS in the inventory, acts on it at once:
 
-1. **Match**: the trap's source address is looked up among the inventory
-   hosts' addresses and recorded interface addresses; when it is not found
-   (the trap passed through NAT), an SNMPv1 trap's agent address is tried.
-   Only an `apc_ups` host is acted on. A trap from anything else is stored
-   as before and nothing more.
-2. **Alert**: the trap raises or resolves the built-in alert it names, under
+1. **Accept**: the datagram's source must be an inventory host address
+   (or in the listener allowlist's extra networks, see
+   [administration.md](administration.md#listener-sources)). An SNMPv1 or
+   SNMPv2c trap from an inventory host must carry the community stored
+   for that host: its own SNMP profile, else its group's SNMP settings, the
+   same community the poll uses. A trap with another community is dropped
+   (not stored) and counted as `trap_dropped_community`.
+2. **Match**: the trap's source address is looked up among the inventory
+   hosts' addresses and recorded interface addresses. An SNMPv1 trap's
+   agent address (a field inside the packet, as forgeable as the rest) is
+   used only when the source itself is an inventory host that is not a UPS
+   (a relay in inventory); a trap whose source is not an inventory host is
+   stored and never acted on, so a UPS behind NAT needs its translated
+   address recorded on the host. Only an `apc_ups` host is acted on, and
+   only with that host's community. A trap from anything else is stored
+   and nothing more.
+3. **Alert**: the trap raises or resolves the built-in alert it names, under
    the same alert key the poll uses, so a trap and a poll never make two
    alerts for one condition and each resolves the other's. A suppression
    for the host, its group or the metric applies to traps too.
-3. **Re-poll**: the host is polled a few seconds later (the full monitoring
+4. **Re-poll**: the host is polled a few seconds later (the full monitoring
    poll of that one host), so its state on the device page, its charts and
    every alert catch up. A burst of traps is one re-poll. The poll stays
    authoritative: it re-raises what the UPS still reports and resolves what
    it no longer does.
 
-Nothing is acted on while monitoring is off (Monitoring > Settings).
+Nothing is acted on while monitoring is off (Monitoring > Settings). The
+decoded trap goes through the receiver's bounded event queue: storing it
+and acting on it happen in the queue's batch writer, at most about a second
+after it arrived.
+
+**Upgrading:** traps were accepted from any source with any community
+before. Now a card whose trap community differs from the community stored
+for its host, or whose traps arrive from an address that is not the host's
+(only the v1 agent address matched it), raises and resolves nothing; set the
+card's trap receiver community to the host's SNMP community and record the
+address the traps come from on the host.
 
 | Trap (number) | Effect |
 |---|---|
@@ -240,9 +261,10 @@ name, the card's text (`mtrapargsString`) and its MIB severity.
    Network > SNMPv1 > Trap Receivers* (NMC2: *Administration > Network >
    SNMPv1 > trap receivers*), *Add Trap Receiver*: the Plexus server's
    address as the NMS IP / host name, **SNMPv1** or **SNMPv2c** as the
-   trap type, a community name, and the port (162 with Docker, else
-   10162) where the card offers one. Plexus does not check the trap
-   community today: use one that is not your read community.
+   trap type, the community stored for the UPS host in Plexus (its SNMP
+   profile, else its group's SNMP settings: Plexus drops a trap with any
+   other community), and the port (162 with Docker, else 10162) where the
+   card offers one.
 3. **Enable the UPS events** for that receiver: *Configuration >
    Notification > Event Actions* (*by Event* or *by Group*), and make sure
    the trap action is on for at least *UPS: On battery*, *Power restored*,
@@ -253,9 +275,11 @@ name, the card's text (`mtrapargsString`) and its MIB severity.
    `upsDiagnosticsPassed` (10), which should appear in Monitoring > Events
    as *APC upsDiagnosticsPassed* with the UPS as its host.
 
-SNMPv3 traps are received and stored, but not decoded or acted on (Plexus
-has no trap user keys): use an SNMPv1 or SNMPv2c trap receiver for the
-immediate alerts, even when the poll uses SNMPv3.
+SNMPv3 traps are received and stored, but not decoded, authenticated or
+acted on (Plexus has no trap user keys): use an SNMPv1 or SNMPv2c trap
+receiver for the immediate alerts, even when the poll uses SNMPv3. A host
+whose SNMP profile is SNMPv3 needs a community set in that profile (the
+v2c fallback community) for its v1 / v2c traps to be accepted.
 
 ## Software versions and advisories
 

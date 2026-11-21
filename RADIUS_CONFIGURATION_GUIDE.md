@@ -20,11 +20,13 @@ Plexus login supports four auth providers:
 When RADIUS auth succeeds, Plexus will create a local shadow user automatically if needed.
 This allows sessions, roles, and feature access policies to continue working in-app.
 
-RADIUS never grants the admin role. A RADIUS login whose username matches a local
-admin account that RADIUS does not already manage is refused ("RADIUS login succeeded
-but local account provisioning failed"): that account signs in with its local
-password instead. An account created by a RADIUS login and later promoted to admin in
-**Settings → Users** keeps signing in through RADIUS.
+RADIUS never grants the admin role. A RADIUS login signs in only to an account that
+RADIUS created (or already manages). A login whose username matches a local account
+(admin or not) or an account another provider (LDAP, TACACS+, OIDC, SAML) manages is
+refused with "Invalid username or password" and audited as `auth` /
+`login.adopt_refused`: a local account signs in with its local password instead. An
+account created by a RADIUS login and later promoted to admin in **Settings → Users**
+keeps signing in through RADIUS.
 
 ## 2. Prerequisites
 
@@ -156,10 +158,12 @@ If login fails unexpectedly:
 4. Test local fallback intentionally
 - Temporarily stop RADIUS service and confirm local login path
 
-5. "RADIUS login succeeded but local account provisioning failed"
-- The username matches a local admin account that RADIUS does not manage (see
-  section 1). Sign in to that account with its local password, or use a different
-  username on one side.
+5. RADIUS accepts the password but Plexus answers "Invalid username or password"
+- The audit log shows `login.adopt_refused`: the username matches a local account or
+  one another provider manages (see section 1). Sign in to that account with its
+  local password, or use a different username on one side. An account created by
+  RADIUS before Plexus recorded providers is treated as local: delete it (the next
+  login recreates it) or set its provider (`docs/administration.md`, Authentication).
 
 ## 10. Operational Rollout Plan
 

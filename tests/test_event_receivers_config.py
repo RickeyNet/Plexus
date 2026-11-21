@@ -44,7 +44,12 @@ def _reset_receivers() -> None:
 
 @pytest.fixture(autouse=True)
 def _loopback_receivers(monkeypatch):
+    from netcontrol import listener_sources
+
     monkeypatch.setattr(me, "_RECEIVER_BIND_HOST", "127.0.0.1")
+    # Loopback is not an inventory host: admit every source here (the
+    # listener allowlist is tested in test_listener_sources.py).
+    monkeypatch.setitem(listener_sources.CONFIG, "policy", "any")
     state.EVENT_RECEIVER_CONFIG.update(state.EVENT_RECEIVER_DEFAULTS)
     yield
     _reset_receivers()

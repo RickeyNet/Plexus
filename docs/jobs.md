@@ -180,6 +180,27 @@ a letter or `_`, and is at most 64 characters. If you paste the full
 `{{secret.NAME}}` reference, Plexus keeps only the name. The value is stored
 encrypted and never shown again; **Edit** lets you replace it.
 
+### Secret variables and ad-hoc targets
+
+A job sends the value of every secret variable its instruction set (any
+device-type variant) or its secret inputs use to each target. An ad-hoc
+address can be any device, including one the person launching the job
+controls, so:
+
+- An admin (or the server API token) may send secrets to any target.
+- Anyone else may send secrets only to inventory hosts they may change. An
+  ad-hoc address counts when it is the address of such a host. Any other
+  ad-hoc address is refused with `403` and the message names the address.
+  Add the device to the inventory, drop the secret from the instruction
+  set, or ask an admin to run the job.
+- The check runs at launch, retry and **Run Live**, and again when the job
+  leaves the queue: a job whose launcher is no longer an admin, or whose
+  address is no longer an inventory host, fails before it signs in.
+- The refusal comes before any secret is looked up, so it is the same
+  whether the secret exists. A secret that does not exist is reported as
+  "a secret variable that does not exist or that it may not use", without
+  its name. Admins see the names in the server log.
+
 ## Launching a job
 
 1. On the **Assignments** tab, choose **+ Launch Job**.
@@ -271,12 +292,19 @@ days** or **Last 30 days**.
 - **Checks at launch.** Launch fails if no credential is available, if an
   instruction set uses a `{{secret.NAME}}` that does not exist, if an
   ad-hoc address is invalid or reserved (loopback, link-local, multicast,
-  broadcast, `0.0.0.0/8`), if a run input is not valid (or names a host,
-  group or secret that does not exist), or if the task's permissions refuse
-  you.
+  broadcast, `0.0.0.0/8`), if a non-admin sends secrets to an ad-hoc
+  address (see [Secret variables and ad-hoc
+  targets](#secret-variables-and-ad-hoc-targets)), if a run input is not
+  valid (or names a host, group or secret that does not exist), or if the
+  task's permissions refuse you.
 - **Secrets in logs.** Secret values (from instruction sets and secret
   inputs) are removed from Python and Ansible task output before it is
-  stored.
+  stored, together with their base64 (standard and URL-safe, with or
+  without `=` padding), URL-encoded and hex forms. Values shorter than 4
+  characters are not removed (masking them would blank common text all
+  over the log). This is best effort: a value the device changes in
+  another way (wrapped, hashed, part of a longer encoded blob) is not
+  recognized, so do not echo secrets back in commands.
 - **After a live job.** When a live job succeeds, Plexus waits 15 seconds and
   re-polls the inventory hosts by SNMP if SNMP discovery is on for their
   group.
@@ -311,6 +339,7 @@ days** or **Last 30 days**.
 | Create, edit and delete instruction sets | `templates` Modify (`templates.write`) |
 | Manage your own credentials | `credentials` Modify (`credentials.write`) |
 | Manage secret variables | Admin |
+| Send secret variables to an ad-hoc address that is not an inventory host you may change | Admin |
 | Set job retention and the default credential | Admin |
 
 Job actions are written to the audit log under `jobs`. Task, instruction set

@@ -27,7 +27,9 @@ Before you start:
   by default and set through the API (`/api/admin/snmp-discovery`, admin).
   When SNMP is off for the group, discovery uses the other probes.
 - For SSH `show version`, set a Plexus service credential in Settings, or
-  pick a credential in the discovery dialog.
+  pick a credential in the discovery dialog. If you are not an admin, the
+  service credential signs in only to addresses that are already inventory
+  hosts you may change (see [Rules worth knowing](#rules-worth-knowing)).
 
 ## Set up SNMP
 
@@ -197,6 +199,15 @@ deletions count as **Removed**.
 
 ## Rules worth knowing
 
+- **The service credential and new addresses.** The addresses of a scan
+  come from you, so one of them could be a device you control. For a user
+  who is not an admin, the Plexus service credential is used only when
+  every address of the scan or sync is the address of an inventory host
+  you may change (a sync with no ranges re-reads the group's own hosts, so
+  it qualifies). Otherwise the scan or sync is refused with `403` and a
+  message naming the addresses: pick one of your own credentials, untick
+  **Read model/serial/version over SSH**, or ask an admin to run it. Admins and the server
+  API token are not limited.
 - **Large ranges are refused.** A range with more than 65,536 addresses, or
   more than ten times **Max Hosts** if that is larger, is rejected.
 - **At most 64 probes run at once** by default. The server setting
@@ -231,6 +242,7 @@ deletions count as **Removed**.
 | See SNMP profiles | The `inventory` feature (names and settings only; the community strings and v3 keys are shown to admins only) |
 | Create, change or delete SNMP profiles | Admin |
 | Use a stored credential for SSH | Access to that credential (your own, or any as admin) |
+| Read new addresses over SSH with the Plexus service credential | Admin (others: only addresses of inventory hosts they may change) |
 | See which credential a group remembers | The `inventory` feature and read access to the group |
 | Forget a group's credential | The `inventory` feature and write access to the group |
 | Set scheduled discovery | Admin |

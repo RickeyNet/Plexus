@@ -655,6 +655,10 @@ async def collect_inventory_api(request: Request, body: InventoryCollectRequest 
     if body.credential_id is not None:
         credential = await require_credential_access(body.credential_id, session=session, allow_service=True)
     else:
+        # Safe for a non-admin: the run reads only inventory hosts the caller
+        # may change (``_hosts_in_scope``), never an address from the request.
+        # Discovery, which scans request addresses, limits this fallback
+        # (``inventory._require_service_targets``).
         credential = await service_credential()
     if credential is None:
         raise HTTPException(

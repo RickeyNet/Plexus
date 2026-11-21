@@ -1,5 +1,6 @@
 # Plexus in-app update agent. Installed by deploy/bootstrap.sh, which
-# replaces @INSTALL_DIR@ with the install directory (default /opt/plexus).
+# replaces @INSTALL_DIR@ with the install directory (default /opt/plexus)
+# and @OWNER_HOME@ with the home directory of the account that owns it.
 # Started by plexus-updater.path when the app queues state/updates/request.json.
 [Unit]
 Description=Plexus update agent (applies upgrades requested from the web UI)
@@ -13,3 +14,30 @@ Environment=PLEXUS_INSTALL_DIR=@INSTALL_DIR@
 ExecStart=/bin/bash @INSTALL_DIR@/deploy/plexus-updater.sh
 # A git-mode upgrade rebuilds the image on the host; give it room.
 TimeoutStartSec=3600
+UMask=0022
+
+# Hardening. The script runs as root only to switch to the install owner
+# (runuser) and to keep state/update-status root-owned; git, docker and
+# pg_dump run as the owner. The Docker daemon does the image work outside
+# this sandbox, so the client only needs the docker socket (connecting to a
+# socket works on a read-only mount), the install directory and the owner's
+# home (~/.docker for buildx, ~/.gitconfig). Options that would block that
+# (ProtectSystem=strict hiding /var and /run writes, ProtectHome=yes or
+# tmpfs hiding the owner's home, PrivateUsers, a capability bounding set
+# without CAP_SETUID/CAP_SETGID/CAP_CHOWN) are deliberately left out.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=@INSTALL_DIR@ -@OWNER_HOME@
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+SystemCallArchitectures=native

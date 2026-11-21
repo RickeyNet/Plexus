@@ -9,6 +9,7 @@ and topology route modules.
 from __future__ import annotations
 
 import asyncio
+import hmac
 import ipaddress
 import json
 import re
@@ -974,6 +975,21 @@ def decode_snmp_trap(data: bytes) -> dict | None:
         "agent_address": agent_address,
         "varbinds": varbinds,
     }
+
+
+def trap_community_matches(trap: dict | None, host: dict) -> bool:
+    """True when the community of a decoded v1 / v2c trap
+    (``decode_snmp_trap``) is the one stored for the inventory ``host``: its
+    own SNMP profile, else its group's config, resolved as the poll resolves
+    it (``state._resolve_host_snmp_config``). Compared in constant time. A
+    host with no community stored, or a trap without one, never matches."""
+    import netcontrol.routes.state as state
+
+    expected = str(state._resolve_host_snmp_config(host).get("community") or "").strip()
+    received = str((trap or {}).get("community") or "")
+    if not expected or not received:
+        return False
+    return hmac.compare_digest(received.encode("utf-8"), expected.encode("utf-8"))
 
 
 def _parse_cdp_address(raw_value) -> str:

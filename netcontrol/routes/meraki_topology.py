@@ -216,6 +216,7 @@ from netcontrol.routes.cloud_visibility import discovery_progress
 from netcontrol.routes.opnsense_filterlog import attach_trace_evidence
 from netcontrol.routes.shared import _audit, _corr_id, _session_user, supervise_task
 from netcontrol.routes.topology_traffic import record_collection_traffic
+from netcontrol.secret_fields import compared_tls_verify, refuse_secret_reuse, url_origin
 from netcontrol.telemetry import configure_logging, redact_value
 
 router = APIRouter()
@@ -730,6 +731,37 @@ def _check_secret(provider: str, secret: str) -> None:
             raise HTTPException(status_code=400, detail=str(exc)) from None
 
 
+def _source_destination(provider: str, base_url: Any, options: Any) -> dict[str, Any]:
+    """Where a source's stored key is sent: the address (scheme, host, port)
+    and whether the certificate is verified."""
+    default = {PROVIDER_MERAKI: DEFAULT_BASE_URL, PROVIDER_CATO: CATO_BASE_URL}.get(provider, "")
+    return {
+        "address": url_origin(base_url or default),
+        "verify_tls": bool(_options_for(provider, options).get("verify_tls", True)),
+    }
+
+
+def _refuse_key_reuse(current: dict, provider: str, updates: dict[str, Any]) -> None:
+    """400 when an update moves the stored key to another address or turns
+    certificate checks off without sending the key again
+    (``secret_fields.refuse_secret_reuse``)."""
+    old = _source_destination(provider, current.get("base_url"), current.get("options"))
+    new = _source_destination(
+        provider, updates.get("base_url", current.get("base_url")), updates.get("options", current.get("options"))
+    )
+    new["verify_tls"] = compared_tls_verify(old["verify_tls"], new["verify_tls"])
+    try:
+        refuse_secret_reuse(
+            old,
+            new,
+            ("address", "verify_tls"),
+            stored=["API key"] if current.get("has_api_key") else [],
+            resent=["API key"] if "api_key" in updates else [],
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+
+
 def _serialize_org(org: dict) -> dict:
     item = dict(org)
     item["provider"] = _provider_of(org)
@@ -1050,7 +1082,8 @@ async def update_source_schedule_api(body: SourceScheduleUpdate, request: Reques
 @router.put("/api/sources/{org_ref}", dependencies=[Depends(_require_admin_dep)])
 @scoped("admin")
 async def update_meraki_org_api(org_ref: int, body: MerakiOrgUpdate, request: Request):
-    provider = _provider_of(await _get_org_or_404(org_ref))
+    current = await _get_org_or_404(org_ref)
+    provider = _provider_of(current)
     updates: dict[str, Any] = {}
     if body.name is not None:
         updates["name"] = body.name.strip()
@@ -1063,6 +1096,7 @@ async def update_meraki_org_api(org_ref: int, body: MerakiOrgUpdate, request: Re
         updates["api_key"] = body.api_key.strip()
     if body.options is not None:
         updates["options"] = _options_for(provider, body.options)
+    _refuse_key_reuse(current, provider, updates)
     if body.auto_collect is not None:
         updates["auto_collect"] = body.auto_collect
     if body.collect_interval_seconds is not None:

@@ -1,9 +1,12 @@
 """APC Smart-UPS SNMP traps (PowerNet-MIB, enterprise 318).
 
 The card sends a trap the moment the UPS changes state. The SNMP trap
-receiver (``netcontrol/routes/metrics_engine.py``) stores every trap in
-``trap_syslog_events``; for an APC trap whose source is an inventory host of
-type ``apc_ups`` it also hands the trap to ``handle_apc_trap`` here, which
+receiver (``netcontrol/routes/metrics_engine.py``) queues every trap it
+accepts in its bounded event buffer; its batch writer stores them in
+``trap_syslog_events`` and, for an APC trap whose source is an inventory
+host, hands the trap to ``handle_apc_trap`` here. When the trap belongs to
+an ``apc_ups`` host and carries that host's stored SNMP community
+(``snmp.trap_community_matches``), the handler
 
 - raises or resolves the built-in UPS alert the trap names, under the same
   dedup key the monitoring poll uses (``snmp.alert_dedup_key``), so a trap
@@ -22,15 +25,14 @@ carries ``mtrapargsString`` (``1.3.6.1.4.1.318.2.3.3.0``), the card's text.
 
 from __future__ import annotations
 
-import asyncio
 import ipaddress
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import routes.database as db
 
 from netcontrol.integrations.apc import snmp as apc_snmp
-from netcontrol.monitoring_repoll import keep_task, schedule_repoll
+from netcontrol.monitoring_repoll import schedule_repoll
 
 LOGGER = logging.getLogger(__name__)
 
@@ -112,13 +114,15 @@ APC_UPS_TRAPS: dict[int, TrapKind] = {
 @dataclass(frozen=True)
 class ApcTrap:
     """A decoded APC trap: its number, its kind (None when not one of
-    ``APC_UPS_TRAPS``), the card's text and the trap's agent address."""
+    ``APC_UPS_TRAPS``), the card's text, the trap's agent address and the
+    decoded trap itself (``trap``: the SNMP community is checked on it)."""
 
     number: int
     kind: TrapKind | None
     detail: str
     trap_oid: str
     agent_address: str = ""
+    trap: dict = field(default_factory=dict, repr=False, compare=False)
 
     @property
     def severity(self) -> str:
@@ -147,6 +151,7 @@ def parse_apc_trap(trap: dict | None) -> ApcTrap | None:
         detail=" ".join(str(detail).split())[:200],
         trap_oid=trap_oid,
         agent_address=str((trap or {}).get("agent_address") or ""),
+        trap=dict(trap or {}),
     )
 
 
@@ -158,33 +163,50 @@ def _unspecified(address: str) -> bool:
         return True
 
 
+def _ups(host: dict | None) -> dict | None:
+    return host if host is not None and host.get("device_type") == apc_snmp.STATUS_KIND else None
+
+
 async def find_ups_host(source_ip: str, agent_address: str = "") -> dict | None:
-    """The ``apc_ups`` inventory host a trap came from: by the datagram's
-    source address (primary IP or a recorded interface IP), else by a v1
-    trap's agent address. None when neither is an APC UPS host."""
-    for address in dict.fromkeys(a for a in (source_ip, agent_address) if a and not _unspecified(a)):
-        host = await db.find_host_by_ip(address, include_aliases=True)
-        if host is not None:
-            return host if host.get("device_type") == apc_snmp.STATUS_KIND else None
-    return None
+    """The ``apc_ups`` inventory host a trap came from: the host whose
+    address (primary IP or a recorded interface IP) is the datagram's source.
+    A v1 trap's agent address (a field of the packet, as forgeable as the
+    rest of it) picks the host only when the source itself is an inventory
+    host that is not a UPS (a relay or NAT device in inventory). None when no
+    APC UPS host is found that way."""
+    if not source_ip or _unspecified(source_ip):
+        return None
+    source_host = await db.find_host_by_ip(source_ip, include_aliases=True)
+    if source_host is None:
+        return None
+    if _ups(source_host) is not None:
+        return source_host
+    if not agent_address or _unspecified(agent_address) or agent_address == source_ip:
+        return None
+    return _ups(await db.find_host_by_ip(agent_address, include_aliases=True))
 
 
 # ── Acting on a trap ────────────────────────────────────────────────────────
 
 
 async def handle_apc_trap(source_ip: str, trap: ApcTrap) -> dict:
-    """Act on an APC trap: when its source is an ``apc_ups`` host and
+    """Act on an APC trap: when it comes from an ``apc_ups`` host
+    (``find_ups_host``) with that host's stored SNMP community and
     monitoring is on, raise or resolve the alert it names (unless
     suppressed) and schedule the host's re-poll. Returns what was done:
     ``{"host_id", "alert", "action", "repoll"}`` (``host_id`` None when the
-    trap is not from a UPS in inventory)."""
+    trap is not from a UPS in inventory or its community is wrong)."""
     import netcontrol.routes.state as state
+    from netcontrol.routes.snmp import trap_community_matches
 
     outcome: dict = {"host_id": None, "alert": "", "action": "", "repoll": False}
     if not state.MONITORING_CONFIG.get("enabled"):
         return outcome
     host = await find_ups_host(source_ip, trap.agent_address)
     if host is None:
+        return outcome
+    if not trap_community_matches(trap.trap, host):
+        LOGGER.debug("apc traps: trap from %s ignored: not the host's SNMP community", source_ip)
         return outcome
     host_id = int(host["id"])
     outcome["host_id"] = host_id
@@ -210,15 +232,3 @@ async def handle_apc_trap(source_ip: str, trap: ApcTrap) -> dict:
     # sees this trap's state too.
     outcome["repoll"] = schedule_repoll(host_id, REPOLL_DELAY_SECONDS)
     return outcome
-
-
-def dispatch_apc_trap(source_ip: str, trap: ApcTrap) -> None:
-    """Run ``handle_apc_trap`` in the background (the UDP receiver is sync)."""
-
-    async def _run() -> None:
-        try:
-            await handle_apc_trap(source_ip, trap)
-        except Exception as exc:  # noqa: BLE001 - one trap must not stop the receiver
-            LOGGER.warning("apc traps: handling a trap from %s failed: %s", source_ip, exc)
-
-    keep_task(asyncio.ensure_future(_run()))

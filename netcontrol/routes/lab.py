@@ -32,6 +32,11 @@ limited to selected inventory groups sees and uses only the twins of hosts
 they may read (model ``lab_device``; twins with no source host follow the
 environment rules only). Cloning needs read access to the source host;
 promoting to a deployment needs write access to the target group and hosts.
+
+Features: cloning copies the host's running config, so it also needs
+``config-drift`` or ``config-backups``; promoting creates a deployment, so it
+also needs ``deployments`` + ``deployments.write`` and is planned by
+``deployments.plan_deployment`` (the production approval rule).
 """
 
 from __future__ import annotations
@@ -54,6 +59,7 @@ from netcontrol.object_scope import (
     require_row,
     scoped,
 )
+from netcontrol.routes.deployments import plan_deployment
 from netcontrol.routes.risk_analysis import (
     _classify_change_areas,
     _compute_risk_score,
@@ -64,6 +70,7 @@ from netcontrol.routes.shared import (
     _compute_config_diff,
     _corr_id,
     _get_session,
+    require_any_feature,
     require_credential_access,
 )
 from netcontrol.telemetry import configure_logging
@@ -435,6 +442,9 @@ async def clone_host(env_id: int, body: CloneHostRequest, request: Request):
     session, _, role = await _resolve_session_user(request)
     if not _user_can_access_env(env, session, role):
         raise HTTPException(status_code=403, detail="Not allowed")
+    # The twin holds the host's full running config (passwords, keys,
+    # communities): the same access the config pages need.
+    await require_any_feature(request, "config-drift", "config-backups")
 
     host = await require_host(request, body.host_id, not_found="Source host not found")
 
@@ -719,6 +729,9 @@ async def promote_run(run_id: int, body: PromoteRequest, request: Request):
     session, _, role = await _resolve_session_user(request)
     if not _user_can_access_env(env or {}, session, role):
         raise HTTPException(status_code=403, detail="Not allowed")
+    # Creating a deployment is a deployments write, whichever page starts it.
+    await require_any_feature(request, "deployments")
+    await require_any_feature(request, "deployments.write")
 
     # Enforce credential ownership before binding it to a production deployment —
     # otherwise a user could promote a lab run with another user's credential id
@@ -749,16 +762,20 @@ async def promote_run(run_id: int, body: PromoteRequest, request: Request):
     except Exception:
         commands = []
 
-    deployment_id = await db.create_deployment(
+    # The deployments API's own path, so the production approval rule (by
+    # the groups of the hosts targeted) applies to a promoted run too.
+    plan = await plan_deployment(
+        request,
         name=body.name.strip(),
         description=body.description or f"Promoted from lab run {run_id}",
-        group_id=group_id,
+        group_id=int(group_id),
         credential_id=body.credential_id,
         change_type="lab-promote",
-        proposed_commands="\n".join(commands),
-        host_ids=json.dumps(target_host_ids),
-        created_by=session["user"] if session else "",
+        commands=commands,
+        host_ids=target_host_ids,
+        user=session["user"] if session else "",
     )
+    deployment_id = plan["id"]
     await db.update_lab_run_status(run_id, "promoted", promoted_deployment_id=deployment_id)
     await _audit(
         "lab",
@@ -767,4 +784,9 @@ async def promote_run(run_id: int, body: PromoteRequest, request: Request):
         detail=f"run={run_id} deployment={deployment_id} group={group_id}",
         correlation_id=_corr_id(request),
     )
-    return {"ok": True, "deployment_id": deployment_id}
+    return {
+        "ok": True,
+        "deployment_id": deployment_id,
+        "requires_approval": plan["requires_approval"],
+        "approval_status": plan["approval_status"],
+    }

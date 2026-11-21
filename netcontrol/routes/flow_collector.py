@@ -25,6 +25,7 @@ import routes.database as db
 from fastapi import APIRouter, HTTPException, Query, Request
 
 import netcontrol.routes.state as state
+from netcontrol import listener_sources
 from netcontrol.bounded_map import BoundedDict
 from netcontrol.object_scope import group_filter, readable_host_ids, require_host, scope_exempt, scoped
 from netcontrol.telemetry import configure_logging
@@ -61,8 +62,11 @@ _flow_aggregation_task: asyncio.Task | None = None
 # (host_ip_aliases; the primary wins on a collision). Populated at collector
 # start and refreshed via refresh_exporter_cache() whenever inventory hosts
 # are added/updated/deleted or an integration recorded interface addresses.
-_exporter_cache: dict[str, int] = {}
-_exporter_cache_lock = asyncio.Lock()
+# It is the listener allowlist's inventory address set
+# (``listener_sources.INVENTORY_ADDRESSES``): one cache, one refresh.
+_exporter_cache: dict[str, int] = listener_sources.INVENTORY_ADDRESSES
+# The source allowlist and per-exporter rate limit of both flow sockets.
+_flow_guard = listener_sources.guard("flow")
 
 
 # Well-known port to service name mapping
@@ -682,6 +686,10 @@ class _FlowCollectorProtocol(asyncio.DatagramProtocol):
         LOGGER.info("flow_collector: UDP listener started (mode=%s)", self.mode)
 
     def datagram_received(self, data: bytes, addr: tuple):
+        # An exporter that is not an inventory host address (nor in an
+        # allowed network), or over its rate limit, is dropped unparsed.
+        if not _flow_guard.admit(addr[0]):
+            return
         if len(data) < 4:
             return
 
@@ -782,17 +790,11 @@ async def refresh_exporter_cache() -> int:
 
     Called at collector startup and from host CRUD paths so the in-memory
     map stays consistent with inventory without per-packet DB lookups.
-    Returns the number of entries loaded.
+    The map is the listener allowlist's (``listener_sources.refresh_inventory``),
+    so a host change reaches the trap and syslog allowlist too. Returns the
+    number of entries loaded.
     """
-    async with _exporter_cache_lock:
-        try:
-            mapping = await db.get_exporter_host_map()
-        except Exception as exc:
-            LOGGER.warning("flow_collector: exporter cache refresh failed: %s", type(exc).__name__)
-            return len(_exporter_cache)
-        _exporter_cache.clear()
-        _exporter_cache.update(mapping)
-        return len(_exporter_cache)
+    return await listener_sources.refresh_inventory()
 
 
 async def on_host_changed(
@@ -833,8 +835,9 @@ async def sync_exporter_hosts() -> int:
 
 # Pending per-exporter packet counters, keyed by (exporter_ip, flow_type).
 # Written synchronously from datagram_received (single-threaded on the event
-# loop, so no lock needed) and drained by _flush_exporter_stats.
-_pending_exporter_stats: dict[tuple[str, str], dict] = {}
+# loop, so no lock needed) and drained by _flush_exporter_stats. Bounded: with
+# the "any" source policy the keys follow whatever reaches the socket.
+_pending_exporter_stats: BoundedDict = BoundedDict(4 * NF9_MAX_EXPORTERS)
 
 
 def _note_exporter_packet(
@@ -1127,7 +1130,14 @@ async def api_flow_status():
         "sflow_port": FLOW_COLLECTOR_CONFIG.get("sflow_port", 6343),
         "running": _flow_transport is not None,
         "sflow_running": _sflow_transport is not None,
+        **_drop_counters(),
     }
+
+
+def _drop_counters() -> dict[str, int]:
+    """Datagrams the listener allowlist and rate limit dropped since start."""
+    stats = _flow_guard.stats()
+    return {"dropped_source": stats["dropped_source"], "dropped_rate": stats["dropped_rate"]}
 
 
 @router.get("/api/flows/exporters")
@@ -1255,6 +1265,7 @@ def _config_snapshot() -> dict:
         "aggregation_interval_seconds": int(FLOW_COLLECTOR_CONFIG.get("aggregation_interval_seconds", 3600)),
         "netflow_running": _flow_transport is not None,
         "sflow_running": _sflow_transport is not None,
+        **_drop_counters(),
     }
 
 

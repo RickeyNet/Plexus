@@ -436,3 +436,110 @@ async def test_audit_event_hook_failure_does_not_break_insert():
         assert any(e["id"] == new_id for e in events)
     finally:
         db_module.set_audit_event_hook(None)
+
+
+# ── Connecting to the checked address ────────────────────────────────────────
+
+
+class _FakeWriter:
+    def __init__(self):
+        self.sent = b""
+
+    def write(self, data: bytes) -> None:
+        self.sent += data
+
+    async def drain(self) -> None:
+        return None
+
+    def close(self) -> None:
+        return None
+
+    async def wait_closed(self) -> None:
+        return None
+
+
+def _fake_connections(monkeypatch, *, down: set[str], error: type[Exception] = ConnectionRefusedError):
+    """Replace ``asyncio.open_connection`` as the forwarder uses it: records
+    each attempt and fails with ``error`` for the addresses in ``down``."""
+    attempts: list[tuple[str, int, dict]] = []
+    writers: list[_FakeWriter] = []
+
+    async def fake_open(address, port, **kwargs):
+        attempts.append((address, port, kwargs))
+        if address in down:
+            raise error("connect failed")
+        writers.append(_FakeWriter())
+        return None, writers[-1]
+
+    monkeypatch.setattr(sf.asyncio, "open_connection", fake_open)
+    return attempts, writers
+
+
+def _resolve_to(monkeypatch, *addresses: str):
+    import ipaddress
+
+    monkeypatch.setattr(sf, "validate_outbound_host", lambda host: [ipaddress.ip_address(a) for a in addresses])
+
+
+async def test_tcp_sink_connects_to_the_checked_address_and_falls_back(monkeypatch):
+    _resolve_to(monkeypatch, "2001:db8::20", "192.0.2.20")
+    attempts, writers = _fake_connections(monkeypatch, down={"2001:db8::20"})
+    sink = sf.sanitize_sink({"id": "s", "protocol": "tcp", "host": "siem.example.com", "port": 6514})
+
+    await sf.deliver(sink, _EVENT)
+
+    # The name is never handed to the socket layer: only checked addresses.
+    assert [a[0] for a in attempts] == ["2001:db8::20", "192.0.2.20"]
+    assert writers[0].sent.split(b" ", 1)[0].isdigit()  # octet-counting frame
+
+
+async def test_tls_sink_keeps_the_name_for_the_certificate_check(monkeypatch):
+    _resolve_to(monkeypatch, "192.0.2.21")
+    attempts, _writers = _fake_connections(monkeypatch, down=set())
+    sink = sf.sanitize_sink(
+        {"id": "s", "protocol": "tls", "host": "siem.example.com", "port": 6514, "tls_verify": False}
+    )
+
+    await sf.deliver(sink, _EVENT)
+
+    address, port, kwargs = attempts[0]
+    assert (address, port) == ("192.0.2.21", 6514)
+    assert kwargs["server_hostname"] == "siem.example.com"
+
+
+async def test_sink_connect_tries_a_bounded_number_of_addresses(monkeypatch):
+    many = [f"192.0.2.{n}" for n in range(30, 38)]
+    _resolve_to(monkeypatch, *many)
+    attempts, _writers = _fake_connections(monkeypatch, down=set(many))
+    sink = sf.sanitize_sink({"id": "s", "protocol": "tcp", "host": "siem.example.com", "port": 6514})
+
+    with pytest.raises(ConnectionRefusedError):
+        await sf.deliver(sink, _EVENT)
+    assert [a[0] for a in attempts] == many[: sf.MAX_PINNED_ADDRESSES]
+
+
+async def test_a_tls_failure_is_not_retried_on_another_address(monkeypatch):
+    import ssl
+
+    _resolve_to(monkeypatch, "192.0.2.40", "192.0.2.41")
+    attempts, _writers = _fake_connections(monkeypatch, down={"192.0.2.40"}, error=ssl.SSLError)
+    sink = sf.sanitize_sink(
+        {"id": "s", "protocol": "tls", "host": "siem.example.com", "port": 6514, "tls_verify": False}
+    )
+
+    with pytest.raises(ssl.SSLError):
+        await sf.deliver(sink, _EVENT)
+    assert [a[0] for a in attempts] == ["192.0.2.40"]
+
+
+async def test_a_refused_sink_target_opens_no_connection(monkeypatch):
+    def refuse(host):
+        raise sf.OutboundRequestError("cloud metadata address")
+
+    monkeypatch.setattr(sf, "validate_outbound_host", refuse)
+    attempts, _writers = _fake_connections(monkeypatch, down=set())
+    sink = sf.sanitize_sink({"id": "s", "protocol": "tcp", "host": "imds.example.com", "port": 6514})
+
+    with pytest.raises(RuntimeError, match="target rejected"):
+        await sf.deliver(sink, _EVENT)
+    assert attempts == []

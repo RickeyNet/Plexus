@@ -151,6 +151,12 @@ or more sinks. Choose **Add Sink** and set:
 | **URL**, **Bearer token (optional)** | For `https`. |
 | **Verify TLS certificate**, **CA PEM (optional, pins trust)**, **Client cert PEM (mutual TLS)**, **Client key PEM** | TLS options. |
 
+The bearer token and client key are stored encrypted and shown masked; saving
+the mask keeps them, except when the save changes the protocol, host, port,
+URL host, CA PEM or turns certificate checks off: then type them again. The
+sink connects to the address the outbound check approved (see
+[webhooks.md](webhooks.md#outbound-address-check)).
+
 Events have no severity of their own; Plexus gives each one a severity for
 this filter:
 

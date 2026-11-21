@@ -208,39 +208,35 @@ async def upsert_external_user(
     provider: str = "",
     sync_role: bool = False,
 ) -> dict | None:
-    """Ensure a local shadow user exists for externally-authenticated identities (RADIUS/LDAP).
+    """Ensure a local shadow user exists for an externally authenticated
+    identity (``provider``: ldap, radius, tacacs, oidc or saml).
 
-    Guards against directory name-collision privilege escalation: if a local
-    account with this username already exists as an ``admin`` but the external
-    provider did NOT explicitly map this identity to admin (``role != "admin"``),
-    refuse to adopt it. Otherwise anyone who controls a directory account named
-    like a local admin (e.g. ``admin``) would authenticate straight into the
-    local admin account. Legitimate local admins still log in via the
-    break-glass local-password path; LDAP admin-group members pass ``role=admin``
-    and are allowed through.
+    An existing account is used only when ``users.auth_provider`` already
+    names this provider. A local account (``auth_provider`` empty) or an
+    account another provider manages is never adopted, whatever its role
+    and whatever role the provider maps: otherwise whoever controls a
+    directory or IdP account with the same username (a local admin's
+    ``admin``, a colleague's name in another directory) would sign straight
+    into it. The refusal is logged and audited (``auth`` /
+    ``login.adopt_refused``); the caller answers with the generic sign-in
+    error. Local admins still sign in with their local password (break-glass).
 
-    Provenance and re-sync: ``users.auth_provider`` records which provider
-    manages an account. Adopting an unmanaged account claims it (stamps the
-    provider) so pre-provenance shadow users converge after one login. When
-    ``sync_role`` is set (LDAP, whose directory groups are authoritative), the
-    role and display name are re-synced on every login - directory promotion
-    AND demotion both propagate, including demotion of accounts promoted only
-    in the Plexus UI. RADIUS asserts no role, so it never passes sync_role.
+    Accounts created before ``auth_provider`` existed (migration 0061) and
+    never signed in through a provider since are indistinguishable from
+    local accounts and are refused too; an admin deletes such a stale shadow
+    account (the next sign-in recreates it) or sets its ``auth_provider``.
+
+    Re-sync: when ``sync_role`` is set (LDAP, TACACS+ with authorization,
+    SSO - whose groups are authoritative), the role and display name are
+    re-synced on every login - promotion AND demotion both propagate,
+    including demotion of accounts promoted only in the Plexus UI. RADIUS
+    asserts no role, so it never passes sync_role.
     """
     user = await db.get_user_by_username(username)
     if user:
         current_role = (user.get("role") or "").lower()
-        managed = bool(provider) and (user.get("auth_provider") or "") == provider
-        if not managed:
-            if current_role == "admin" and role != "admin":
-                LOGGER.warning(
-                    "auth: refusing to bind external identity '%s' onto pre-existing "
-                    "local admin account (external mapping did not grant admin)",
-                    username,
-                )
-                return None
-            if provider:
-                await db.set_user_auth_provider(int(user["id"]), provider)
+        if not await _may_use_existing_account(user, provider):
+            return None
         if sync_role:
             updates: dict = {}
             if role != current_role:
@@ -271,8 +267,39 @@ async def upsert_external_user(
             auth_provider=provider,
         )
     except ValueError:
-        return await db.get_user_by_username(username)
+        # Created concurrently: use it only if it is this provider's account.
+        user = await db.get_user_by_username(username)
+        if user and await _may_use_existing_account(user, provider):
+            return user
+        return None
     return await db.get_user_by_id(user_id)
+
+
+async def _refuse_adoption(username: str, provider: str, owner: str, reason: str) -> None:
+    """Log and audit an external sign-in refused onto an existing account."""
+    LOGGER.warning(
+        "auth: refusing %s sign-in for '%s': the existing account is managed by %s (%s)",
+        provider or "external",
+        username,
+        owner,
+        reason,
+    )
+    await _audit(
+        "auth",
+        "login.adopt_refused",
+        user=username,
+        detail=f"source={provider or 'external'} account={owner} reason={reason}",
+    )
+
+
+async def _may_use_existing_account(user: dict, provider: str) -> bool:
+    """True when ``user`` already belongs to ``provider`` (see upsert_external_user)."""
+    owner = (user.get("auth_provider") or "").strip()
+    if provider and owner == provider:
+        return True
+    username = str(user.get("username") or "")
+    await _refuse_adoption(username, provider, owner or "local", "different provider")
+    return False
 
 
 async def _assign_default_groups(user: dict, group_ids: list[int], provider: str) -> dict | None:
@@ -291,8 +318,8 @@ async def upsert_radius_user(username: str) -> dict | None:
     """Ensure a local shadow user exists for RADIUS-authenticated identities.
 
     Always goes through upsert_external_user, existing account or not, so
-    its admin name-collision guard applies: a RADIUS identity named like a
-    local admin is refused instead of signing in as that admin.
+    its provider guard applies: a RADIUS identity named like a local account
+    or another provider's account is refused instead of signing in as it.
     """
     existing = await db.get_user_by_username(username)
     user = await upsert_external_user(username, provider="radius")
@@ -814,7 +841,7 @@ async def upsert_sso_user(identity: SsoIdentity, sso_cfg: dict, provider: str) -
     whose subject differs from the bound one is refused.
     Role: ``admin`` when a group value is in ``admin_groups``, else
     ``default_role``, re-synced every login through upsert_external_user
-    (whose admin name-collision guard applies). Access groups: the defaults
+    (whose provider guard applies). Access groups: the defaults
     on first login; with ``sync_groups`` the defaults plus every mapped
     group on each login. When the groups are unknown (overage), an existing
     account keeps its role and groups.
@@ -824,6 +851,7 @@ async def upsert_sso_user(identity: SsoIdentity, sso_cfg: dict, provider: str) -
     sso_managed = bool(existing) and (existing.get("auth_provider") or "") == provider
     bound_sub = str((existing or {}).get("external_id") or "") if sso_managed else ""
     if bound_sub and not hmac.compare_digest(bound_sub.encode(), identity.sub.encode()):
+        await _refuse_adoption(username, provider, provider, "subject does not match the bound subject")
         return None, "subject does not match the subject bound to this account"
 
     groups = set(identity.groups)
@@ -841,7 +869,7 @@ async def upsert_sso_user(identity: SsoIdentity, sso_cfg: dict, provider: str) -
         username, display_name=identity.display_name, role=role, provider=provider, sync_role=True
     )
     if not user:
-        return None, "local account provisioning refused (name collides with a local admin) or failed"
+        return None, "the username belongs to a local account or another sign-in provider, or provisioning failed"
     user_id = int(user["id"])
     if not bound_sub:
         await db.set_user_external_id(user_id, identity.sub)
@@ -975,7 +1003,9 @@ async def authenticate_login_identity(username: str, password: str) -> tuple[dic
             user = await _upsert_radius(username)
             if user:
                 return user, "radius", None
-            return None, None, "RADIUS login succeeded but local account provisioning failed"
+            # Refused (the username belongs to a local account or another
+            # provider; audited as login.adopt_refused) or failed: generic answer.
+            return None, None, "Invalid username or password"
 
         if status == "reject" and not bool(radius_cfg.get("fallback_on_reject", False)):
             return None, None, "Invalid username or password"
@@ -1002,7 +1032,9 @@ async def authenticate_login_identity(username: str, password: str) -> tuple[dic
             user = await _upsert_tacacs(username, tacacs_attrs)
             if user:
                 return user, "tacacs", None
-            return None, None, "TACACS+ login succeeded but local account provisioning failed"
+            # Refused (the username belongs to a local account or another
+            # provider; audited as login.adopt_refused) or failed: generic answer.
+            return None, None, "Invalid username or password"
 
         if status == "reject" and not bool(tacacs_cfg.get("fallback_on_reject", False)):
             return None, None, "Invalid username or password"
@@ -1029,7 +1061,9 @@ async def authenticate_login_identity(username: str, password: str) -> tuple[dic
             user = await _upsert_ldap(username, ldap_attrs)
             if user:
                 return user, "ldap", None
-            return None, None, "LDAP login succeeded but local account provisioning failed"
+            # Refused (the username belongs to a local account or another
+            # provider; audited as login.adopt_refused) or failed: generic answer.
+            return None, None, "Invalid username or password"
 
         if status == "reject" and not bool(ldap_cfg.get("fallback_on_reject", False)):
             return None, None, "Invalid username or password"
@@ -1152,6 +1186,69 @@ async def _note_login_success(ip: str) -> None:
         attempts_by_ip.pop(ip, None)
 
 
+# Per-username progressive delay (see state.LOGIN_USERNAME_FAILURES). The
+# sleep is a module attribute so tests can record it instead of waiting.
+_login_delay_sleep = asyncio.sleep
+
+
+def _username_failures() -> dict:
+    """The per-username failure map (late-bound so tests can swap it)."""
+    return getattr(_app_module(), "LOGIN_USERNAME_FAILURES", state.LOGIN_USERNAME_FAILURES)
+
+
+def _username_key(username: str) -> str:
+    return (username or "").strip().lower()[:256]
+
+
+def _username_delay_for(failures: int) -> float:
+    """Seconds to wait before an attempt after ``failures`` recent failures."""
+    over = failures - state.USERNAME_FAILURE_FREE_ATTEMPTS
+    if over < 0:
+        return 0.0
+    return min(state.USERNAME_FAILURE_MAX_DELAY, state.USERNAME_FAILURE_BASE_DELAY * (2 ** min(over, 30)))
+
+
+def _live_username_entry(failures: dict, key: str, now: float) -> list | None:
+    entry = failures.get(key)
+    if entry is not None and state.username_failures_expired(key, entry, now):
+        failures.pop(key, None)
+        return None
+    return entry
+
+
+def _reserve_username_slot(key: str, now: float) -> float:
+    """Seconds this attempt must wait. Attempts for one username are spaced
+    by the current delay, so parallel guesses queue up instead of firing
+    together; no attempt waits longer than the cap. Runs without an await,
+    so the read-modify-write is atomic on the event loop."""
+    failures = _username_failures()
+    entry = _live_username_entry(failures, key, now)
+    if entry is None:
+        return 0.0
+    delay = _username_delay_for(int(entry[0]))
+    if not delay:
+        return 0.0
+    start = max(now + delay, float(entry[2]))
+    entry[2] = start + delay
+    return min(start - now, state.USERNAME_FAILURE_MAX_DELAY)
+
+
+def _note_username_failure(key: str, now: float) -> None:
+    failures = _username_failures()
+    entry = _live_username_entry(failures, key, now)
+    if entry is None:
+        failures[key] = [1, now, 0.0]
+    else:
+        entry[0] = int(entry[0]) + 1
+        entry[1] = now
+
+
+def _note_username_success(*names: str) -> None:
+    failures = _username_failures()
+    for name in names:
+        failures.pop(_username_key(name), None)
+
+
 def _session_cookie_secure() -> bool:
     """Whether cookies carry Secure: APP_COOKIE_SECURE (set when TLS ends at
     a reverse proxy and APP_HTTPS is false) or APP_HTTPS itself."""
@@ -1187,10 +1284,18 @@ async def login(body: LoginRequest, request: Request):
     if blocked:
         raise HTTPException(status_code=429, detail=blocked)
 
+    # Per-username progressive delay: slows guessing one account from many
+    # addresses without ever refusing the real user.
+    username_key = _username_key(body.username)
+    wait = _reserve_username_slot(username_key, now)
+    if wait > 0:
+        await _login_delay_sleep(wait)
+
     # Auth identity check runs outside lock (may be slow: LDAP/RADIUS)
     user, auth_source, auth_error = await _auth_identity(body.username, body.password)
 
     if not user:
+        _note_username_failure(username_key, time.time())
         locked = await _note_login_failure(ip, now)
         await _audit_fn(
             "auth",
@@ -1203,6 +1308,7 @@ async def login(body: LoginRequest, request: Request):
             raise HTTPException(status_code=429, detail="Account locked due to too many failed attempts. Try again later.")
         raise HTTPException(status_code=401, detail=auth_error or "Invalid username or password")
     await _note_login_success(ip)
+    _note_username_success(body.username, user["username"])
     # Use the canonical username from the DB (may differ in case from input)
     canonical_user = user["username"]
     await _audit_fn(

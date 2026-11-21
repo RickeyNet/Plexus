@@ -10,7 +10,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import type { HostNetworkFields } from '@/lib/networkObjects';
 
-import { apiRequest, getCsrfToken } from './client';
+import { apiRequest, errorMessage, getCsrfToken } from './client';
 import type { CustomValue, TagRef } from './customData';
 
 // ── Types ──────────────────────────────────────────────────────────────────
@@ -852,7 +852,15 @@ async function streamDiscovery(
 
   if (!res.ok || !res.body) {
     const text = await res.text().catch(() => '');
-    throw new Error(text || `Discovery stream failed: ${res.status}`);
+    // A refusal (e.g. 403 on the service credential) is a JSON error body:
+    // show its message, not the raw JSON.
+    let message: string | null = null;
+    try {
+      message = errorMessage(JSON.parse(text));
+    } catch {
+      // Not JSON (a proxy error page): the text as is.
+    }
+    throw new Error(message || text || `Discovery stream failed: ${res.status}`);
   }
 
   const reader = res.body.getReader();

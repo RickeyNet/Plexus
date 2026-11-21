@@ -422,7 +422,9 @@ def test_admin_redacts_tacacs_secret() -> None:
 
 @pytest.mark.asyncio
 async def test_admin_update_preserves_tacacs_secret_behind_mask(monkeypatch) -> None:
-    live = app_module._sanitize_auth_config({"provider": "tacacs", "tacacs": {"secret": "hunter2"}})
+    live = app_module._sanitize_auth_config(
+        {"provider": "tacacs", "tacacs": {"server": "tacacs.example.com", "secret": "hunter2"}}
+    )
     monkeypatch.setattr(admin_module.state, "AUTH_CONFIG", live)
     saved: dict = {}
 
@@ -431,16 +433,31 @@ async def test_admin_update_preserves_tacacs_secret_behind_mask(monkeypatch) -> 
 
     monkeypatch.setattr(admin_module.db, "set_auth_setting", fake_set)
 
+    # The mask keeps the stored secret while the server stays the same...
     body = admin_module.AuthConfigRequest(
         provider="tacacs",
         tacacs=admin_module.TacacsConfigRequest(
-            enabled=True, server="ise.corp.local", secret=admin_module._SECRET_MASK
+            enabled=True, server="tacacs.example.com", secret=admin_module._SECRET_MASK
         ),
     )
     out = await admin_module.admin_update_auth_config(body)
     assert saved["auth_config"]["tacacs"]["secret"] == "hunter2"
     assert out["tacacs"]["secret"] == admin_module._SECRET_MASK
     assert out["provider"] == "tacacs"
+
+    # ...and is refused for another server: the secret must be entered again.
+    saved.clear()
+    moved = admin_module.AuthConfigRequest(
+        provider="tacacs",
+        tacacs=admin_module.TacacsConfigRequest(
+            enabled=True, server="other.example.com", secret=admin_module._SECRET_MASK
+        ),
+    )
+    with pytest.raises(admin_module.HTTPException) as refused:
+        await admin_module.admin_update_auth_config(moved)
+    assert refused.value.status_code == 400 and "enter secret again" in refused.value.detail
+    assert saved == {}
+    assert admin_module.state.AUTH_CONFIG["tacacs"]["server"] == "tacacs.example.com"
 
 
 @pytest.mark.asyncio

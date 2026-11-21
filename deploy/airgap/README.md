@@ -91,7 +91,10 @@ The installer:
 2. Loads `plexus`, `postgres:16-alpine`, and `nginx:alpine` images via
    `docker load`.
 3. Stages the compose project into `/opt/plexus`.
-4. Runs `deploy/setup.sh` to generate `.env` (random DB password + API token)
+4. Runs `deploy/setup.sh` to generate `.env` (random DB and first-login
+   passwords; `APP_API_TOKEN` stays empty unless you run the installer as
+   `sudo PLEXUS_ENABLE_API_TOKEN=true bash install.sh`, see
+   [deploy/DEPLOYMENT.md](../DEPLOYMENT.md#server-api-token))
    and a self-signed TLS cert from the VM's hostname, then pins
    `PLEXUS_IMAGE=plexus:airgap` in `.env` so compose uses the loaded image
    instead of trying to build (no internet, can't reach Docker Hub).

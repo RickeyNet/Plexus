@@ -25,7 +25,9 @@ itself before you rely on them (see [Known gaps](#known-gaps)).
   removes it from the menu; see [administration.md](administration.md#features).
 - **The peer's API token.** Plexus signs in to a peer with the peer's
   server API token (`APP_API_TOKEN` in the peer's environment). This token
-  is admin-equivalent on the peer. See [Trust and credentials](#trust-and-credentials).
+  is admin-equivalent on the peer. A new install leaves it empty (off), so
+  enable it on the peer first ([deploy/DEPLOYMENT.md](../deploy/DEPLOYMENT.md#server-api-token)).
+  See [Trust and credentials](#trust-and-credentials).
 - **An HTTPS URL** that this instance can reach.
 
 ## Adding a peer
@@ -52,7 +54,11 @@ itself before you rely on them (see [Known gaps](#known-gaps)).
 
 To change a peer, choose **Edit**. The **API Token** field is always empty
 when the dialog opens; leave it empty to keep the saved token, or type a new
-one to replace it. To delete a peer, choose **Delete** and confirm. This
+one to replace it. A change to where the token goes (the URL's scheme, host
+or port, or **Verify TLS certificate** turned off) needs the token typed
+again: the save is refused with "url changed, so the stored API token cannot
+be reused: enter API token again". Without this rule an admin could point a
+peer at a server of their own and receive the other instance's token. To delete a peer, choose **Delete** and confirm. This
 removes the peer and all numbers cached from it.
 
 ## Reading the page
@@ -114,10 +120,17 @@ texts are not stored.
   no token in the other direction.
 - **HTTPS is required.** An `http://` URL is refused unless the server sets
   `PLEXUS_FEDERATION_ALLOW_HTTP=true`, meant for isolated labs only.
-- **Address check.** A URL that resolves to a link-local (including cloud
-  metadata addresses), multicast, reserved or unspecified address is
-  refused. Private and loopback addresses are allowed unless the server sets
-  `APP_SSRF_BLOCK_PRIVATE=true`.
+- **Address check.** The URL passes the outbound address check when it is
+  saved and again before every request (Test, Sync and the background
+  sync), and the request connects to the address the check approved, so a
+  name that later resolves elsewhere cannot redirect the token. Cloud
+  metadata addresses are always refused, a name that does not resolve is
+  refused unless it is listed in `APP_SSRF_ALLOW`, and link-local,
+  multicast, reserved and unspecified addresses are refused. Private and
+  loopback addresses are allowed unless the server sets
+  `APP_SSRF_BLOCK_PRIVATE=true`. See
+  [webhooks.md](webhooks.md#outbound-address-check). A sync whose URL is
+  refused records the status `error`; **Test** shows "Peer URL rejected".
 
 ## Rules worth knowing
 

@@ -8,7 +8,9 @@ execution time.  Plaintext values are never stored in templates, job
 events, or logs.
 """
 
+import base64
 import re
+from urllib.parse import quote, quote_plus
 
 import routes.database as db
 
@@ -164,8 +166,35 @@ async def build_redaction_set(template_commands: list[str]) -> set[str]:
     return values
 
 
+# Secret values shorter than this are not scrubbed from job output: masking a
+# one to three character string would blank every "1", "ab" or "on" in the
+# log while protecting nothing (a value that short is guessable anyway).
+MIN_REDACT_LENGTH = 4
+
+
+def redaction_forms(value: str) -> set[str]:
+    """``value`` and the common encodings a device or command may print it
+    in: base64 (standard and URL-safe, with and without padding), URL
+    encoding (``%20`` and ``+`` for spaces) and hex. Forms shorter than
+    ``MIN_REDACT_LENGTH`` are left out; empty for a value that short."""
+    if len(value) < MIN_REDACT_LENGTH:
+        return set()
+    raw = value.encode("utf-8")
+    forms = {value, quote(value, safe=""), quote(value), quote_plus(value), raw.hex(), raw.hex().upper()}
+    for encoded in (base64.b64encode(raw).decode("ascii"), base64.urlsafe_b64encode(raw).decode("ascii")):
+        forms.update((encoded, encoded.rstrip("=")))
+    return {form for form in forms if len(form) >= MIN_REDACT_LENGTH}
+
+
 def redact_values(text: str, secret_values: set[str]) -> str:
-    """Replace any occurrence of known secret values with ********."""
+    """Replace each secret value, and its common encodings
+    (``redaction_forms``), with ********. Best effort: a value the device
+    transforms otherwise (wrapped, re-encoded inside a longer blob, hashed)
+    is not recognized."""
+    forms: set[str] = set()
     for val in secret_values:
-        text = text.replace(val, "********")
+        forms |= redaction_forms(val)
+    # Longest first, so a form that contains another is masked whole.
+    for form in sorted(forms, key=len, reverse=True):
+        text = text.replace(form, "********")
     return text

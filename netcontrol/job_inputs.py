@@ -302,7 +302,9 @@ async def resolve_references(schema: list[dict], values: dict) -> dict:
             out[name] = {"id": group["id"], "name": group.get("name") or ""}
         elif field["type"] == "secret":
             if await db.get_secret_variable_by_name(value) is None:
-                errors[name] = f"{label}: secret variable '{value}' does not exist."
+                # Not naming the secret, and worded as for one the job may not
+                # use: the answer must not confirm which names exist.
+                errors[name] = f"{label}: the secret variable does not exist or this job may not use it."
                 continue
             out[name] = "{{secret." + value + "}}"
     if errors:

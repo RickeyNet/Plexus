@@ -65,6 +65,31 @@ sync or configuration collection of a host an OPNsense collection also
 records can drop the collection's addresses until the next collection
 (hourly by default) writes them again.
 
+### Which exporters are accepted
+
+The collector shares the listener source allowlist of the syslog and trap
+receivers ([administration.md](administration.md#listener-sources)). By
+default a packet is decoded only when its source is an inventory host
+address (the same in-memory map as above), and each exporter is limited to
+5000 packets per second (`flow_rate_limit`). Dropped packets are counted in
+`dropped_source` and `dropped_rate` of `GET /api/flows/status` and
+`/api/admin/flows/config`.
+
+An exporter that is not (yet) an inventory host is still supported, in one
+of two ways:
+
+- add its address or network to `extra_cidrs`
+  (`PUT /api/admin/listener-sources`): its flows are stored with no host
+  and it is listed under the exporters unlinked, as before; once its
+  address becomes a host's primary or recorded interface address, the next
+  refresh links the exporter to the host; or
+- set `policy` to `any` to accept every source (the behaviour before the
+  allowlist).
+
+**Upgrading:** an exporter whose source address is not an inventory host
+address was accepted before and is dropped now until one of the above is
+done.
+
 ### Interface names
 
 Flow records name interfaces by number (`input_if`, `output_if`: the SNMP

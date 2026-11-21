@@ -158,6 +158,8 @@ def repolls(monkeypatch):
         return {}
 
     monkeypatch.setitem(state.MONITORING_CONFIG, "enabled", True)
+    # The traps carry the community the hosts' (group default) SNMP config stores.
+    monkeypatch.setitem(state.SNMP_DISCOVERY_CONFIG, "community", "trap-community")
     monkeypatch.setattr(monitoring, "poll_host_now", fake_poll)
     monkeypatch.setattr(apc_traps, "REPOLL_DELAY_SECONDS", 0.0)
     repoll._repoll_waiting.clear()
@@ -277,9 +279,10 @@ async def test_the_host_is_matched_by_an_interface_ip_or_the_agent_address(repol
     await db.set_host_ip_aliases(host_id, "192.0.2.85", ["198.51.100.85"])
     outcome = await apc_traps.handle_apc_trap("198.51.100.85", _apc(v1_trap(5, agent="0.0.0.0")))
     assert outcome["host_id"] == host_id
-    # Behind NAT: the source is unknown, the v1 agent address is the UPS.
+    # Behind NAT: the source is unknown, so the v1 agent address (a field of
+    # the packet, as forgeable as the rest) is not believed.
     outcome = await apc_traps.handle_apc_trap("203.0.113.7", _apc(v1_trap(7, agent="192.0.2.85")))
-    assert (outcome["host_id"], outcome["alert"]) == (host_id, "ups_battery")
+    assert (outcome["host_id"], outcome["alert"]) == (None, "")
     assert await apc_traps.find_ups_host("not-an-address", "0.0.0.0") is None
 
 
@@ -346,42 +349,51 @@ async def test_poll_host_now(monkeypatch):
 # ── The UDP receiver ─────────────────────────────────────────────────────────
 
 
-def _receive(monkeypatch, data: bytes, source: str) -> tuple[list[tuple], list[tuple]]:
+def _receive(monkeypatch, data: bytes, source: str) -> list[tuple]:
+    from netcontrol import listener_sources
     from netcontrol.routes import metrics_engine
 
     queued: list[tuple] = []
-    dispatched: list[tuple] = []
     monkeypatch.setattr(metrics_engine, "_queue_trap_syslog_event", lambda *args: queued.append(args))
-    monkeypatch.setattr(metrics_engine, "dispatch_apc_trap", lambda ip, trap: dispatched.append((ip, trap)))
+    # Every source admitted: the listener allowlist is tested in test_listener_sources.py.
+    monkeypatch.setitem(listener_sources.CONFIG, "policy", "any")
     metrics_engine._TrapSyslogProtocol("trap").datagram_received(data, (source, 50162))
-    return queued, dispatched
+    return queued
 
 
 def test_the_receiver_stores_and_dispatches_an_apc_trap(monkeypatch):
-    queued, dispatched = _receive(monkeypatch, v1_trap(7), UPS_IP)
-    ((source, event_type, _facility, severity, oid, message, raw),) = queued
+    queued = _receive(monkeypatch, v1_trap(7), UPS_IP)
+    ((source, event_type, _facility, severity, oid, message, raw, trap),) = queued
     assert (source, event_type, severity, oid) == (UPS_IP, "trap", "critical", "1.3.6.1.4.1.318.0.7")
     assert message.startswith("APC lowBattery: UPS battery low")
     assert raw == v1_trap(7).hex()
-    assert [(ip, trap.number) for ip, trap in dispatched] == [(UPS_IP, 7)]
+    # Queued with its decoded form: the batch writer acts on it.
+    assert apc_traps.parse_apc_trap(trap).number == 7
 
 
 def test_the_receiver_keeps_other_traps_as_before(monkeypatch):
-    queued, dispatched = _receive(monkeypatch, v1_trap(5, enterprise="1.3.6.1.4.1.9"), OTHER_IP)
-    assert dispatched == []
+    queued = _receive(monkeypatch, v1_trap(5, enterprise="1.3.6.1.4.1.9"), OTHER_IP)
+    assert apc_traps.parse_apc_trap(queued[0][7]) is None
     assert queued[0][3] == "info" and queued[0][5].startswith(f"SNMP trap from {OTHER_IP}")
-    queued, dispatched = _receive(monkeypatch, b"\x30\x03junk", OTHER_IP)
-    assert dispatched == [] and len(queued) == 1
+    queued = _receive(monkeypatch, b"\x30\x03junk", OTHER_IP)
+    assert len(queued) == 1 and queued[0][7] is None
 
 
-async def test_dispatch_runs_the_handler_in_the_background(monkeypatch):
+async def test_the_writer_runs_the_handler_and_logs_its_failure(repolls, monkeypatch, caplog):
+    from netcontrol.routes import metrics_engine
+
+    _group_id, host_id = await _ups("ups-t9", "192.0.2.87")
     seen: list[tuple] = []
 
     async def fake_handle(ip, trap):
         seen.append((ip, trap.number))
         raise RuntimeError("boom")  # logged, not raised
 
-    monkeypatch.setattr(apc_traps, "handle_apc_trap", fake_handle)
-    apc_traps.dispatch_apc_trap(UPS_IP, _apc(v1_trap(5)))
-    await _settle()
-    assert seen == [(UPS_IP, 5)]
+    monkeypatch.setattr(metrics_engine, "handle_apc_trap", fake_handle)
+    metrics_engine._trap_event_buffer.clear()
+    trap = decode_snmp_trap(v1_trap(5))
+    metrics_engine._queue_trap_syslog_event("192.0.2.87", "trap", "", "warning", "", "m", "", trap)
+    await metrics_engine._flush_trap_syslog_batch(metrics_engine._take_trap_event_batch())
+    assert seen == [("192.0.2.87", 5)]
+    assert "handling an APC trap from 192.0.2.87 failed" in caplog.text
+    assert host_id

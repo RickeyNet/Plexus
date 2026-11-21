@@ -192,6 +192,9 @@ DEFAULT_RULES = {
     # lower them to land a change.
     "netcontrol/body_limit.py": 90.0,
     "netcontrol/bounded_map.py": 95.0,
+    # Source allowlist and per-source rate limit of the trap, syslog and
+    # flow listeners. Measured by tests/test_listener_sources.py.
+    "netcontrol/listener_sources.py": 90.0,
 }
 
 

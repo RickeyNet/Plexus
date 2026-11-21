@@ -16,6 +16,7 @@ import json
 import os
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import netcontrol.app as app_module
 import netcontrol.routes.federation as federation_module
 import pytest
@@ -275,7 +276,13 @@ async def test_test_peer_connectivity(monkeypatch, request):
     )
     peer_id = resp.json()["id"]
 
-    # This will fail to connect (unreachable host) but should not 500
+    # This will fail to connect (unreachable host) but should not 500. The
+    # network layer is a stand-in: peer requests are pinned to the address
+    # the guard approved, so no real connection is attempted.
+    def _refuse(request):
+        raise httpx.ConnectError("connection refused", request=request)
+
+    monkeypatch.setattr(federation_module, "HTTP_TRANSPORT", httpx.MockTransport(_refuse))
     resp = client.post(f"/api/federation/peers/{peer_id}/test")
     assert resp.status_code == 200
     result = resp.json()

@@ -30,6 +30,7 @@ from netcontrol.integrations.apc import nmc_cli
 from netcontrol.integrations.apc.firmware import DEVICE_TYPE as APC_UPS_DEVICE_TYPE
 from netcontrol.integrations.meraki.enrich import load_inventory_index
 from netcontrol.integrations.software.versions import classify_host
+from netcontrol.managed_targets import unmanaged_addresses
 from netcontrol.object_scope import (
     READ_ONLY_DETAIL,
     ObjectScope,
@@ -82,7 +83,7 @@ from netcontrol.routes.snmp import (
     _snmp_get,
     _snmp_walk,  # noqa: F401
 )
-from netcontrol.secret_fields import mask_secret_fields, merge_secret_fields
+from netcontrol.secret_fields import SNMP_SECRET_FIELDS, mask_secret_fields, merge_secret_fields
 from netcontrol.telemetry import configure_logging, increment_metric, redact_value
 
 LOGGER = configure_logging("plexus.inventory")
@@ -483,9 +484,15 @@ async def _resolve_discovery_ssh(
     group: dict | None = None,
     unattended: bool = False,
     correlation_id: str = "",
+    request: Request | None = None,
+    targets: list[str] | None = None,
 ) -> tuple[dict | None, dict]:
     """The credential discovery reads ``show version`` with, and the base of
     the ``ssh_enrichment`` summary reported with the result.
+
+    The service credential (step 3) signs in to ``targets`` only when the
+    caller of ``request`` is an admin or every target is an inventory host
+    they may change; otherwise 403 (``_require_service_targets``).
 
     In order:
 
@@ -525,6 +532,8 @@ async def _resolve_discovery_ssh(
         if credential is None:
             credential = await service_credential()
             source = "service"
+            if credential is not None and not unattended:
+                await _require_service_targets(request, targets or [])
         if credential is None:
             return None, {
                 "enabled": True,
@@ -544,6 +553,27 @@ async def _resolve_discovery_ssh(
         "skipped_reason": "",
         "note": note,
     }
+
+
+SERVICE_CREDENTIAL_TARGETS_DETAIL = (
+    "Discovery signs in with the Plexus service credential only to inventory hosts you can change, "
+    "and {count} address(es) to scan ({shown}) are not. Pick a credential of your own, turn off "
+    "reading show version over SSH, or ask an admin to run this scan."
+)
+
+
+async def _require_service_targets(request: Request | None, targets: list[str]) -> None:
+    """403 unless the caller may have the Plexus service credential sign in
+    to every one of ``targets``: an admin (or the API token) to any
+    address, anyone else only to inventory hosts they may change. Discovery
+    addresses come from the request, so they may be a device the caller
+    controls."""
+    if await caller_is_admin(request):
+        return
+    outside = await unmanaged_addresses(targets, request)
+    if outside:
+        shown = ", ".join(outside[:3]) + (", ..." if len(outside) > 3 else "")
+        raise HTTPException(403, SERVICE_CREDENTIAL_TARGETS_DETAIL.format(count=len(outside), shown=shown))
 
 
 async def _group_credential(group: dict, session: dict | None, *, unattended: bool) -> tuple[dict | None, str]:
@@ -1297,8 +1327,8 @@ async def admin_get_snmp_discovery_profiles():
 # feature), because every inventory user's profile picker needs the list.
 # Only admins get the stored profiles; others get the public view.
 
-# The SNMP secrets of a profile (named or a group's discovery profile).
-SNMP_SECRET_FIELDS = ("community", "v3.auth_password", "v3.priv_password")
+# The SNMP secrets of a profile (named or a group's discovery profile) are
+# ``secret_fields.SNMP_SECRET_FIELDS``.
 
 
 def public_snmp_profile(profile: dict) -> dict:
@@ -2244,7 +2274,7 @@ async def discovery_scan(group_id: int, body: DiscoveryScanRequest, request: Req
     except ValueError as exc:
         raise HTTPException(400, str(exc))
     credential, ssh_base = await _resolve_discovery_ssh(
-        body, _get_session(request), group=group, correlation_id=_corr_id(request)
+        body, _get_session(request), group=group, correlation_id=_corr_id(request), request=request, targets=targets
     )
 
     job = background_jobs.create_job(
@@ -2336,7 +2366,7 @@ async def discovery_scan_stream(group_id: int, body: DiscoveryScanRequest, reque
     semaphore = asyncio.Semaphore(max(1, state.DISCOVERY_MAX_CONCURRENT_PROBES))
     snmp_cfg = state._resolve_snmp_discovery_config(group_id)
     credential, ssh_base = await _resolve_discovery_ssh(
-        body, _get_session(request), group=group, correlation_id=_corr_id(request)
+        body, _get_session(request), group=group, correlation_id=_corr_id(request), request=request, targets=targets
     )
 
     async def _scan_one(ip_address: str) -> tuple[str, dict | None]:
@@ -2475,8 +2505,14 @@ async def discovery_sync(group_id: int, body: DiscoverySyncRequest, request: Req
             raise HTTPException(400, "Group has no hosts to sync. Add hosts first or provide CIDR targets.")
         body.cidrs = host_ips
 
+    try:
+        targets = _expand_scan_targets(body.cidrs, body.max_hosts)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
     session = _get_session(request)
-    credential, ssh_base = await _resolve_discovery_ssh(body, session, group=group, correlation_id=_corr_id(request))
+    credential, ssh_base = await _resolve_discovery_ssh(
+        body, session, group=group, correlation_id=_corr_id(request), request=request, targets=targets
+    )
     scanned_count, discovered = await _discover_hosts(body, group_id=group_id, credential=credential)
     sync_result = await _sync_group_hosts(group_id, discovered, remove_absent=body.remove_absent)
     await _software_changed()
@@ -2527,7 +2563,9 @@ async def discovery_sync_stream(group_id: int, body: DiscoverySyncRequest, reque
     semaphore = asyncio.Semaphore(max(1, state.DISCOVERY_MAX_CONCURRENT_PROBES))
     snmp_cfg = state._resolve_snmp_discovery_config(group_id)
     session = _get_session(request)
-    credential, ssh_base = await _resolve_discovery_ssh(body, session, group=group, correlation_id=_corr_id(request))
+    credential, ssh_base = await _resolve_discovery_ssh(
+        body, session, group=group, correlation_id=_corr_id(request), request=request, targets=targets
+    )
 
     async def _scan_one(ip_address: str) -> tuple[str, dict | None]:
         return ip_address, await _scan_target(ip_address, body, snmp_cfg, semaphore, credential)
