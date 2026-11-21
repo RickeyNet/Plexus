@@ -46,7 +46,10 @@ try:
         usmHMACSHAAuthProtocol,
         walk_cmd,
     )
+    from pysnmp.proto import errind
 
+    # The error text of a request the device never answered.
+    SNMP_TIMEOUT_ERROR = str(errind.requestTimedOut)
     PYSMNP_AVAILABLE = True
 except Exception:
     CommunityData = None
@@ -67,6 +70,7 @@ except Exception:
     usmHMACSHAAuthProtocol = None
     usmHMAC192SHA256AuthProtocol = None
     usmHMAC384SHA512AuthProtocol = None
+    SNMP_TIMEOUT_ERROR = "No SNMP response received before timeout"
     PYSMNP_AVAILABLE = False
 
 
@@ -764,6 +768,7 @@ async def _snmp_walk(
     base_oid: str,
     max_rows: int = 500,
     return_errors: bool = False,
+    engine: Any = None,
 ):
     """Walk an SNMP OID subtree and return {oid: value} dict.
 
@@ -773,6 +778,11 @@ async def _snmp_walk(
     "timeout / authentication failure / no SNMP agent" — those used to look
     identical to callers, which made silent collection failures effectively
     invisible.
+
+    ``engine``: a pysnmp engine the caller shares between its requests to
+    one device and closes itself, so an SNMPv3 device is discovered (engine
+    ID, then time) once instead of once per request. Without it the walk
+    opens and closes its own.
     """
     # Resolve {{secret.NAME}} references in v3 passwords before building auth
     snmp_config = await _resolve_snmp_secrets(snmp_config)
@@ -782,7 +792,9 @@ async def _snmp_walk(
     auth_data, version, port, timeout, retries = auth_tuple
     timeout = max(timeout, timeout_seconds)
 
-    engine = SnmpEngine()
+    own_engine = engine is None
+    if own_engine:
+        engine = SnmpEngine()
     transport = await UdpTransportTarget.create((ip_address, port), timeout=timeout, retries=retries)
     results: dict[str, str] = {}
     row_count = 0
@@ -824,13 +836,7 @@ async def _snmp_walk(
                 error_text = str(error_indication)
                 break
             if error_status:
-                # error_status is a pysnmp PDU status — prettyPrint() gives the
-                # MIB name (noSuchName, authorizationError, etc.), which is
-                # what an operator wants to see.
-                try:
-                    error_text = error_status.prettyPrint()
-                except Exception:
-                    error_text = str(error_status)
+                error_text = _error_status_text(error_status)
                 break
             for name, value in var_binds:
                 oid_str = str(name)
@@ -841,10 +847,61 @@ async def _snmp_walk(
     except Exception as exc:
         error_text = f"{type(exc).__name__}: {exc}"
     finally:
-        engine.close_dispatcher()
+        if own_engine:
+            engine.close_dispatcher()
     if return_errors:
         return results, error_text
     return results
+
+
+def _error_status_text(error_status: Any) -> str:
+    """A PDU error status as its MIB name (noSuchName, authorizationError
+    ...), which is what an operator wants to see."""
+    try:
+        return str(error_status.prettyPrint())
+    except Exception:
+        return str(error_status)
+
+
+async def _snmp_get_values(
+    ip_address: str,
+    timeout_seconds: float,
+    snmp_config: dict,
+    oids: tuple[str, ...],
+    *,
+    engine: Any = None,
+) -> tuple[dict[str, Any], str | None]:
+    """GET the instances ``oids`` in one request: ``({oid: value}, error)``.
+
+    The dict is empty, with the reason as ``error``, when the device did not
+    answer or refused the request. An object the device does not have is in
+    the dict with pysnmp's NoSuchObject / NoSuchInstance value (``_snmp_str``
+    gives ""). ``engine``: as for :func:`_snmp_walk`."""
+    snmp_config = await _resolve_snmp_secrets(snmp_config)
+    auth_tuple = _build_snmp_auth(snmp_config)
+    if auth_tuple is None:
+        return {}, "SNMP not configured"
+    auth_data, _version, port, timeout, retries = auth_tuple
+    timeout = max(timeout, timeout_seconds)
+
+    own_engine = engine is None
+    if own_engine:
+        engine = SnmpEngine()
+    try:
+        transport = await UdpTransportTarget.create((ip_address, port), timeout=timeout, retries=retries)
+        error_indication, error_status, _error_index, var_binds = await get_cmd(
+            engine, auth_data, transport, ContextData(), *(ObjectType(ObjectIdentity(oid)) for oid in oids)
+        )
+    except Exception as exc:
+        return {}, f"{type(exc).__name__}: {exc}"
+    finally:
+        if own_engine:
+            engine.close_dispatcher()
+    if error_indication:
+        return {}, str(error_indication)
+    if error_status:
+        return {}, _error_status_text(error_status)
+    return {str(name): value for name, value in var_binds}, None
 
 
 # ── CDP Address Parser ───────────────────────────────────────────────────────
