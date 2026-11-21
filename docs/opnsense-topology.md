@@ -108,16 +108,26 @@ default) as described in [Scheduled collection](meraki-topology.md#scheduled-col
 | System: Trust: Authorities | the certificate authorities and their expiry (same option) |
 | Services: Intrusion Detection (`api/ids/*`) | whether the IDS is enabled, its alerts and the classtype of each alerting rule (only with **IDS alerts** on) |
 | Status: DHCP leases / Status: DHCPv6 leases | ISC DHCP leases (same option; only if the firewall runs ISC DHCP) |
-| the Kea DHCP leases page (v4 and v6) | Kea DHCP leases (same option; only if the firewall runs Kea) |
-| the Dnsmasq DNS/DHCP leases page | Dnsmasq DHCP leases (same option; 25.1+, only if the firewall runs Dnsmasq DHCP) |
+| Services: DHCP: Kea(v4) / Services: DHCP: Kea(v6) (`api/kea/leases4/*`, `api/kea/leases6/*`) | Kea DHCP leases (same option; only if the firewall runs Kea; the v6 privilege is 25.1+) |
+| Services: Dnsmasq DNS/DHCP: Settings (`api/dnsmasq/*`) | Dnsmasq DHCP leases (same option; 25.1+, only if the firewall runs Dnsmasq DHCP) |
 
 The ARP, NDP and lease privileges also allow flushing the ARP / NDP table
 or deleting a lease, and **Status: Services** allows starting, stopping
-and restarting a service; Plexus never sends those calls. The exact names of the
-Kea and Dnsmasq lease privileges vary between releases and were not checked
-against a firewall: pick the ones whose description lists
-`api/kea/leases4/*`, `api/kea/leases6/*` or `api/dnsmasq/leases/*`. A
-refused lease call names the privilege Plexus expects.
+and restarting a service; Plexus never sends those calls. A refused lease
+call names the privilege it needs.
+
+OPNsense has no privilege for the Kea or Dnsmasq leases alone:
+**Services: DHCP: Kea(v4)**, **Services: DHCP: Kea(v6)** and
+**Services: Dnsmasq DNS/DHCP: Settings** are the privileges of the whole
+service, so they also allow changing its settings, subnets, reservations
+and ranges and restarting it. Plexus only sends the lease search. Grant
+them only for a DHCP service the firewall runs. For one it does not run
+you need nothing: with **Config backup** on, Plexus reads from
+`config.xml` whether Kea DHCPv4, Kea DHCPv6 and Dnsmasq DHCP are enabled
+(Dnsmasq: enabled with at least one DHCP range) and drops the refused
+(403) lease read of a service that is off, so it is no warning. With
+**Config backup** off, or the download refused, Plexus cannot tell and the
+refused read stays a warning. A refused ISC DHCP lease read always warns.
 
 **Diagnostics: PF Table IP addresses** also allows adding an address to a
 table, deleting one and flushing a table. Plexus only lists the tables and
@@ -722,7 +732,10 @@ a lease):
 
 A DHCP server the firewall does not have answers 404 and is skipped without
 a warning; when none answers, one informational warning says no leases
-were read. A refused call (403) is a warning that names the privilege.
+were read. A refused call (403) is a warning that names the privilege,
+except the Kea or Dnsmasq lease read of a service `config.xml` shows as off
+(see [Creating the API key](#creating-the-api-key)): that one is skipped
+like a 404.
 The ISC DHCPv4 answer and the ARP / NDP answers follow the OPNsense core
 source; the Kea, Dnsmasq and ISC DHCPv6 row fields and the ISC time format
 (`YYYY/MM/DD HH:MM:SS`, read as UTC) were inferred and are not verified
