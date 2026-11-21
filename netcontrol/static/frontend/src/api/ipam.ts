@@ -443,7 +443,9 @@ export function useCreateIpamSource() {
 export function useUpdateIpamSource() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, payload }: { id: number; payload: IpamSourcePayload }) =>
+    // Partial: a collection-fed source (an OPNsense firewall's) only changes
+    // its name, notes and enabled switch.
+    mutationFn: ({ id, payload }: { id: number; payload: Partial<IpamSourcePayload> }) =>
       apiRequest(`/ipam/sources/${id}`, { method: 'PUT', body: payload }),
     onSuccess: () => invalidateSources(qc),
   });

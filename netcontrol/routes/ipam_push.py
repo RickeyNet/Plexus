@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import routes.database as db
 
-from netcontrol.routes.ipam_adapters import IpamAdapterError, push_allocation_to_provider
+from netcontrol.routes.ipam_adapters import IpamAdapterError, is_collection_fed, push_allocation_to_provider
 from netcontrol.sync.transport import canonical_address
 from netcontrol.telemetry import configure_logging
 
@@ -41,7 +41,11 @@ async def push_inventory_host_allocation(
             type(exc).__name__,
         )
         return {"attempted": 0, "pushed": 0, "failed": 1}
-    push_sources = [src for src in sources if src.get("provider") != "plexus" and bool(src.get("push_enabled"))]
+    push_sources = [
+        src
+        for src in sources
+        if src.get("provider") != "plexus" and not is_collection_fed(src.get("provider")) and src.get("push_enabled")
+    ]
 
     attempted = 0
     pushed = 0

@@ -2994,6 +2994,7 @@ from routes.db.network_objects import *  # noqa: E402,F403
 from routes.db.object_changes import *  # noqa: E402,F403
 from routes.db.opnsense_alias_tables import *  # noqa: E402,F403
 from routes.db.opnsense_filterlog import *  # noqa: E402,F403
+from routes.db.opnsense_rule_counters import *  # noqa: E402,F403
 from routes.db.organization import *  # noqa: E402,F403
 from routes.db.playbooks import *  # noqa: E402,F403
 from routes.db.reporting import *  # noqa: E402,F403

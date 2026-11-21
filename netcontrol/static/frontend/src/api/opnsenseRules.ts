@@ -9,7 +9,7 @@ import { useQuery } from '@tanstack/react-query';
 
 import { apiRequest } from './client';
 
-export type OpnsenseRuleFlag = 'any_any' | 'shadowed' | 'disabled' | 'missing_alias' | 'unused';
+export type OpnsenseRuleFlag = 'any_any' | 'shadowed' | 'disabled' | 'missing_alias' | 'unused' | 'unused_90d';
 
 export interface OpnsenseRuleEndpoint {
   text: string;
@@ -29,6 +29,25 @@ export interface OpnsenseRuleCounters {
   bytes?: number;
   states?: number;
   pf_rules?: number;
+}
+
+/**
+ * A rule's counter history, kept across collections and counter resets
+ * (reboots, filter reloads). Spans end at the last read.
+ */
+export interface OpnsenseRuleHistory {
+  /** UTC 'YYYY-MM-DD HH:MM:SS' of the first collection that read the rule's counters. */
+  first_seen_at: string;
+  last_seen_at: string | null;
+  /** The collection at which the packet counter last grew; null when never. */
+  last_hit_at: string | null;
+  /** Days from the first read to the last. */
+  tracked_days: number;
+  /** Days from the last hit (else the first read) to the last read. */
+  idle_days: number;
+  /** Packets and bytes counted since the first read, across resets. */
+  total_packets: number;
+  total_bytes: number;
 }
 
 /** One distinct flow the firewall log showed for a rule (newest first). */
@@ -104,6 +123,8 @@ export interface OpnsenseAnalyzedRule extends OpnsenseRule {
   shadow: '' | 'redundant' | 'conflicting';
   missing_aliases: string[];
   stats: OpnsenseRuleCounters | null;
+  /** Absent on an older server; null when no collection stored the rule's counters. */
+  history?: OpnsenseRuleHistory | null;
   /** Absent on an older server; null when the log showed nothing of the rule. */
   log_evidence?: OpnsenseLogEvidence | null;
 }
@@ -155,6 +176,10 @@ export interface OpnsenseRulesView {
   backup: OpnsenseBackupRef | null;
   stats_collected_at: string | null;
   stats_available: boolean;
+  /** Whether the counter history was read (absent on an older server). */
+  history_available?: boolean;
+  /** The days without a hit after which an enabled rule is flagged unused_90d. */
+  unused_days?: number;
   hostname: string;
   interfaces: OpnsenseInterfaceInfo[];
   groups: Record<string, string[]>;
@@ -227,6 +252,23 @@ export interface OpnsenseItemDiff {
   changed: { key: string; changes: OpnsenseFieldChange[] }[];
 }
 
+/** A rule a configuration change made any-to-any or shadowed (what a rule change alert is raised on). */
+export interface OpnsenseRuleFinding {
+  kind: 'any_any' | 'shadowed';
+  key: string;
+  number: number;
+  interfaces: string[];
+  action: string;
+  protocol: string;
+  source: string;
+  source_port: string;
+  destination: string;
+  destination_port: string;
+  description: string;
+  shadowed_by: number | null;
+  shadow: '' | 'redundant' | 'conflicting';
+}
+
 export interface OpnsenseRulesDiff {
   host_id: number;
   available: boolean;
@@ -246,6 +288,12 @@ export interface OpnsenseRulesDiff {
     one_to_one: OpnsenseItemDiff;
   };
   summary: { rules: number; aliases: number; nat: number };
+  /**
+   * The rules the change made any-to-any or shadowed (`new`, numbered as in
+   * the newer backup) and the ones it no longer flags (`gone`, numbered as in
+   * the older one). Absent on an older server.
+   */
+  findings?: { new: OpnsenseRuleFinding[]; gone: OpnsenseRuleFinding[] };
 }
 
 export function useOpnsenseRules(hostId: number | null, enabled = true) {

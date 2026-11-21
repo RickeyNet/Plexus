@@ -233,6 +233,13 @@ same values; the stored backup and its download stay as collected. The
 full list of masked elements is in
 [OPNsense, Config drift and masked secrets](opnsense-topology.md#config-drift-and-masked-secrets).
 
+A new backup of an OPNsense firewall is also compared with the one before
+it for risky rule changes: a rule that became any-to-any or shadowed
+raises a monitoring alert. Unlike drift, this compares consecutive
+backups, not a baseline, and the alert resolves on its own when a later
+backup no longer has the rule that way. See
+[Rule change alerts](opnsense-topology.md#rule-change-alerts).
+
 ### Drift results
 
 | Item | Meaning |

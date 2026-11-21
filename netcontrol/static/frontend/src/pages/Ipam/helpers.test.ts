@@ -5,6 +5,7 @@ import {
   driftLabel,
   filterSubnetsByCustomData,
   formatSubnetPreview,
+  isCollectionFed,
   providerLabel,
   searchSubnets,
   validateConnectionForm,
@@ -61,6 +62,16 @@ describe('providerLabel', () => {
     expect(providerLabel('aws')).toBe('AWS');
     expect(providerLabel('other')).toBe('other');
     expect(providerLabel(undefined)).toBe('');
+  });
+});
+
+describe('isCollectionFed', () => {
+  it('marks the sources an OPNsense collection fills and nothing else', () => {
+    expect(isCollectionFed('opnsense')).toBe(true);
+    expect(isCollectionFed(' OPNsense ')).toBe(true);
+    expect(isCollectionFed('netbox')).toBe(false);
+    expect(isCollectionFed('plexus')).toBe(false);
+    expect(isCollectionFed(undefined)).toBe(false);
   });
 });
 

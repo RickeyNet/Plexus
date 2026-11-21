@@ -281,6 +281,9 @@ Click the firewall for its sections:
 - **Clients**: the ARP, NDP and lease counts (per DHCP server) and what
   the collection stored in MAC tracking and IPAM (see
   [ARP, NDP and DHCP leases](#arp-ndp-and-dhcp-leases))
+- **Names and reservations**: the DNS names and DHCP reservations read from
+  config.xml and what the collection stored in IPAM (see
+  [DNS names and DHCP reservations](#dns-names-and-dhcp-reservations))
 - **Config backup**: what the collection did with config.xml
 - **Route capture**: what the collection did with the routing table and
   the interface addresses (see
@@ -318,7 +321,9 @@ connection: one warning, and the tunnels keep their phase 1 state.
 
 The connected subnets and static routes join the subnet index, so they can
 be picked in **Path Mode** and appear on the **IPAM** page as subnets of
-source **topology**, owned by the firewall. Once the firewall is an
+source **topology**, owned by the firewall; its DNS names and DHCP
+reservations are allocations under them (see
+[DNS names and DHCP reservations](#dns-names-and-dhcp-reservations)). Once the firewall is an
 inventory host with a config backup, Path Mode traces through it with its
 interfaces, filter rules and NAT read from `config.xml` and the routes of
 its collected routing table (see
@@ -746,6 +751,54 @@ source; the Kea, Dnsmasq and ISC DHCPv6 row fields and the ISC time format
 (`YYYY/MM/DD HH:MM:SS`, read as UTC) were inferred and are not verified
 against a firewall. A field that is missing only leaves that column empty.
 
+## DNS names and DHCP reservations
+
+With **Config backup** on, each collection also reads the names and
+reservations the firewall's `config.xml` holds and keeps them in IPAM. No
+other call is made and no other privilege is needed; with **Config backup**
+off, or the download refused, nothing is read and what IPAM holds stays.
+
+| Read from `config.xml` | Elements | Stored as |
+|---|---|---|
+| Unbound host overrides and their aliases | `OPNsense/unboundplus/hosts/host` (`enabled`, `hostname`, `domain`, `rr`, `server`, `description`), `aliases/alias` (`host` names the override's uuid); the pre-21 `unbound/hosts` layout too | DNS names (A and AAAA records only) |
+| Dnsmasq hosts | `dnsmasq/hosts` (`host`, `domain`, `ip`, `hwaddr`, `client_id`, `ignore`, `descr`, `aliases`) | DNS names; a reservation when the host has a hardware address or client id, Dnsmasq has a DHCP range and the host is not ignored |
+| ISC DHCP static mappings | `dhcpd/<interface>/staticmap` (`mac`, `cid`, `ipaddr`, `hostname`, `domain`, `descr`), `dhcpdv6/<interface>/staticmap` (`duid`, `ipaddrv6`, `hostname`) | Reservations |
+| Kea reservations | `OPNsense/Kea/dhcp4/reservations/reservation` (`ip_address`, `hw_address`, `client_id`, `hostname`, `description`), the DHCPv6 reservations (`ip_address`, `duid`) | Reservations |
+
+Only what the firewall serves is read: Unbound, Dnsmasq and Kea entries
+while that service is enabled, ISC static mappings of interfaces whose DHCP
+service is enabled, enabled overrides and aliases, entries with an address.
+Wildcard names (`*`), MX and TXT records, partial IPv6 addresses and the
+IPv6 mappings of a `track6` interface (a suffix of a prefix `config.xml`
+does not hold) are left out. A host name without a domain is qualified with
+the entry's domain, else the interface's, else the system domain.
+
+The firewall gets an IPAM source of provider `opnsense`, named
+`<source name> (OPNsense)` and matched by its API address like the DHCP
+server above. Plexus creates it at the first collection that has a name or
+reservation to store; each collection replaces its allocations, one per
+address:
+
+- **DNS name**: the first name (an Unbound override's before a Dnsmasq
+  host's, an ISC mapping's, then a Kea reservation's); the other names and
+  aliases are kept with it.
+- **Status**: `reserved` for a DHCP reservation, `active` for a DNS name
+  only.
+- **Description**, and the MAC address, DUID or client id, the DHCP
+  interface (or Kea subnet) and the origins with it.
+- **Subnet**: the firewall's connected subnet that holds the address (the
+  one the IPAM page lists for the firewall), so the allocation shows in that
+  subnet's drill-down and next-IP allocation never hands the address out.
+  An address in none of the firewall's subnets is stored without one.
+
+The source is never synced, validated, reconciled or pushed to (the scheduled
+IPAM sync skips it) and cannot be added by hand or allocated into. Its name,
+notes and enabled switch are yours: disable it to stop storing (what it
+holds stays), delete it to start over. Reservations are not written to the
+reserved ranges of **IPAM**: an allocation under the subnet already keeps
+next-IP allocation off the address. The firewall's **Names and
+reservations** section says what was read and stored.
+
 ## Config backup
 
 With **Config backup** on (the default), each collection downloads the
@@ -877,6 +930,31 @@ The flags:
 | Disabled | The rule is disabled in the configuration |
 | Missing alias | The rule names an alias the configuration does not define (deleted or renamed) |
 | Unused | The rule's counters say it matched no packet since they were last reset (a reboot or a filter reload resets them). Only with **Rule counters** on and OPNsense 24.1 or later |
+| Unused 90 days | An enabled rule Plexus has tracked for at least 90 days whose packet counter did not grow in the last 90 days of that tracking, across counter resets (see [Rule counter history](#rule-counter-history)). The chip on the rule says how many days it went without a hit |
+
+#### Rule counter history
+
+Because pf resets the rule counters at every reboot and filter reload,
+"Unused" only covers the time since the last reset. Each collection with
+**Rule counters** on therefore also adds the counters to a history kept
+per inventory host and rule label: when the rule was first and last read,
+when its packet counter last grew (a counter that went down was reset, so
+its whole value counts as new), and the packets and bytes counted across
+resets. The firewall's **Rule counters** section in the topology says
+whether the read was stored (the firewall must be an inventory host).
+
+- The history starts with the first collection after the upgrade that
+  added it: no rule can be flagged **Unused 90 days** before it has been
+  tracked for 90 days. Until then the **Counters** column says how long the
+  rule has been tracked and how many days are left; hover it for the first
+  read, the last hit and the totals.
+- Tracked time and idle time end at the last collection that read the
+  counters, so days when the counters were not collected never count as
+  idle.
+- A label the firewall stops reporting (the rule was deleted, disabled, or
+  edited into a new label) keeps its history for 30 days, then it is
+  removed; a rule that comes back later starts a new history. The history
+  goes with its inventory host.
 
 The order follows pf: per interface and direction the first matching rule
 with **Quick** set decides; a rule without Quick (a floating rule can be
@@ -885,6 +963,50 @@ one wins. The rules of the automation / new rules model come first, then
 floating rules, then interface group rules, then each interface's rules. A
 flow no rule matches is blocked (OPNsense's default `block in`); what
 leaves an interface passes unless a floating `out` rule says otherwise.
+
+### Rule change alerts
+
+Each collection that stores a **new** config backup (the configuration
+changed) compares its rules with the host's previous backup and raises an
+alert, on the firewall's inventory host, for every rule the change made:
+
+| Finding | Raised when | Severity |
+|---|---|---|
+| Any to any | A new enabled pass rule from any to any (any protocol and port), or an existing rule widened to that or enabled | Warning |
+| Shadowed, opposite action | A rule now covered by an earlier rule that does the opposite: a new rule shadowed on arrival, or a rule a new, moved or widened rule now covers | Warning |
+| Shadowed, redundant | The same, with a covering rule that does the same (traffic is decided as before) | Info |
+
+The flags are the ones the Rules tab shows; disabled rules never raise
+one. The alert names the rule's number, description, interfaces, action,
+source and destination and, for a shadowed rule, the number of the rule
+that covers it. It holds parsed rule fields only, never the backup's text
+or what an alias contains. A finding is raised once (dedup key
+`opnsense-rule:<host id>:<any_any|shadowed>:<rule key>`, the rule key being
+its uuid, or what it matches for a legacy rule without one): later backups that still have it raise nothing. When a later
+backup no longer has it (the rule was removed, narrowed, disabled or moved
+back), its open alert is resolved as `auto-resolved`. At most 25 alerts are
+raised per backup.
+
+Nothing is raised for the first backup of a host (there is nothing to
+compare with), for an unchanged configuration (no new backup), or while
+the firewall (or its site) is muted under **Availability** or the host has
+an active alert suppression for all metrics or for `opnsense_rule_any_any`
+/ `opnsense_rule_shadowed`. The alerts reach the notification channels like
+other monitoring alerts (alert type `opnsense_rule_change`). The firewall's
+**Config backup** section says what the last new backup brought, for
+example "1 new any-to-any rule, 2 newly shadowed rules; alerts raised".
+**Changes between backups** in the Rules view lists the same findings
+for the two backups it compares (`findings` of the diff API).
+
+They need **Config backup** on and the firewall imported as an inventory
+host, since they are read from its backups. Config drift (see
+[Config drift and masked secrets](#config-drift-and-masked-secrets)) is
+separate: it opens a drift event for any difference from the baseline you
+approved, raises no monitoring alert, and is cleared by accepting or
+resolving the event. A rule change alert covers only these risky rule
+changes between two consecutive backups, whatever the baseline, and clears
+itself when the rule is fixed. A risky change usually shows in both: the
+drift event says what changed, the alert says why it matters.
 
 ### Path trace through the firewall
 
@@ -1260,6 +1382,7 @@ firewalls when you edit the advisory.
 | CARP virtual IPs, demotion, maintenance mode | `GET diagnostics/interface/get_vip_status` (`getVipStatus`) | High availability |
 | Security audit | `GET core/firmware/running`, `POST core/firmware/audit`, `GET core/firmware/upgradestatus` | Firmware security audit |
 | config.xml | `GET core/backup/download/this` | Config backup |
+| DNS names and DHCP reservations (see [DNS names and DHCP reservations](#dns-names-and-dhcp-reservations)) | none: read from the downloaded `config.xml` | Config backup |
 | Filter rule counters (evaluations, packets, bytes, states per rule uuid) | `GET firewall/filter_util/rule_stats` (`ruleStats`) | Rule counters |
 | Memory (total, used, ZFS ARC) | `GET diagnostics/system/system_resources` (`systemResources`) | Health and services |
 | File systems | `GET diagnostics/system/system_disk` (`systemDisk`) | Health and services |
@@ -1381,4 +1504,4 @@ An OPNsense firewall uses the source endpoints listed in
 | `GET` | `/api/availability/topology/summary?provider=opnsense&entity_type=certificate` | The tracked certificates and CAs with their state; `raw_status` is the expiry tier (`valid`, `expiring`, `critical`, `expired`) |
 | `GET` | `/api/opnsense/hosts/{host_id}/rules` | The rule view of the firewall's newest config backup (Config Backups feature), with each rule's firewall log evidence (`log_evidence`) and the sizes of the collected alias tables (`alias_tables`); see [api-reference.md](api-reference.md#opnsense-firewall-rules) |
 | `GET` | `/api/monitoring/security-events` | The stored [IDS alerts](#ids-alerts) (Monitoring feature): `?hours=&severity=&action=&q=&host_id=&org_ref=&provider=&kind=&limit=&offset=`; see [api-reference.md](api-reference.md#security-events) |
-| `GET` | `/api/opnsense/hosts/{host_id}/rules/diff` | Rule, alias and NAT changes between two backups (`?from_backup=&to_backup=`, default: the newest two) |
+| `GET` | `/api/opnsense/hosts/{host_id}/rules/diff` | Rule, alias and NAT changes between two backups (`?from_backup=&to_backup=`, default: the newest two), with the rule change `findings` (rules made any-to-any or shadowed, and those no longer flagged) |

@@ -29,7 +29,9 @@ COLLECTION_FED_PROVIDERS = frozenset({DHCP_PROVIDER_OPNSENSE})
 
 
 def is_collection_fed(provider: str | None) -> bool:
-    """Whether a DHCP server's leases come from another collection, not a sync."""
+    """Whether a DHCP server's leases (or an IPAM source's allocations, see
+    ``netcontrol.routes.ipam_adapters``) come from another collection, not
+    a sync: such a row is never contacted, synced, validated or pushed to."""
     return str(provider or "").strip().lower() in COLLECTION_FED_PROVIDERS
 
 

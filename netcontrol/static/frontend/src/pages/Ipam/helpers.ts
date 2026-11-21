@@ -67,6 +67,16 @@ export function providerLabel(provider: string | undefined): string {
   }
 }
 
+/**
+ * Whether an IPAM source or DHCP server is filled by a topology collection
+ * (an OPNsense firewall's Map source) rather than synced: it is never synced,
+ * validated, reconciled or pushed to from here (the server refuses it too:
+ * ``is_collection_fed`` in ``netcontrol/routes/dhcp_adapters.py``).
+ */
+export function isCollectionFed(provider: string | undefined): boolean {
+  return (provider ?? '').trim().toLowerCase() === 'opnsense';
+}
+
 export function driftLabel(driftType: string): string {
   switch (driftType) {
     case 'missing_in_ipam':

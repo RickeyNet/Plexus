@@ -53,6 +53,26 @@ them) into `monitoring_alerts` / notification channels
 | APC Smart-UPS through a Network Management Card (inventory) | host (the card's interface), UPS battery and output state | SNMP + ICMP poll (`apc_ups`, no SSH driver: the card's command line is used only by the Upgrades tool); PowerNet-MIB battery status, capacity, runtime, replace indicator, temperature, output status, load and voltage, input voltage and frequency, last transfer cause, and the card's temperature probe; plus the card's SNMP traps (v1 / v2c, decoded on arrival) | Yes (ICMP) | Yes | Full pipeline over SNMP. The UPS state is stored per host (`host_vendor_status`), kept as metric samples with hourly / daily rollups, and raises server-side alerts into `monitoring_alerts` / notification channels: on battery, battery low / fault / not present / needs replacing, output off or on bypass, overload, battery temperature (warning 40 °C, critical 50 °C), each resolved when it clears (`netcontrol/integrations/apc/snmp.py`). Traps: Yes. A PowerNet-MIB trap from an `apc_ups` host raises or resolves the same alerts at once (same dedup keys as the poll; communication lost / established too) and triggers an immediate re-poll of the host (`netcontrol/integrations/apc/traps.py`). No CPU or memory (none to read). A trap is acted on only with the community stored for the host and from the host's own address (the v1 agent address only through an inventory source); SNMPv3 traps are stored undecoded and never acted on. Gaps: SNMPv3 traps are not authenticated (no trap user keys); outlet groups, humidity and the per-module tables of a parallel / three-phase UPS are not read. `docs/apc-ups.md`. |
 | ICMP-only hosts | host | ICMP | Yes | Yes | |
 
+Firewall rule posture: only OPNsense is checked today. A collection that
+stores a new config.xml backup compares its filter rules with the previous
+backup and raises a `monitoring_alerts` alert on the firewall's inventory
+host for each rule the change made any-to-any or shadowed (alert type
+`opnsense_rule_change`, resolved when a later backup no longer has it;
+`docs/opnsense-topology.md#rule-change-alerts`). The rule counters are
+kept per host across counter resets (`opnsense_rule_counters`) and a rule
+without a hit for 90 tracked days is flagged in the rule view; that flag
+is view-only and raises no alert. Gap: no other vendor's rule base (Meraki
+L3 rules, Cato, FMC access policies, Panorama security rules, cloud
+security groups) is checked for any-to-any or shadowed rules, and none
+keeps rule hit history.
+
+IPAM names: an OPNsense collection with Config backup on also stores the
+firewall's DNS names and DHCP reservations (Unbound overrides, Dnsmasq
+hosts, ISC static mappings, Kea reservations, read from config.xml) as the
+allocations of an `opnsense` IPAM source, next to the DHCP leases of its
+`opnsense` DHCP server; both are fed by the collection and never synced or
+pushed to (`docs/opnsense-topology.md#dns-names-and-dhcp-reservations`).
+
 Tunnel traffic: only OPNsense tunnels and OpenVPN servers report traffic
 today. Gap: the tunnels of Meraki (AutoVPN, third-party IPsec), Cato,
 FMC, Panorama, Appgate and the AWS, Azure and GCP VPN connections store no
@@ -73,7 +93,7 @@ acknowledge and Suppressions instead.
 | Cisco Meraki | Yes | Yes: devices at any stored collection; uplinks and tunnels when no organization-wide call failed | Yes, for a device that had an open Meraki alert: confirmed with one API call by the alert poll, about a minute |
 | Cato Networks | Yes | Yes, at a collection with no warnings and no site marked not collected | No |
 | Cisco FMC, Palo Alto Panorama, Appgate SDP | Yes | Yes, at a collection with no warnings | No |
-| OPNsense | Yes (muting the firewall covers its CARP groups and their failover warnings, its services, its certificates with their expiry alerts and its IDS alerts) | Yes, at a collection with no warnings other than informational ones (an incomplete security audit, a pending firmware update, audit findings, config.xml not stored, a CARP VIP in INIT or a CARP demotion, certificates expiring, certificates read from config.xml or not read on a release without the trust API) | No |
+| OPNsense | Yes (muting the firewall covers its CARP groups and their failover warnings, its services, its certificates with their expiry alerts, its IDS alerts and its rule change alerts) | Yes, at a collection with no warnings other than informational ones (an incomplete security audit, a pending firmware update, audit findings, config.xml not stored, a CARP VIP in INIT or a CARP demotion, certificates expiring, certificates read from config.xml or not read on a release without the trust API) | No |
 | AWS, Azure, GCP | Yes | Partly: at a discovery with no warnings and no *not collected* network (a peered VPC or VNet outside the collected accounts and regions). One failed region or account, or one such peering, keeps everything of that cloud `unknown` until the retention cleanup. Gap: removal per account and region | No |
 
 A removal that cannot be trusted (any other collection) leaves the entity

@@ -27,7 +27,10 @@ import {
   FLAG_LABELS,
   FLAG_TONES,
   filterRules,
+  findingText,
   flagLabel,
+  flagName,
+  historyLines,
   type RuleFilter,
 } from './opnsenseRules';
 
@@ -72,7 +75,7 @@ export function OpnsenseRulesTab({ hostId }: { hostId: number }) {
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.3rem' }}>
         {FLAGS.map((flag) => (
           <Badge key={flag} size="sm" tone={view.summary[flag] ? FLAG_TONES[flag] : 'neutral'}>
-            {FLAG_LABELS[flag]}: {view.summary[flag]}
+            {flagName(flag, view.unused_days)}: {view.summary[flag] ?? 0}
           </Badge>
         ))}
       </div>
@@ -204,7 +207,7 @@ function RulesTable({ view }: { view: OpnsenseRulesView }) {
               pressed={filter.flag === flag}
               onClick={() => setFilter({ ...filter, flag: filter.flag === flag ? '' : flag })}
             >
-              {FLAG_LABELS[flag]} ({view.summary[flag]})
+              {flagName(flag, view.unused_days)} ({view.summary[flag] ?? 0})
             </Badge>
           ))}
         </div>
@@ -212,6 +215,9 @@ function RulesTable({ view }: { view: OpnsenseRulesView }) {
       <div className="text-muted" style={{ fontSize: '0.78rem' }}>
         Rules are listed in the order the firewall evaluates them; # is the number a path trace names.
         {view.stats_available ? '' : ' No rule counters were collected, so no rule is flagged unused.'}
+        {view.unused_days
+          ? ` The firewall resets its counters at a reboot or filter reload; Plexus keeps their history from the first collection that read them and flags a rule tracked for ${view.unused_days} days without a hit.`
+          : ''}
         {view.alias_tables?.read_at
           ? ` Aliases marked "pf table" are resolved by path traces from their table as read at ${formatBackendDateTime(view.alias_tables.read_at, '-')}.`
           : ''}
@@ -254,18 +260,21 @@ function RulesTable({ view }: { view: OpnsenseRulesView }) {
                       </td>
                       <td title={rule.source.cidrs.join(', ')}>
                         {endpointText(rule.source)}
-                        <AliasTables lines={aliasTableLines(rule.source, view.alias_tables)} />
+                        <MutedLines lines={aliasTableLines(rule.source, view.alias_tables)} />
                       </td>
                       <td title={rule.destination.cidrs.join(', ')}>
                         {endpointText(rule.destination)}
-                        <AliasTables lines={aliasTableLines(rule.destination, view.alias_tables)} />
+                        <MutedLines lines={aliasTableLines(rule.destination, view.alias_tables)} />
                       </td>
                       <td>
                         {rule.description}
                         {rule.gateway && <div className="text-muted">gateway {rule.gateway}</div>}
                         {rule.tier !== 'interface' && <div className="text-muted">{rule.tier} rule</div>}
                       </td>
-                      <td>{countersText(rule) || <span className="text-muted">-</span>}</td>
+                      <td title={historyTitle(rule)}>
+                        {countersText(rule) || <span className="text-muted">-</span>}
+                        <MutedLines lines={historyLines(rule, view.unused_days)} />
+                      </td>
                       <td>
                         <LogEvidenceCell evidence={rule.log_evidence ?? null} view={view} logs={rule.log} />
                       </td>
@@ -290,8 +299,19 @@ function RulesTable({ view }: { view: OpnsenseRulesView }) {
   );
 }
 
-/** The aliases of a rule side the path trace resolves from the collected pf tables. */
-function AliasTables({ lines }: { lines: string[] }) {
+/** The counter history of a rule on hover: when it was tracked from, last hit and what it counted across resets. */
+function historyTitle(rule: OpnsenseAnalyzedRule): string | undefined {
+  const history = rule.history;
+  if (!history) return undefined;
+  return [
+    `Tracked since ${formatBackendDateTime(history.first_seen_at, '-')}`,
+    `Last hit ${formatBackendDateTime(history.last_hit_at, 'never')}`,
+    `Counted across counter resets: ${history.total_packets.toLocaleString()} pkts, ${history.total_bytes.toLocaleString()} bytes`,
+  ].join('\n');
+}
+
+/** Small muted lines under a cell's value (alias tables, counter history). */
+function MutedLines({ lines }: { lines: string[] }) {
   if (!lines.length) return null;
   return (
     <>
@@ -435,6 +455,16 @@ function RulesDiff({ hostId, newest }: { hostId: number; newest: number | null }
         <EmptyState compact message="No rule, alias or NAT change between these backups" />
       ) : (
         <div className="stack stack-sm" style={{ fontSize: '0.82rem' }}>
+          <DiffSection
+            title="New any-to-any or shadowed rules"
+            rows={(diff.data.findings?.new ?? []).map(findingText)}
+            tone="danger"
+          />
+          <DiffSection
+            title="No longer any-to-any or shadowed"
+            rows={(diff.data.findings?.gone ?? []).map(findingText)}
+            tone="success"
+          />
           <DiffSection
             title="Rules added"
             rows={diff.data.rules.added.map((r) => `#${r.number} ${r.action} ${endpointText(r.source)} → ${endpointText(r.destination)} ${r.description}`)}

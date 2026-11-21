@@ -1,10 +1,18 @@
-"""ipam_adapters.py -- External IPAM provider adapters for overview sync."""
+"""ipam_adapters.py -- External IPAM provider adapters for overview sync.
+
+A source of provider ``opnsense`` is never contacted, synced or pushed to
+here: an OPNsense firewall's topology collection creates it and replaces
+its allocations (``netcontrol.routes.opnsense_collection.store_names``).
+``is_collection_fed`` (shared with the DHCP servers) says which sources
+those are; every sync, validation, reconciliation and push path checks it.
+"""
 
 from __future__ import annotations
 
 import ipaddress
 from typing import Any
 
+from netcontrol.routes.dhcp_adapters import is_collection_fed
 from netcontrol.sync.transport import (
     canonical_address,
     canonical_subnet,
@@ -16,6 +24,11 @@ from netcontrol.sync.transport import (
 
 _HTTP_TIMEOUT_SECONDS = 20.0
 _VALID_PROVIDERS = {"netbox", "phpipam", "infoblox"}
+# The source an OPNsense collection feeds (see the module docstring).
+IPAM_PROVIDER_OPNSENSE = "opnsense"
+COLLECTION_FED_MESSAGE = (
+    "collection_fed: this source's allocations are updated by its OPNsense topology source; build that source"
+)
 
 _PROVIDER_INFO = {
     "netbox": {
@@ -45,6 +58,11 @@ def normalize_ipam_provider(raw: str | None) -> str:
     if provider not in _VALID_PROVIDERS:
         raise ValueError("invalid_provider")
     return provider
+
+
+def _refuse_collection_fed(source: dict) -> None:
+    if is_collection_fed(source.get("provider")):
+        raise IpamAdapterError(COLLECTION_FED_MESSAGE)
 
 
 def get_ipam_provider_catalog() -> list[dict]:
@@ -370,6 +388,7 @@ async def collect_ipam_snapshot(
     *,
     fetch_json=_fetch_json,
 ) -> dict:
+    _refuse_collection_fed(source)
     provider = normalize_ipam_provider(source.get("provider"))
     if provider == "netbox":
         snapshot = await _collect_netbox(source, auth_config, fetch_json)
@@ -597,6 +616,7 @@ async def push_allocation_to_provider(
     request_json=_request_json,
     fetch_json=_fetch_json,
 ) -> None:
+    _refuse_collection_fed(source)
     provider = normalize_ipam_provider(source.get("provider"))
     normalized_address = _normalize_address(address)
     headers, auth = _build_auth(source, auth_config)

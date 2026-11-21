@@ -228,6 +228,18 @@ added or edited, or a discovery sync adds or renames one, Plexus writes the
 address and host name to every enabled source with push on. A failed push
 does not stop the inventory change.
 
+An OPNsense firewall collected as a Map source with **Config backup** on
+adds a source of provider `opnsense` named `<source name> (OPNsense)`: its
+allocations are the firewall's DNS names and DHCP reservations (Unbound host
+overrides, Dnsmasq hosts, ISC static mappings, Kea reservations), a DHCP
+reservation with status `reserved`, each under the firewall subnet that
+holds it, replaced with every collection of that source. It shows "Updated
+by its Map source" instead of **Sync Now**; it is never synced, validated,
+reconciled or pushed to, the scheduled sync skips it, and next-IP allocation
+cannot commit into it. Its menu has **Disable** / **Enable** (a disabled
+source keeps what it holds) and **Delete**. See the OPNsense guide's
+"DNS names and DHCP reservations" section.
+
 ## Reconciliation
 
 Reconciliation compares inventory host addresses with the allocations of

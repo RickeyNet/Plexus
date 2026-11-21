@@ -14,7 +14,9 @@ is stored:
     (``netcontrol.integrations.inventory_import.importable_devices``: the
     host with its address, or the one the collection matched it to). When
     the firewall is no inventory host yet, nothing is stored and the
-    snapshot gets a warning that says to import it first. The XML holds
+    snapshot gets a warning that says to import it first. A new backup is
+    compared with the one before it for rules that became any-to-any or
+    shadowed, which raise alerts (``opnsense_rule_alerts``). The XML holds
     password hashes, private keys and pre-shared keys: it is dropped from
     the raw collection here and never reaches the snapshot.
   - ``sync_audit_advisories``: the findings of the firewall's security
@@ -42,9 +44,21 @@ is stored:
     API address and created on first use), so they show in IPAM's DHCP
     servers, lease listing and inventory correlation. The firewall's
     "Clients" section says what was stored.
+  - ``store_names``: the Unbound host overrides, Dnsmasq hosts, ISC static
+    mappings and Kea reservations config.xml holds (``names``, popped from
+    the raw collection; see ``netcontrol.integrations.opnsense.names``)
+    replace the allocations of the firewall's IPAM source (provider
+    ``opnsense``, matched by the API address like the DHCP server, created
+    once there is something to store), one per address under the firewall
+    subnet that holds it, so they show in the subnet drill-down and are
+    never handed out by next-IP allocation. The "Names and reservations"
+    section says what was stored.
   - ``attach_rule_stats``: the filter rule counters (``rule_stats``) stay
     in the snapshot with the inventory host they belong to, for the rule
-    views (``netcontrol.routes.opnsense_rules``).
+    views (``netcontrol.routes.opnsense_rules``), and are added to that
+    host's counter history (``store_rule_counters``:
+    ``opnsense_rule_counters``, which survives counter resets and tells a
+    rule unused for 90 days); the "Rule counters" section says so.
   - ``store_route_capture``: the routing table and the live interface
     addresses become the route capture of the firewall's inventory host (a
     ``route_snapshots`` row in the text of
@@ -82,6 +96,7 @@ the collection is stored anyway.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
 
@@ -89,7 +104,9 @@ import routes.database as db
 
 from netcontrol.integrations.inventory_import import importable_devices
 from netcontrol.integrations.meraki.normalize import _add, kv_section
+from netcontrol.integrations.meraki.subnets import subnet_index, subnets_containing
 from netcontrol.integrations.opnsense.collector import PATH_ARP, PATH_CONFIG, info_warning
+from netcontrol.integrations.opnsense.names import ORIGINS, STATUS_RESERVED, ipam_allocations
 from netcontrol.integrations.opnsense.normalize import (
     ADVISORY_SOURCE,
     DEVICE_NODE_PREFIX,
@@ -107,6 +124,7 @@ from netcontrol.integrations.pathtrace.opnsense_routes import LiveInterface, cap
 from netcontrol.integrations.software.versions import canonical_version, snapshot_device_key, snapshot_devices
 from netcontrol.routes.device_config import store_device_config
 from netcontrol.routes.dhcp_adapters import DHCP_PROVIDER_OPNSENSE
+from netcontrol.routes.ipam_adapters import IPAM_PROVIDER_OPNSENSE
 from netcontrol.routes.route_capture import store_route_snapshot
 from netcontrol.telemetry import configure_logging
 
@@ -125,9 +143,16 @@ CLIENTS_NOT_IMPORTED_MESSAGE = (
 )
 SECTION_ROUTE_CAPTURE = "Route capture"
 SECTION_ALIAS_TABLES = "Alias tables"
+SECTION_RULE_COUNTERS = "Rule counters"
 LEASE_SERVER_NOTES = (
     "Leases collected by the OPNsense topology source of this firewall; replaced on every collection. "
     "Disable this server to stop storing them."
+)
+SECTION_NAMES = "Names and reservations"
+NAMES_SOURCE_NOTES = (
+    "DNS names and DHCP reservations of this firewall's config.xml (Unbound host overrides, Dnsmasq hosts, "
+    "ISC DHCP static mappings, Kea reservations), collected by its OPNsense topology source with the Config "
+    "backup option; replaced on every collection. Disable this source to stop storing them."
 )
 
 
@@ -166,10 +191,12 @@ async def matching_host(snapshot: dict, hosts: list[dict] | None = None) -> dict
     return next((h for h in hosts if int(h.get("id") or 0) == host_id), None)
 
 
-async def store_config_backup(raw: dict, snapshot: dict) -> dict[str, Any] | None:
+async def store_config_backup(raw: dict, snapshot: dict, *, org_ref: int | None = None) -> dict[str, Any] | None:
     """Store the collected ``config.xml`` (popped from ``raw``) as a config
-    backup of the firewall's inventory host. Returns what was done, or
-    ``None`` when there was nothing to store."""
+    backup of the firewall's inventory host; a new backup is checked for
+    rule changes to alert on (``opnsense_rule_alerts``; ``org_ref``: the
+    collecting source, whose firewall mute covers them). Returns what was
+    done, or ``None`` when there was nothing to store."""
     config_xml = raw.pop("config_xml", None)
     if not config_xml:
         return None
@@ -201,20 +228,33 @@ async def store_config_backup(raw: dict, snapshot: dict) -> dict[str, Any] | Non
         LOGGER.warning("opnsense: config backup of host %s not stored: %s", host.get("id"), type(exc).__name__)
         _warn(snapshot, info_warning("config", "/" + PATH_CONFIG, "config.xml was not stored: see the server log"))
         return {"stored": False, "host_id": host.get("id")}
+    rows: list[tuple[str, Any]] = [
+        ("Result", "New backup stored" if stored.created else "Unchanged since the newest backup"),
+        ("Inventory host", host.get("hostname") or host.get("ip_address")),
+        ("Backup ID", stored.backup_id),
+    ]
+    rule_changes = None
+    if stored.created:
+        try:
+            # Imported here: the alert module imports the monitoring routes.
+            from netcontrol.routes.opnsense_rule_alerts import alert_rule_changes, summary_text
+
+            rule_changes = await alert_rule_changes(host, stored.backup_id, config_xml, org_ref=org_ref)
+            if rule_changes is not None:
+                rows.append(("Rule changes", summary_text(rule_changes)))
+        except Exception as exc:  # noqa: BLE001 - the backup is stored anyway
+            LOGGER.warning("opnsense: rule changes of host %s not checked: %s", host.get("id"), type(exc).__name__)
+            rows.append(("Rule changes", "Not checked: see the server log"))
+    rows.append(("Source", "config.xml over the OPNsense API"))
     if firewall is not None:
-        _add(
-            firewall["sections"],
-            kv_section(
-                SECTION_CONFIG_BACKUP,
-                [
-                    ("Result", "New backup stored" if stored.created else "Unchanged since the newest backup"),
-                    ("Inventory host", host.get("hostname") or host.get("ip_address")),
-                    ("Backup ID", stored.backup_id),
-                    ("Source", "config.xml over the OPNsense API"),
-                ],
-            ),
-        )
-    return {"stored": True, "created": stored.created, "backup_id": stored.backup_id, "host_id": host.get("id")}
+        _add(firewall["sections"], kv_section(SECTION_CONFIG_BACKUP, rows))
+    return {
+        "stored": True,
+        "created": stored.created,
+        "backup_id": stored.backup_id,
+        "host_id": host.get("id"),
+        "rule_changes": rule_changes,
+    }
 
 
 def firewall_device_key(snapshot: dict, org_ref: int) -> str:
@@ -378,6 +418,93 @@ async def sync_clients(raw: dict, snapshot: dict) -> dict[str, Any] | None:
     return result
 
 
+async def _names_source(snapshot: dict, raw: dict, base_url: str, create: bool) -> dict | None:
+    """The ``ipam_sources`` row (provider ``opnsense``) that holds this
+    firewall's names and reservations, matched by its API address; created
+    when ``create`` (there is something to store), renamed with the source.
+    ``None`` when there is none."""
+    name = _lease_server_name(snapshot, raw)
+    sources = await db.list_ipam_sources(provider=IPAM_PROVIDER_OPNSENSE)
+    source = next((s for s in sources if s.get("base_url") == base_url), None)
+    if source is None:
+        if not create:
+            return None
+        return await db.create_ipam_source(
+            provider=IPAM_PROVIDER_OPNSENSE,
+            name=name,
+            base_url=base_url,
+            auth_type="none",
+            notes=NAMES_SOURCE_NOTES,
+            created_by="opnsense-collection",
+        )
+    if source.get("name") != name:
+        source = await db.update_ipam_source(int(source["id"]), name=name) or source
+    return source
+
+
+def _subnet_finder(snapshot: dict) -> Callable[[str], str]:
+    """``address -> the firewall's connected subnet that holds it`` (the
+    most specific; ``""`` for none), from the snapshot's subnet index: the
+    same rows the IPAM overview lists for the firewall, so an allocation
+    keyed by it shows under that subnet and counts as taken there."""
+    connected = [s for s in subnet_index(snapshot) if s.get("kind") == "connected"]
+
+    def subnet_of(address: str) -> str:
+        found = subnets_containing(connected, address)
+        return str(found[0]["cidr"]) if found else ""
+
+    return subnet_of
+
+
+async def store_names(raw: dict, snapshot: dict) -> dict[str, Any] | None:
+    """Replace the allocations of the firewall's ``opnsense`` IPAM source
+    with the DNS names and DHCP reservations config.xml holds (``names``,
+    popped from ``raw``). ``None`` when they were not read (no config.xml):
+    the stored ones stay."""
+    found = raw.pop("names", None)
+    if not isinstance(found, dict):
+        return None
+    records = [r for r in found.get("records") or [] if isinstance(r, dict)]
+    counts: dict[str, Any] = found["counts"] if isinstance(found.get("counts"), dict) else {}
+    allocations = ipam_allocations(records, _subnet_finder(snapshot))
+    result: dict[str, Any] = {"stored": None, "ipam_source_id": None}
+    rows: list[tuple[str, Any]] = []
+    base_url = str((raw.get("firewall") or {}).get("base_url") or "").strip()
+    try:
+        source = await _names_source(snapshot, raw, base_url, create=bool(allocations)) if base_url else None
+        if not base_url:
+            text = "Not stored: the firewall has no address"
+        elif source is None:
+            text = "Nothing to store"
+        elif not source.get("enabled"):
+            text = f"Not stored: IPAM source '{source.get('name')}' is disabled"
+        else:
+            stored = await db.replace_ipam_source_snapshot(
+                int(source["id"]),
+                prefixes=[],
+                allocations=allocations,
+                sync_status="success",
+                sync_message=f"OPNsense collection: {len(allocations)} names and reservations",
+            )
+            result = {"stored": stored["allocations"], "ipam_source_id": source["id"]}
+            text = f"{stored['allocations']} addresses in IPAM source '{source.get('name')}'"
+    except Exception as exc:  # noqa: BLE001 - the snapshot is stored anyway
+        LOGGER.warning("opnsense: names and reservations not stored: %s", type(exc).__name__)
+        text = "Not stored: see the server log"
+    rows.append(("Result", text))
+    rows.append(("Addresses", len(allocations)))
+    rows.append(("DHCP reservations", sum(1 for a in allocations if a["status"] == STATUS_RESERVED)))
+    rows += [(label, counts[key]) for key, label in ORIGINS if counts.get(key)]
+    outside = sum(1 for a in allocations if not a["prefix_subnet"])
+    if outside:
+        rows.append(("Outside the firewall's subnets", outside))
+    rows.append(("Source", "config.xml (Config backup option)"))
+    firewall = _firewall(snapshot)
+    if firewall is not None:
+        _add(firewall["sections"], kv_section(SECTION_NAMES, rows))
+    return result
+
+
 async def after_collection(raw: dict, snapshot: dict, org_ref: int) -> None:
     """Store the config backup, sync the audit advisories, feed the ARP
     / NDP tables and DHCP leases into MAC tracking and IPAM and store the
@@ -385,7 +512,7 @@ async def after_collection(raw: dict, snapshot: dict, org_ref: int) -> None:
     ``org_ref``. Never raises."""
     try:
         if (raw.get("options") or {}).get("config_backup", True):
-            await store_config_backup(raw, snapshot)
+            await store_config_backup(raw, snapshot, org_ref=org_ref)
     finally:
         # Whatever happened above, the XML never outlives this call.
         raw.pop("config_xml", None)
@@ -397,6 +524,12 @@ async def after_collection(raw: dict, snapshot: dict, org_ref: int) -> None:
         await sync_clients(raw, snapshot)
     except Exception as exc:  # noqa: BLE001 - the snapshot is stored anyway
         LOGGER.warning("opnsense: clients not synced: %s", type(exc).__name__)
+    try:
+        await store_names(raw, snapshot)
+    except Exception as exc:  # noqa: BLE001 - the snapshot is stored anyway
+        LOGGER.warning("opnsense: names and reservations not stored: %s", type(exc).__name__)
+    finally:
+        raw.pop("names", None)
     try:
         await attach_rule_stats(raw, snapshot)
     except Exception as exc:  # noqa: BLE001 - the snapshot is stored anyway
@@ -520,7 +653,40 @@ async def attach_rule_stats(raw: dict, snapshot: dict) -> dict | None:
         "collected_at": raw.get("timestamp"),
         "rules": stats,
     }
+    await store_rule_counters(snapshot, host, stats, raw.get("timestamp"))
     return snapshot["rule_stats"]
+
+
+async def store_rule_counters(snapshot: dict, host: dict | None, stats: dict, collected_at: Any) -> dict | None:
+    """Add the read counters to the counter history of the firewall's
+    inventory host (``opnsense_rule_counters``, read at the collection's
+    time), from which the rule views tell a rule unused for
+    ``rules.UNUSED_DAYS``. Best effort: the firewall's "Rule counters"
+    section says what was stored. Returns the store's answer, or ``None``."""
+    result: dict | None = None
+    if host is None:
+        text = "Not stored: import the firewall into the inventory"
+    else:
+        try:
+            result = await db.record_opnsense_rule_counters(int(host["id"]), stats, _utc_text(collected_at))
+            text = (
+                f"{result['rules']} rules added to the counter history"
+                if result["rules"]
+                else "Nothing stored: the firewall reported no rule counters"
+            )
+        except Exception as exc:  # noqa: BLE001 - the snapshot is stored anyway
+            LOGGER.warning("opnsense: rule counter history not stored: %s", type(exc).__name__)
+            text = "Not stored: see the server log"
+    rows: list[tuple[str, Any]] = [("Result", text)]
+    if host is not None:
+        rows.append(("Inventory host", host.get("hostname") or host.get("ip_address")))
+    if result and result.get("removed"):
+        rows.append(("Removed", f"{result['removed']} rules not reported for {db.RULE_COUNTER_RETENTION_DAYS} days"))
+    rows.append(("Source", "Filter rule counters over the OPNsense API (firewall/filter_util)"))
+    firewall = _firewall(snapshot)
+    if firewall is not None:
+        _add(firewall["sections"], kv_section(SECTION_RULE_COUNTERS, rows))
+    return result
 
 
 def _utc_text(iso: Any) -> str:

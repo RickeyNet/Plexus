@@ -24,6 +24,7 @@ import routes.database as db
 
 from netcontrol.routes.ipam_adapters import (
     IpamAdapterError,
+    is_collection_fed,
     push_allocation_to_provider,
 )
 from netcontrol.telemetry import configure_logging
@@ -196,6 +197,10 @@ async def run_reconciliation(
         raise ValueError("IPAM source not found")
     if source.get("provider") == "plexus":
         raise ValueError("Cannot reconcile the built-in Plexus IPAM source against itself")
+    if is_collection_fed(source.get("provider")):
+        # Its allocations mirror the firewall's configuration: nothing in
+        # Plexus can be pushed to it, and its clients are no inventory hosts.
+        raise ValueError("Cannot reconcile an IPAM source fed by an OPNsense collection")
 
     run = await db.create_reconciliation_run(source_id, triggered_by=triggered_by)
     if not run:
