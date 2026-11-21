@@ -50,10 +50,16 @@ async def test_standalone_and_unknown_pass(_emits) -> None:
 
 
 @pytest.mark.asyncio
-async def test_skip_health_check_downgrades_to_warning(_emits) -> None:
+async def test_skip_health_check_does_not_override(_emits) -> None:
     err = await upgrades._transfer_standby_gate(1, 42, "10.0.0.1", "cisco_xe", _COLD, {"skip_health_check": True})
+    assert err is not None and "STANDBY COLD" in err
+
+
+@pytest.mark.asyncio
+async def test_allow_degraded_chassis_downgrades_to_warning(_emits) -> None:
+    err = await upgrades._transfer_standby_gate(1, 42, "10.0.0.1", "cisco_xe", _COLD, {"allow_degraded_chassis": True})
     assert err is None
-    assert any(lvl == "warn" and "STANDBY COLD" in msg for (lvl, msg) in _emits)
+    assert any(lvl == "warn" and "STANDBY COLD" in msg and "allow_degraded_chassis" in msg for (lvl, msg) in _emits)
 
 
 @pytest.mark.asyncio

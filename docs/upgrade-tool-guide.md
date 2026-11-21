@@ -98,9 +98,10 @@ Times are per switch. Prestage and Transfer run against several devices at once 
 | Prestage | Varies | `install remove inactive` can be slow on switches with many old packages |
 | Transfer (SCP) | 30 - 60 minutes | Depends on link speed and image size (roughly 400 - 900 MB) |
 | MD5 verification and `install add` | Several minutes | Automatic after transfer |
-| Activate (normal reload) | 5 - 15 minutes | Up to about 20 minutes for a fully populated dual-supervisor chassis. Switch is down for this period |
+| Activate (normal reload), fixed switch or stack | 5 - 15 minutes | Switch is down for this period |
+| Activate (normal reload), 9400 / 9600 chassis | 15 - 40 minutes | Supervisors and every line card reload together. The first boot on a new release can also upgrade ROMMON, CPLD and line card firmware, which adds time. Chassis is down for this period. **Do not power cycle it** (see Step 3) |
 | Activate (ISSU) | 20 - 45 minutes | Dual-sup / StackWise Virtual only. The chassis keeps forwarding |
-| Post-upgrade verification and commit | Several minutes | Automatic when "Verify upgrade after reboot" is on |
+| Post-upgrade verification and commit | Several minutes, up to 30 on a chassis | Automatic when "Verify upgrade after reboot" is on. The tool waits for the standby supervisor and every module before it commits |
 | Total per switch (all phases) | Roughly 1 - 2 hours | Mostly transfer time |
 | Total for this change | | Fill in based on switch count and strategy |
 
@@ -112,7 +113,7 @@ Recommended strategy: Run Prestage and Transfer during business hours the day be
 
 **Phases 1, 2, and 4 (Prestage, Transfer, Verify):** No user impact. The switch keeps running its current software. Network traffic is unaffected. The only observable effect is slightly higher CPU on the switch during the file copy, MD5 check, and package unpack.
 
-**Phase 3 (Activate):** Full outage for every device connected to that switch while it reloads, typically 5 - 15 minutes. This includes:
+**Phase 3 (Activate):** Full outage for every device connected to that switch while it reloads, typically 5 - 15 minutes for a fixed switch or stack and 15 - 40 minutes for a 9400 / 9600 chassis. This includes:
 
 - All wired users, printers, phones, and cameras on that switch
 - Wireless access points powered by or uplinked through that switch (and therefore the Wi-Fi they provide)
@@ -146,7 +147,12 @@ Risk mitigations built into this procedure:
 - Running configuration is backed up before any change is made and is downloadable from the Backups tab.
 - The software image is MD5-verified after transfer, so a corrupt image is never installed.
 - The unpacked packages are verified on flash after `install add`, and can be re-verified any time before the reload window.
-- On redundant chassis, the standby supervisor must be STANDBY HOT before both Transfer and Activate. A cold or absent standby blocks the operation.
+- On redundant chassis, the standby supervisor must be STANDBY HOT before both Transfer and Activate. A cold or absent standby blocks the operation. "Skip health check" does not lift this; only the explicit **Allow a degraded chassis** option does.
+- The boot variables are read with `show boot` in Prestage, in Check status and again in Activate, for every supervisor and stack member. The switch is not reloaded when the BOOT variable does not point at a `.conf` provisioning file, when manual boot is on, or when the configuration register would stop it at ROMMON or skip the startup-config.
+- Every module is read with `show module` before the reload. A line card or supervisor that is not `ok`, or a second supervisor that is installed but not acting as standby, blocks Activate.
+- After the reload the tool does not commit until the chassis is whole again: the standby supervisor is back to STANDBY HOT, every module that was there before is back and `ok`, and every module runs the target version. If that does not happen in time, the commit is withheld and the device is marked failed with what is missing.
+- Power supplies and fans are read in the pre-flight health check. A failed one fails the check.
+- Free space is checked on the standby supervisor's flash as well as the active's, for the image plus its unpacked packages.
 - Each switch's boot mode (INSTALL or BUNDLE) is read from `show version` in Prestage, before the Transfer copy, in Check status and in Activate, and shown in the campaign's **Mode** column. Stackable switches report it in the `show version` Mode table; a modular chassis (9400, 9600) has no such table, so the mode is taken from the `System image file` line (`packages.conf` is INSTALL, a `.bin` file is BUNDLE). A bundle-mode switch is stopped before any image is copied. Install mode is required for every upgrade the tool runs, ISSU included.
 - The switch is not rebooted until the image is re-verified on flash and the boot-mode, redundancy and install-state gates pass. The install-state gate (IOS-XE) refuses to activate while an earlier install is left uncommitted, and when the target was never added. See Appendix F.
 - Post-upgrade verification confirms the running version, then runs `install commit`, then re-reads the version to confirm nothing rolled back.
@@ -155,7 +161,8 @@ Risk mitigations built into this procedure:
 
 Residual risks (not mitigated by the tool):
 
-- A switch that does not return after reload requires console or on-site access.
+- A switch that does not return after reload requires console or on-site access. The tool only sees SSH. It cannot tell a chassis that is still upgrading firmware from one that is hung, so the console is the only place to check before anyone touches power.
+- Power cycling a switch while it boots a new release can corrupt a supervisor or line card. Nothing in the tool can prevent that.
 - Hardware faults exposed by a reboot (failed power supply, bad flash) are outside the tool's control.
 - If "Verify upgrade after reboot" is turned off, the install is left uncommitted and the switch rolls back on its own timer unless someone commits manually.
 - If the Plexus server is down when a scheduled reload window arrives, the reload does not run. The campaign is marked "Reload missed - reschedule" and nothing reloads out-of-window.
@@ -210,7 +217,9 @@ Check each item off as it is completed. All items must be done before the mainte
 - ☐ Confirmed the target version is compatible with all hardware in scope (Cisco release notes).
 - ☐ Confirmed every switch in scope is running in install mode. **Check status** (or Prestage) fills the campaign's **Mode** column; any switch showing BUNDLE must be converted before it can be upgraded.
 - ☐ Confirmed SSH (port 22) and SCP are enabled on every switch (see Appendix B).
-- ☐ Confirmed there is enough free space on `flash:` for the image plus its unpacked packages.
+- ☐ Confirmed there is enough free space on `flash:` for the image plus its unpacked packages (about 2.2 times the image size), on the standby supervisor too.
+- ☐ Confirmed with `show boot` that the BOOT variable is `packages.conf` and manual boot is `no` on every supervisor and stack member. Prestage and Check status report this.
+- ☐ For a 9400 / 9600 chassis: confirmed with `show module` that every module is `ok`.
 - ☐ Created the campaign with only the in-scope devices, the correct image map, and reviewed options (see Appendix C).
 - ☐ For dual-sup / StackWise Virtual: confirmed the standby is STANDBY HOT with `show redundancy`.
 - ☐ Ran the Prestage phase during business hours and confirmed every device shows success.
@@ -234,6 +243,8 @@ If Prestage was skipped, or you want a manual copy, run the following on each sw
 show running-config
 show version
 show install summary
+show boot
+show module
 show switch          ! stacks only
 show redundancy      ! dual-sup / StackWise Virtual only
 show inventory
@@ -286,12 +297,13 @@ Click **Run prestage**. On each device the tool:
 
 1. Connects and detects the model and running version, then resolves the target image from the image map.
 2. Reads the boot mode and shows it in the **Mode** column. A BUNDLE-mode switch fails Prestage here, because install-mode upgrades and ISSU cannot run on it.
-3. Runs a pre-flight health check (skippable). A failed check fails the device and stops it there.
-4. Backs up `show running-config` (downloadable later from the **Backups** tab, and stored in **Config Backups** for an inventory switch).
-5. Saves the config (`write memory`).
-6. Frees flash space with `install remove inactive`.
+3. Reads the boot variables (`show boot`) for every supervisor and stack member. Prestage fails when the BOOT variable is empty or points at a `.bin`, when manual boot is on, or when the configuration register would stop the switch at ROMMON or skip the startup-config. This check cannot be skipped.
+4. Runs a pre-flight health check (skippable): CPU, memory, stack members, standby supervisor, module status (`show module`), power supplies and fans. A failed check fails the device and stops it there.
+5. Backs up `show running-config` (downloadable later from the **Backups** tab, and stored in **Config Backups** for an inventory switch).
+6. Saves the config (`write memory`).
+7. Frees flash space with `install remove inactive`.
 
-**What you will see, per device:** model and version detected, image resolved, health check result, backup saved, config saved, inactive packages removed.
+**What you will see, per device:** model and version detected, image resolved, boot variables, health check result, backup saved, config saved, inactive packages removed.
 
 **If it fails:** The most common cause is a health-check failure or "No image map match for model". Open the device log for the specific warnings. Do not upgrade an unhealthy switch. Fix the cause and use **Retry failed (N)** to re-run only the devices that failed.
 
@@ -299,13 +311,13 @@ Click **Run prestage**. On each device the tool:
 
 Click **Run transfer**. On each device the tool:
 
-1. Checks free space on `flash:`.
+1. Checks free space on `flash:`. The switch needs room for the image and for the packages `install add` unpacks from it: 2.2 times the image size, or 1.1 times when the image is already on flash.
 2. Reads the switch's TCP and SSH receive windows and logs a warning when they will slow the copy (see Appendix B). The transfer continues either way and no configuration is changed.
 3. Copies the image via SCP (30 - 60 minutes per device is normal).
 4. Verifies the on-device MD5 against the uploaded image (skippable).
 5. Runs `install add` to unpack the image, and verifies the unpacked packages. Before `install add` it reads `show install summary` (IOS-XE). If an earlier install is still uncommitted it logs a warning, because Activate will be refused until that install is closed. The transfer itself goes on.
 
-**Dual-sup / StackWise Virtual:** before `install add`, the standby supervisor must be **STANDBY HOT**. If it isn't, the transfer is refused (with "Skip health check" enabled it is only a warning). This is because `install add` silently skips syncing packages to a cold or absent standby and the problem would otherwise only surface at Activate time. Timeouts are automatically widened for redundant chassis.
+**Dual-sup / StackWise Virtual:** before `install add`, the standby supervisor must be **STANDBY HOT**. If it isn't, the transfer is refused (with **Allow a degraded chassis** enabled it is only a warning; "Skip health check" does not change it). This is because `install add` silently skips syncing packages to a cold or absent standby and the problem would otherwise only surface at Activate time. The tool also reads free space on the standby supervisor's flash and refuses the transfer when the packages would not fit there. Timeouts are automatically widened for redundant chassis.
 
 **What you will see, per device:** flash free space, a live progress bar in the device's Status cell (percent, MB sent, rate, ETA), MD5 verified, `install add` output, packages verified.
 
@@ -322,6 +334,8 @@ Click **Run transfer**. On each device the tool:
 | Image on flash and complete, but not expanded | Transfer is marked failed. **Retry failed** finishes `install add` without re-copying the image |
 | Image on flash but MD5 mismatch (partial/corrupt copy) | Transfer is marked failed. **Retry failed** re-copies it |
 | Image not on flash | Transfer is left pending |
+| Boot variables would not boot the new release (`show boot`) | Transfer is marked failed with the reason (see Appendix E). Fix the boot variables on the switch, save, and check again |
+| A module is not `ok`, or two supervisors are installed and none is standby (`show module`) | A "Module check" warning in the device log. Check status does not fail on it; Activate will |
 | Switch unreachable, or the check errors | The previous checkmark is kept and the error is shown |
 
 ### Step 3. Activate (OUTAGE - maintenance window only)
@@ -335,16 +349,25 @@ Two ways to start it:
 
 On each device the tool will:
 
-1. Re-verify the image on flash, then check the boot-mode gate and (on redundant chassis) the redundancy gate. A non-HOT standby blocks activation.
+1. Re-verify the image on flash, then check the boot-mode gate, the boot variables (`show boot`), the redundancy gate (on redundant chassis) and the modules (`show module`). A non-HOT standby, a module that is not `ok`, or a second supervisor that is installed but not acting as standby blocks activation. The module list read here is what the tool compares against after the reload.
 2. Read `show install summary` (IOS-XE install mode). Activate is refused, before any command is sent, when:
    - an earlier install is still open: a version is "Activated & Uncommitted" (U) or a package is "Deactivated & Uncommitted" (D). The message names the version, the auto-abort timer state and, when the timer runs, the time before rollback. With the **Commit a pending install before activating** option on, and when the uncommitted version is the one the switch is running, the tool runs `install commit` first (no reload), re-reads the state and goes on only when nothing is left uncommitted.
    - the target version is not listed at all, so `install add` never ran for it. Run Transfer again.
    If the reply cannot be read or is not recognised, the tool logs a warning and goes on as before.
 3. Run `install activate` (with the ISSU verb when the ISSU option is set) and the switch reloads:
-   - Normal reload: about 5 - 15 minutes (up to about 20 for a fully populated dual-sup chassis).
+   - Normal reload, fixed switch or stack: about 5 - 15 minutes. The tool waits up to 20.
+   - Normal reload, 9400 / 9600 chassis: about 15 - 40 minutes. The tool waits up to 40, with one supervisor or two.
    - ISSU: standby reloads first, switchover, then the old active reloads. 20 - 45 minutes, but the chassis keeps forwarding.
 4. Wait for the switch to go down and come back, then verify the running version.
-5. Run `install commit` to make the new version permanent. For ISSU it first waits for the former active to return as STANDBY HOT, because committing earlier would abort the ISSU. After commit it re-reads the version to confirm nothing rolled back. Then it reads `show install summary` once more: the target must be committed (C) and nothing may be left uncommitted.
+5. Wait for the chassis to be whole again, checking every 30 seconds (up to 20 minutes; 30 on a chassis or on a stack with a standby member):
+   - the standby supervisor is STANDBY HOT again, when it was before the reload;
+   - every module that was present before the reload is back and `ok`;
+   - every module runs the target version;
+   - on a stack, every member that was Ready is Ready again.
+   Each check logs what is still outstanding. If the wait runs out, the tool does **not** commit. The device is marked failed with the list of what is missing and the state of the auto-abort timer, so you know how long you have to decide (see Roll Back / Backout, Scenario 2).
+6. Run `install commit` to make the new version permanent. For ISSU it first waits for the former active to return as STANDBY HOT, because committing earlier would abort the ISSU. After commit it re-reads the version to confirm nothing rolled back. Then it reads `show install summary` once more: the target must be committed (C) and nothing may be left uncommitted.
+
+> **Do not power cycle a switch that is slow to come back.** The first boot on a new release can upgrade ROMMON, CPLD and line card firmware before the switch answers on the network. Removing power in the middle of that can corrupt a supervisor or a line card. A chassis with several line cards takes longer than a fixed switch. If the wait feels too long, look at the console: it shows what the switch is doing. The tool repeats this warning in the device log when it sends the activate.
 
 If the switch already runs the target version, Activate does not reload it. When that version was never committed, the tool runs `install commit` first and marks the device done only when the commit succeeds.
 
@@ -356,13 +379,20 @@ If the switch already runs the target version, Activate does not reload it. When
 
 **When the switch did not reload or came back on the wrong version**, the tool reconnects, reads `show install summary` and `show install log`, and adds a short diagnosis to the error. For example: "Version mismatch: 17.x. Switch did not reload. Install state: 17.x (running) activated but not committed, auto-abort timer inactive. Last install operation: install_activate FAILED: ...". Platforms without these commands keep the plain "Version mismatch" message.
 
-Expect no response from the switch for 5 - 15 minutes during step 4. This is normal. Do not cancel the step while a device is mid-reload.
+Expect no response from the switch for 5 - 15 minutes during step 4, and up to 40 minutes for a 9400 / 9600 chassis. This is normal. Do not cancel the step while a device is mid-reload, and do not power cycle the switch.
 
 If the commit fails or the post-commit version is wrong, the device is marked **failed** and the log will say whether the switch is going to roll back. Act on that before the auto-rollback timer expires (see Roll Back / Backout, Scenario 2).
 
 ### Step 4. Verify each switch
 
-Click **Verify upgrade** any time after the reload. The tool reconnects to each device and confirms the running version matches the target image. Use it as the final sign-off, or to re-check devices later.
+Click **Verify upgrade** any time after the reload. The tool reconnects to each device and confirms the running version matches the target image. It then reads `show redundancy` and `show module` once and fails the device when:
+
+- a module (line card or supervisor) is not `ok`;
+- a module runs a different version from the target;
+- two supervisors are installed but none is acting as standby;
+- the chassis is redundant and the standby is not STANDBY HOT.
+
+On success the log shows a one-line summary of the modules and the standby state. Use it as the final sign-off, or to re-check devices later.
 
 A device that is verified on its target version (by Activate, by Verify, or because it already ran the target) is updated everywhere at once: the tool writes the running version to the device's inventory host, so the **Software** column on the Inventory page, the **Software** page and its vulnerability alerts change with the campaign, and the log shows "Inventory and software alerts updated". No discovery sync is needed. A device added to the campaign by IP address has no inventory host and is skipped.
 
@@ -371,6 +401,8 @@ Then log in to each switch and confirm by hand:
 ```
 show version                 ! Version line shows the target version
 show install summary         ! Target packages show state "C" (Activated & Committed)
+show boot                    ! BOOT variable is packages.conf, manual boot is no
+show module                  ! Chassis: every module "ok" and on the target version
 show switch                  ! Stacks only: all members "Ready"
 show redundancy              ! Dual-sup / SVL only: standby is STANDBY HOT
 show interfaces status       ! Expected ports up
@@ -417,6 +449,8 @@ If the tool could not commit (for example the switch came back on the wrong vers
 
 ### Scenario 2. The switch came back on the wrong version, or is misbehaving on the new version
 
+This is also where you are when the device failed with "Chassis not healthy ... install commit was NOT sent": the active supervisor runs the new version, but a standby supervisor, line card or stack member did not come back in time. The message lists what is missing and the state of the auto-abort timer. Find out why first (`show module`, `show redundancy`, the console of the failed supervisor). A hardware fault is not fixed by rolling back, and a rollback reloads the chassis again.
+
 Log in and act before the auto-rollback timer expires. If the state is good and you want to keep the new version:
 
 ```
@@ -443,17 +477,20 @@ After it reloads, confirm with `show version` that it is on the original version
 
 The tool cannot recover a switch that does not respond to SSH. This requires console access.
 
-1. Wait the full reload window. Large stacks and dual-sup chassis can take longer than expected.
-2. Connect to the console (on-site or out-of-band).
-3. If the switch is at the `switch:` ROMMON prompt, it failed to boot the new image. Boot the old one:
+**Do not power cycle the switch.** A switch that is silent on the network may still be upgrading ROMMON, CPLD or line card firmware, and removing power during that can corrupt a supervisor or a line card.
+
+1. Wait the full reload window: 20 minutes for a fixed switch or stack, 40 minutes for a 9400 / 9600 chassis. Large stacks and chassis with several line cards can take longer than expected.
+2. Connect to the console (on-site or out-of-band) and read what it shows before doing anything else.
+3. If the console shows boot or firmware upgrade messages that are still moving, wait. Let it finish.
+4. If the switch is at the `switch:` ROMMON prompt, it failed to boot the new image. Boot the old one:
 
    ```
    switch: dir flash:
    switch: boot flash:packages.conf          ! or the previous .bin / .conf
    ```
 
-4. If the switch is booting but hanging, power-cycle it once.
-5. If it still fails, escalate per the Escalations table and open a Cisco TAC case. Have the serial number (`show inventory` from the pre-change backup) ready.
+5. If one supervisor of a dual-sup chassis is up and the other is not, leave the working one in service. Run **Verify upgrade** to see which modules are missing, and work on the failed supervisor from its own console.
+6. If the console shows no output and no progress for a long time, or the switch still fails, escalate per the Escalations table and open a Cisco TAC case before touching power. Have the serial number (`show inventory` from the pre-change backup) and the console output ready.
 
 ### Restoring configuration
 
@@ -537,7 +574,8 @@ The switch warns that a larger SSH window can raise CPU load and should be used 
 |---|---|---|
 | Skip config backup | off | Skips saving `show running-config` during Prestage |
 | Skip MD5 verification | off | Skips checksum verification after the image copy |
-| Skip health check | off | Skips the pre-flight health check (also downgrades the dual-sup standby gate to a warning) |
+| Skip health check | off | Skips the pre-flight health check in Prestage only. The standby supervisor, module and boot variable checks in Transfer and Activate still apply |
+| Allow a degraded chassis | off | Continue when the standby supervisor is not STANDBY HOT (Transfer and Activate) or a module is not `ok` before Activate. They are logged as warnings. A module that was already faulty before the reload is not counted against the upgrade afterwards. ISSU ignores this option. The boot variable check is never lifted |
 | Verify upgrade after reboot | **on** | After Activate, wait for the switch to return, confirm the version, and run `install commit`. Turning this off leaves the install uncommitted. The switch rolls back on its own timer unless you commit manually |
 | ISSU | off | In-service upgrade for dual-sup / StackWise Virtual only. Requires SSO with the standby in STANDBY HOT. Refused on unsupported platforms |
 | Commit a pending install before activating | off | IOS-XE install mode. If the switch runs a version that was activated but never committed, run `install commit` before the activate (no reload). Only the running version is committed. Without this option the activate is refused and you close the install by hand |
@@ -555,7 +593,15 @@ The **Backups** tab lists every running-config capture taken during Prestage (`b
 | Symptom | Likely cause | Action |
 |---|---|---|
 | Device shows "No image map match for model" | The model pattern on the image or in the campaign's image map does not match this device | Add or fix the model pattern on the image (Images tab) or in the campaign's image map |
-| Transfer refused: standby not STANDBY HOT | The standby supervisor is cold, absent, or not synced | Fix the standby sup (reseat, boot, sync) before transferring. Do not bypass unless you accept an unsynced standby |
+| Transfer refused: standby not STANDBY HOT | The standby supervisor is cold, absent, or not synced | Fix the standby sup (reseat, boot, sync) before transferring. Do not bypass unless you accept an unsynced standby. The bypass is **Allow a degraded chassis**, not "Skip health check" |
+| "Boot variables would not boot the new release: ..." (Prestage, Check status, Activate) | `show boot` shows a BOOT variable that is empty or points at a `.bin`, manual boot enabled, or a configuration register that stops at ROMMON (boot field 0) or skips the startup-config (0x40). The message names the supervisor or stack member | On the switch: `no boot system`, `boot system flash:packages.conf` (`bootflash:` on a chassis), `no boot manual`, `config-register 0x2102` as needed, then `write memory` and confirm with `show boot`. Re-run the step. No option skips this check |
+| "Boot variable check skipped: ... - continuing" (warning) | `show boot` failed or its reply was not recognised | The step went on without the check. Read `show boot` on the switch by hand |
+| "Module check failed: ..." (Activate), or the same problems in a failed health check | `show module` lists a line card or supervisor that is not `ok`, or two supervisors are installed and none has the standby role | Fix the module first (`show module`, reseat, console of the failed supervisor). To activate with a known fault, turn on **Allow a degraded chassis** |
+| "Chassis not healthy N min after the reload: ... install commit was NOT sent" | After the reload the standby supervisor did not return to STANDBY HOT, a module did not come back `ok` or on the target version, or a stack member is not Ready. The active supervisor runs the new version, uncommitted | See Roll Back / Backout, Scenario 2. Check `show module` and `show redundancy`, and the console of whatever is missing. Then `install commit` to keep the new version, or `install abort` to go back. Do not power cycle |
+| "Running ..., but the chassis is not healthy: ..." (Verify upgrade) | The version is right but a module is not `ok` or runs another version, or the standby is not STANDBY HOT | Same checks as above. Run **Verify upgrade** again once the chassis is whole |
+| "Switch unreachable after reboot: no SSH within N minutes. Do not power cycle it ..." | The switch did not answer SSH in the wait window. It may still be booting or upgrading firmware | Do not power cycle. Check the console (Roll Back / Backout, Scenario 3). When it is back, run **Verify upgrade**, then `install commit` if the tool did not get to it |
+| "Insufficient flash space on flash: ..." or "Not enough free space on the standby supervisor ..." | Less than 2.2 times the image size is free (1.1 when the image is already there), on the active or on the standby supervisor's flash | Run Prestage (`install remove inactive`) and delete old images. On the standby: `dir stby-bootflash:` and `delete` what is not needed |
+| Health check FAILED with "Power/fan: ..." | A power supply or fan reports a fault | Fix it before the reload. A supply that is deliberately unplugged also reads as a fault; skip the health check for that device only if you accept it |
 | "Small receive window on the switch" warning; transfer runs at tens of KB/s | The switch's TCP or SSH receive window is at its default, which caps SCP speed on a high-latency path | Apply the window settings in Appendix B, then cancel and re-run Transfer. The running copy keeps its old window |
 | Health check FAILED | Switch is not healthy enough to upgrade safely | Open the device log for the specific warnings. Fix and re-run Prestage |
 | "Device is booted in BUNDLE mode" (Prestage, Transfer, Check status or Activate); **Mode** shows BUNDLE | The switch boots the `.bin` directly, not `packages.conf` | Convert the switch to install mode first, then re-run the step. No image is copied while it is in bundle mode |

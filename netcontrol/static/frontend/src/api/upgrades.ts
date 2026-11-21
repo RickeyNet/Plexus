@@ -277,6 +277,10 @@ export interface UpgradeCampaignOptions {
   // Run install commit first when the running version was activated but
   // never committed (IOS-XE install mode); otherwise activate is refused.
   commit_pending_install?: boolean;
+  // Explicit override: a standby that is not STANDBY HOT (Transfer, plain
+  // Activate) and a module that is not ok before Activate become warnings.
+  // skip_health_check does not do this.
+  allow_degraded_chassis?: boolean;
   parallel?: number;
   retries?: number;
 }

@@ -383,6 +383,264 @@ class CiscoXEDriver(CiscoStyleTables, Driver):
                 reasons.append(stripped[:200])
         return {"operation": operation, "result": result, "reasons": list(dict.fromkeys(reasons))[-5:]}
 
+    def upgrade_boot_vars_show_command(self) -> str:
+        return "show boot"
+
+    def parse_boot_vars(self, output: str) -> dict:
+        # Representative output, modular chassis (9400/9600, and the
+        # 9500 high-performance models); the standby's lines repeat with
+        # a ``Standby`` prefix when a second supervisor is up:
+        #
+        #   BOOT variable = bootflash:packages.conf;
+        #   Configuration Register is 0x102 (will be 0x2102 at next reload)
+        #   MANUAL_BOOT variable = no
+        #   BAUD variable = 9600
+        #   Standby BOOT variable = bootflash:packages.conf;
+        #   Standby Configuration Register is 0x2102
+        #   Standby MANUAL_BOOT variable = no
+        #
+        # Stackable (9200/9300), one block per member:
+        #
+        #   ---------------------------
+        #   Switch 1
+        #   ---------------------------
+        #   Current Boot Variables:
+        #   BOOT variable = flash:packages.conf;
+        #
+        #   Boot Variables on next reload:
+        #   BOOT variable = flash:packages.conf;
+        #   Manual Boot = no
+        #   Enable Break = no
+        #
+        # The next-reload value is the one the reload uses, so it wins
+        # over the current one.  ``BOOT variable does not exist`` reads as
+        # an empty BOOT variable.
+        entries: dict[str, dict] = {}
+        member: str | None = None
+        section: str | None = None
+
+        def _entry(scope: str) -> dict:
+            if scope not in entries:
+                entries[scope] = {"current": None, "next": None, "manual_boot": None, "config_register": None}
+            return entries[scope]
+
+        for raw in (output or "").splitlines():
+            line = raw.strip()
+            m = re.match(r"^Switch\s+(\d+)$", line)
+            if m:
+                member, section = f"switch {m.group(1)}", None
+                continue
+            if re.match(r"^Current Boot Variables\s*:", line, re.IGNORECASE):
+                section = "current"
+                continue
+            if re.match(r"^Boot Variables on next reload\s*:", line, re.IGNORECASE):
+                section = "next"
+                continue
+            standby = line.startswith("Standby ")
+            body = line[len("Standby ") :] if standby else line
+            scope = "standby" if standby else (member or "active")
+            m = re.match(r"^BOOT variable\s*(?:=\s*(.*)|does not exist)", body)
+            if m:
+                value = (m.group(1) or "").strip()
+                first = value.split(";")[0].strip()
+                # Older releases append ``,<n>`` (boot attempts) to an entry.
+                first = re.sub(r",\d+$", "", first)
+                _entry(scope)["next" if section == "next" else "current"] = first
+                continue
+            m = re.match(
+                r"^Configuration Register is\s+(0x[0-9a-fA-F]+)(?:\s*\(will be\s+(0x[0-9a-fA-F]+)\s+at next reload\))?",
+                body,
+            )
+            if m:
+                _entry(scope)["config_register"] = (m.group(2) or m.group(1)).lower()
+                continue
+            m = re.match(r"^(?:MANUAL_BOOT variable|Manual Boot)\s*=\s*(\w+)", body, re.IGNORECASE)
+            if m:
+                _entry(scope)["manual_boot"] = m.group(1).lower() in ("yes", "1", "true")
+        if not entries:
+            return {}
+        result = []
+        for scope, e in entries.items():
+            boot = e["next"] if e["next"] is not None else e["current"]
+            result.append(
+                {
+                    "scope": scope,
+                    "boot": boot if boot is not None else "",
+                    "manual_boot": e["manual_boot"],
+                    "config_register": e["config_register"],
+                }
+            )
+        return {"entries": result}
+
+    def upgrade_module_show_command(self) -> str:
+        return "show module"
+
+    def parse_module_state(self, output: str) -> dict:
+        # Representative output, modular chassis (Cisco's Catalyst 9400
+        # dual supervisor upgrade note; columns abbreviated):
+        #
+        #   Chassis Type: C9407R
+        #
+        #   Mod Ports Card Type                              Model          Serial No.
+        #   ---+-----+--------------------------------------+--------------+--------------
+        #   1   48   48-Port 10/100/1000 (RJ-45)             C9400-LC-48T   JAE00000001
+        #   3   10   Supervisor 1 Module                     C9400-SUP-1    JAE00000003
+        #   4   10   Supervisor 1 Module                     C9400-SUP-1    JAE00000004
+        #
+        #   Mod MAC addresses                    Hw   Fw           Sw                 Status
+        #   ---+--------------------------------+----+------------+------------------+--------
+        #   1   0000.5e00.5301 to 0000.5e00.532f 1.0  17.15.1r     17.15.05           ok
+        #   3   0000.5e00.5330 to 0000.5e00.5339 1.0  17.15.1r     17.15.05           ok
+        #   4   0000.5e00.533a to 0000.5e00.5343 1.0  17.15.1r     17.15.05           ok
+        #
+        #   Mod Redundancy Role     Operating Redundancy Mode Configured Redundancy Mode
+        #   ---+-------------------+-------------------------+---------------------------
+        #   3   Active              sso                       sso
+        #   4   Standby             sso                       sso
+        #
+        # A StackWise Virtual pair repeats the three tables under
+        # ``Switch Number 1`` / ``Switch Number 2``; a quad-supervisor
+        # pair shows the in-chassis standby with ``--`` columns, status
+        # ``Provisioned`` and role ``InChassis-Standby``.  Status values
+        # include ``ok``, ``booting``, ``out of service``, ``offline``,
+        # ``faulty`` and ``disabled``.
+        #
+        # Stackable (9200/9300), one row per member and no status column:
+        #
+        #   Switch  Ports    Model                Serial No.   MAC address     Hw Ver.       Sw Ver.
+        #   ------  -----   ---------             -----------  --------------  -------       --------
+        #    1       41     C9300-48P             FOC0000X001  0000.5e00.5344  V02           17.15.05
+        #    2       41     C9300-48P             FOC0000X002  0000.5e00.5345  V02           17.15.05
+        text = output or ""
+        modules: dict[tuple[int | None, int], dict] = {}
+        chassis: int | None = None
+        table: str | None = None
+        chassis_type: str | None = None
+        modular = False
+
+        def _module(slot: int) -> dict:
+            key = (chassis, slot)
+            if key not in modules:
+                modules[key] = {
+                    "chassis": chassis,
+                    "slot": slot,
+                    "model": None,
+                    "card_type": None,
+                    "sw": None,
+                    "status": None,
+                    "supervisor": False,
+                    "role": None,
+                }
+            return modules[key]
+
+        for raw in text.splitlines():
+            line = raw.strip()
+            if not line or line.startswith("-"):
+                continue
+            m = re.match(r"^Chassis Type\s*:\s*(\S+)", line)
+            if m:
+                chassis_type, modular = m.group(1), True
+                continue
+            m = re.match(r"^Switch Number\s+(\d+)", line)
+            if m:
+                chassis, table = int(m.group(1)), None
+                continue
+            if re.match(r"^Mod\s+Ports\s+Card Type", line):
+                table, modular = "cards", True
+                continue
+            if re.match(r"^Mod\s+MAC addresses", line):
+                table, modular = "status", True
+                continue
+            if re.match(r"^Mod\s+Redundancy Role", line):
+                table = "redundancy"
+                continue
+            if re.match(r"^Switch\s+Ports\s+Model", line):
+                table = "stack"
+                continue
+            tokens = line.split()
+            if not tokens[0].isdigit() or table is None:
+                continue
+            slot = int(tokens[0])
+            if table == "cards" and len(tokens) >= 4:
+                mod = _module(slot)
+                mod["model"], mod["card_type"] = tokens[-2], " ".join(tokens[2:-2]) or None
+            elif table == "status":
+                rest = tokens[4:] if len(tokens) > 3 and tokens[2] == "to" else tokens[2:]
+                if len(rest) >= 4:
+                    mod = _module(slot)
+                    sw = rest[2]
+                    mod["sw"] = None if sw in ("--", "N/A") else sw
+                    mod["status"] = " ".join(rest[3:])
+            elif table == "redundancy" and len(tokens) >= 2:
+                _module(slot)["role"] = tokens[1].lower()
+            elif table == "stack" and len(tokens) >= 7:
+                mod = _module(slot)
+                mod["model"], mod["sw"] = tokens[2], tokens[-1]
+        if not modules:
+            return {}
+        for mod in modules.values():
+            card = (mod["card_type"] or "").lower()
+            mod["supervisor"] = "supervisor" in card or "-SUP" in (mod["model"] or "").upper()
+        return {"modular": modular, "chassis_type": chassis_type, "modules": list(modules.values())}
+
+    def upgrade_environment_show_commands(self) -> list[str]:
+        # A modular chassis lists power supplies and fan trays in ``show
+        # environment status``; a stackable reports both in ``show
+        # environment all``.  Each platform rejects the other's command,
+        # and a rejected command simply yields no readings.
+        return ["show environment status", "show environment all"]
+
+    def parse_environment_state(self, outputs: dict[str, str]) -> dict:
+        # Representative output, modular chassis (``show environment status``):
+        #
+        #   Power                                                       Fan States
+        #   Supply  Model No              Type  Capacity  Status        0     1
+        #   ------  --------------------  ----  --------  ------------  -----------
+        #   PS1     C9400-PWR-3200AC      ac    3200 W    active        good  good
+        #   PS2     C9400-PWR-3200AC      ac    3200 W    faulty        bad   good
+        #   PS3     n.a.                  n.a.  n.a.      n.a.          n.a.  n.a.
+        #
+        #   Fan Tray Status
+        #   ---------------
+        #   Slot  Fan Status
+        #   FM1   ok
+        #
+        # Stackable (``show environment all``):
+        #
+        #   Switch 1 FAN 1 is OK
+        #   FAN PS-1 is OK
+        #   FAN PS-2 is NOT PRESENT
+        #   SW  PID                 Serial#     Status           Sys Pwr  PoE Pwr  Watts
+        #   --  ------------------  ----------  ---------------  -------  -------  -----
+        #   1A  PWR-C1-715WAC       DCB0000X01  OK               Good     Good     715
+        #   1B  PWR-C1-715WAC       DCB0000X02  No Input Power   Bad      Bad      715
+        #
+        # Only power supply and fan lines are read, and only a positively
+        # bad word flags one: ``Not Present``, ``standby`` and unknown text
+        # are not problems.
+        problems: list[str] = []
+        for output in outputs.values():
+            for raw in (output or "").splitlines():
+                line = " ".join(raw.split())
+                if not line or not _ENV_SUBJECT.search(line):
+                    continue
+                if _ENV_BAD.search(line):
+                    problems.append(line[:160])
+        return {"problems": list(dict.fromkeys(problems))}
+
+    def upgrade_standby_flash_filesystems(self) -> list[str]:
+        # 9400/9600 name the standby's flash ``stby-bootflash:``; some
+        # StackWise Virtual pairs use ``stby-flash:``.
+        return ["stby-bootflash:", "stby-flash:"]
+
+
+# A power supply or fan reading: ``PS1``, ``FAN PS-1``, ``Switch 1 FAN 1``,
+# a fan tray (``FM1``), or a stackable supply row (``1A  PWR-C1-...``).
+_ENV_SUBJECT = re.compile(r"\bPS-?\d|\bFAN\b|\bFM\d|\bPWR-|^\d+[A-Z]\s", re.IGNORECASE)
+_ENV_BAD = re.compile(
+    r"\b(?:bad|fail|failed|failure|faulty|fault|no input power|critical|shutdown|not functioning)\b", re.IGNORECASE
+)
+
 
 # ``IMG   C    17.09.04a.0.6`` - package type, one-letter state, version
 # or package file name.  The legend and header rows never match: their
