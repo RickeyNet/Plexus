@@ -191,6 +191,12 @@ export interface SyslogActivity {
   unmatched_tags: SyslogUnmatchedGroup[];
   /** The top 20 unknown source addresses (empty for a group-limited user). */
   unknown_sources: SyslogUnknownSource[];
+  /** Messages of inventory hosts scanned, per transport they arrived over. */
+  transports: { udp: number; tcp: number; tls: number };
+  /** Inventory hosts that sent at least one message over UDP in the window. */
+  udp_hosts: number;
+  /** The Act on UDP messages setting: off, UDP messages are stored but not acted on. */
+  udp_actions: boolean;
 }
 
 /**

@@ -72,6 +72,10 @@ services:
       # A port changed in Settings needs the matching change here.
       - "162:10162/udp"    # SNMP traps
       - "1514:1514/udp"    # Syslog receiver
+      # Syslog over TCP (RFC 6587) and TLS (RFC 5425), each off until turned
+      # on in Settings > Syslog & Traps. TCP and UDP share the number 1514.
+      - "1514:1514/tcp"    # Syslog over TCP
+      - "6514:6514/tcp"    # Syslog over TLS
     volumes:
       - plexus-db:/app/state
       - ./certs:/app/certs:ro

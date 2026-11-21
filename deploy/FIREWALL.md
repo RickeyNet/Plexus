@@ -6,7 +6,8 @@ rules plus steps to confirm flow packets are reaching the collector.
 
 Reference ruleset for a Plexus host running the Docker stack
 (`docker-compose.yml`: nginx 80/443, app 8080, NetFlow 2055/udp, sFlow
-6343/udp, SNMP traps 162/udp (to container port 10162), syslog 1514/udp).
+6343/udp, SNMP traps 162/udp (to container port 10162), syslog 1514/udp,
+syslog over TCP 1514/tcp and over TLS 6514/tcp).
 Substitute the placeholder
 variables at the top for your environment, then run the block as `root`.
 
@@ -21,7 +22,7 @@ variables at the top for your environment, then run the block as `root`.
 > stack is unchanged from `docker-compose.yml` and that you also add the
 > `DOCKER-USER` rules in the **"Hardening Docker-published ports"**
 > section (section 9) - that is what actually enforces source-IP
-> restrictions on 2055/6343/162/1514/8080.
+> restrictions on 2055/6343/162/1514/6514/8080.
 
 ## 1. Define your networks
 
@@ -84,6 +85,11 @@ sudo ufw allow from "$SNMP_TRAP_SOURCES" to any port 162  proto udp comment 'SNM
 # 514, also publish "514:1514/udp" in docker-compose.yml and open 514 here.
 sudo ufw allow from "$SYSLOG_SOURCES"    to any port 1514 proto udp comment 'Syslog'
 # sudo ufw allow from "$SYSLOG_SOURCES"  to any port 514  proto udp comment 'Syslog (514)'
+
+# Syslog over TCP (1514/tcp) and TLS (6514/tcp), when turned on in
+# Settings > Syslog & Traps.
+sudo ufw allow from "$SYSLOG_SOURCES"    to any port 1514 proto tcp comment 'Syslog (TCP)'
+sudo ufw allow from "$SYSLOG_SOURCES"    to any port 6514 proto tcp comment 'Syslog (TLS)'
 ```
 
 ## 5. Inbound - federation (optional)
@@ -183,7 +189,7 @@ sudo ufw status numbered verbose
 its own NAT rules that bypass `ufw` for any port published in
 `docker-compose.yml`. Add explicit `DOCKER-USER` rules so the
 source-IP restrictions are actually enforced for the published
-container ports (2055, 6343, 10162, 1514, 80, 443, 8080). `DOCKER-USER`
+container ports (2055, 6343, 10162, 1514, 6514, 80, 443, 8080). `DOCKER-USER`
 sees a packet after Docker has translated it, so `--dport` is the
 container port: traps sent to host port 162 match `--dport 10162`, and
 syslog published as `514:1514/udp` still matches `--dport 1514`:
@@ -203,6 +209,8 @@ sudo iptables -I DOCKER-USER -p udp --dport 2055 -s "$NETFLOW_EXPORTERS" -j RETU
 sudo iptables -I DOCKER-USER -p udp --dport 6343 -s "$SFLOW_EXPORTERS"   -j RETURN
 sudo iptables -I DOCKER-USER -p udp --dport 10162 -s "$SNMP_TRAP_SOURCES" -j RETURN
 sudo iptables -I DOCKER-USER -p udp --dport 1514 -s "$SYSLOG_SOURCES"    -j RETURN
+sudo iptables -I DOCKER-USER -p tcp --dport 1514 -s "$SYSLOG_SOURCES"    -j RETURN
+sudo iptables -I DOCKER-USER -p tcp --dport 6514 -s "$SYSLOG_SOURCES"    -j RETURN
 
 # Web UI: admin + user networks only
 sudo iptables -I DOCKER-USER -p tcp --dport 443  -s "$ADMIN_NET" -j RETURN
@@ -218,6 +226,8 @@ sudo iptables -A DOCKER-USER -p udp --dport 2055 -j DROP
 sudo iptables -A DOCKER-USER -p udp --dport 6343 -j DROP
 sudo iptables -A DOCKER-USER -p udp --dport 10162 -j DROP
 sudo iptables -A DOCKER-USER -p udp --dport 1514 -j DROP
+sudo iptables -A DOCKER-USER -p tcp --dport 1514 -j DROP
+sudo iptables -A DOCKER-USER -p tcp --dport 6514 -j DROP
 sudo iptables -A DOCKER-USER -p tcp --dport 443  -j DROP
 sudo iptables -A DOCKER-USER -p tcp --dport 80   -j DROP
 sudo iptables -A DOCKER-USER -p tcp --dport 8080 -j DROP

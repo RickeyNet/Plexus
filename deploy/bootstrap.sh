@@ -223,13 +223,15 @@ done
 
 # ── 8. Open firewall (only if ufw is enabled) ─────────────────────────
 if ufw status | grep -q "Status: active"; then
-    log "Opening firewall ports (443, 80, 2055/udp, 6343/udp, 162/udp, 1514/udp)"
+    log "Opening firewall ports (443, 80, 2055/udp, 6343/udp, 162/udp, 1514/udp, 1514/tcp, 6514/tcp)"
     ufw allow 443/tcp >/dev/null
     ufw allow 80/tcp >/dev/null
     ufw allow 2055/udp >/dev/null
     ufw allow 6343/udp >/dev/null
     ufw allow 162/udp >/dev/null
     ufw allow 1514/udp >/dev/null
+    ufw allow 1514/tcp >/dev/null
+    ufw allow 6514/tcp >/dev/null
 else
     log "ufw is inactive - skipping firewall rules. Enable with: sudo ufw enable"
 fi

@@ -207,7 +207,10 @@ an admin turns them on in **Settings > Syslog & Traps** (see
 [administration.md](administration.md#syslog--traps)); after that they start
 with Plexus. The Docker stack publishes host port 162 to the trap receiver
 and 1514 to the syslog receiver; for devices that can only send syslog to
-UDP 514, publish `514:1514/udp` as well.
+UDP 514, publish `514:1514/udp` as well. Syslog can also arrive over TCP
+(1514) and TLS (6514), whose source address cannot be forged; each
+event records how it arrived (`transport`: `udp`, `tcp` or `tls`, see
+[syslog-rules.md](syslog-rules.md#transports)).
 
 By default only datagrams whose source is an inventory host address are
 received (the listener source allowlist, with a per-source rate limit:

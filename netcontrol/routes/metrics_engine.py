@@ -31,7 +31,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 import netcontrol.routes.state as state
-from netcontrol import listener_sources, syslog_rules
+from netcontrol import listener_sources, syslog_rules, syslog_stream, syslog_tls
 from netcontrol.bounded_map import BoundedDict
 from netcontrol.integrations.apc.snmp import UPS_METRICS, ups_metric_samples
 from netcontrol.integrations.apc.traps import handle_apc_trap, parse_apc_trap
@@ -888,8 +888,9 @@ _PRINTABLE_RUN = re.compile(rb"[ -~]{6,}")
 
 
 class _ReceiverStats:
-    """Counters of one UDP receiver since it last started. Updated on the
-    datagram hot path, so only plain attribute writes."""
+    """Counters of one receiver (UDP, or a syslog TCP / TLS listener) since
+    it last started. Updated on the message hot path, so only plain
+    attribute writes."""
 
     __slots__ = ("received", "errors", "last_message_at", "started_at")
 
@@ -965,42 +966,49 @@ class _TrapSyslogProtocol(asyncio.DatagramProtocol):
         _queue_trap_syslog_event(source_ip, "trap", "", "info", oid, message, raw_hex, trap)
 
     def _handle_syslog(self, data: bytes, source_ip: str):
+        handle_syslog_message(data, source_ip)
+
+
+# RFC 5424 numeric severities → Plexus taxonomy. 0-2 (Emergency/Alert/
+# Critical) are critical; 3-4 (Error/Warning) map to warning so routine
+# device "error" syslogs don't flood the critical tier; 5-7 (Notice/Info/
+# Debug) are info.
+_SYSLOG_SEVERITY = {
+    0: "critical",
+    1: "critical",
+    2: "critical",
+    3: "warning",
+    4: "warning",
+    5: "info",
+    6: "info",
+    7: "info",
+}
+
+
+def handle_syslog_message(data: bytes, source_ip: str, transport: str = "udp") -> None:
+    """Parse one syslog message (a UDP datagram, or a TCP / TLS frame from
+    ``netcontrol.syslog_stream``) and queue it, with the ``transport`` it
+    arrived over, for the batch writer."""
+    try:
+        text = data.decode("utf-8", errors="replace").strip()
+    except Exception:
+        text = data.hex()[:2000]
+
+    # Parse RFC 3164 / RFC 5424 priority
+    facility = ""
+    severity = "info"
+    message = text
+    if text.startswith("<") and ">" in text[:6]:
         try:
-            text = data.decode("utf-8", errors="replace").strip()
-        except Exception:
-            text = data.hex()[:2000]
+            pri_end = text.index(">")
+            pri = int(text[1:pri_end])
+            facility = str((pri >> 3) & 0x1F)
+            severity = _SYSLOG_SEVERITY.get(pri & 0x07, "info")
+            message = text[pri_end + 1 :].strip()
+        except (ValueError, IndexError) as exc:
+            LOGGER.debug("metrics: syslog priority parse failed from %s: %s", source_ip, exc)
 
-        # Parse RFC 3164 / RFC 5424 priority
-        facility = ""
-        severity = "info"
-        message = text
-        if text.startswith("<") and ">" in text[:6]:
-            try:
-                pri_end = text.index(">")
-                pri = int(text[1:pri_end])
-                sev_num = pri & 0x07
-                fac_num = (pri >> 3) & 0x1F
-                facility = str(fac_num)
-                # RFC 5424 numeric severities → Plexus taxonomy. 0-2
-                # (Emergency/Alert/Critical) are critical; 3-4 (Error/Warning)
-                # map to warning so routine device "error" syslogs don't flood
-                # the critical tier; 5-7 (Notice/Info/Debug) are info.
-                _sev_map = {
-                    0: "critical",
-                    1: "critical",
-                    2: "critical",
-                    3: "warning",
-                    4: "warning",
-                    5: "info",
-                    6: "info",
-                    7: "info",
-                }
-                severity = _sev_map.get(sev_num, "info")
-                message = text[pri_end + 1 :].strip()
-            except (ValueError, IndexError) as exc:
-                LOGGER.debug("metrics: syslog priority parse failed from %s: %s", source_ip, exc)
-
-        _queue_trap_syslog_event(source_ip, "syslog", facility, severity, "", message, text[:2000])
+    _queue_trap_syslog_event(source_ip, "syslog", facility, severity, "", message, text[:2000], None, transport)
 
 
 # ── Buffered trap/syslog persistence ─────────────────────────────────────────
@@ -1017,9 +1025,10 @@ _HOST_IP_CACHE_TTL_SECONDS = 300.0
 
 _HOST_IP_CACHE_MAX = 4096
 
-# (source_ip, event_type, facility, severity, oid, message, raw_data, trap):
-# ``trap`` is the decoded v1 / v2c trap (``decode_snmp_trap``), None for
-# syslog and for a trap that could not be decoded (SNMPv3, malformed).
+# (source_ip, event_type, facility, severity, oid, message, raw_data, trap,
+# transport): ``trap`` is the decoded v1 / v2c trap (``decode_snmp_trap``),
+# None for syslog and for a trap that could not be decoded (SNMPv3,
+# malformed); ``transport`` is ``udp``, ``tcp`` or ``tls``.
 _trap_event_buffer: list[tuple] = []
 _trap_events_dropped = 0
 # Never reset (the writer resets _trap_events_dropped each flush): shown in
@@ -1037,14 +1046,16 @@ _host_ip_cache: BoundedDict = BoundedDict(_HOST_IP_CACHE_MAX, _host_ip_entry_exp
 
 
 def _queue_trap_syslog_event(
-    source_ip, event_type, facility, severity, oid, message, raw_data, trap: dict | None = None
+    source_ip, event_type, facility, severity, oid, message, raw_data, trap: dict | None = None, transport: str = "udp"
 ) -> None:
     global _trap_events_dropped, _trap_events_dropped_total, _trap_event_writer_task
     if len(_trap_event_buffer) >= _TRAP_EVENT_BUFFER_MAX:
         _trap_events_dropped += 1
         _trap_events_dropped_total += 1
         return
-    _trap_event_buffer.append((source_ip, event_type, facility, severity, oid, message[:2000], raw_data[:2000], trap))
+    _trap_event_buffer.append(
+        (source_ip, event_type, facility, severity, oid, message[:2000], raw_data[:2000], trap, transport)
+    )
     if _trap_event_writer_task is None or _trap_event_writer_task.done():
         _trap_event_writer_task = asyncio.ensure_future(_trap_event_writer_loop())
 
@@ -1128,8 +1139,8 @@ async def _flush_trap_syslog_batch(batch: list[tuple]) -> None:
         host_ids = {ip: await _resolve_host_id_cached(ip) for ip in {row[0] for row in batch}}
         batch, apc = await _screen_traps(batch, host_ids)
         rows = [
-            (source_ip, host_ids.get(source_ip), event_type, facility, severity, oid, message, raw_data)
-            for (source_ip, event_type, facility, severity, oid, message, raw_data, _trap) in batch
+            (source_ip, host_ids.get(source_ip), event_type, facility, severity, oid, message, raw_data, transport)
+            for (source_ip, event_type, facility, severity, oid, message, raw_data, _trap, transport) in batch
         ]
         # OPNsense firewall log lines are summed per rule, never stored
         # raw nor run through the syslog rules.
@@ -1150,22 +1161,22 @@ async def _evaluate_syslog_rules(rows: list[tuple]) -> None:
     syslog rule engine (alerts, config-change and re-poll triggers), and
     every syslog message, with its source address, to the OPNsense
     re-collection trigger (a firewall need not be an inventory host). A
-    rule or trigger error is logged: it never touches the stored events."""
-    syslog_rows = [
-        (host_id, message)
-        for (_ip, host_id, event_type, _facility, _severity, _oid, message, _raw) in rows
-        if event_type == "syslog" and host_id is not None
-    ]
+    rule or trigger error is logged: it never touches the stored events.
+
+    Rows are ``(source_ip, host_id, event_type, facility, severity, oid,
+    message, raw_data[, transport])`` (no transport: ``udp``). With the
+    ``syslog_udp_actions`` switch off, a message that arrived over UDP,
+    whose source address can be forged, is stored only: it reaches no rule
+    and no trigger."""
+    if not syslog_rules.receiver_flag("syslog_udp_actions"):
+        rows = [row for row in rows if len(row) > 8 and row[8] != "udp"]
+    syslog_rows = [(row[1], row[6]) for row in rows if row[2] == "syslog" and row[1] is not None]
     if syslog_rows:
         try:
             await syslog_rules.process_syslog_batch(syslog_rows)
         except Exception as exc:
             LOGGER.warning("metrics: syslog rule evaluation failed for %d events: %s", len(syslog_rows), exc)
-    recollect_rows = [
-        (source_ip, host_id, message)
-        for (source_ip, host_id, event_type, _facility, _severity, _oid, message, _raw) in rows
-        if event_type == "syslog"
-    ]
+    recollect_rows = [(row[0], row[1], row[6]) for row in rows if row[2] == "syslog"]
     if recollect_rows:
         try:
             await syslog_rules.process_recollect_batch(recollect_rows)
@@ -1190,8 +1201,30 @@ _receiver_transports: dict[str, asyncio.DatagramTransport | None] = {"trap": Non
 _receiver_ports: dict[str, int] = {"trap": 0, "syslog": 0}
 
 
-def receiver_running(kind: str) -> bool:
+def _stream_handler(transport: str) -> syslog_stream.Handler:
+    def handle(data: bytes, source_ip: str) -> None:
+        handle_syslog_message(data, source_ip, transport)
+
+    return handle
+
+
+# Syslog over TCP and TLS (netcontrol.syslog_stream), each with its own
+# counters; every message goes through handle_syslog_message as UDP does.
+_STREAM_LISTENERS: dict[str, syslog_stream.StreamListener] = {
+    transport: syslog_stream.StreamListener(transport, _stream_handler(transport), _ReceiverStats())
+    for transport in syslog_stream.TRANSPORTS
+}
+
+
+def _udp_running(kind: str) -> bool:
     return _receiver_transports.get(kind) is not None
+
+
+def receiver_running(kind: str) -> bool:
+    """Whether the ``kind`` receiver listens; ``syslog``: on UDP, TCP or TLS."""
+    if kind == "syslog" and any(listener.running for listener in _STREAM_LISTENERS.values()):
+        return True
+    return _udp_running(kind)
 
 
 async def _start_receiver(kind: str, port: int) -> bool:
@@ -1251,6 +1284,37 @@ def stop_syslog_receiver() -> bool:
 def stop_receivers() -> None:
     _stop_receiver("trap")
     _stop_receiver("syslog")
+    for listener in _STREAM_LISTENERS.values():
+        listener.stop()
+
+
+async def _apply_stream_listeners(cfg: dict) -> None:
+    """Reconcile the TCP and TLS syslog listeners: each is started, stopped
+    or rebound only when its own on/off or port, or (TLS) the stored
+    certificate, client CA or client certificate mode, differs from what is
+    running. A TLS listener without a usable certificate is logged, keeps
+    the reason in its ``error`` and stays stopped."""
+    require_client_cert = bool(cfg.get("syslog_tls_require_client_cert"))
+    for transport, listener in _STREAM_LISTENERS.items():
+        enabled = bool(cfg.get(f"syslog_{transport}_enabled"))
+        port = int(cfg.get(f"syslog_{transport}_port") or 0)
+        key = syslog_tls.material_key(require_client_cert) if transport == "tls" else ""
+        if listener.running and (not enabled or listener.port != port or listener.config_key != key):
+            listener.stop()
+        if not enabled:
+            listener.error = ""
+            continue
+        if listener.running:
+            continue
+        context = None
+        if transport == "tls":
+            try:
+                context = syslog_tls.server_context(require_client_cert)
+            except syslog_tls.TlsMaterialError as exc:
+                listener.error = str(exc)
+                LOGGER.warning("metrics: syslog TLS receiver not started: %s", exc)
+                continue
+        await listener.start(_RECEIVER_BIND_HOST, port, context, key)
 
 
 async def apply_event_receiver_config(new_cfg: dict) -> dict:
@@ -1263,12 +1327,13 @@ async def apply_event_receiver_config(new_cfg: dict) -> dict:
     for kind in ("syslog", "trap"):
         enabled = bool(cfg.get(f"{kind}_enabled"))
         port = int(cfg.get(f"{kind}_port") or 0)
-        running = receiver_running(kind)
+        running = _udp_running(kind)
         if running and (not enabled or _receiver_ports[kind] != port):
             _stop_receiver(kind)
             running = False
         if enabled and not running:
             await _start_receiver(kind, port)
+    await _apply_stream_listeners(cfg)
     return event_receiver_snapshot()
 
 
@@ -1282,7 +1347,7 @@ def event_receiver_snapshot() -> dict:
     snapshot = dict(state.EVENT_RECEIVER_CONFIG)
     for kind in ("syslog", "trap"):
         stats = _RECEIVER_STATS[kind]
-        running = receiver_running(kind)
+        running = _udp_running(kind)
         snapshot[f"{kind}_running"] = running
         snapshot[f"{kind}_listening_port"] = _receiver_ports[kind] if running else None
         snapshot[f"{kind}_received"] = stats.received
@@ -1296,6 +1361,19 @@ def event_receiver_snapshot() -> dict:
         snapshot[f"{kind}_dropped_rate"] = drops["dropped_rate"]
         if kind == "trap":
             snapshot["trap_dropped_community"] = drops["dropped_community"]
+    # The TCP and TLS syslog listeners share the syslog drop counters above.
+    for transport, listener in _STREAM_LISTENERS.items():
+        prefix = f"syslog_{transport}"
+        stats = listener.stats
+        snapshot[f"{prefix}_running"] = listener.running
+        snapshot[f"{prefix}_listening_port"] = listener.port if listener.running else None
+        snapshot[f"{prefix}_received"] = stats.received
+        snapshot[f"{prefix}_errors"] = stats.errors
+        snapshot[f"{prefix}_last_message_at"] = _epoch_iso(stats.last_message_at)
+        snapshot[f"{prefix}_started_at"] = _epoch_iso(stats.started_at)
+        snapshot[f"{prefix}_connections"] = listener.connections
+        snapshot[f"{prefix}_connections_refused"] = listener.refused
+        snapshot[f"{prefix}_error"] = listener.error
     snapshot["source_policy"] = listener_sources.CONFIG.get("policy")
     snapshot["events_dropped"] = _trap_events_dropped_total
     snapshot["events_pending"] = len(_trap_event_buffer)
@@ -1717,14 +1795,36 @@ class EventReceiverConfigRequest(BaseModel):
     repoll_trigger: bool | None = None
     recollect_trigger: bool | None = None
     filterlog_evidence: bool | None = None
+    syslog_tcp_enabled: bool | None = None
+    syslog_tcp_port: int | None = Field(default=None, ge=1, le=65535)
+    syslog_tls_enabled: bool | None = None
+    syslog_tls_port: int | None = Field(default=None, ge=1, le=65535)
+    syslog_tls_require_client_cert: bool | None = None
+    syslog_udp_actions: bool | None = None
+
+
+def _receiver_config_error(cfg: dict) -> str:
+    """Why a sanitized receiver config cannot be saved ("" when it can)."""
+    if cfg["syslog_enabled"] and cfg["trap_enabled"] and cfg["syslog_port"] == cfg["trap_port"]:
+        return "The syslog and trap receivers cannot use the same UDP port."
+    tcp, tls = cfg["syslog_tcp_enabled"], cfg["syslog_tls_enabled"]
+    if tcp and tls and cfg["syslog_tcp_port"] == cfg["syslog_tls_port"]:
+        return "The syslog TCP and TLS receivers cannot use the same TCP port."
+    if tls and not syslog_tls.has_certificate():
+        return "Store or generate a server certificate before turning on the syslog TLS receiver."
+    if cfg["syslog_tls_require_client_cert"] and not syslog_tls.has_client_ca():
+        return "Store a client CA before requiring client certificates."
+    if not cfg["syslog_udp_actions"] and not (tcp or tls):
+        return "Turn on the syslog TCP or TLS receiver before turning off actions on UDP messages."
+    return ""
 
 
 async def _save_event_receiver_config(cfg: dict, request: Request, action: str) -> dict:
     """Sanitize, persist, apply and audit a receiver config. Returns the snapshot."""
     sanitized = state._sanitize_event_receiver_config(cfg)
-    both_enabled = sanitized["syslog_enabled"] and sanitized["trap_enabled"]
-    if both_enabled and sanitized["syslog_port"] == sanitized["trap_port"]:
-        raise HTTPException(400, "The syslog and trap receivers cannot use the same UDP port.")
+    error = _receiver_config_error(sanitized)
+    if error:
+        raise HTTPException(400, error)
     await db.set_auth_setting("event_receivers", sanitized)
     snapshot = await apply_event_receiver_config(sanitized)
     session = _get_session(request)
@@ -1739,7 +1839,11 @@ async def _save_event_receiver_config(cfg: dict, request: Request, action: str) 
             f"config_change_trigger={sanitized['config_change_trigger']} "
             f"repoll_trigger={sanitized['repoll_trigger']} "
             f"recollect_trigger={sanitized['recollect_trigger']} "
-            f"filterlog_evidence={sanitized['filterlog_evidence']}"
+            f"filterlog_evidence={sanitized['filterlog_evidence']} "
+            f"syslog_tcp={'on' if sanitized['syslog_tcp_enabled'] else 'off'}:{sanitized['syslog_tcp_port']} "
+            f"syslog_tls={'on' if sanitized['syslog_tls_enabled'] else 'off'}:{sanitized['syslog_tls_port']} "
+            f"syslog_tls_require_client_cert={sanitized['syslog_tls_require_client_cert']} "
+            f"syslog_udp_actions={sanitized['syslog_udp_actions']}"
         ),
         correlation_id=_corr_id(request),
     )
@@ -1748,7 +1852,8 @@ async def _save_event_receiver_config(cfg: dict, request: Request, action: str) 
 
 @admin_router.post("/api/admin/metrics/receivers/start")
 async def admin_start_receivers(request: Request, body: EventReceiverStartRequest | None = None):
-    """Turn both receivers on (optionally on new ports) and save that."""
+    """Turn both UDP receivers on (optionally on new ports) and save that.
+    The syslog TCP and TLS listeners are left as saved."""
     cfg = {**state.EVENT_RECEIVER_CONFIG, "syslog_enabled": True, "trap_enabled": True}
     if body is not None:
         cfg.update(body.model_dump(exclude_none=True))
@@ -1758,7 +1863,8 @@ async def admin_start_receivers(request: Request, body: EventReceiverStartReques
 
 @admin_router.post("/api/admin/metrics/receivers/stop")
 async def admin_stop_receivers(request: Request):
-    """Turn both receivers off and save that, so they stay off after a restart."""
+    """Turn both UDP receivers off and save that, so they stay off after a
+    restart. The syslog TCP and TLS listeners are left as saved."""
     cfg = {**state.EVENT_RECEIVER_CONFIG, "syslog_enabled": False, "trap_enabled": False}
     await _save_event_receiver_config(cfg, request, "event_receivers.stopped")
     return {"ok": True}
@@ -1774,6 +1880,100 @@ async def admin_update_event_receiver_config(body: EventReceiverConfigRequest, r
     changes = body.model_dump(exclude_none=True)
     cfg = {**state.EVENT_RECEIVER_CONFIG, **changes}
     return await _save_event_receiver_config(cfg, request, "event_receivers.config.updated")
+
+
+# ── Admin: syslog TLS certificate ───────────────────────────────────────────
+#
+# The server certificate and client CA of the syslog TLS receiver
+# (netcontrol.syslog_tls), in auth_settings("syslog_tls") with the private
+# key encrypted at rest. No response, log line or audit entry carries the
+# key. A change restarts a running TLS listener (open connections drop).
+
+
+class SyslogTlsRequest(BaseModel):
+    """PUT body. ``cert_pem`` and ``key_pem`` go together (both left out:
+    the server certificate is kept); ``client_ca_pem`` on its own ("":
+    removed). Sizes are checked by ``syslog_tls``, not here, so a refused
+    key is never echoed in a validation error log."""
+
+    cert_pem: str | None = None
+    key_pem: str | None = None
+    client_ca_pem: str | None = None
+
+
+class SyslogTlsGenerateRequest(BaseModel):
+    common_name: str = Field(min_length=1, max_length=syslog_tls.MAX_COMMON_NAME_CHARS)
+    sans: list[str] = Field(default_factory=list, max_length=syslog_tls.MAX_SANS)
+    days: int = Field(default=825, ge=syslog_tls.MIN_DAYS, le=syslog_tls.MAX_DAYS)
+
+
+async def _save_syslog_tls(material: dict, request: Request, action: str, detail: str) -> dict:
+    """Persist and apply the TLS material, rebuild a running TLS listener,
+    audit. Returns the GET view."""
+    await db.set_auth_setting(syslog_tls.SETTING_KEY, material)
+    syslog_tls.apply(material)
+    await apply_event_receiver_config(state.EVENT_RECEIVER_CONFIG)
+    view = syslog_tls.public_view()
+    fingerprint = (view["certificate"] or {}).get("sha256_fingerprint", "")
+    session = _get_session(request)
+    await _audit(
+        "system",
+        action,
+        user=session["user"] if session else "",
+        detail=f"{detail} certificate={fingerprint or 'none'} client_ca_certs={len(view['client_ca'])}",
+        correlation_id=_corr_id(request),
+    )
+    return view
+
+
+@admin_router.get("/api/admin/metrics/receivers/tls")
+async def admin_get_syslog_tls():
+    return syslog_tls.public_view()
+
+
+@admin_router.put("/api/admin/metrics/receivers/tls")
+async def admin_update_syslog_tls(body: SyslogTlsRequest, request: Request):
+    material = dict(syslog_tls.MATERIAL)
+    changed: list[str] = []
+    if (body.cert_pem is None) != (body.key_pem is None):
+        raise HTTPException(400, "Give the certificate and its private key together.")
+    try:
+        if body.cert_pem is not None and body.key_pem is not None:
+            material["cert_pem"], material["key_pem"] = syslog_tls.validate_server_pair(body.cert_pem, body.key_pem)
+            changed.append("certificate")
+        if body.client_ca_pem is not None:
+            if body.client_ca_pem.strip():
+                material["client_ca_pem"] = syslog_tls.validate_client_ca(body.client_ca_pem)
+            elif state.EVENT_RECEIVER_CONFIG.get("syslog_tls_require_client_cert"):
+                raise HTTPException(400, "Turn off Require client certificates before removing the client CA.")
+            else:
+                material["client_ca_pem"] = ""
+            changed.append("client_ca")
+    except syslog_tls.TlsMaterialError as exc:
+        raise HTTPException(400, str(exc)) from None
+    if not changed:
+        return syslog_tls.public_view()
+    return await _save_syslog_tls(material, request, "syslog_tls.updated", f"changed={','.join(changed)}")
+
+
+@admin_router.post("/api/admin/metrics/receivers/tls/generate")
+async def admin_generate_syslog_tls(body: SyslogTlsGenerateRequest, request: Request):
+    try:
+        cert_pem, key_pem = await asyncio.to_thread(
+            syslog_tls.generate_self_signed, body.common_name, body.sans, body.days
+        )
+    except syslog_tls.TlsMaterialError as exc:
+        raise HTTPException(400, str(exc)) from None
+    material = {**syslog_tls.MATERIAL, "cert_pem": cert_pem, "key_pem": key_pem}
+    return await _save_syslog_tls(material, request, "syslog_tls.generated", f"days={body.days}")
+
+
+@admin_router.delete("/api/admin/metrics/receivers/tls")
+async def admin_delete_syslog_tls(request: Request):
+    if state.EVENT_RECEIVER_CONFIG.get("syslog_tls_enabled"):
+        raise HTTPException(400, "Turn off the syslog TLS receiver before removing its certificate.")
+    material = {**syslog_tls.MATERIAL, "cert_pem": "", "key_pem": ""}
+    return await _save_syslog_tls(material, request, "syslog_tls.deleted", "changed=certificate")
 
 
 @admin_router.post("/api/admin/metrics/rollup/hourly")

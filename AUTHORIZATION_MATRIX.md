@@ -145,6 +145,7 @@ below. Admins and the API token pass every feature check.
 | `/api/compliance/admin/*` | compliance_admin |
 | `/api/monitoring/admin/*` | monitoring_admin |
 | `/api/metrics/admin/*` | metrics_engine_admin |
+| `GET/PUT /api/admin/metrics/receivers/config`, `POST /api/admin/metrics/receivers/start`, `POST /api/admin/metrics/receivers/stop`, `GET/PUT/DELETE /api/admin/metrics/receivers/tls`, `POST /api/admin/metrics/receivers/tls/generate` (syslog / trap receiver settings and the syslog TLS server certificate and client CA; writes audited as `system` / `event_receivers.*`, `syslog_tls.*`; the TLS private key is write-only and encrypted at rest) | metrics_engine_admin |
 | `/api/monitoring/meraki-alerts/settings` (GET/PUT; the webhook secret is write-only), `POST /api/monitoring/meraki-alerts/poll` | meraki_alerts_admin |
 
 ### WebSocket (self-authenticated)

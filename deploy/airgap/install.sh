@@ -112,6 +112,8 @@ if command -v ufw >/dev/null 2>&1 && ufw status | grep -q "Status: active"; then
     ufw allow 6343/udp || true
     ufw allow 162/udp  || true
     ufw allow 1514/udp || true
+    ufw allow 1514/tcp || true
+    ufw allow 6514/tcp || true
 fi
 
 VM_HOST="$(hostname -f 2>/dev/null || hostname -I | awk '{print $1}')"

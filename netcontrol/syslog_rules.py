@@ -31,8 +31,10 @@ monitoring to be enabled.
 Parsing is pure (``parse_syslog_message``): the event *tag* of a message is
 the Cisco-style ``%FACILITY-SEVERITY-MNEMONIC`` (IOS, IOS XE, IOS XR,
 NX-OS, ASA, Arista EOS), compared without its severity digit
-(``LINK-UPDOWN``), or the Junos ``TAG_NAME`` (``SNMP_TRAP_LINK_DOWN``).
-Its *program* is the RFC 5424 APP-NAME or the RFC 3164 ``program[pid]:``
+(``LINK-UPDOWN``), the Junos ``TAG_NAME`` (``SNMP_TRAP_LINK_DOWN``), or
+the tag ``netcontrol.syslog_vendor_formats`` gives a FortiOS, PAN-OS,
+AOS-CX or AOS-Switch message (``FGT-0100032002``, ``PAN-SYSTEM-AUTH-FAIL``,
+``AOSCX-404``, ``AOSS-00077``). Its *program* is the RFC 5424 APP-NAME or the RFC 3164 ``program[pid]:``
 (``dpinger``, ``charon``, ``audit``): messages without a tag, OPNsense's
 among them, are matched by program and the text after it.
 Built-in patterns are fixed and written for Python ``re``; custom regex
@@ -66,6 +68,7 @@ import netcontrol.routes.state as state
 from netcontrol import source_recollect
 from netcontrol.bounded_map import BoundedDict
 from netcontrol.monitoring_repoll import keep_task, schedule_repoll
+from netcontrol.syslog_vendor_formats import aos_switch_tag, vendor_tag
 
 LOGGER = logging.getLogger("plexus.syslog_rules")
 
@@ -196,11 +199,16 @@ def normalize_tag(tag: str) -> str:
     return tag.upper()
 
 
+def _bsd_rest(text: str) -> str:
+    """An RFC 3164 message without its timestamp (when it has one)."""
+    stamp = _BSD_TIMESTAMP.match(text)
+    return text[stamp.end() :].lstrip() if stamp else text
+
+
 def _bsd_program(text: str) -> tuple[str, str]:
     """``(program, MSG)`` of an RFC 3164 message (its timestamp and host
     name optional), or ``("", text)`` when it names no program."""
-    stamp = _BSD_TIMESTAMP.match(text)
-    rest = text[stamp.end() :].lstrip() if stamp else text
+    rest = _bsd_rest(text)
     found = _PROGRAM.match(rest) or _HOST_PROGRAM.match(rest)
     if found is None:
         return "", text
@@ -228,6 +236,9 @@ def parse_syslog_message(message: str) -> ParsedSyslog:
         search_in = text
     if not program:
         body = search_in
+    vendor = vendor_tag(search_in)
+    if vendor is not None:
+        return ParsedSyslog(vendor.tag, vendor.raw_tag, vendor.text, text, program, body)
     head = search_in[:_TAG_SEARCH_CHARS]
     cisco = _CISCO_TAG.search(head)
     if cisco:
@@ -240,6 +251,10 @@ def parse_syslog_message(message: str) -> ParsedSyslog:
     if junos:
         tag = junos.group(1)
         return ParsedSyslog(tag, tag, search_in[junos.end() :].strip(), text, program, body)
+    if not m5424:
+        aoss = aos_switch_tag(_bsd_rest(text))
+        if aoss is not None:
+            return ParsedSyslog(aoss.tag, aoss.raw_tag, aoss.text, text, aoss.program, aoss.text)
     return ParsedSyslog("", "", search_in, text, program, body)
 
 
@@ -376,12 +391,30 @@ INTERFACE_DOWN: tuple[Matcher, ...] = (
     ),
     # Junos (an interface an operator disabled has ifAdminStatus down).
     _m("SNMP_TRAP_LINK_DOWN", text=r"ifAdminStatus up\b", instance=rf"ifName {_IFACE}"),
+    # FortiOS 20099 "Interface status changed": "Link monitor: Interface
+    # wan1 was turned down" (the up form says "turned up").
+    _m("FGT-0100020099", text=r"\bwas turned down\b", instance=rf"\bInterface {_IFACE} was turned down"),
+    # PAN-OS link-change: "Port ethernet1/3: Down 1Gb/s-full duplex",
+    # "ethernet1/3: Down ...", "Port MGT: Down ...", "Port X: MAC Down".
+    _m("PAN-SYSTEM-LINK-CHANGE", text=r":(?: MAC)? Down\b", instance=r"^(?:Port )?([^\s:,]+):"),
+    # AOS-CX 404: "Link status for interface 1/1/1 is down".
+    _m("AOSCX-404", text=r"\bis down\b", instance=rf"\binterface {_IFACE} is down"),
+    # AOS-Switch 77: "port 1 is now off-line" (stacked: "port 2/16").
+    _m("AOSS-00077", text=r"\bis now off-line\b", instance=rf"\bport {_IFACE} is now off-line"),
 )
 
 # ADJCHG: IOS, IOS XE, IOS XR. NBRSTATE: NX-OS (newer releases; older ones log
 # ADJCHANGE "went DOWN"). Both read "... Nbr X on IF from STATE to STATE".
 _OSPF_TAGS = ("OSPF-ADJCHG", "OSPFV3-ADJCHG", "ROUTING-OSPF-ADJCHG", "ROUTING-OSPFV3-ADJCHG", "OSPF-NBRSTATE")
-_BGP_TAGS = ("BGP-ADJCHANGE", "ROUTING-BGP-ADJCHANGE")
+# FortiOS 20300 "BGP neighbor status changed" carries the same text in its
+# msg ("BGP: %BGP-5-ADJCHANGE: VRF 0 neighbor X Down Hold Timer Expired").
+_BGP_TAGS = ("BGP-ADJCHANGE", "ROUTING-BGP-ADJCHANGE", "FGT-0103020300")
+# FortiOS 20302 "OSPF neighbor status changed": "OSPF: %OSPF-5-ADJCHANGE:
+# neighbor port1:192.0.2.1-192.0.2.2 Down" (the neighbor is IF:local-remote).
+_FGT_OSPF = "FGT-0103020302"
+_PAN_BGP_PEER = r"\bpeer IP: ([^\s,]+)"
+_ARISTA_PSU = r"\b(PowerSupply\d+)"
+_ARISTA_FAN = r"\b(Fan\d+(?:/\d+)?)"
 
 BUILTIN_RULES: tuple[BuiltinRule, ...] = (
     BuiltinRule(
@@ -391,7 +424,18 @@ BUILTIN_RULES: tuple[BuiltinRule, ...] = (
             "An interface went down 3 times within 10 minutes. One down is not an alert (access ports go "
             "down all day); resolves 30 minutes after the last down."
         ),
-        families=("Cisco IOS / IOS XE", "Cisco IOS XR", "Cisco NX-OS", "Cisco ASA", "Arista EOS", "Juniper Junos"),
+        families=(
+            "Cisco IOS / IOS XE",
+            "Cisco IOS XR",
+            "Cisco NX-OS",
+            "Cisco ASA",
+            "Arista EOS",
+            "Juniper Junos",
+            "Fortinet FortiOS",
+            "Palo Alto PAN-OS",
+            "HPE Aruba AOS-CX",
+            "HPE Aruba AOS-Switch",
+        ),
         severity="warning",
         raise_on=INTERFACE_DOWN,
         threshold_count=3,
@@ -402,26 +446,48 @@ BUILTIN_RULES: tuple[BuiltinRule, ...] = (
         key="ospf_neighbor",
         name="OSPF neighbor down",
         description="An OSPF adjacency went down; resolved when it is back to FULL.",
-        families=("Cisco IOS / IOS XE", "Cisco IOS XR", "Cisco NX-OS", "Arista EOS", "Juniper Junos"),
+        families=(
+            "Cisco IOS / IOS XE",
+            "Cisco IOS XR",
+            "Cisco NX-OS",
+            "Arista EOS",
+            "Juniper Junos",
+            "Fortinet FortiOS",
+            "Palo Alto PAN-OS",
+        ),
         severity="critical",
         raise_on=(
             _m(*_OSPF_TAGS, text=r"\bto DOWN\b", instance=rf"Nbr {_IFACE}"),
             _m("OSPF-ADJCHANGE", text=r"\bwent DOWN\b", instance=rf"Nbr {_IFACE}"),
             _m("OSPF-OSPF_ADJACENCY_TEARDOWN", instance=rf"NGB {_IFACE}"),
             _m("RPD_OSPF_NBRDOWN", instance=rf"neighbor {_IFACE}"),
+            _m(_FGT_OSPF, text=r"\bADJCHANGE: neighbor \S+ Down\b", instance=rf"\bADJCHANGE: neighbor {_IFACE}"),
+            # PAN-OS (legacy routing engine): the description names no
+            # neighbor, so one alert per firewall.
+            _m("PAN-SYSTEM-ROUTED-OSPF-NEIGHBOR-DOWN"),
         ),
         clear_on=(
             _m(*_OSPF_TAGS, text=r"\bto FULL\b", instance=rf"Nbr {_IFACE}"),
             _m("OSPF-ADJCHANGE", text=r"\bwent FULL\b", instance=rf"Nbr {_IFACE}"),
             _m("OSPF-OSPF_ADJACENCY_ESTABLISHED", instance=rf"NGB {_IFACE}"),
             _m("RPD_OSPF_NBRUP", text=r"\bto Full\b", instance=rf"neighbor {_IFACE}"),
+            _m(_FGT_OSPF, text=r"\bADJCHANGE: neighbor \S+ Up\b", instance=rf"\bADJCHANGE: neighbor {_IFACE}"),
+            _m("PAN-SYSTEM-ROUTED-OSPF-NEIGHBOR-FULL"),
         ),
     ),
     BuiltinRule(
         key="bgp_neighbor",
         name="BGP neighbor down",
         description="A BGP session left Established or was reset; resolved when it is Up / Established again.",
-        families=("Cisco IOS / IOS XE", "Cisco IOS XR", "Cisco NX-OS", "Arista EOS", "Juniper Junos"),
+        families=(
+            "Cisco IOS / IOS XE",
+            "Cisco IOS XR",
+            "Cisco NX-OS",
+            "Arista EOS",
+            "Juniper Junos",
+            "Fortinet FortiOS",
+            "Palo Alto PAN-OS",
+        ),
         severity="critical",
         raise_on=(
             _m(*_BGP_TAGS, text=r"neighbor \S+(?: vpn vrf \S+)? Down\b", instance=rf"neighbor {_IFACE}"),
@@ -436,30 +502,57 @@ BUILTIN_RULES: tuple[BuiltinRule, ...] = (
                 text=r"from Established to (?!Established)",
                 instance=r"peer ([^\s,+]+)",
             ),
+            _m("PAN-SYSTEM-ROUTED-BGP-PEER-LEFT-ESTABLISHED", instance=_PAN_BGP_PEER),
         ),
         clear_on=(
             _m(*_BGP_TAGS, text=r"neighbor \S+(?: vpn vrf \S+)? Up\b", instance=rf"neighbor {_IFACE}"),
             _m("BGP-ADJCHANGE", text=r"\bnew state Established\b", instance=rf"peer {_IFACE}"),
             _m("RPD_BGP_NEIGHBOR_STATE_CHANGED", text=r"\bto Established\b", instance=r"peer ([^\s,+]+)"),
+            _m("PAN-SYSTEM-ROUTED-BGP-PEER-ENTER-ESTABLISHED", instance=_PAN_BGP_PEER),
         ),
     ),
     BuiltinRule(
         key="power_supply",
         name="Power supply fault",
         description="A power supply failed or lost its input; resolved when it reports OK, or after 24 hours.",
-        families=("Cisco IOS XE (ASR 1000, ISR 4000, Catalyst 9000)", "Cisco NX-OS", "Juniper Junos"),
+        families=(
+            "Cisco IOS XE (ASR 1000, ISR 4000, Catalyst 9000)",
+            "Cisco Catalyst 3750-X / 3560-X",
+            "Cisco NX-OS",
+            "Arista EOS",
+            "Juniper Junos",
+            "Fortinet FortiOS",
+            "Palo Alto PAN-OS",
+            "HPE Aruba AOS-CX",
+        ),
         severity="critical",
         raise_on=(
             _m("IOSXE_PEM-PEMFAIL", instance=rf"slot {_IFACE}"),
             _m("PLATFORM_FEP-FRU_PS_SIGNAL_FAULTY", instance=r"Switch (\d+):.*power supply ([A-Za-z0-9]+)"),
             _m("PLATFORM-PS_FAIL", instance=r"Power supply (\d+)"),
             _m(prefixes=("CHASSISD_SNMP_TRAP",), text=r"Power Supply fail", instance=_JUNOS_FRU),
+            # Catalyst 3750-X / 3560-X: "<signal> signal on power supply is
+            # faulty" (names no supply).
+            _m("PLATFORM_ENV-FRU_PS_SIGNAL_FAULTY"),
+            # Arista EOS: "PowerSupply2 has failed and has stopped providing
+            # power to the system." / "PowerSupply2 has lost input power."
+            _m("PWRMGMT-PSU_STATUS_FAILED", "PWRMGMT-INPUT_POWER_LOSS", instance=_ARISTA_PSU),
+            # FortiOS 22105 "Power supply failed" (msg "PSU [2] not detected";
+            # 22104 "Power supply restored" names no supply in a known form,
+            # so one alert per firewall).
+            _m("FGT-0100022105"),
+            # PAN-OS ps-failure: "Alarm on Power Supply #2".
+            _m("PAN-SYSTEM-PS-FAILURE", instance=r"\bPower Supply #(\d+)"),
+            # AOS-CX 304: "PSU 1/1 faulted."
+            _m("AOSCX-304", instance=r"\bPSU (\S+?) faulted"),
         ),
         clear_on=(
             _m("IOSXE_PEM-PEMOK", instance=rf"slot {_IFACE}"),
             _m("PLATFORM_FEP-FRU_PS_SIGNAL_OK", instance=r"Switch (\d+):.*power supply ([A-Za-z0-9]+)"),
             _m("PLATFORM-PS_OK", instance=r"Power supply (\d+)"),
             _m(prefixes=("CHASSISD_SNMP_TRAP",), text=r"Power Supply OK", instance=_JUNOS_FRU),
+            _m("PWRMGMT-PSU_STATUS_OK", instance=_ARISTA_PSU),
+            _m("FGT-0100022104"),
         ),
         auto_resolve_minutes=1440,
     ),
@@ -467,17 +560,38 @@ BUILTIN_RULES: tuple[BuiltinRule, ...] = (
         key="fan",
         name="Fan fault",
         description="A fan failed; resolved when it reports OK, or after 24 hours.",
-        families=("Cisco IOS XE (ASR 1000, ISR 4000)", "Cisco NX-OS", "Juniper Junos"),
+        families=(
+            "Cisco IOS XE (ASR 1000, ISR 4000)",
+            "Cisco Catalyst 2960 / 3560 / 3750 (classic IOS)",
+            "Cisco ISR G2 (1900, 2900, 3900)",
+            "Cisco NX-OS",
+            "Arista EOS",
+            "Juniper Junos",
+            "Palo Alto PAN-OS",
+        ),
         severity="warning",
         raise_on=(
             _m("IOSXE_PEM-FANFAIL", instance=rf"slot {_IFACE}"),
             _m("PLATFORM-FANMOD_FAN_FAIL", instance=r"Fan module (\d+)"),
             _m(prefixes=("CHASSISD_SNMP_TRAP",), text=r"Fan(?:/Blower)? fail", instance=_JUNOS_FRU),
+            # Catalyst 2960 / 3560 / 3750: "Fan 1 Failure."; 3750-X / 3560-X:
+            # "Faulty fan detected." and "Power supply fan failure detected."
+            _m("HARDWARE-FAN_ERROR", instance=r"\bFan (\S+?)\s+Failure\b"),
+            _m("PLATFORM_ENV-FAN", "PLATFORM_ENV-FRU_PS_FAN_FAILED"),
+            # ISR G2 (and ISR 4000): "Fan 1 is malfunctioning"; older ISRs
+            # log FAN_FAILED.
+            _m("ENVMON-FAN_FAIL", "ENVMON-FAN_FAILED", instance=r"\bFan (\d+)"),
+            # Arista EOS: "Fan1/1 failure detected".
+            _m("ENVMON-FANFAILED", instance=_ARISTA_FAN),
+            # PAN-OS fan-failure: "Alarm on Fan Tray #1".
+            _m("PAN-SYSTEM-FAN-FAILURE", instance=r"\bFan Tray #(\d+)"),
         ),
         clear_on=(
             _m("IOSXE_PEM-FANOK", instance=rf"slot {_IFACE}"),
             _m("PLATFORM-FANMOD_FAN_OK", instance=r"Fan module (\d+)"),
             _m(prefixes=("CHASSISD_SNMP_TRAP",), text=r"Fan(?:/Blower)? OK", instance=_JUNOS_FRU),
+            _m("ENVMON-FAN_OK", instance=r"\bFan (\d+)"),
+            _m("ENVMON-FANOK", instance=_ARISTA_FAN),
         ),
         auto_resolve_minutes=1440,
     ),
@@ -488,7 +602,19 @@ BUILTIN_RULES: tuple[BuiltinRule, ...] = (
             "5 failed logins to one device within 5 minutes (from any source); resolves 30 minutes after "
             "the last failure."
         ),
-        families=("Cisco IOS / IOS XE", "Cisco IOS XR", "Cisco NX-OS", "Cisco ASA", "Juniper Junos", "OPNsense"),
+        families=(
+            "Cisco IOS / IOS XE",
+            "Cisco IOS XR",
+            "Cisco NX-OS",
+            "Cisco ASA",
+            "Arista EOS",
+            "Juniper Junos",
+            "OPNsense",
+            "Fortinet FortiOS",
+            "Palo Alto PAN-OS",
+            "HPE Aruba AOS-CX",
+            "HPE Aruba AOS-Switch",
+        ),
         severity="warning",
         raise_on=(
             _m(
@@ -500,7 +626,21 @@ BUILTIN_RULES: tuple[BuiltinRule, ...] = (
                 "ASA-611102",
                 "SSHD_LOGIN_FAILED",
                 "LOGIN_FAILED",
+                "FGT-0100032002",  # FortiOS "Admin login failed"
+                "AOSCX-5210",  # AOS-CX SSH login failed (password)
+                "AOSCX-5216",  # AOS-CX SSH login failed (public key)
+                "AOSS-00419",  # AOS-Switch invalid user name / password
+                "AOSS-03345",  # AOS-Switch SSH login failed
             ),
+            # PAN-OS auth-fail, except the ones that report the
+            # authentication server's setup rather than a login.
+            _m(
+                "PAN-SYSTEM-AUTH-FAIL",
+                exclude=r"^(?:Time clock does not match|Wrong realm|Server certificate:|KDC Spoofing)",
+            ),
+            # OpenSSH (Arista EOS, and any host that sends sshd's lines):
+            # "Failed password for [invalid user ]NAME from ADDR port N ssh2".
+            _p("sshd", text=r"^Failed (?:password|keyboard-interactive/pam) for "),
             _m("AUTHPRIV-SYSTEM_MSG", text=r"authentication failed"),
             # OPNsense: a login the firewall authenticates (web GUI, and SSH
             # through pam_opnsense) that no authenticator accepted
@@ -528,11 +668,32 @@ CONFIG_CHANGE: tuple[Matcher, ...] = (
     # ASA 111010 logs every command run through ASDM or the CLI, show
     # commands too: only the others count.
     _m("ASA-111010", text=r"executed '", exclude=r"executed '(?:show|ping|traceroute|more|dir)\b"),
+    # FortiOS applies each change at once: 44544 "Path configured", 44545
+    # "Object configured", 44546 "Attribute configured", 44547 "Object
+    # attribute configured" (44548 "Action performed", an execute command,
+    # is no change).
+    _m("FGT-0100044544", "FGT-0100044545", "FGT-0100044546", "FGT-0100044547"),
+    # PAN-OS CONFIG log of a commit that succeeded (Command, Admin, Client,
+    # Result): a candidate edit (set, edit, delete ...) changes nothing yet.
+    _m("PAN-CONFIG", text=r'^commit,(?:"[^"]*"|[^,]*),(?:"[^"]*"|[^,]*),Succeeded(?:,|$)'),
+    # A commit runs as a job, so its CONFIG log may only say "Submitted":
+    # the SYSTEM log reports the job's end ("Commit job succeeded[ for user
+    # NAME]").
+    _m("PAN-SYSTEM-GENERAL", text=r"^Commit job succeeded\b"),
 )
 # Messages a device logs when it is about to reload.
-RELOAD: tuple[Matcher, ...] = (_m("SYS-RELOAD", "ASA-199001", "UI_REBOOT_EVENT", "PLATFORM-PFM_SYSTEM_RESET"),)
+RELOAD: tuple[Matcher, ...] = (
+    _m("SYS-RELOAD", "ASA-199001", "UI_REBOOT_EVENT", "PLATFORM-PFM_SYSTEM_RESET"),
+    # FortiOS 32138 "Device rebooted", 32200 "Device shutdown"; AOS-Switch 63
+    # "System went down".
+    _m("FGT-0100032138", "FGT-0100032200", "AOSS-00063"),
+)
 # Messages a device logs once it is back up.
-RESTART: tuple[Matcher, ...] = (_m("SYS-RESTART", "SYS-BOOTTIME", "ASA-199002", "SNMPD_TRAP_COLD_START"),)
+RESTART: tuple[Matcher, ...] = (
+    _m("SYS-RESTART", "SYS-BOOTTIME", "ASA-199002", "SNMPD_TRAP_COLD_START"),
+    # FortiOS 32009 "FortiGate started"; AOS-Switch 64 "System Booted".
+    _m("FGT-0100032009", "AOSS-00064"),
+)
 
 
 # OPNsense: messages that say a state its topology source collects just
@@ -1257,6 +1418,17 @@ def _received(value: object) -> datetime | None:
     return _parse_db_time(value)
 
 
+def _restore_transports() -> tuple[str, ...] | None:
+    """The transports whose stored messages a restore replays: all (None),
+    or only TCP and TLS while ``syslog_udp_actions`` is off (UDP syslog is
+    then stored and never acted on)."""
+    if receiver_flag("syslog_udp_actions"):
+        return None
+    from netcontrol.syslog_stream import TRANSPORTS
+
+    return TRANSPORTS
+
+
 async def _restore_counters() -> int:
     """Replay the stored messages of inventory hosts through the counters of
     the enabled threshold rules, each counted at its age before now. Raises
@@ -1268,7 +1440,9 @@ async def _restore_counters() -> int:
     if not rules:
         return 0
     window = min(max(r.threshold_window_seconds for r in rules), RESTORE_WINDOW_MAX_SECONDS)
-    rows = await db.list_syslog_messages_since(window, limit=RESTORE_ROWS_MAX, hosts_only=True)
+    rows = await db.list_syslog_messages_since(
+        window, limit=RESTORE_ROWS_MAX, hosts_only=True, transports=_restore_transports()
+    )
     now_utc = datetime.now(UTC)
     now = _clock()
     replayed = 0
@@ -1291,7 +1465,9 @@ async def _restore_config_changes() -> int:
     configuration message of the last ``CONFIG_COOLDOWN_SECONDS`` has no
     backup captured (or re-read unchanged) at or after it. Returns how many
     runs were scheduled."""
-    rows = await db.list_syslog_messages_since(int(CONFIG_COOLDOWN_SECONDS), limit=RESTORE_ROWS_MAX, hosts_only=True)
+    rows = await db.list_syslog_messages_since(
+        int(CONFIG_COOLDOWN_SECONDS), limit=RESTORE_ROWS_MAX, hosts_only=True, transports=_restore_transports()
+    )
     newest: dict[int, datetime] = {}
     for row in rows:  # newest first
         host_id = int(row["host_id"])

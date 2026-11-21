@@ -151,15 +151,18 @@ async def list_syslog_messages_since(
     limit: int = 5000,
     hosts_only: bool = False,
     group_ids: Iterable[int] | None = None,
+    transports: Iterable[str] | None = None,
 ) -> list[dict]:
     """One page of the syslog messages in ``trap_syslog_events`` received
     within the last ``seconds``, newest first (by id): ``id``, ``host_id``,
-    ``source_ip``, ``message``, ``received_at`` and the host's
-    ``device_type`` and ``hostname`` (empty for an unknown source).
+    ``source_ip``, ``message``, ``received_at``, ``transport`` and the
+    host's ``device_type`` and ``hostname`` (empty for an unknown source).
     ``before_id``: the next page after the row with that id. ``hosts_only``:
     only the messages of inventory hosts. ``group_ids`` keeps the messages of
     hosts in those inventory groups (object scope: a message from an unknown
-    source is left out), as ``get_trap_syslog_events`` does."""
+    source is left out), as ``get_trap_syslog_events`` does. ``transports``
+    keeps the messages that arrived over those transports (``udp``, ``tcp``,
+    ``tls``; None: all)."""
     clauses = ["e.event_type = 'syslog'", "e.received_at >= datetime('now', ?)"]
     params: list = [f"-{int(seconds)} seconds"]
     if before_id is not None:
@@ -167,13 +170,19 @@ async def list_syslog_messages_since(
         params.append(int(before_id))
     if hosts_only:
         clauses.append("e.host_id IS NOT NULL")
+    if transports is not None:
+        wanted = sorted({str(t) for t in transports})
+        if not wanted:
+            return []
+        clauses.append(f"e.transport IN ({', '.join('?' for _ in wanted)})")
+        params.extend(wanted)
     scope_sql, scope_params = group_ids_condition("h.group_id", group_ids)
     if scope_sql:
         clauses.append(scope_sql)
         params.extend(scope_params)
     params.append(int(limit))
     return await _select(
-        f"""SELECT e.id, e.host_id, e.source_ip, e.message, e.received_at,
+        f"""SELECT e.id, e.host_id, e.source_ip, e.message, e.received_at, e.transport,
                    COALESCE(h.device_type, '') AS device_type, COALESCE(h.hostname, '') AS hostname
             FROM trap_syslog_events e
             LEFT JOIN hosts h ON h.id = e.host_id

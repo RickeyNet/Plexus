@@ -21,6 +21,8 @@ import {
   ruleMatchCounts,
   SYSLOG_BUILTIN_METRICS,
   thresholdLabel,
+  transportSummary,
+  udpTransportNote,
   unmatchedGroupLabel,
 } from './syslogRules';
 
@@ -245,5 +247,37 @@ describe('syslog rule activity', () => {
       '345 messages scanned: 120 matched, 200 unmatched, 25 from unknown sources. '
         + 'Trigger messages: 1 configuration change, 10 re-poll, 0 OPNsense re-collection.',
     );
+  });
+});
+
+describe('syslog transports', () => {
+  const scan = (udp: number, tcp: number, tls: number, udpHosts: number, udpActions: boolean) => ({
+    transports: { udp, tcp, tls },
+    udp_hosts: udpHosts,
+    udp_actions: udpActions,
+  });
+
+  it('counts the messages per transport', () => {
+    expect(transportSummary(scan(1200, 40, 310, 9, true))).toBe('By transport: 1,200 UDP, 40 TCP, 310 TLS.');
+    expect(transportSummary(scan(0, 0, 0, 0, true))).toBe('');
+  });
+
+  it('says how many UDP messages were stored but not acted on while UDP actions are off', () => {
+    expect(udpTransportNote(scan(1200, 40, 0, 3, false))).toEqual({
+      kind: 'ignored',
+      text: '1,200 messages from 3 hosts arrived over UDP and were stored but not acted on, because Act on UDP messages is off.',
+    });
+    expect(udpTransportNote(scan(1, 0, 5, 1, false))?.text).toBe(
+      '1 message from 1 host arrived over UDP and was stored but not acted on, because Act on UDP messages is off.',
+    );
+    expect(udpTransportNote(scan(0, 40, 5, 0, false))).toBeNull();
+  });
+
+  it('names the hosts still on UDP only once some hosts send over TCP or TLS', () => {
+    expect(udpTransportNote(scan(500, 0, 20, 4, true))).toEqual({ kind: 'remaining', text: '4 hosts still send syslog over UDP.' });
+    expect(udpTransportNote(scan(5, 10, 0, 1, true))?.text).toBe('1 host still sends syslog over UDP.');
+    // A UDP-only deployment, and one that has moved every host, get no note.
+    expect(udpTransportNote(scan(500, 0, 0, 4, true))).toBeNull();
+    expect(udpTransportNote(scan(0, 10, 20, 0, true))).toBeNull();
   });
 });

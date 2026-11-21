@@ -26,7 +26,7 @@ import {
   TargetTestsProvider,
   TestResultBadge,
 } from './DeliveryTargets';
-import { CheckboxField, CheckboxRow, FormRow, NumberField, TextField } from './FormFields';
+import { CheckboxField, CheckboxRow, FormRow, NumberField, PemField, TextField } from './FormFields';
 import type { FormStatus } from './StatusLine';
 import { isDirty } from './unsaved-context';
 
@@ -231,36 +231,6 @@ export function SiemTab() {
           error={saveError}
         />
       )}
-    </div>
-  );
-}
-
-/** A PEM textarea: monospace, no spellcheck. */
-function PemField({
-  label,
-  value,
-  onChange,
-  placeholder,
-}: {
-  label: string;
-  value: string;
-  onChange: (v: string) => void;
-  placeholder?: string;
-}) {
-  const id = useId();
-  return (
-    <div className="form-group" style={{ flex: '1 1 320px' }}>
-      <label className="form-label" htmlFor={id}>{label}</label>
-      <textarea
-        id={id}
-        className="form-textarea"
-        rows={6}
-        spellCheck={false}
-        autoComplete="off"
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder={placeholder}
-      />
     </div>
   );
 }

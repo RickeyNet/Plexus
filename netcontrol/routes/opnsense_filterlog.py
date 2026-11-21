@@ -78,7 +78,7 @@ def evidence_enabled() -> bool:
 
 def divert(rows: list[tuple]) -> list[tuple]:
     """The rows of a flushed receiver batch (``(source_ip, host_id,
-    event_type, facility, severity, oid, message, raw_data)``) without the
+    event_type, facility, severity, oid, message, raw_data, transport)``) without the
     filterlog lines, which are summed into ``AGGREGATOR`` (or counted and
     dropped). A message that only mentions filterlog stays. Never raises."""
     kept: list[tuple] = []

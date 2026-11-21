@@ -51,6 +51,7 @@ from netcontrol.routes.net_guard import (
 from netcontrol.routes.outbound_http import MAX_PINNED_ADDRESSES, send_request, tls_verify
 from netcontrol.secret_fields import SECRET_MASK
 from netcontrol.telemetry import configure_logging
+from netcontrol.tls_pem import load_cert_chain_pem
 
 LOGGER = configure_logging("plexus.siem")
 
@@ -491,28 +492,7 @@ def _build_tls_context(sink: SinkConfig) -> ssl.SSLContext:
     if sink.tls_ca_pem.strip():
         ctx.load_verify_locations(cadata=sink.tls_ca_pem)
     if sink.tls_client_cert_pem.strip() and sink.tls_client_key_pem.strip():
-        import os as _os
-        import tempfile
-
-        # SSLContext.load_cert_chain demands paths. Materialize PEMs into
-        # temp files for the duration of context construction, then unlink.
-        cert_fd, cert_path = tempfile.mkstemp(suffix=".pem")
-        key_fd, key_path = tempfile.mkstemp(suffix=".pem")
-        try:
-            with _os.fdopen(cert_fd, "w") as f:
-                f.write(sink.tls_client_cert_pem)
-            with _os.fdopen(key_fd, "w") as f:
-                f.write(sink.tls_client_key_pem)
-            ctx.load_cert_chain(cert_path, key_path)
-        finally:
-            try:
-                _os.unlink(cert_path)
-            except OSError as exc:
-                LOGGER.debug("siem sink %s: temp cert cleanup failed: %s", sink.id, exc)
-            try:
-                _os.unlink(key_path)
-            except OSError as exc:
-                LOGGER.debug("siem sink %s: temp key cleanup failed: %s", sink.id, exc)
+        load_cert_chain_pem(ctx, sink.tls_client_cert_pem, sink.tls_client_key_pem)
     return ctx
 
 

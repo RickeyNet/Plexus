@@ -43,6 +43,8 @@ SNMP_SECRET_FIELDS = ("community", "v3.auth_password", "v3.priv_password")
 SIEM_SINK_SECRET_FIELDS = ("bearer_token", "tls_client_key_pem")
 #: A notification channel.
 NOTIFICATION_CHANNEL_SECRET_FIELDS = ("smtp_password", "routing_key", "webhook_auth_value")
+#: The syslog TLS receiver's server certificate (``netcontrol.syslog_tls``).
+SYSLOG_TLS_SECRET_FIELDS = ("key_pem",)
 
 
 def _get(obj: Mapping, path: str) -> Any:

@@ -37,10 +37,23 @@ The rules are set up under **Monitoring > Configure > Syslog Rules**.
    EOS), compared without its severity digit (`%LINK-3-UPDOWN` is
    `LINK-UPDOWN`), or the Junos tag (`SNMP_TRAP_LINK_DOWN`). RFC 3164 and
    RFC 5424 headers, sequence numbers and timestamps before the tag are
-   skipped. Plexus also reads the message's *program*: the RFC 5424
+   skipped. Vendors without such a tag get one from their own format:
+
+   | Vendor | Tag | Example | Text the built-in patterns test |
+   |---|---|---|---|
+   | Fortinet FortiOS (key=value) | `FGT-<logid>` | `FGT-0100032002` | The `msg` value (else the line from `logid=` on); the tag shown is the `logdesc` |
+   | Palo Alto PAN-OS SYSTEM log (default CSV format) | `PAN-SYSTEM-<EVENT ID>` | `PAN-SYSTEM-AUTH-FAIL` | The Description field |
+   | Palo Alto PAN-OS CONFIG log | `PAN-CONFIG` | `PAN-CONFIG` | The line from the Command field on (`commit,ops,Web,Succeeded,...`) |
+   | Palo Alto PAN-OS, other log types | `PAN-<TYPE>` | `PAN-TRAFFIC`, `PAN-THREAT` | The line from the Subtype field on |
+   | HPE Aruba AOS-CX (`Event\|<id>\|<severity>\|...`) | `AOSCX-<event id>` | `AOSCX-404` | The text after the fifth `\|` |
+   | HPE Aruba AOS-Switch / ProCurve (`<event id> <facility>: ...`) | `AOSS-<event id>`, five digits as written | `AOSS-00077` | The text after the facility (the facility is also the program) |
+
+   A custom **Tag** rule takes these tags too. A PAN-OS firewall must send
+   the default log format (a custom format has no fixed field positions).
+   Plexus also reads the message's *program*: the RFC 5424
    APP-NAME or the RFC 3164 `program[pid]:` (`dpinger`, `charon`,
-   `audit`). Messages without a tag, OPNsense's among them, are matched by
-   their program and the text after it.
+   `audit`, `sshd`). Messages without a tag, OPNsense's among them, are
+   matched by their program and the text after it.
 3. **Match**: each enabled rule is checked. A rule that matches names an
    *instance* when it can (the interface or the neighbor in the message).
 4. **Threshold**: a rule with a threshold raises only when that many
@@ -70,17 +83,18 @@ severity; the patterns, threshold and auto-resolve time are fixed.
 
 | Rule (metric) | Raised by | Resolved by | Threshold | Auto-resolve | Severity | Device families |
 |---|---|---|---|---|---|---|
-| Interface flapping (`syslog_link_flap`) | An interface going down: `LINK-3-UPDOWN` and `LINEPROTO-5-UPDOWN` ... `changed state to down`, IOS XR `PKT_INFRA-LINK-3-UPDOWN` / `PKT_INFRA-LINEPROTO-5-UPDOWN`, ASA `411002`, NX-OS `ETHPORT-5-IF_DOWN_LINK_FAILURE` / `IF_DOWN_ERROR_DISABLED` / `IF_DOWN_PORT_CHANNEL_MEMBERS_DOWN`, Junos `SNMP_TRAP_LINK_DOWN` with `ifAdminStatus up` | Time only | 3 within 10 min, per interface | 30 min | warning | Cisco IOS / IOS XE, IOS XR, NX-OS, ASA, Arista EOS, Juniper Junos |
-| OSPF neighbor down (`syslog_ospf_neighbor`) | `OSPF-5-ADJCHG` / `OSPFv3-5-ADJCHG` / IOS XR `ROUTING-OSPF-5-ADJCHG` ... `to DOWN`, NX-OS `OSPF-5-NBRSTATE` ... `to DOWN` and `OSPF-5-ADJCHANGE` ... `went DOWN`, EOS `OSPF-4-OSPF_ADJACENCY_TEARDOWN`, Junos `RPD_OSPF_NBRDOWN` | The same tags ... `to FULL` / `went FULL`, EOS `OSPF_ADJACENCY_ESTABLISHED`, Junos `RPD_OSPF_NBRUP` | Every match, per neighbor | Clear message only | critical | Cisco IOS / IOS XE, IOS XR, NX-OS, Arista EOS, Juniper Junos |
-| BGP neighbor down (`syslog_bgp_neighbor`) | `BGP-5-ADJCHANGE` / IOS XR `ROUTING-BGP-5-ADJCHANGE` `neighbor X Down`, `BGP-5-NBR_RESET`, EOS `BGP-5-ADJCHANGE` `old state Established ... new state` other than Established, Junos `RPD_BGP_NEIGHBOR_STATE_CHANGED` `from Established to` another state | `neighbor X Up`, EOS `new state Established`, Junos `to Established` | Every match, per neighbor | Clear message only | critical | Cisco IOS / IOS XE, IOS XR, NX-OS, Arista EOS, Juniper Junos |
-| Power supply fault (`syslog_power_supply`) | IOS XE `IOSXE_PEM-3-PEMFAIL`, Catalyst 9000 `PLATFORM_FEP-1-FRU_PS_SIGNAL_FAULTY`, NX-OS `PLATFORM-2-PS_FAIL`, Junos `CHASSISD_SNMP_TRAP*` `Power Supply failed` | `IOSXE_PEM-6-PEMOK`, `PLATFORM_FEP-6-FRU_PS_SIGNAL_OK`, `PLATFORM-2-PS_OK`, Junos `Power Supply OK` | Every match, per power supply | 24 h | critical | Cisco IOS XE (ASR 1000, ISR 4000, Catalyst 9000), NX-OS, Juniper Junos |
-| Fan fault (`syslog_fan`) | IOS XE `IOSXE_PEM-3-FANFAIL`, NX-OS `PLATFORM-2-FANMOD_FAN_FAIL`, Junos `CHASSISD_SNMP_TRAP*` `Fan/Blower failed` | `IOSXE_PEM-6-FANOK`, `PLATFORM-2-FANMOD_FAN_OK`, Junos `Fan/Blower OK` | Every match, per fan | 24 h | warning | Cisco IOS XE (ASR 1000, ISR 4000), NX-OS, Juniper Junos |
-| Repeated login failures (`syslog_auth_failure`) | `SEC_LOGIN-4-LOGIN_FAILED`, IOS XR `SECURITY-LOGIN-4-AUTHEN_FAILED`, NX-OS `AUTHPRIV-3-SYSTEM_MSG` with `Authentication failed`, ASA `113005`, `113015`, `605004`, `611102`, Junos `SSHD_LOGIN_FAILED`, `LOGIN_FAILED`, OPNsense program `audit` `user ... could not authenticate for ...` (web GUI, and SSH through the firewall's authentication) | Time only | 5 within 5 min, per device (from any source) | 30 min | warning | Cisco IOS / IOS XE, IOS XR, NX-OS, ASA, Juniper Junos, OPNsense |
+| Interface flapping (`syslog_link_flap`) | An interface going down: `LINK-3-UPDOWN` and `LINEPROTO-5-UPDOWN` ... `changed state to down`, IOS XR `PKT_INFRA-LINK-3-UPDOWN` / `PKT_INFRA-LINEPROTO-5-UPDOWN`, ASA `411002`, NX-OS `ETHPORT-5-IF_DOWN_LINK_FAILURE` / `IF_DOWN_ERROR_DISABLED` / `IF_DOWN_PORT_CHANNEL_MEMBERS_DOWN`, Junos `SNMP_TRAP_LINK_DOWN` with `ifAdminStatus up`, FortiOS `FGT-0100020099` (Interface status changed) `Interface <name> was turned down`, PAN-OS `link-change` `<port>: Down ...`, AOS-CX `AOSCX-404` `Link status for interface <name> is down`, AOS-Switch `AOSS-00077` `port <name> is now off-line` | Time only | 3 within 10 min, per interface | 30 min | warning | Cisco IOS / IOS XE, IOS XR, NX-OS, ASA, Arista EOS, Juniper Junos, Fortinet FortiOS, Palo Alto PAN-OS, HPE Aruba AOS-CX, AOS-Switch |
+| OSPF neighbor down (`syslog_ospf_neighbor`) | `OSPF-5-ADJCHG` / `OSPFv3-5-ADJCHG` / IOS XR `ROUTING-OSPF-5-ADJCHG` ... `to DOWN`, NX-OS `OSPF-5-NBRSTATE` ... `to DOWN` and `OSPF-5-ADJCHANGE` ... `went DOWN`, EOS `OSPF-4-OSPF_ADJACENCY_TEARDOWN`, Junos `RPD_OSPF_NBRDOWN`, FortiOS `FGT-0103020302` (OSPF neighbor status changed) `ADJCHANGE: neighbor <if:local-remote> Down`, PAN-OS `routed-OSPF-neighbor-down` (one alert per firewall: the message names no neighbor) | The same tags ... `to FULL` / `went FULL`, EOS `OSPF_ADJACENCY_ESTABLISHED`, Junos `RPD_OSPF_NBRUP`, FortiOS `... neighbor <if:local-remote> Up`, PAN-OS `routed-OSPF-neighbor-full` | Every match, per neighbor | Clear message only | critical | Cisco IOS / IOS XE, IOS XR, NX-OS, Arista EOS, Juniper Junos, Fortinet FortiOS, Palo Alto PAN-OS |
+| BGP neighbor down (`syslog_bgp_neighbor`) | `BGP-5-ADJCHANGE` / IOS XR `ROUTING-BGP-5-ADJCHANGE` / FortiOS `FGT-0103020300` (BGP neighbor status changed) `neighbor X Down`, `BGP-5-NBR_RESET`, EOS `BGP-5-ADJCHANGE` `old state Established ... new state` other than Established, Junos `RPD_BGP_NEIGHBOR_STATE_CHANGED` `from Established to` another state, PAN-OS `routed-BGP-peer-left-established` | `neighbor X Up`, EOS `new state Established`, Junos `to Established`, PAN-OS `routed-BGP-peer-enter-established` | Every match, per neighbor | Clear message only | critical | Cisco IOS / IOS XE, IOS XR, NX-OS, Arista EOS, Juniper Junos, Fortinet FortiOS, Palo Alto PAN-OS |
+| Power supply fault (`syslog_power_supply`) | IOS XE `IOSXE_PEM-3-PEMFAIL`, Catalyst 9000 `PLATFORM_FEP-1-FRU_PS_SIGNAL_FAULTY`, Catalyst 3750-X / 3560-X `PLATFORM_ENV-1-FRU_PS_SIGNAL_FAULTY`, NX-OS `PLATFORM-2-PS_FAIL`, EOS `PWRMGMT-3-PSU_STATUS_FAILED` and `PWRMGMT-4-INPUT_POWER_LOSS`, Junos `CHASSISD_SNMP_TRAP*` `Power Supply failed`, FortiOS `FGT-0100022105` (Power supply failed), PAN-OS `ps-failure` `Alarm on Power Supply #<n>`, AOS-CX `AOSCX-304` `PSU <name> faulted` | `IOSXE_PEM-6-PEMOK`, `PLATFORM_FEP-6-FRU_PS_SIGNAL_OK`, `PLATFORM-2-PS_OK`, EOS `PWRMGMT-3-PSU_STATUS_OK`, Junos `Power Supply OK`, FortiOS `FGT-0100022104` (Power supply restored); PAN-OS and AOS-CX by time only | Every match, per power supply (FortiOS and 3750-X: per device) | 24 h | critical | Cisco IOS XE (ASR 1000, ISR 4000, Catalyst 9000), Catalyst 3750-X / 3560-X, NX-OS, Arista EOS, Juniper Junos, Fortinet FortiOS, Palo Alto PAN-OS, HPE Aruba AOS-CX |
+| Fan fault (`syslog_fan`) | IOS XE `IOSXE_PEM-3-FANFAIL`, Catalyst 2960 / 3560 / 3750 `HARDWARE-2-FAN_ERROR`, Catalyst 3750-X / 3560-X `PLATFORM_ENV-1-FAN` and `PLATFORM_ENV-1-FRU_PS_FAN_FAILED`, ISR G2 `ENVMON-3-FAN_FAIL` (older ISRs `FAN_FAILED`), NX-OS `PLATFORM-2-FANMOD_FAN_FAIL`, EOS `ENVMON-3-FANFAILED`, Junos `CHASSISD_SNMP_TRAP*` `Fan/Blower failed`, PAN-OS `fan-failure` `Alarm on Fan Tray #<n>` | `IOSXE_PEM-6-FANOK`, ISR G2 `ENVMON-3-FAN_OK`, `PLATFORM-2-FANMOD_FAN_OK`, EOS `ENVMON-3-FANOK`, Junos `Fan/Blower OK`; the classic Catalyst and PAN-OS forms by time only | Every match, per fan | 24 h | warning | Cisco IOS XE (ASR 1000, ISR 4000), Catalyst 2960 / 3560 / 3750 (classic IOS), ISR G2, NX-OS, Arista EOS, Juniper Junos, Palo Alto PAN-OS |
+| Repeated login failures (`syslog_auth_failure`) | `SEC_LOGIN-4-LOGIN_FAILED`, IOS XR `SECURITY-LOGIN-4-AUTHEN_FAILED`, NX-OS `AUTHPRIV-3-SYSTEM_MSG` with `Authentication failed`, ASA `113005`, `113015`, `605004`, `611102`, Junos `SSHD_LOGIN_FAILED`, `LOGIN_FAILED`, program `sshd` `Failed password for ...` / `Failed keyboard-interactive/pam for ...` (Arista EOS and other OpenSSH hosts), OPNsense program `audit` `user ... could not authenticate for ...` (web GUI, and SSH through the firewall's authentication), FortiOS `FGT-0100032002` (Admin login failed), PAN-OS `auth-fail` (not the ones about the authentication server: `Time clock does not match ...`, `Wrong realm ...`, `Server certificate: ...`, `KDC Spoofing ...`), AOS-CX `AOSCX-5210` and `AOSCX-5216` (SSH login failed), AOS-Switch `AOSS-00419` (invalid user name / password) and `AOSS-03345` (SSH login failed) | Time only | 5 within 5 min, per device (from any source) | 30 min | warning | Cisco IOS / IOS XE, IOS XR, NX-OS, ASA, Arista EOS, Juniper Junos, OPNsense, Fortinet FortiOS, Palo Alto PAN-OS, HPE Aruba AOS-CX, AOS-Switch |
 
 A single interface down is not an alert: access ports go down all day. An
 interface an operator shut down (`LINK-5-CHANGED ... administratively
 down`, NX-OS `IF_DOWN_ADMIN_DOWN`, Junos `ifAdminStatus down`) is not
-counted. OSPF and BGP neighbor alerts are critical because a lost
+counted (except on AOS-Switch, whose disabled ports also log `port ... is
+now off-line`). OSPF and BGP neighbor alerts are critical because a lost
 adjacency changes where traffic goes; they stay open until the neighbor
 is back (or someone acknowledges the alert), since a time-out would hide
 a neighbor that is still down.
@@ -166,8 +180,12 @@ to 168, needs **monitoring**) returns `scanned`, `truncated`, `matched`,
 `unmatched`, `unknown_source`, `rules` (`key`, `raised`, `cleared`,
 `hosts`, `last_at`), `triggers`, `unmatched_tags` (`tag`, `raw_tag`,
 `program`, `count`, `hosts`, `device_types`, `last_at`, `sample`,
-`related`, `known_tag`) and `unknown_sources` (`source_ip`, `count`,
-`last_at`).
+`related`, `known_tag`), `unknown_sources` (`source_ip`, `count`,
+`last_at`), `transports` (the scanned messages of inventory hosts per
+transport: `{"udp": n, "tcp": n, "tls": n}`), `udp_hosts` (how many
+inventory hosts sent at least one message over UDP in the window) and
+`udp_actions` (the **Act on UDP messages** switch, see
+[Transports](#transports)).
 
 ## Configuration change trigger
 
@@ -180,6 +198,9 @@ These messages start a backup and drift check of the host:
 | Cisco IOS XR | `MGBL-CONFIG-6-DB_COMMIT` |
 | Cisco ASA | `111008` (a configuration command); `111010` except `show`, `ping`, `traceroute`, `more` and `dir` |
 | Juniper Junos | `UI_COMMIT_COMPLETED` |
+| Fortinet FortiOS | `FGT-0100044544` (Path configured), `FGT-0100044545` (Object configured), `FGT-0100044546` (Attribute configured), `FGT-0100044547` (Object attribute configured): FortiOS applies each change at once. `44548` (Action performed, an `execute` command) is no change |
+| Palo Alto PAN-OS | A CONFIG log of a `commit` whose result is `Succeeded`, or the SYSTEM log `Commit job succeeded` that ends the commit job (`PAN-SYSTEM-GENERAL`). Candidate edits (`set`, `edit`, `delete` ...) change nothing until the commit, and a `Submitted` or `Failed` commit is left out |
+| HPE Aruba AOS-CX, AOS-Switch | None yet: the event id of a configuration change was not confirmed against the vendor's reference, see [Known gaps](#known-gaps) |
 
 - **Debounce**: one configuration session logs several messages, so the
   run starts 60 seconds after the host's last configuration message, but
@@ -206,8 +227,8 @@ The configuration change trigger does not depend on monitoring being on.
 | Message | Re-poll after |
 |---|---|
 | An interface going down (every form in the Interface flapping row above, from the first one) | 5 s |
-| Reload: `SYS-5-RELOAD`, ASA `199001`, NX-OS `PLATFORM-2-PFM_SYSTEM_RESET`, Junos `UI_REBOOT_EVENT` | 30 s (the device logs it before it goes down) |
-| Restart: `SYS-5-RESTART`, `SYS-6-BOOTTIME`, ASA `199002`, Junos `SNMPD_TRAP_COLD_START` | 5 s |
+| Reload: `SYS-5-RELOAD`, ASA `199001`, NX-OS `PLATFORM-2-PFM_SYSTEM_RESET`, Junos `UI_REBOOT_EVENT`, FortiOS `FGT-0100032138` (Device rebooted) and `FGT-0100032200` (Device shutdown), AOS-Switch `AOSS-00063` (System went down) | 30 s (the device logs it before it goes down) |
+| Restart: `SYS-5-RESTART`, `SYS-6-BOOTTIME`, ASA `199002`, Junos `SNMPD_TRAP_COLD_START`, FortiOS `FGT-0100032009` (FortiGate started), AOS-Switch `AOSS-00064` (System Booted) | 5 s |
 
 A re-poll is the full monitoring poll of that one host, so its state,
 availability, charts and poll alerts catch up. A host is re-polled at most
@@ -268,12 +289,130 @@ The receiver settings (Settings > Syslog & Traps, admin) have a switch for
 each of the four behaviours: **Raise alerts from syslog rules**, **Back up
 the config on a change message**, **Re-poll on link down or reload** and
 **Re-collect OPNsense on a state change**. Each is on by default; turning
-one off stops that behaviour only, and messages are still stored.
+one off stops that behaviour only, and messages are still stored. A fifth
+switch, **Act on UDP messages**, stops all four for messages that arrived
+over UDP (see [Transports](#transports)).
+
+## Transports
+
+The syslog receiver has three listeners, each turned on and given its
+port under Settings > Syslog & Traps. They can run at the same time, so
+devices can move one by one. Every stored message records how it arrived
+(`transport`: `udp`, `tcp` or `tls`), shown in Monitoring > Events.
+
+| Listener | Default port | What it protects against |
+|---|---|---|
+| **UDP** | 1514 | Nothing on its own: the source address of a datagram can be forged, so anything that can reach the port can send a message "from" an inventory host. The source allowlist and rate limit ([administration.md](administration.md#listener-sources)) bound what a forged message can start |
+| **TCP** (RFC 6587) | 1514 | A forged source address: a TCP connection needs the reply to the address it claims. A host on the path between the device and Plexus can still read and change the messages |
+| **TLS** (RFC 5425) | 6514 | A forged source address, and reading or changing the messages on the way: the connection is encrypted and the device checks Plexus's server certificate |
+| **TLS with client certificates** (mutual TLS) | 6514 | All of the above, and a sender that has no certificate from your device CA: with **Require client certificates** on, only a device holding a certificate the stored client CA signed can connect |
+
+TCP and UDP can use the same port number. The TCP and TLS listeners
+cannot share a port.
+
+- **Framing**: both stream listeners read octet-counted frames
+  (`<length> <message>`, RFC 6587 and RFC 5425) and newline-terminated
+  frames (LF, CRLF or NUL), detected per message, so one connection may
+  mix them. A message longer than 8192 bytes, or a malformed length,
+  closes the connection (counted as an error).
+- **Sources**: the same source allowlist and per-source rate limit as UDP.
+  A connection from an address the allowlist refuses is closed at once
+  (counted in **Dropped (source)**); every message on an open connection
+  counts against the rate limit. With mutual TLS, the certificate proves
+  the device belongs to you, and the connection's source address (which
+  TCP does not let anyone forge) still decides which inventory host a
+  message is from.
+- **Limits**: at most 1024 open connections, 8 per source address; a
+  connection over a limit is closed and counted (**Refused**). The TLS
+  handshake must finish within 10 seconds. There is no idle timeout,
+  because devices keep one connection open and may send nothing for
+  hours; TCP keepalive closes connections whose device went away.
+- **Status**: each listener shows whether it runs and on which port, the
+  messages received, errors (unreadable messages, framing errors and
+  failed TLS handshakes), the last message, the connections open now and
+  the connections refused, since it last started. A TLS listener that is
+  on but cannot start (no certificate) shows why.
+
+### Act on UDP messages
+
+**Act on UDP messages** (on by default) decides whether a message that
+arrived over UDP may raise or resolve an alert, start a configuration
+backup, a re-poll or an OPNsense re-collection. Turned off, UDP messages
+are still received and stored (Monitoring > Events, **Received
+messages**), but nothing acts on them; messages over TCP and TLS act as
+before. The restore at startup then skips UDP messages too. It can only be
+turned off while the TCP or TLS listener is on.
+
+The recommended order:
+
+1. Store or generate a server certificate and turn on the TLS listener
+   (and the TCP listener for devices that cannot send TLS).
+2. Move devices to TCP or TLS, one platform at a time.
+3. Watch the transport counts in **Received messages** (Monitoring >
+   Configure > Syslog Rules): it shows how many messages of inventory
+   hosts arrived over each transport and how many hosts still send UDP.
+4. When no host you rely on sends UDP, turn **Act on UDP messages** off.
+
+### Certificates
+
+The TLS listener needs a server certificate, managed under Settings >
+Syslog & Traps:
+
+- **Generate**: a self-signed certificate (EC P-256) for the names and
+  addresses devices use to reach Plexus (DNS names or IP addresses, up to
+  32), valid 1 to 3650 days (825 by default). Each device must then trust
+  that certificate: import it as a trusted certificate (a trustpoint on
+  Cisco).
+- **Upload**: a certificate from your own CA, in PEM, with any
+  intermediates after it, and its private key (PEM, not encrypted). The
+  key must belong to the certificate, and an expired certificate is
+  refused. Devices that trust your CA need nothing more.
+- **Client CA**: for mutual TLS, the PEM certificate(s) of the CA that
+  signs your devices' client certificates. **Require client certificates**
+  can be turned on only while a client CA is stored, and the CA cannot be
+  removed while it is on.
+
+The private key is encrypted at rest and never shown again, in the
+settings, the API or the audit log. Saving a new certificate or client CA
+restarts the TLS listener: open TLS connections drop and devices
+reconnect. The certificate cannot be removed while the TLS listener is on.
+
+### Device configuration for TCP and TLS
+
+The examples use `192.0.2.10` for Plexus and the default ports.
+
+```text
+! Cisco IOS / IOS XE: TCP
+logging host 192.0.2.10 transport tcp port 1514
+
+! Cisco ASA: TCP, or TLS with "secure"
+logging host inside 192.0.2.10 tcp/1514
+logging host inside 192.0.2.10 tcp/6514 secure
+logging permit-hostdown
+```
+
+- **Cisco ASA**: with TCP syslog, the ASA stops passing new connections
+  when it cannot reach the syslog server (for example while Plexus
+  restarts) unless `logging permit-hostdown` is configured. Configure it.
+- **Cisco IOS XE TLS**: IOS XE sends syslog over TLS through a TLS profile
+  (`logging host ... transport tls`) that names a trustpoint holding the
+  Plexus certificate or its CA. See "Configuring Secure Syslog" in the
+  System Management Configuration Guide of your release. Classic IOS
+  without that feature can send TCP only.
+- **Cisco NX-OS, Arista EOS, Juniper Junos, HPE Aruba, Fortinet FortiOS,
+  Palo Alto PAN-OS**: each can send syslog over TCP or TLS on current
+  releases; set the transport (TCP or TLS / SSL), the port and, for TLS,
+  the trusted CA as the vendor's logging or system management guide for
+  your release describes.
+- **OPNsense**: in the remote logging destination, pick a TCP or TLS
+  transport and the matching port, as the OPNsense logging documentation
+  describes.
 
 ## Device configuration
 
 Send syslog to the Plexus server's address on the syslog receiver's port
-(UDP 1514 unless Settings > Syslog & Traps says otherwise). The examples use
+(UDP 1514 unless Settings > Syslog & Traps says otherwise; for TCP and TLS
+see [Device configuration for TCP and TLS](#device-configuration-for-tcp-and-tls)). The examples use
 `192.0.2.10` for Plexus. Interface and neighbor messages are level 3 to 5,
 login failures level 4 to 6, so send at least `informational` for every
 rule to see its messages.
@@ -301,6 +440,26 @@ set system syslog host 192.0.2.10 any info
 set system syslog host 192.0.2.10 port 1514
 ```
 
+- **Fortinet FortiOS**: under `config log syslogd setting` set `status
+  enable`, `server` to the Plexus address and `port` to the receiver's
+  port, and keep the event log on (`config log eventfilter`, `event
+  enable`, with `system` and `router` events). Keep the default `format`
+  (`default`; `rfc5424` works too); `csv` and `cef` are not read. See
+  Fortinet's "Log settings and targets" in the FortiOS Administration
+  Guide.
+- **Palo Alto PAN-OS**: add a Syslog server profile (Device > Server
+  Profiles > Syslog) with the Plexus address, UDP, the receiver's port and
+  the BSD or IETF format, leave the custom log format empty, and forward
+  the System and Configuration logs to it (Device > Log Settings).
+- **HPE Aruba AOS-CX**: `logging 192.0.2.10 udp 1514 severity info`
+  (add `vrf mgmt` when the switch reaches Plexus through its management
+  port); the AOS-CX Monitoring Guide lists the options of your release.
+- **HPE Aruba AOS-Switch**: `logging 192.0.2.10` sends to UDP 514.
+  Publish that port to the receiver (add `"514:1514/udp"` to the ports in
+  `docker-compose.yml`), or set the port on the switch when your release
+  supports it, as the ArubaOS-Switch Management and Configuration Guide
+  describes.
+
 Send from an address Plexus knows: the host's primary address or one of
 its recorded interface addresses (discovery records them), for example
 with `logging source-interface` on Cisco IOS.
@@ -310,14 +469,43 @@ with `logging source-interface` on Cisco IOS.
 - Only hosts in the inventory are acted on; messages from other addresses
   are stored only (except the OPNsense re-collect trigger, which also
   knows the firewalls of OPNsense sources by their collected addresses).
-- Power supply and fan messages of classic IOS Catalyst switches (2960,
-  3750), ISR G2 routers and Arista EOS are not built in: write a custom
-  rule for the messages your hardware logs.
-- Arista EOS login failures are logged by `sshd` without a tag and are not
-  built in; a custom **Contains** rule (`Failed password`) covers them.
-- Fortinet FortiOS, Palo Alto PAN-OS, HPE Aruba, Netgear and APC send
-  syslog in their own formats; no built-in rule or trigger matches them
-  yet. Custom rules work on them.
+- **Vendor rules not yet seen on a live device**: the Fortinet FortiOS,
+  Palo Alto PAN-OS, HPE Aruba AOS-CX and AOS-Switch forms, and the classic
+  Catalyst, ISR G2 and Arista EOS power supply and fan forms, were written
+  from the vendors' log message references and checked against invented
+  samples only. **Received messages** under Monitoring > Configure >
+  Syslog Rules shows whether your devices' messages match them (a **Tag
+  of** row means a known tag whose text did not match).
+- **Fortinet FortiOS**: no fan rule (no fan failure log id was confirmed),
+  and only the "Link monitor: Interface ... was turned down" form of
+  `FGT-0100020099` counts as a link down. The OSPF clear form (`neighbor
+  ... Up`) is assumed from the BGP form and not confirmed. A power supply
+  alert is one per firewall, since the restore message names no supply in
+  a known form.
+- **Palo Alto PAN-OS**: only the default (CSV) log format is read. OSPF
+  and BGP events are those of the legacy routing engine; the Advanced
+  Routing Engine's event ids are not built in. A failed power supply or
+  fan tray has no recovery event in the reference, so those alerts resolve
+  after 24 hours. No reload or restart message is built in. `auth-fail`
+  is logged for every authentication the firewall rejects, VPN and
+  portal users as well as administrators, so on a busy VPN gateway
+  raise the threshold of **Repeated login failures** or turn the rule
+  off. The `Commit job succeeded` form is taken from a log sample of an
+  old release, not from the reference.
+- **HPE Aruba AOS-CX**: no configuration change, fan, BGP, OSPF, reload or
+  restart message is built in, and the PSU fault (`AOSCX-304`) has no
+  clear message, because their event ids were not confirmed against the
+  AOS-CX Event Log Message Reference. Write a custom **Tag** rule
+  (`AOSCX-<event id>`) for the ones your switches log.
+- **HPE Aruba AOS-Switch**: no configuration change (`logging notify
+  running-config-change`), power supply, fan or routing message is built
+  in, for the same reason. A port disabled in the configuration also logs
+  `port ... is now off-line` and counts as a link down.
+- **Classic Cisco hardware**: the classic Catalyst fan and power supply
+  forms have no recovery message (their alerts resolve after 24 hours),
+  and ISR G2 power supply messages are not built in.
+- **Netgear and APC** send syslog in their own formats; no built-in rule
+  or trigger matches them. Custom rules work on them.
 - API-polled platforms (Cato, AWS, Azure, GCP, Meraki, Cisco FMC,
   Panorama, Appgate) send no syslog to Plexus; their state comes from the
   scheduled collections and, for Meraki, its alert feed
@@ -328,12 +516,21 @@ with `logging source-interface` on Cisco IOS.
   threshold window (at most one hour, the newest 20,000 messages), without
   raising or resolving anything, and a host's configuration-change run
   when its last configuration message is less than 5 minutes old and no
-  backup was taken since. Messages sent while Plexus was down are lost
-  (syslog over UDP is not queued by the device).
+  backup was taken since (only TCP and TLS messages while **Act on UDP
+  messages** is off).
+- Messages sent while Plexus is down or restarting are lost over UDP. Over
+  TCP or TLS a device sees the connection close and connects again, but
+  do not count on it to resend what it logged meanwhile: most devices do
+  not keep those messages. Saving a new TLS certificate also drops the
+  open TLS connections.
 - Syslog over UDP is not authenticated: anything that can reach the
   receiver port can send a message with an inventory host's source
-  address. The rate limits above bound what that can start (one backup
-  per host every 5 minutes, one re-poll per host a minute, 6 OPNsense
-  re-collections per source an hour); restrict the
-  port to your device networks in the firewall
+  address. Move devices to TCP or TLS and turn off **Act on UDP messages**
+  ([Transports](#transports)); until then the rate limits above bound
+  what a forged message can start (one backup per host every 5 minutes,
+  one re-poll per host a minute, 6 OPNsense re-collections per source an
+  hour). Plain TCP stops forged source addresses but not a host on the
+  path between the device and Plexus; TLS stops that too, and mutual TLS
+  also refuses senders without a device certificate. Restrict the ports
+  to your device networks in the firewall
   ([deploy/FIREWALL.md](../deploy/FIREWALL.md)).

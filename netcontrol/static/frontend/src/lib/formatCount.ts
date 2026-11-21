@@ -14,3 +14,8 @@ export function formatCount(value: unknown): string {
   }
   return n.toLocaleString();
 }
+
+/** A count and its noun: 1 -> "1 host", 1200 -> "1,200 hosts". */
+export function countLabel(n: number, one: string, many: string): string {
+  return `${formatCount(n)} ${n === 1 ? one : many}`;
+}

@@ -245,7 +245,7 @@ in the `/api/upgrades/images` block with it. If you raise
 
 The AI access endpoint (`/mcp`, off until enabled in Settings > AI Access) is served through the same nginx `location /` block as the rest of the application: it answers each request with one JSON response, so it needs no extra proxy configuration and no extra port. See [docs/ai-access.md](../docs/ai-access.md).
 
-Additional UDP ports exposed on the app container:
+Additional ports exposed on the app container:
 
 | Host port  | Container port | Purpose                       |
 |------------|----------------|-------------------------------|
@@ -253,6 +253,8 @@ Additional UDP ports exposed on the app container:
 | `6343/udp` | `6343/udp`     | sFlow collector               |
 | `162/udp`  | `10162/udp`    | SNMP trap receiver            |
 | `1514/udp` | `1514/udp`     | Syslog receiver               |
+| `1514/tcp` | `1514/tcp`     | Syslog receiver over TCP      |
+| `6514/tcp` | `6514/tcp`     | Syslog receiver over TLS      |
 
 The app runs as a non-root user, so the syslog and trap receivers listen on
 unprivileged ports (1514 and 10162). They are off until an admin turns them
@@ -261,6 +263,9 @@ devices at host port 162 for traps and 1514 for syslog. For devices that can
 only send syslog to UDP 514, add `"514:1514/udp"` to the `plexus` service's
 `ports` in `docker-compose.yml` (and open 514/udp in the firewall). A port
 changed in Settings needs the matching container port in `docker-compose.yml`.
+Syslog over TCP (1514/tcp) and TLS (6514/tcp) are separate listeners, also
+off until turned on in the same tab; a TCP or TLS sender cannot forge its
+source address (see [docs/syslog-rules.md](../docs/syslog-rules.md#transports)).
 
 ## Step 6: Verify
 
@@ -282,6 +287,8 @@ sudo ufw allow 80/tcp  # HTTP redirect to HTTPS
 sudo ufw allow 2055/udp  # NetFlow from network devices
 sudo ufw allow 162/udp  # SNMP traps (optional)
 sudo ufw allow 1514/udp  # Syslog (optional)
+sudo ufw allow 1514/tcp  # Syslog over TCP (optional)
+sudo ufw allow 6514/tcp  # Syslog over TLS (optional)
 ```
 
 ## Step 8: First Login and Configuration
