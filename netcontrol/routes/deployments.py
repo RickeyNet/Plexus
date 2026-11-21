@@ -47,6 +47,7 @@ from netcontrol.routes.shared import (
     _corr_id,
     _get_session,
     _push_config_to_device,
+    is_owner_or_admin,
     require_credential_access,
     require_owner_or_admin,
     supervise_task,
@@ -1308,6 +1309,8 @@ async def request_deployment_approval(deployment_id: int, request: Request):
     when ops decides post-hoc that a deployment needs four-eyes review
     even though no auto-rule fired."""
     dep = await _require_deployment(request, deployment_id, write=True)
+    # Only the creator (or an admin) puts a plan into the approval queue.
+    await require_owner_or_admin(request, dep.get("created_by"))
     if dep["status"] not in ("planning", "failed"):
         raise HTTPException(status_code=400, detail=f"Cannot request approval in '{dep['status']}' status")
     if dep.get("approval_status") == "pending":
@@ -1475,9 +1478,15 @@ async def get_deployment_job_status(job_id: str, request: Request):
     job = _deployment_jobs.get(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Deployment job not found")
+    # Object-level authorization, as the WebSocket twin (ws_deployment): the
+    # output is device config push/rollback output, so only the deployment's
+    # creator or an admin reads it. Another user's job answers like an
+    # unknown one.
+    dep = await db.get_deployment(job["deployment_id"]) if job.get("deployment_id") else None
+    if not await is_owner_or_admin(request, (dep or {}).get("created_by")):
+        raise HTTPException(status_code=404, detail="Deployment job not found")
     scope = await request_scope(request)
     if scope.restricted:
-        dep = await db.get_deployment(job["deployment_id"]) if job.get("deployment_id") else None
         if not dep or not await _deployment_visible(scope, dep):
             raise HTTPException(status_code=404, detail="Deployment job not found")
     return {

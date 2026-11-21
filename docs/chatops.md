@@ -227,9 +227,15 @@ configuration changes are `chatops` / `bot.update`, `bot.delete`,
   refused when the timestamp is more than five minutes from now, and a
   signature seen before is refused); Webex's `X-Spark-Signature`
   (HMAC-SHA1 of the body); the Teams `Authorization: HMAC` header
-  (HMAC-SHA256 with the base64 security token). Webex and Teams deliveries
-  are also de-duplicated by message id for ten minutes. A failed check
-  answers `401`; a platform with no enabled bot answers `404`.
+  (HMAC-SHA256 with the base64 security token). A failed check answers
+  `401`; a platform with no enabled bot answers `404`.
+- **Replays.** Webex and Teams sign no timestamp header, so Plexus reads the
+  time inside the signed body: Webex `data.created` and the Teams activity
+  `timestamp`. A delivery whose time is missing, unreadable, more than five
+  minutes old or more than one minute ahead of the Plexus clock is refused
+  with `400`, and so is one with no message or activity id. Within that
+  window, a delivery whose id was seen before is answered as a duplicate and
+  not run again.
 - **No session.** The four inbound paths take no cookie and no CSRF token;
   they are rate limited per source IP on the webhook budget and read at most
   64 KiB of body.
@@ -250,6 +256,7 @@ configuration changes are `chatops` / `bot.update`, `bot.delete`,
 |---|---|
 | Slack says `dispatch_failed` or the platform shows `404` | No enabled bot for that platform, or it has no signing secret |
 | `401` in the platform's delivery log | The signing secret or security token in Plexus is not the one the platform uses, the server clock is more than five minutes off (Slack), or a request was replayed |
+| `400` in the Webex or Teams delivery log | The delivery's time is more than five minutes old or over a minute ahead of the Plexus clock (check the server's time sync), or the delivery had no id. A replayed delivery also gets this answer |
 | "Your chat account is not linked" | No mapping for the id shown; add it under User mappings |
 | "not enabled on this bot" | Tick the command under Allowed commands |
 | "needs the ... feature" | Grant the feature to the user's access group |

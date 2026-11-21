@@ -45,7 +45,7 @@ from netcontrol.object_scope import (
     scope_exempt,
     scoped,
 )
-from netcontrol.routes.shared import _audit, _corr_id, _get_session
+from netcontrol.routes.shared import _audit, _corr_id, _get_session, _session_user
 from netcontrol.telemetry import configure_logging, increment_metric, redact_value
 
 router = APIRouter()
@@ -174,8 +174,7 @@ async def create_report(payload: ReportDefinitionCreate, request: Request):
         params = _parse_report_params(payload.parameters_json)
         await _report_scope(request, payload.report_type, params)
         await require_new_row(request, "report_definition", _scope_keys({"parameters_json": params}) or {})
-    user = getattr(request.state, "user", None) or {}
-    owner = user.get("username", "") if isinstance(user, dict) else ""
+    owner = _session_user(request)
     report = await db.create_report_definition(
         name=payload.name,
         report_type=payload.report_type,
@@ -1504,8 +1503,7 @@ async def get_oid_profile(profile_id: int):
 @scoped("refused")
 async def create_oid_profile(payload: OidProfileCreate, request: Request):
     await refuse_scoped(request)
-    user = getattr(request.state, "user", None) or {}
-    owner = user.get("username", "") if isinstance(user, dict) else ""
+    owner = _session_user(request)
     profile = await db.create_custom_oid_profile(
         name=payload.name,
         vendor=payload.vendor,

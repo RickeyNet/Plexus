@@ -10,15 +10,65 @@ import threading
 from collections import defaultdict, deque
 from typing import Any
 
-_SENSITIVE_FIELD_PATTERN = re.compile(
-    r"(password|secret|token|authorization|api[_-]?key)",
+from netcontrol.secret_keys import SECRET_KEY_FRAGMENTS, SECRET_KEY_REGEX, should_mask
+
+_MASK = "***"
+
+# A quoted value is read up to this many characters, so a quote that never
+# closes costs one bounded scan, not one to the end of the line.
+_MAX_QUOTED = 1024
+
+# A secret key name (``netcontrol.secret_keys``), possibly the tail of a
+# longer name (``db_password``) and possibly quoted (JSON), then ``=`` or
+# ``:`` and the value: a quoted string, or one token with an optional
+# scheme (``Authorization: Bearer x``). Nothing may follow the key name
+# before the separator, so ``token_count=5`` and ``credential_id: 7`` stay;
+# a boolean or null value stays too (``has_password: true``).
+_SENSITIVE_ASSIGNMENT_PATTERN = re.compile(
+    rf"(?P<p>{SECRET_KEY_REGEX}s?[\"']?[ \t]*+[=:][ \t]*+)"
+    r"(?!(?:true|false|none|null)\b)"
+    r"(?P<v>(?:(?:bearer|basic|token|digest|negotiate)[ \t]++)?"
+    rf"(?:\"[^\"\n]{{0,{_MAX_QUOTED}}}\"|'[^'\n]{{0,{_MAX_QUOTED}}}'|[\"']?[^\s,;&\"'}}\]]+))",
     re.IGNORECASE,
 )
 
-_SENSITIVE_ASSIGNMENT_PATTERN = re.compile(
-    r"((?:password|secret|token|api[_-]?key)\s*[=:]\s*)([^\s,;]+)",
+# Words that follow "password" or "secret" in a log sentence, not a value.
+_NOT_A_VALUE = (
+    r"(?:is|was|are|be|been|for|of|to|and|or|not|no|in|on|at|by|with|from|the|a|an|if|as|"
+    r"reset|change|changed|changes|expired|expires|expiry|incorrect|invalid|wrong|required|missing|provided|"
+    r"supplied|empty|blank|policy|length|must|has|have|had|set|auth|authentication|login|prompt|failed|"
+    r"failure|mismatch|too|cannot|update|updated|variables?|manager|operator|peer|field|fields|value|hash|"
+    r"stored|rotation|accepted|rejected|ok|error|check|does|did|should|will|ref|reference|id|count|key|keys|"
+    r"store|vault|provider|engine|name|names|type|file|path|level|encryption|encrypted|\*\*\*)"
+)
+# Device configuration style: "password x", "enable secret 5 x".
+_SENSITIVE_WORD_PATTERN = re.compile(
+    r"(?P<p>\b(?:password|passwd|secret)[ \t]++(?:[0-9][ \t]++)?)"
+    rf"(?!{_NOT_A_VALUE}(?![^\s,;]))(?P<v>[^\s,;]+)",
     re.IGNORECASE,
 )
+
+# An HTTP credential after its scheme. The value must look like a token (a
+# digit, a symbol or mixed case) so "basic authentication" still reads.
+_AUTH_SCHEME_PATTERN = re.compile(
+    r"(?P<p>\b(?i:bearer|basic)[ \t]++)"
+    r"(?P<v>(?=[A-Za-z0-9\-._~+/]*?(?:[0-9\-._~+/=]|[a-z][A-Z]))[A-Za-z0-9\-._~+/]++=*+)"
+)
+
+# SNMP communities in configuration text (``netcontrol.mcp.redact`` has the
+# full set of device configuration rules).
+_COMMUNITY_PATTERN = re.compile(r"(?P<p>\bsnmp(?:-server)?[ \t]++community[ \t]++)(?P<v>[^\s,;]+)", re.IGNORECASE)
+
+_STRING_PATTERNS = (
+    _SENSITIVE_ASSIGNMENT_PATTERN,
+    _SENSITIVE_WORD_PATTERN,
+    _AUTH_SCHEME_PATTERN,
+    _COMMUNITY_PATTERN,
+)
+# A %-style placeholder of a log format string.
+_PLACEHOLDER = re.compile(r"%(?:\(\w+\))?[-#0 +]*\d*(?:\.\d+)?[sdrfixXoeEgGca%]")
+# A string holding none of these has nothing the patterns could match.
+_TRIGGERS = (*SECRET_KEY_FRAGMENTS, "api", "priv", "auth", "routing", "bearer", "basic", "snmp")
 
 _METRICS_LOCK = threading.Lock()
 _COUNTERS: dict[str, int] = defaultdict(int)
@@ -66,25 +116,55 @@ class RedactingFilter(logging.Filter):
     """Filter that strips obvious secrets from log messages and args."""
 
     def filter(self, record: logging.LogRecord) -> bool:
-        record.msg = redact_value(record.msg)
         if record.args:
             if isinstance(record.args, dict):
                 record.args = {k: redact_value(v) for k, v in record.args.items()}
             else:
                 record.args = tuple(redact_value(a) for a in record.args)
+            if isinstance(record.msg, str):
+                # Then the formatted message, so a secret split between the
+                # format string and its argument ("password=%s") is seen.
+                try:
+                    message = record.getMessage()
+                except Exception:  # noqa: BLE001 - a bad format string is logging's to report
+                    message = None
+                if message is not None:
+                    record.msg = redact_value(message)
+                    record.args = None
+                    return True
+        record.msg = redact_value(record.msg)
         return True
 
 
+def _mask_match(match: re.Match[str]) -> str:
+    value = match.group("v")
+    if _PLACEHOLDER.fullmatch(value.strip("\"'")):
+        # A log format string ("password=%s"): the argument is redacted on
+        # its own, and masking the placeholder would break the formatting.
+        return match.group(0)
+    quote = value[:1]
+    quoted = len(value) >= 2 and quote in "\"'" and value.endswith(quote)
+    return match.group("p") + (f"{quote}{_MASK}{quote}" if quoted else _MASK)
+
+
 def _redact_string(value: str) -> str:
-    return _SENSITIVE_ASSIGNMENT_PATTERN.sub(r"\1***", value)
+    lowered = value.lower()
+    if not any(trigger in lowered for trigger in _TRIGGERS):
+        return value
+    for pattern in _STRING_PATTERNS:
+        value = pattern.sub(_mask_match, value)
+    return value
 
 
 def redact_value(value: Any) -> Any:
+    """A copy of ``value`` with the secrets masked: under a secret key name
+    (``netcontrol.secret_keys``) the value is replaced whole, other strings
+    lose the secret assignments, credentials and communities they hold."""
     if isinstance(value, dict):
         redacted: dict[str, Any] = {}
         for key, val in value.items():
-            if _SENSITIVE_FIELD_PATTERN.search(str(key)):
-                redacted[key] = "***"
+            if should_mask(key, val):
+                redacted[key] = _MASK
             else:
                 redacted[key] = redact_value(val)
         return redacted
@@ -147,6 +227,12 @@ def _build_syslog_handler(config: dict[str, Any]) -> logging.Handler:
     app_name = str(config.get("app_name", "plexus")).strip() or "plexus"
     app_name = "".join(ch for ch in app_name if ch.isalnum() or ch in "._-") or "plexus"
 
+    # The outbound address guard on the admin-set host (raises when refused,
+    # so ``configure_syslog_logging`` answers False). Imported here because
+    # net_guard imports this module for its logger.
+    from netcontrol.routes.net_guard import validate_outbound_host
+
+    validate_outbound_host(host)
     handler = logging.handlers.SysLogHandler(
         address=(host, port),
         facility=facility,

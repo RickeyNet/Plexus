@@ -32,6 +32,7 @@ from netcontrol.routes.shared import (
     _corr_id,
     _get_session,
     _push_config_to_device,
+    is_owner_or_admin,
     require_credential_access,
     supervise_task,
     verify_ws_session,
@@ -1046,9 +1047,14 @@ async def capture_config_single_job(body: ConfigSnapshotCaptureRequest, request:
 @scoped("job")
 async def get_capture_job(job_id: str, request: Request):
     """Return status and output for a config capture job (not found for a
-    caller who may not read every host it captures)."""
+    caller who may not read every host it captures, or who is neither its
+    launcher nor an admin, as the WebSocket twin)."""
     job = _capture_jobs.get(job_id)
-    if not job or not _job_visible(await request_scope(request), job):
+    if (
+        not job
+        or not await is_owner_or_admin(request, job.get("launched_by"))
+        or not _job_visible(await request_scope(request), job)
+    ):
         raise HTTPException(status_code=404, detail="Capture job not found")
     return {
         "job_id": job["job_id"],

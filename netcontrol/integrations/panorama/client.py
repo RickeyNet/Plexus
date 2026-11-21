@@ -39,7 +39,7 @@ from typing import Any
 
 import httpx
 
-from netcontrol.integrations.http_common import validate_https_host
+from netcontrol.integrations.http_common import guard_api_host, validate_https_host
 from netcontrol.integrations.safe_xml import DoctypeRefused, parse_xml
 
 DEFAULT_TIMEOUT_SECONDS = 60.0
@@ -238,8 +238,9 @@ class PanoramaClient:
     async def __aexit__(self, *_exc: object) -> None:
         await self.close()
 
-    def _ensure_client(self) -> httpx.AsyncClient:
+    async def _ensure_client(self) -> httpx.AsyncClient:
         if self._client is None:
+            await guard_api_host(self.base_url, "Panorama", PanoramaApiError)
             # Redirects are never followed: the key must only ever reach the
             # validated Panorama host.
             self._client = httpx.AsyncClient(
@@ -264,7 +265,7 @@ class PanoramaClient:
         await self._wait_for_slot()
         self.stats["requests"] += 1
         try:
-            resp = await self._ensure_client().post(
+            resp = await (await self._ensure_client()).post(
                 API_PATH,
                 data={"type": "keygen", "user": self._username, "password": self._password},
                 headers={"User-Agent": USER_AGENT},
@@ -310,7 +311,7 @@ class PanoramaClient:
     async def _send(self, params: dict[str, str]) -> httpx.Response | None:
         self.stats["requests"] += 1
         try:
-            return await self._ensure_client().get(
+            return await (await self._ensure_client()).get(
                 API_PATH,
                 params=params,
                 headers={"X-PAN-KEY": self._key, "User-Agent": USER_AGENT},

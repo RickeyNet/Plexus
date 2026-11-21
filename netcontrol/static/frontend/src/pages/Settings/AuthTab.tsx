@@ -959,6 +959,12 @@ export function SamlPanel({ draft, setDraft, groups }: PanelProps) {
           ))}
         </FormRow>
       )}
+      {sp.data?.configured === false && o.enabled && (
+        <Callout tone="warning">
+          The SP entity ID and ACS URL are not saved yet, so SAML sign-in is off. Save these settings to store
+          the values shown above.
+        </Callout>
+      )}
       <FormRow>
         <TextField
           label="IdP Metadata URL"
@@ -1071,18 +1077,18 @@ export function SamlPanel({ draft, setDraft, groups }: PanelProps) {
       <SsoRoleFields value={o} onChange={setO} groupNoun="groups attribute value" />
       <FormRow>
         <TextField
-          label="SP Entity ID Override (optional)"
+          label="SP Entity ID"
           value={o.sp_entity_id}
           onChange={(v) => setO({ sp_entity_id: v })}
           flex="1 1 240px"
-          help="Blank uses the metadata URL."
+          help="Blank stores the metadata URL on the address you are using now."
         />
         <TextField
-          label="ACS URL Override (optional)"
+          label="ACS URL"
           value={o.acs_url}
           onChange={(v) => setO({ acs_url: v })}
           flex="1 1 240px"
-          help="Blank derives it from the request."
+          help="Blank stores the ACS path on the address you are using now."
         />
         <TextField
           label="CA Certificate File (optional)"

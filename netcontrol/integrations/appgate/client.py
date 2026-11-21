@@ -38,7 +38,7 @@ from typing import Any
 
 import httpx
 
-from netcontrol.integrations.http_common import RequestPacer, retry_delay, validate_https_host
+from netcontrol.integrations.http_common import RequestPacer, guard_api_host, retry_delay, validate_https_host
 
 DEFAULT_TIMEOUT_SECONDS = 60.0
 # The admin API is served by the Controllers that also run the collective;
@@ -186,8 +186,11 @@ class AppgateClient:
     async def __aexit__(self, *_exc: object) -> None:
         await self.close()
 
-    def _ensure_client(self) -> httpx.AsyncClient:
+    async def _ensure_client(self) -> httpx.AsyncClient:
         if self._client is None:
+            await guard_api_host(
+                self.base_url, "Appgate Controller", lambda message: AppgateApiError(message, transport=True)
+            )
             # Redirects are never followed: the password and the token must
             # only ever reach the validated Controller.
             self._client = httpx.AsyncClient(
@@ -207,7 +210,7 @@ class AppgateClient:
             headers["Authorization"] = f"Bearer {self._token}"
         self.stats["requests"] += 1
         try:
-            return await self._ensure_client().request(method, path, params=params, json=body, headers=headers)
+            return await (await self._ensure_client()).request(method, path, params=params, json=body, headers=headers)
         except httpx.HTTPError:
             return None
 

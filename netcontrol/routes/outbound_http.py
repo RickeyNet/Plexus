@@ -23,9 +23,9 @@ from urllib.parse import urlsplit
 
 import httpx
 
-from netcontrol.routes.net_guard import IPAddress, OutboundRequestError, validate_outbound_url
+from netcontrol.routes.net_guard import IPAddress, OutboundRequestError, validate_outbound_host, validate_outbound_url
 
-__all__ = ["OutboundRequestError", "PinnedTransport", "guard_url", "send_request", "tls_verify"]
+__all__ = ["OutboundRequestError", "PinnedTransport", "guard_host", "guard_url", "send_request", "tls_verify"]
 
 
 async def guard_url(url: str) -> list[IPAddress]:
@@ -34,6 +34,12 @@ async def guard_url(url: str) -> list[IPAddress]:
 
     Runs in a thread because the check resolves the host name."""
     return await asyncio.to_thread(validate_outbound_url, url)
+
+
+async def guard_host(host: str) -> list[IPAddress]:
+    """``guard_url`` for a bare host name or address (an SMTP, syslog or
+    directory server). Raises ``OutboundRequestError`` when it is refused."""
+    return await asyncio.to_thread(validate_outbound_host, host)
 
 
 def tls_verify(verify: bool = True, ca_pem: str = "") -> Any:

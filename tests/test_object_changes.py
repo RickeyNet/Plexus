@@ -161,6 +161,44 @@ async def test_recorder_masks_secret_looking_keys():
     assert "k-old" not in json.dumps(row) and "k-new" not in json.dumps(row)
 
 
+async def test_recorder_masks_secrets_but_keeps_references_readable():
+    # A community, a PSK or a routing key is masked; a field that only
+    # references a credential (an id, a count, a flag) stays readable.
+    after = {
+        "id": 8,
+        "name": "green",
+        "snmp_community": "c0mmVal",
+        "tunnel_psk": "pskVal",
+        "routing_key": "rkVal",
+        "credential_id": 12,
+        "token_count": 3,
+        "has_password": True,
+    }
+    await oc.on_object_change(
+        {
+            "event": "vrf.update",
+            "object_type": "vrf",
+            "action": "update",
+            "object_id": "8",
+            "timestamp": "2026-01-02T03:04:05Z",
+            "user": "alice",
+            "correlation_id": "",
+            "before": {"id": 8, "name": "green", "credential_id": 11},
+            "after": after,
+            "changes": {
+                "credential_id": {"before": 11, "after": 12},
+                "tunnel_psk": {"before": None, "after": "pskVal"},
+            },
+        }
+    )
+    rows, _total = await db.list_object_changes(object_types=["vrf"], object_id="8")
+    text = json.dumps(rows[0])
+    assert "c0mmVal" not in text and "pskVal" not in text and "rkVal" not in text
+    assert rows[0]["after"]["credential_id"] == 12 and rows[0]["after"]["token_count"] == 3
+    assert rows[0]["after"]["has_password"] is True
+    assert rows[0]["changes"]["credential_id"] == {"before": 11, "after": 12}
+
+
 # ── Access: features per type, object scope ──────────────────────────────────
 
 

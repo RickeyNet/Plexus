@@ -216,20 +216,37 @@ async def verify_ws_session(token: str) -> dict | None:
     # rotate their password may not open device-output streams first.
     if user.get("must_change_password"):
         return None
-    # Session revocation check (mirrors require_auth).
-    if int(session.get("session_epoch") or 0) != int(user.get("session_epoch") or 0):
+    if session_rejection(session, user) is not None:
         return None
+    return session
+
+
+def session_rejection(session: dict, user: dict | None) -> str | None:
+    """Why ``require_auth`` would refuse a validly signed ``session`` whose
+    user record is ``user``, or ``None`` when it would accept it.
+
+    Reasons: ``"user_missing"`` (deleted account), ``"revoked"`` (the
+    user's session epoch moved on: password change, admin reset, privilege
+    change, rename, sign-out), ``"expired"`` (24h absolute cap) and
+    ``"idle"`` (idle timeout). Kiosk accounts (``session_never_expires``)
+    skip the two time checks. The forced password change is not a reason
+    here: each caller decides what that user may still reach.
+    """
+    if not user:
+        return "user_missing"
+    if int(session.get("session_epoch") or 0) != int(user.get("session_epoch") or 0):
+        return "revoked"
     if bool(user.get("session_never_expires")):
-        return session
+        return None
     now = int(time.time())
     originally_issued = int(session.get("originally_issued_at") or 0)
     if originally_issued > 0 and now - originally_issued > _WS_SESSION_MAX_AGE:
-        return None
+        return "expired"
     idle_timeout = int(state.LOGIN_RULES.get("session_idle_timeout", 1800))
     last_activity = int(session.get("last_activity") or 0)
     if idle_timeout > 0 and last_activity > 0 and now - last_activity > idle_timeout:
-        return None
-    return session
+        return "idle"
+    return None
 
 
 # ── Object-level authorization (ownership) ───────────────────────────────────
@@ -259,6 +276,16 @@ async def require_owner_or_admin(request, owner_username: str | None) -> dict | 
     if await caller_is_admin(request):
         return session
     raise HTTPException(status_code=403, detail="You do not have access to this resource")
+
+
+async def is_owner_or_admin(request, owner_username: str | None) -> bool:
+    """``require_owner_or_admin`` as a test: for a route that answers another
+    user's object like an unknown one (404) instead of 403."""
+    try:
+        await require_owner_or_admin(request, owner_username)
+    except HTTPException:
+        return False
+    return True
 
 
 async def caller_is_admin(request) -> bool:

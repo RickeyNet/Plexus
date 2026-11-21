@@ -45,7 +45,12 @@ The map shows the most recent collection until you run another.
   `/admin`; a trailing `/admin` you type is dropped. Only `https` is
   accepted, no path or query, and redirects are never followed, so the
   password cannot be sent elsewhere. Turn off **Verify TLS** for a
-  Controller with a self-signed certificate.
+  Controller with a self-signed certificate. The address passes the
+  [outbound address check](webhooks.md#outbound-address-check) when saved
+  and when a collection connects: a cloud metadata address and a name that
+  does not resolve are refused, private addresses too when
+  `APP_SSRF_BLOCK_PRIVATE=true` (list the Controller in `APP_SSRF_ALLOW`).
+  A refusal fails the collection like a Controller that cannot be reached.
 - **Identity provider**: the identity provider the admin user signs in
   with (`local` by default, the built-in local database).
 - **Username** and **Password**: an admin user whose admin role can read

@@ -273,3 +273,155 @@ async def test_auth_status_marks_kiosk_user(monkeypatch):
 
     assert result["authenticated"] is True
     assert result["session_never_expires"] is True
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 7. Deleted users, revoked and over-age sessions (require_auth and status)
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+def _make_token(user_id: int, *, epoch: int = 0, issued_age: int = 0, idle_age: int = 0) -> str:
+    now = int(time.time())
+    return app_module._serializer.dumps(
+        {
+            "user": "frank",
+            "user_id": user_id,
+            "session_epoch": epoch,
+            "originally_issued_at": now - issued_age,
+            "last_activity": now - idle_age,
+        }
+    )
+
+
+def _user_row(uid: int, **over) -> dict:
+    row = {
+        "id": uid,
+        "username": "frank",
+        "role": "user",
+        "display_name": "",
+        "must_change_password": 0,
+        "session_never_expires": 0,
+        "session_epoch": 0,
+    }
+    row.update(over)
+    return row
+
+
+def _deletes_session_cookie(resp: Response) -> bool:
+    return any(
+        k.decode().lower() == "set-cookie" and v.startswith(b"session=") and b"Max-Age=0" in v
+        for k, v in resp.raw_headers
+    )
+
+
+@pytest.mark.asyncio
+async def test_require_auth_rejects_a_deleted_user(monkeypatch):
+    monkeypatch.setattr(app_module, "APP_API_TOKEN", "")
+
+    async def no_user(uid):
+        return None
+
+    monkeypatch.setattr(app_module.db, "get_user_by_id", no_user)
+    req = DummyRequest(cookies={"session": _make_token(21)}, path="/api/help-docs")
+    resp = Response()
+    with pytest.raises(HTTPException) as exc:
+        await app_module.require_auth(cast(Request, req), response=resp)
+    assert exc.value.status_code == 401
+    assert exc.value.detail == "Session user not found"
+    assert _deletes_session_cookie(resp)
+
+
+@pytest.mark.asyncio
+async def test_require_auth_api_token_needs_no_user_row(monkeypatch):
+    monkeypatch.setattr(app_module, "APP_API_TOKEN", "server-token-0001")
+
+    async def no_user(uid):
+        raise AssertionError("the API token has no user row to look up")
+
+    monkeypatch.setattr(app_module.db, "get_user_by_id", no_user)
+    req = DummyRequest(path="/api/help-docs")
+    req.headers = {"x-api-token": "server-token-0001"}
+    session = await app_module.require_auth(cast(Request, req), response=Response())
+    assert session["auth_mode"] == "token"
+
+
+@pytest.mark.parametrize(
+    ("row", "token_kwargs"),
+    [
+        (None, {}),  # deleted user
+        ({"session_epoch": 3}, {"epoch": 2}),  # revoked (password change, sign-out, rename)
+        ({}, {"issued_age": app_module.SESSION_MAX_AGE + 60}),  # past the 24h cap
+    ],
+)
+@pytest.mark.asyncio
+async def test_auth_status_refuses_tokens_require_auth_refuses(monkeypatch, row, token_kwargs):
+    monkeypatch.setattr(app_module, "APP_API_TOKEN", "")
+    monkeypatch.setitem(state.LOGIN_RULES, "session_idle_timeout", 1800)
+
+    async def fake_get_user_by_id(uid):
+        return None if row is None else _user_row(uid, **row)
+
+    monkeypatch.setattr(auth_module.db, "get_user_by_id", fake_get_user_by_id)
+    token = _make_token(22, **token_kwargs)
+
+    with pytest.raises(HTTPException) as exc:
+        await app_module.require_auth(cast(Request, DummyRequest(cookies={"session": token})), response=Response())
+    assert exc.value.status_code == 401
+
+    resp = Response()
+    result = await auth_module.auth_status(cast(Request, DummyRequest(cookies={"session": token})), resp)
+    assert result["authenticated"] is False
+    assert "csrf_token" not in result and "username" not in result
+    assert _deletes_session_cookie(resp)
+
+
+@pytest.mark.asyncio
+async def test_auth_status_keeps_the_forced_password_change_visible(monkeypatch):
+    monkeypatch.setitem(state.LOGIN_RULES, "session_idle_timeout", 1800)
+
+    async def fake_get_user_by_id(uid):
+        return _user_row(uid, must_change_password=1)
+
+    async def fake_get_user_features(user):
+        return []
+
+    monkeypatch.setattr(auth_module.db, "get_user_by_id", fake_get_user_by_id)
+    monkeypatch.setattr(auth_module, "_get_user_features", fake_get_user_features)
+    monkeypatch.setattr(auth_module, "_generate_csrf_token", lambda u: "csrf-stub")
+
+    req = DummyRequest(cookies={"session": _make_token(23)}, path="/api/auth/status")
+    result = await auth_module.auth_status(cast(Request, req), Response())
+    assert result["authenticated"] is True
+    assert result["must_change_password"] is True
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 8. Change-password and profile routes enforce the idle timeout
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+@pytest.mark.asyncio
+async def test_profile_dependency_enforces_idle_timeout(monkeypatch):
+    monkeypatch.setattr(app_module, "APP_API_TOKEN", "")
+    monkeypatch.setitem(state.LOGIN_RULES, "session_idle_timeout", 60)
+    monkeypatch.setattr(auth_module, "_require_auth", app_module.require_auth)
+
+    async def fake_get_user_by_id(uid):
+        return _user_row(uid)
+
+    monkeypatch.setattr(app_module.db, "get_user_by_id", fake_get_user_by_id)
+    recorder = AuditRecorder()
+    with patch.object(app_module.shared, "_audit", recorder.record):
+        req = DummyRequest(cookies={"session": _make_token(24, idle_age=300)}, path="/api/auth/profile")
+        with pytest.raises(HTTPException) as exc:
+            await auth_module._require_auth_dep(cast(Request, req), Response())
+    assert exc.value.status_code == 401
+    assert "idle" in str(exc.value.detail).lower()
+    assert [e["action"] for e in recorder.events] == ["session.idle_timeout"]
+
+    # An active session passes and gets its cookie refreshed.
+    resp = Response()
+    req = DummyRequest(cookies={"session": _make_token(24, idle_age=5)}, path="/api/auth/profile")
+    session = await auth_module._require_auth_dep(cast(Request, req), resp)
+    assert session["user_id"] == 24
+    assert any(k.decode().lower() == "set-cookie" and v.startswith(b"session=") for k, v in resp.raw_headers)

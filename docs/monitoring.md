@@ -320,6 +320,10 @@ Poll**, and the matching IPAM subnet when there is one.
   rollups 365 days; interface traffic and syslog / trap events 30 days;
   interface error events 90 days.
 - **Poll Now** runs even when polling is not enabled.
+- **One manual poll at a time.** While a **Poll Now** from any user (or
+  the admin run-now) runs, another one is refused with "A manual monitoring
+  poll is already running. Try again when it finishes." (`409`). The
+  scheduled cycle is not affected and does not block **Poll Now**.
 - **Known gaps:** the **Cooldown (min)** of a rule and of **Settings >
   Monitoring**, and a rule's **Escalate After** time, are saved but the
   poller does not read them: repeats are folded by the open alert and
@@ -355,7 +359,7 @@ The full list is in [API reference](api-reference.md).
 | `POST /api/monitoring/alerts/{id}/acknowledge`, `POST /api/monitoring/alerts/bulk-acknowledge` | Acknowledge one, or up to 1000 |
 | `GET/POST /api/monitoring/rules`, `PUT/DELETE /api/monitoring/rules/{id}` | Alert rules |
 | `GET/POST /api/monitoring/suppressions`, `DELETE /api/monitoring/suppressions/{id}` | Suppressions |
-| `POST /api/monitoring/poll-now` | Poll every host now |
+| `POST /api/monitoring/poll-now`, `POST /api/monitoring/poll-now/stream` (progress as server-sent events) | Poll every host now; `409` while another manual poll runs |
 | `GET /api/availability/summary?days=`, `/outages`, `/transitions` | Host availability |
 | `GET /api/monitoring/security-events?hours=&severity=&action=&q=&host_id=&limit=&offset=` | Security events (IDS alerts), newest first, with counts |
 | `GET/PUT /api/admin/monitoring` | Polling settings (admin) |

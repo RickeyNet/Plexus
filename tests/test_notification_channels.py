@@ -415,6 +415,39 @@ async def test_email_delivery_calls_smtp(monkeypatch):
     assert "CRITICAL" in sent[0][2]
 
 
+def _email_channel(host: str):
+    return nc.sanitize_channel(
+        {"id": "e", "type": "email", "smtp_host": host, "mail_from": "a@example.com", "mail_to": "b@example.com"}
+    )
+
+
+async def test_email_delivery_refuses_a_guarded_smtp_host(monkeypatch):
+    sent: list = []
+    monkeypatch.setattr(nc, "_send_email_blocking", lambda cfg, msg: sent.append(cfg.id))
+    with pytest.raises(nc.OutboundRequestError, match="SMTP server refused by the outbound address guard"):
+        await nc.deliver(_email_channel("169.254.169.254"), _ALERT)
+    monkeypatch.setenv("APP_SSRF_BLOCK_PRIVATE", "true")
+    with pytest.raises(nc.OutboundRequestError, match="disallowed address"):
+        await nc.deliver(_email_channel("10.0.0.25"), _ALERT)
+    assert sent == []
+
+
+async def test_admin_channel_save_refuses_a_guarded_smtp_host():
+    from fastapi import HTTPException
+    from netcontrol.routes import admin
+
+    good = _email_channel("smtp.example.com")
+    await admin._refuse_guarded_smtp_host(good)
+    bad = _email_channel("169.254.169.254")
+    with pytest.raises(HTTPException) as raised:
+        await admin._refuse_guarded_smtp_host(bad)
+    assert raised.value.status_code == 400 and "outbound address guard" in raised.value.detail
+    # A save that keeps the stored server does not check it again.
+    await admin._refuse_guarded_smtp_host(bad, bad)
+    with pytest.raises(HTTPException):
+        await admin._refuse_guarded_smtp_host(bad, good)
+
+
 # ── Reconcile + test event ───────────────────────────────────────────────────
 
 

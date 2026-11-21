@@ -55,7 +55,11 @@ UI again.
 Accounts hosted on a regional Cato API host are supported through the *API
 URL* field (for example `https://api.us1.catonetworks.com/api/v1/graphql2`).
 Only `https` hosts under `catonetworks.com` are accepted and redirects are
-not followed, so the key cannot be sent elsewhere.
+not followed, so the key cannot be sent elsewhere. The URL also passes the
+[outbound address check](webhooks.md#outbound-address-check) when it is
+saved and when a collection connects: a name that does not resolve from
+the Plexus server is refused (list it in `APP_SSRF_ALLOW` when only a
+proxy resolves it).
 
 ## On the map
 

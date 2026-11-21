@@ -31,7 +31,7 @@ from typing import Any
 
 import httpx
 
-from netcontrol.integrations.http_common import validate_https_host
+from netcontrol.integrations.http_common import guard_api_host, validate_https_host
 
 DEFAULT_TIMEOUT_SECONDS = 60.0
 # FMC's documented limit is 120 requests per minute per user.
@@ -135,8 +135,9 @@ class FmcClient:
     async def __aexit__(self, *_exc: object) -> None:
         await self.close()
 
-    def _ensure_client(self) -> httpx.AsyncClient:
+    async def _ensure_client(self) -> httpx.AsyncClient:
         if self._client is None:
+            await guard_api_host(self.base_url, "FMC", FmcApiError)
             # Redirects are never followed: the credentials must only ever
             # reach the validated FMC host.
             self._client = httpx.AsyncClient(
@@ -163,7 +164,7 @@ class FmcClient:
         await self._wait_for_slot()
         self.stats["requests"] += 1
         try:
-            resp = await self._ensure_client().post(
+            resp = await (await self._ensure_client()).post(
                 TOKEN_PATH,
                 auth=(self._username, self._password),
                 headers={"Accept": "application/json", "User-Agent": "Plexus-FmcTopology/1.0"},
@@ -214,7 +215,7 @@ class FmcClient:
     async def _send(self, path: str, params: dict[str, Any] | None) -> httpx.Response | None:
         self.stats["requests"] += 1
         try:
-            return await self._ensure_client().get(
+            return await (await self._ensure_client()).get(
                 path,
                 params=params,
                 headers={

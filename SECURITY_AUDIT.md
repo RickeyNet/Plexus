@@ -9,8 +9,9 @@
 - **Method:** static code review in six slices (authentication, authorization,
   injection, SSRF and secrets, inbound surfaces, deploy/dependencies/frontend).
   Nothing was exploited against a running instance and the test suite was not run.
-- **Status:** no code was changed by the audit itself. Findings 1 to 30, 40 and 41
-  have since been fixed (see "Fix status"); the rest (31 to 39, 42 to 49) are open.
+- **Status:** no code was changed by the audit itself. Every numbered finding has
+  since been fixed or mitigated (see "Fix status", which also names what each fix
+  left open).
 
 The "Checked" column says whether the finding was re-read in the code a second time
 after the slice reviewer reported it: **yes** (confirmed), **partial** (the mechanism
@@ -39,9 +40,9 @@ collectors.
 
 ## Fix status
 
-Updated 2026-11-20. Fixed means changed in the code with tests (1 to 14, 26, 40 and 41
-are committed; 15 to 25 and 27 to 30 are in the working tree); nothing was re-tested
-against a running deployment. Findings not listed are open.
+Updated 2026-11-20. Fixed means changed in the code with tests (1 to 30, 40 and 41
+are committed; 31 to 39 and 42 to 52 are in the working tree); nothing was re-tested
+against a running deployment. The last column names what a fix left open.
 
 | # | Status | What changed, and what is left |
 |---|---|---|
@@ -75,8 +76,28 @@ against a running deployment. Findings not listed are open.
 | 28 | Fixed | Hash-pinned `requirements-cloud-lock.txt`, `--require-hashes`, pip-audit and SBOM steps, lock check. The image build was not run locally; `pip install --upgrade pip` in the Dockerfile is still unhashed. |
 | 29 | Fixed | Per-username progressive delay (three free failures, then 1 s doubling to 30 s) and a dummy hash for unknown usernames. |
 | 30 | Fixed | External sign-ins use only accounts of their own provider and bound subject; an admin changes an account's provider through the API (audited). |
+| 31 | Fixed | Logout bumps the account's session epoch and writes an audit event. There is no per-session id, so it ends every session of that account. |
+| 32 | Fixed | `require_auth` answers 401 and clears the cookie when the session's user is gone. |
+| 33 | Fixed | `/api/auth/status` uses the same decision as the WebSocket check (`shared.session_rejection`). `require_auth` still carries its own inline copy of the epoch, age and idle checks. |
+| 34 | Fixed | A rename bumps the user's session epoch. |
+| 35 | Fixed | The SP entity ID and ACS URL come from stored settings only; an admin save stores the admin's own address for a blank field. A config saved with blank fields has SAML sign-in off until an admin saves once. The OIDC redirect URI is still derived from the request when it is not configured. |
+| 36 | Fixed | The change-password and profile routes apply the idle timeout. |
+| 37 | Fixed | `/api/dashboard` is filtered per caller by feature, and a non-admin sees their own recent jobs. The `stats` job counts still cover every user's jobs. |
+| 38 | Fixed | Deployment and capture job status answer 404 to anyone but the launcher or an admin; requesting approval needs the creator or an admin. |
+| 39 | Fixed | Owners come from the session (`shared._session_user`) in dashboards, billing, reporting, baseline alerting, CDEFs and graph templates. The other two AUTHZ-13 items (cookie-only handlers refusing the API token, the fail-open `jobs.py` admin hook) are open. |
 | 40 | Fixed | `netcontrol/csv_cells.py` guards report, billing and sweep exports. |
 | 41 | Fixed | Git names that start with `-` are refused. |
+| 42 | Fixed | One manual fleet poll at a time (409). The scheduled cycle does not take the lock, so it can overlap with one manual poll. |
+| 43 | Fixed | Webex and Teams deliveries need an id and a signed time at most 5 minutes old (60 s of skew). |
+| 44 | Mitigated | The server instructions mark device, syslog and config text as untrusted, and a test pins the tool list to read-only tools. The text still reaches the client verbatim. |
+| 45 | Fixed | The FMC, Panorama, Appgate, OPNsense, Cato, Meraki and FDM clients, SMTP, the syslog forwarder and the RADIUS / TACACS+ / LDAP servers pass the guard before connecting and at save; an AWS `endpoint_url` needs an explicit access key and passes the guard. Not pinned (these open their own connections); Meraki same-domain redirect hops are not checked again; provider writes are still open to non-admin `secrets-providers.write` users. |
+| 46 | Fixed | New patterns for `community`, `psk`, `passphrase`, private and routing keys, JSON and quoted forms and `Bearer` / `Basic` headers; the filter redacts the formatted message; one definition of a secret key name (`netcontrol/secret_keys.py`). `meraki/collector.py` keeps its own fragment list. |
+| 47 | Fixed | ECharts is served by Plexus from the locked npm package; the embed CSP allows `'self'` and one script hash. |
+| 48 | Fixed | SQLite sidecars, `auth.json` backups, `*.bak` and migration lock files are excluded. |
+| 49 | Fixed | Unauthenticated callers get `ok` / `status` and the release number only. The unauthenticated health check still runs the database probe and is not rate limited. |
+| 50 | Fixed | No production source maps; the image keeps only the built frontend. |
+| 51 | Fixed | Dockerfile and compose images are pinned by digest, with Dependabot updates and an air-gap override that names them by tag. The `postgres` service image of the CI job is not pinned. The image build was not run locally. |
+| 52 | Fixed | Actions pinned to commits, gitleaks checksummed, release gated on a successful CI run of the same commit. The workflows were parse-checked only; `workflow_dispatch` builds the dispatched ref. |
 
 ## Critical and High
 

@@ -152,6 +152,47 @@ def test_execute_rechecks_the_hosts_groups(env):
     assert dep["status"] == "planning"
 
 
+# ── Object-level checks on approval requests and job status ─────────────────
+
+
+def test_request_approval_is_for_the_creator_or_an_admin(env):
+    owner = env["login"]("lab-deployer")
+    r = _plan(env, owner, cred=env["lab-deployer_cred"], group=env["lab_group"], hosts=[env["lab_host"]])
+    assert r.status_code == 200, r.text
+    dep_id = r.json()["id"]
+
+    other = env["login"]("deployer")
+    r = env["client"].post(f"/api/deployments/{dep_id}/request-approval", headers=other)
+    assert r.status_code == 403, r.text
+    assert asyncio.run(db_module.get_deployment(dep_id))["approval_status"] == "not_required"
+
+    owner = env["login"]("lab-deployer")
+    r = env["client"].post(f"/api/deployments/{dep_id}/request-approval", headers=owner)
+    assert r.status_code == 200, r.text
+    assert r.json()["approval_status"] == "pending"
+
+
+def test_job_status_is_for_the_creator_or_an_admin(env, monkeypatch):
+    import netcontrol.routes.deployments as deployments
+
+    owner = env["login"]("lab-deployer")
+    dep_id = _plan(env, owner, cred=env["lab-deployer_cred"], group=env["lab_group"], hosts=[env["lab_host"]]).json()[
+        "id"
+    ]
+    job = {"status": "completed", "output": "hostname da-new\n", "deployment_id": dep_id, "action": "execute"}
+    monkeypatch.setitem(deployments._deployment_jobs, "da-job", job)
+    client = env["client"]
+    assert client.get("/api/deployments/job/da-job/status").json()["output"] == "hostname da-new\n"
+
+    env["login"]("deployer")
+    other = client.get("/api/deployments/job/da-job/status")
+    unknown = client.get("/api/deployments/job/no-such-job/status")
+    assert (other.status_code, _msg(other)) == (unknown.status_code, _msg(unknown)) == (404, "Deployment job not found")
+
+    client.post("/api/auth/login", json={"username": "admin", "password": "netcontrol"})
+    assert client.get("/api/deployments/job/da-job/status").status_code == 200
+
+
 # ── Lab promote goes through plan_deployment ────────────────────────────────
 
 

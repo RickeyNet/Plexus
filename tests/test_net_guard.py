@@ -107,3 +107,74 @@ def test_any_blocked_answer_refuses_the_name(monkeypatch):
     )
     with pytest.raises(OutboundRequestError, match="disallowed address"):
         validate_outbound_url("https://mixed.example.com/")
+
+
+# ── Vendor API clients (integrations/*/client.py) ────────────────────────────
+#
+# Each client runs the guard on its API host before it opens a connection
+# (``http_common.guard_api_host``) and reports a refusal as the error it
+# raises for an unreachable device, naming the guard.
+
+
+def _vendor_clients(transport):
+    from netcontrol.integrations.appgate.client import AppgateApiError, AppgateClient
+    from netcontrol.integrations.cato.client import CatoApiError, CatoClient
+    from netcontrol.integrations.cisco_fdm.client import FdmApiError, FdmClient
+    from netcontrol.integrations.fmc.client import FmcApiError, FmcClient
+    from netcontrol.integrations.meraki.client import MerakiApiError, MerakiClient
+    from netcontrol.integrations.opnsense.client import OpnsenseApiError, OpnsenseClient
+    from netcontrol.integrations.panorama.client import PanoramaApiError, PanoramaClient
+
+    imds = "https://169.254.169.254"
+    kw = {"transport": transport, "max_retries": 0}
+    return {
+        "fmc": (FmcClient(imds, "u", "p", **kw), lambda c: c.login(), FmcApiError),
+        "panorama": (PanoramaClient(imds, api_key="k", **kw), lambda c: c.login(), PanoramaApiError),
+        "appgate": (AppgateClient(imds, "u", "p", **kw), lambda c: c.negotiate(), AppgateApiError),
+        "opnsense": (OpnsenseClient(imds, "k", "s", **kw), lambda c: c.get("core/firmware/status"), OpnsenseApiError),
+        # Cato and Meraki only take their vendor's domains: a name of one
+        # that resolves to a metadata address is refused all the same.
+        "cato": (CatoClient("key", **kw), lambda c: c.query("q", "{ x }"), CatoApiError),
+        "meraki": (MerakiClient("key", **kw), lambda c: c.get("/organizations"), MerakiApiError),
+        "fdm": (FdmClient("169.254.169.254", "u", "p", transport=transport), lambda c: c.get("x"), FdmApiError),
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("vendor", ["fmc", "panorama", "appgate", "opnsense", "cato", "meraki", "fdm"])
+async def test_vendor_clients_refuse_a_metadata_host_before_connecting(monkeypatch, vendor):
+    import httpx
+
+    monkeypatch.setattr(
+        net_guard,
+        "_getaddrinfo",
+        _resolver({"api.catonetworks.com": ["169.254.169.254"], "api.meraki.com": ["169.254.169.254"]}),
+    )
+    sent: list[str] = []
+
+    def handler(request):
+        sent.append(str(request.url))
+        return httpx.Response(200, json={})
+
+    client, first_call, error = _vendor_clients(httpx.MockTransport(handler))[vendor]
+    with pytest.raises(error, match="outbound address guard") as raised:
+        await first_call(client)
+    assert "169.254.169.254" in str(raised.value)
+    if hasattr(raised.value, "transport"):
+        # Appgate and OPNsense: the same flag as a Controller or firewall
+        # that cannot be reached.
+        assert raised.value.transport is True
+    assert sent == []
+
+
+@pytest.mark.asyncio
+async def test_guard_api_host_passes_an_allowed_host_and_names_the_guard_on_refusal(monkeypatch):
+    from netcontrol.integrations.http_common import guard_api_host
+
+    monkeypatch.setattr(net_guard, "_getaddrinfo", _resolver({"fw1.example.com": ["192.0.2.30"]}))
+    await guard_api_host("https://fw1.example.com:8443", "OPNsense", RuntimeError)
+    monkeypatch.setenv("APP_SSRF_BLOCK_PRIVATE", "true")
+    with pytest.raises(RuntimeError, match="OPNsense address refused by the outbound address guard"):
+        await guard_api_host("https://fw1.example.com:8443", "OPNsense", RuntimeError)
+    with pytest.raises(RuntimeError, match="does not resolve"):
+        await guard_api_host("https://gone.example.com", "FMC", RuntimeError)

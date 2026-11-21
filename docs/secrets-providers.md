@@ -115,7 +115,7 @@ reference fails with `sdk_not_installed`.
 | Access key ID and secret access key | Optional. Blank: the default credential chain of the Plexus server |
 | Session token | Optional, for temporary keys |
 | Role ARN and external ID | Optional: Plexus calls `sts:AssumeRole` first |
-| Endpoint URL | Optional, for a VPC interface endpoint |
+| Endpoint URL | Optional, for a VPC interface endpoint. Needs an access key: with the default credential chain the request would be signed with the server's own role and sent to this address, so that is refused |
 
 The identity needs `secretsmanager:GetSecretValue` on the secrets (and
 `kms:Decrypt` for a customer managed key).
@@ -146,14 +146,18 @@ or the reason it did not. It never shows the value. Every test is audited.
 | `key_not_found` | The secret has no such key, or several keys and none named | Check the key |
 | `unreachable` | No connection, TLS failure, or an address the outbound guard refuses | Check the address, CA bundle and firewall |
 | `invalid_reference` | The path is empty or has `.`/`..` segments or bad characters | Fix the path |
-| `invalid_config` | A CA bundle that does not parse, or stored settings that cannot be read | Save the provider again |
+| `invalid_config` | A CA bundle that does not parse, stored settings that cannot be read, or an AWS endpoint URL without an access key | Save the provider again |
 | `disabled` | The provider is disabled | Enable it |
 | `provider_error` | Any other refusal from the store | See the HTTP status in the message |
 
 Requests use the same outbound guard as webhooks and notification channels
 (`APP_SSRF_BLOCK_PRIVATE`, `APP_SSRF_ALLOW`): link-local addresses such as
 the cloud metadata endpoint are always refused, and redirects are not
-followed.
+followed. The AWS endpoint URL goes through `boto3`, which opens its own
+connection: the guard checks it before each fetch, without pinning. Saving
+a provider runs the guard on its address settings (Vault URL, Azure vault
+URL and authority host, AWS endpoint URL) and answers `400` when it
+refuses one.
 
 ## When a reference fails
 

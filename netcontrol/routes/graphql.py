@@ -17,8 +17,6 @@ the features of the REST routes and the caller's object scope.
 
 from __future__ import annotations
 
-import base64
-import hashlib
 import json
 import re
 from typing import Any
@@ -29,6 +27,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from graphql import GraphQLError
 from strawberry.types.graphql import OperationType
 
+from netcontrol.csp import script_hash_source
 from netcontrol.graphql_api import limits, settings as graphql_settings
 from netcontrol.graphql_api.context import GraphQLContext
 from netcontrol.graphql_api.schema import schema
@@ -134,12 +133,11 @@ _GRAPHIQL_HTML = f"""<!doctype html>
 </body>
 </html>
 """
-_SCRIPT_HASH = base64.b64encode(hashlib.sha256(_GRAPHIQL_SCRIPT.encode()).digest()).decode()
 _GRAPHIQL_CSP = re.sub(
     r"\s+",
     " ",
     f"""default-src 'none';
-    script-src https://unpkg.com 'sha256-{_SCRIPT_HASH}';
+    script-src https://unpkg.com {script_hash_source(_GRAPHIQL_SCRIPT)};
     style-src https://unpkg.com 'unsafe-inline';
     img-src 'self' data:;
     font-src https://unpkg.com data:;

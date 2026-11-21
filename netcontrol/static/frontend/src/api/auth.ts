@@ -66,6 +66,8 @@ export function enabledSsoMethods(sso: SsoStatus | undefined): SsoMethod[] {
  * sentence. Nothing the provider sends is ever shown. */
 export const SSO_ERROR_MESSAGES: Record<string, string> = {
   disabled: 'Single sign-on is not enabled. Sign in with a local account.',
+  setup:
+    'Single sign-on is not set up yet: an administrator must save the SAML settings once. Sign in with a local account.',
   state: 'The sign-in request expired or did not match. Try again.',
   provider: 'The identity provider could not be reached or returned an error. Try again or contact an administrator.',
   token: 'The identity provider’s response could not be verified. Contact an administrator.',

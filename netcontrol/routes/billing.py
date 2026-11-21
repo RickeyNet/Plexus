@@ -29,7 +29,7 @@ from pydantic import BaseModel
 from netcontrol.csv_cells import csv_text_cell
 from netcontrol.integrations.traffic import format_bps
 from netcontrol.object_scope import filter_rows, readable_host_ids, require_new_row, require_row, scoped
-from netcontrol.routes.shared import _audit, _corr_id, _get_session
+from netcontrol.routes.shared import _audit, _corr_id, _get_session, _session_user
 from netcontrol.telemetry import configure_logging
 
 router = APIRouter()
@@ -306,8 +306,7 @@ async def get_circuit(circuit_id: int, request: Request):
 @scoped("create")
 async def create_circuit(payload: BillingCircuitCreate, request: Request):
     await require_new_row(request, "host_record", {"host_id": payload.host_id})
-    user = getattr(request.state, "user", None) or {}
-    owner = user.get("username", "") if isinstance(user, dict) else ""
+    owner = _session_user(request)
     circuit = await db.create_billing_circuit(
         name=payload.name,
         host_id=payload.host_id,

@@ -79,12 +79,22 @@ bash deploy/setup.sh
 # setting PLEXUS_IMAGE in .env is enough - compose only builds when the
 # named image is absent. Must run after setup.sh, which only writes .env
 # when the file does not exist yet.
-if grep -q '^PLEXUS_IMAGE=' .env; then
-    sed -i 's|^PLEXUS_IMAGE=.*|PLEXUS_IMAGE=plexus:airgap|' .env
-else
-    printf 'PLEXUS_IMAGE=plexus:airgap\n' >> .env
-fi
+set_env() {
+    if grep -q "^$1=" .env; then
+        sed -i "s|^$1=.*|$1=$2|" .env
+    else
+        printf '%s=%s\n' "$1" "$2" >> .env
+    fi
+}
+set_env PLEXUS_IMAGE plexus:airgap
 echo "  Pinned plexus service to image: plexus:airgap (PLEXUS_IMAGE in .env)"
+# docker-compose.yml names postgres and nginx by digest, which a loaded tar
+# does not carry; the bundle's override names the loaded tags instead.
+# Compose reads COMPOSE_FILE from .env, so plain `docker compose` uses both.
+if [ -f docker-compose.airgap.yml ]; then
+    set_env COMPOSE_FILE docker-compose.yml:docker-compose.airgap.yml
+    echo "  Using the loaded postgres/nginx images (COMPOSE_FILE in .env)"
+fi
 
 # ── 5. Bring the stack up ────────────────────────────────────────────
 echo ""

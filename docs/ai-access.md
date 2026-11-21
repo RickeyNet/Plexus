@@ -17,6 +17,13 @@ a set of read-only tools. The AI calls those tools to answer your questions.
 - The endpoint is off until an administrator turns it on.
 - Every tool reads data Plexus already holds. No tool changes anything, and no
   tool connects to a device or to a vendor API.
+- Alert messages, interface descriptions, syslog text, hostnames and device
+  configurations come from the devices themselves. Anyone who controls a
+  device, or can send it log messages, can write text that reads like an
+  instruction to the AI. The server tells the AI client to treat that text as
+  data, never as instructions, and the tools stay read-only so such text
+  cannot make Plexus change anything. Still read the AI's suggestions before
+  you act on them.
 
 ## What the AI can and cannot see
 

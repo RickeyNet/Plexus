@@ -25,18 +25,30 @@ to register, each with a Copy button:
 
 | What | Value |
 |------|-------|
-| SP entity ID (audience) | `https://<plexus host>/api/auth/saml/metadata` unless overridden |
-| ACS URL (reply URL), HTTP-POST | `https://<plexus host>/api/auth/saml/acs` unless overridden |
-| SP metadata | `GET https://<plexus host>/api/auth/saml/metadata` (no sign-in needed); most IdPs can import it |
+| SP entity ID (audience) | `https://<plexus host>/api/auth/saml/metadata` unless set otherwise |
+| ACS URL (reply URL), HTTP-POST | `https://<plexus host>/api/auth/saml/acs` unless set otherwise |
+| SP metadata | `GET https://<plexus host>/api/auth/saml/metadata` (no sign-in needed, 404 until the values are saved); most IdPs can import it |
 | Signing | Sign the **assertion** (or response and assertion), RSA or ECDSA with SHA-256 or stronger. SHA-1 is refused. |
 | Encryption | Off. Encrypted assertions are not supported. |
 | NameID | A persistent or email NameID, or map a username attribute (a transient NameID needs one) |
 | Attributes | Username (or email), display name and groups, as below |
 
-The entity ID and ACS URL are derived from the request (the scheme from
-`X-Forwarded-Proto`, the `Host` header). Behind a proxy that rewrites the
-host name, set the **overrides** to the public URLs; both are then checked
-against the assertion's audience and recipient.
+Sign-in uses only the stored SP entity ID and ACS URL; both are checked
+against the assertion's audience and recipient. When you save the SAML
+settings with either field blank, Plexus fills it from the address you are
+using at that moment (the scheme from `X-Forwarded-Proto`, then the host
+name) and stores it. So open Settings on the public URL users will sign in
+on, or type the public URLs in the fields. Until both values are stored the
+form shows the values a save would store, SAML sign-in is off and the
+metadata endpoint answers 404. Plexus never derives these values from the
+`Host` header of a sign-in request, which the client controls.
+
+**Upgrading.** A SAML configuration saved by an older version with blank
+fields has no stored values, so SAML sign-in is off after the upgrade (the
+login page offers no SAML button and a direct sign-in shows "Single sign-on
+is not set up yet"). An admin opens Settings > Authentication on the public
+URL and saves once to restore it. Check that the stored values match what
+is registered at the IdP.
 
 **Use HTTPS.** The IdP posts the response to the ACS from its own site.
 Plexus binds that POST to the browser that started the sign-in with a
@@ -65,7 +77,7 @@ signing certificates, then **Save**), or fill the fields by hand:
 | Admin Groups, Default Role, Default Access Groups, Sync access groups, Group Mappings | | As for OIDC ([sso-oidc.md](sso-oidc.md#2-configure-plexus)), with groups attribute values instead of group claim values |
 | Button Label | `Sign in with SAML` | At most 60 characters |
 | Lead with SSO on the login page | off | Display only: the SSO buttons come first and the password form folds behind "Use a local account" |
-| SP Entity ID / ACS URL Override | empty | Empty = derived from the request |
+| SP Entity ID / ACS URL | empty | Empty = filled from the address you save on, then stored. Sign-in needs both stored. A typed ACS URL must be `https`; the one filled in from a plain `http` address is kept as it is. |
 | CA Certificate File | | A CA bundle path on the Plexus host, for importing metadata from a host behind a private CA |
 
 Saving with SAML enabled and no entity ID, SSO URL or certificate is
@@ -120,7 +132,9 @@ with the account managed by `saml`:
 4. The account is provisioned and the browser gets the normal session
    cookie. On failure it lands on `/login?sso_error=<code>` with the same
    fixed sentences as OIDC (`disabled`, `state`, `provider`, `token`,
-   `claims`, `account`, `denied`). The audit log records `login.failure`
+   `claims`, `account`, `denied`), plus `setup` when SAML is enabled but
+   the SP entity ID or ACS URL is not stored yet (the server log says an
+   admin must save the SAML settings once). The audit log records `login.failure`
    with `source=saml` and the step; the assertion is never logged.
 
 Failures count toward the per-IP login rate limit and lockout like wrong
@@ -139,8 +153,8 @@ are pruned on each sign-in.
 
 | Method | Path | Notes |
 |--------|------|-------|
-| GET/PUT | `/api/admin/auth-config` | The `saml` block holds the fields above (`idp_certs` as PEM). Omitting `saml` keeps the saved settings. |
-| GET | `/api/admin/auth-config/saml/sp` | SP entity ID, ACS URL and metadata URL to register, and the saved certificates' fingerprints and expiry dates |
+| GET/PUT | `/api/admin/auth-config` | The `saml` block holds the fields above (`idp_certs` as PEM). A blank `sp_entity_id` or `acs_url` is filled from the address of this request and stored. Omitting `saml` keeps the saved settings. |
+| GET | `/api/admin/auth-config/saml/sp` | SP entity ID, ACS URL and metadata URL to register, the saved certificates' fingerprints and expiry dates, and `configured` (false while either SP value is not stored; the values shown are then what a save would store) |
 | POST | `/api/admin/auth-config/saml/metadata` | `{xml}` or `{url}` (plus optional `entity_id` to pick one IdP from an `EntitiesDescriptor`, `ca_cert_file`): answers the IdP entity ID, SSO URL and signing certificates. Saves nothing. |
 
 ## Provider notes (invented example values)

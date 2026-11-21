@@ -1213,6 +1213,41 @@ def test_api_appgate_crud_keeps_the_password_write_only(api):
     assert api.delete(f"/api/sources/{org['id']}").status_code == 200
 
 
+def test_api_sources_refuse_an_address_the_outbound_guard_refuses(api, monkeypatch):
+    # Every provider's address passes the outbound address guard at save
+    # time, so a metadata address is a 400 naming the guard, not a later
+    # collection failure. Cato and Meraki only take their vendor's domains:
+    # those names are made to resolve to the metadata address here.
+    from netcontrol.routes import net_guard
+
+    real = net_guard._getaddrinfo
+
+    def resolver(host):
+        if host in ("api.catonetworks.com", "api.meraki.com"):
+            return [(2, 1, 6, "", ("169.254.169.254", 0))]
+        return real(host)
+
+    monkeypatch.setattr(net_guard, "_getaddrinfo", resolver)
+    for provider, base_url in (
+        ("fmc", "https://169.254.169.254"),
+        ("panorama", "https://169.254.169.254"),
+        ("appgate", "https://169.254.169.254:8443"),
+        ("opnsense", "https://169.254.169.254"),
+        ("cato", "https://api.catonetworks.com/api/v1/graphql2"),
+        ("meraki", "https://api.meraki.com/api/v1"),
+    ):
+        body = {"name": f"IMDS {provider}", "provider": provider, "base_url": base_url, "api_key": "k:s"}
+        refused = api.post("/api/sources", json=body)
+        assert refused.status_code == 400, (provider, refused.text)
+        assert "outbound address guard" in refused.text and "169.254.169.254" in refused.text
+
+    body = {"name": "Lab Appgate", "provider": "appgate", "base_url": "https://appgate.example.com", "api_key": "k"}
+    org = api.post("/api/sources", json=body).json()["org"]
+    moved = api.put(f"/api/sources/{org['id']}", json={"base_url": "https://169.254.169.254", "api_key": "k2"})
+    assert moved.status_code == 400 and "outbound address guard" in moved.text
+    assert api.delete(f"/api/sources/{org['id']}").status_code == 200
+
+
 def test_api_appgate_sample_is_merged_into_the_topology(api):
     built = api.post("/api/sources/sample?provider=appgate")
     assert built.status_code == 201, built.text

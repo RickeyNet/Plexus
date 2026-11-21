@@ -185,6 +185,15 @@ def test_missing_secret_or_server_is_error_not_cleartext(monkeypatch) -> None:
     assert rec["ctor"] == [], "must not open a TACACS+ session without a secret"
 
 
+def test_guarded_server_is_error_and_never_contacted(monkeypatch) -> None:
+    # The outbound address guard runs before the session opens.
+    rec = _install_fake_client(monkeypatch)
+    assert auth_module._tacacs_authenticate_sync("jdoe", "pw", _cfg(server="169.254.169.254")) == (False, "error", {})
+    monkeypatch.setenv("APP_SSRF_BLOCK_PRIVATE", "true")
+    assert auth_module._tacacs_authenticate_sync("jdoe", "pw", _cfg(server="10.0.0.9"))[1] == "error"
+    assert rec["ctor"] == []
+
+
 def test_library_missing_is_error(monkeypatch) -> None:
     monkeypatch.setattr(auth_module, "TACACS_AVAILABLE", False)
     assert auth_module._tacacs_authenticate_sync("jdoe", "pw", _cfg()) == (False, "error", {})

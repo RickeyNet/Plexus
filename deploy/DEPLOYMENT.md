@@ -442,6 +442,15 @@ that image. Running the default git mode again clears it and goes back to
 the local build. Plain `git pull && docker compose up -d --build` still
 works, it just skips the snapshot and rollback bookkeeping.
 
+The base images in `Dockerfile` and the `postgres` and `nginx` images in
+`docker-compose.yml` are pinned by digest (`name:tag@sha256:...`, the
+multi-arch index digest), and nginx names a version instead of the floating
+`alpine` tag. An upgrade that moves a pin pulls the new image on the next
+`docker compose up -d`; a re-pushed tag upstream changes nothing until the
+pin in the repository changes. Dependabot proposes the digest bumps. To run a
+different image, put the change in a `docker-compose.override.yml` rather
+than editing the pinned line.
+
 `--rollback` restores the code or image only. If the failed version already
 applied schema migrations, restore its pre-upgrade `pg_dump` into a fresh
 database before rolling back (use your `POSTGRES_USER` / `POSTGRES_DB` in

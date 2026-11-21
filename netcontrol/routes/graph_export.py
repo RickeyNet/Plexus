@@ -19,6 +19,7 @@ import routes.database as db
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
+from netcontrol.csp import script_hash_source
 from netcontrol.object_scope import require_row, scoped
 from netcontrol.telemetry import configure_logging
 
@@ -124,9 +125,26 @@ def _build_echart_option(
 # Self-contained HTML embed
 # ═════════════════════════════════════════════════════════════════════════════
 
+# ECharts as one classic script, served by the app itself (no CDN, so the page
+# also works air-gapped). The frontend build copies the locked echarts
+# package's dist/echarts.min.js to this fixed, unhashed path in dist/ (see the
+# echartsEmbedScript plugin in netcontrol/static/frontend/vite.config.ts), and
+# the SPA route serves files from dist/ at the site root.
+ECHARTS_SCRIPT_SRC = "/vendor/echarts.min.js"
+
 # The chart option JSON is placed inside a <script type="application/json">
 # block so the browser never interprets it as executable code or HTML.
-# The bootstrap <script> reads it via textContent and JSON.parse.
+# The bootstrap <script> reads it via textContent and JSON.parse, and the
+# theme from a data attribute, so its text never changes and the CSP can
+# allow it by hash instead of 'unsafe-inline'.
+EMBED_BOOTSTRAP_SCRIPT = """
+var el = document.getElementById('chart');
+var opt = JSON.parse(document.getElementById('chart-data').textContent);
+var chart = echarts.init(el, el.getAttribute('data-theme') || undefined);
+chart.setOption(opt);
+window.addEventListener('resize', function() { chart.resize(); });
+"""
+
 EMBED_HTML_TEMPLATE = """<!DOCTYPE html>
 <html>
 <head>
@@ -136,19 +154,31 @@ EMBED_HTML_TEMPLATE = """<!DOCTYPE html>
 body {{ margin: 0; padding: 0; background: {bg}; }}
 #chart {{ width: {width}px; height: {height}px; }}
 </style>
-<script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+<script src="{echarts_src}"></script>
 </head>
 <body>
-<div id="chart"></div>
+<div id="chart" data-theme="{echarts_theme}"></div>
 <script id="chart-data" type="application/json">{option_json}</script>
-<script>
-var opt = JSON.parse(document.getElementById('chart-data').textContent);
-var chart = echarts.init(document.getElementById('chart'), '{echarts_theme}');
-chart.setOption(opt);
-window.addEventListener('resize', function() {{ chart.resize(); }});
-</script>
+<script>{bootstrap}</script>
 </body>
 </html>"""
+
+# This page (and only this page) needs an inline bootstrap <script> and an
+# inline <style> block, so it sets its CSP explicitly and the global
+# security-headers middleware (script-src 'self') leaves it alone. Scripts are
+# limited to the app's own origin plus the bootstrap's exact hash. The rendered
+# content is data-only: the theme is whitelisted, the chart JSON is
+# <>-escaped, and the title is XML-escaped, so no user input reaches an
+# executable context.
+EMBED_CSP = (
+    "default-src 'self'; "
+    f"script-src 'self' {script_hash_source(EMBED_BOOTSTRAP_SCRIPT)}; "
+    "style-src 'self' 'unsafe-inline'; "
+    "img-src 'self' data: blob:; "
+    "connect-src 'self'; "
+    "frame-ancestors 'none'; "
+    "base-uri 'self'"
+)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -234,23 +264,10 @@ async def get_graph_embed(
         height=int(height),
         echarts_theme=echarts_theme_safe,
         option_json=safe_json,
+        echarts_src=ECHARTS_SCRIPT_SRC,
+        bootstrap=EMBED_BOOTSTRAP_SCRIPT,
     )
-    # This page (and only this page) needs an inline bootstrap <script>, an
-    # inline <style> block, and ECharts from the CDN. Set its CSP explicitly so
-    # the global security-headers middleware (script-src 'self') leaves it alone
-    # instead of blocking the chart. The rendered content is data-only: the
-    # theme is whitelisted, the chart JSON is <>-escaped, and the title is
-    # XML-escaped, so no user input reaches an executable context.
-    csp = (
-        "default-src 'self'; "
-        "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
-        "style-src 'self' 'unsafe-inline'; "
-        "img-src 'self' data: blob:; "
-        "connect-src 'self'; "
-        "frame-ancestors 'none'; "
-        "base-uri 'self'"
-    )
-    return HTMLResponse(content=html, headers={"Content-Security-Policy": csp})
+    return HTMLResponse(content=html, headers={"Content-Security-Policy": EMBED_CSP})
 
 
 @router.get("/api/graph-image/{host_graph_id}.svg")

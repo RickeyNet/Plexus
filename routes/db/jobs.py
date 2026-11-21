@@ -108,11 +108,19 @@ def job_scope_condition(
 
 
 async def get_all_jobs(
-    limit: int = 50, *, group_ids: Iterable[int] | None = None, launched_by: str | None = None
+    limit: int = 50,
+    *,
+    group_ids: Iterable[int] | None = None,
+    launched_by: str | None = None,
+    only_launched_by: str | None = None,
 ) -> list[dict]:
     """The newest jobs. ``group_ids`` (object scope): only jobs whose every
-    target is in those inventory groups (``job_scope_condition``)."""
+    target is in those inventory groups (``job_scope_condition``).
+    ``only_launched_by``: only the jobs that user launched."""
     cond, cond_params = job_scope_condition(group_ids, launched_by)
+    if only_launched_by is not None:
+        cond = f"({cond}) AND j.launched_by = ?" if cond else "j.launched_by = ?"
+        cond_params = (*cond_params, only_launched_by)
     where = f"WHERE {cond}" if cond else ""
     db = await _dbcore.get_db(read_only=True)
     try:

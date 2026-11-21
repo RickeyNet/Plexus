@@ -22,7 +22,7 @@ from netcontrol.object_scope import (
     scope_exempt,
     scoped,
 )
-from netcontrol.routes.shared import _get_session, require_owner_or_admin
+from netcontrol.routes.shared import _session_user, caller_is_admin, require_owner_or_admin
 from netcontrol.telemetry import configure_logging
 
 router = APIRouter()
@@ -68,23 +68,14 @@ class PanelUpdate(BaseModel):
 # ── Dashboard CRUD ────────────────────────────────────────────────────────────
 
 
-async def _is_admin_session(session: dict | None) -> bool:
-    if session is None:
-        # API-token callers are admin-equivalent by design.
-        return True
-    user = await db.get_user_by_id(session["user_id"])
-    return bool(user and user.get("role") == "admin")
-
-
 @router.get("/api/dashboards")
 @scope_exempt("user-owned dashboard, owner-scoped; holds no host data")
 async def list_dashboards_api(request: Request):
-    session = _get_session(request)
     # Non-admin users see only their own dashboards; admins and API-token
     # callers see all. Previously this returned every user's dashboards.
     owner = None
-    if not await _is_admin_session(session):
-        owner = (session or {}).get("user")
+    if not await caller_is_admin(request):
+        owner = _session_user(request)
     dashboards = await db.list_dashboards(owner=owner)
     return {"dashboards": dashboards}
 
@@ -92,12 +83,11 @@ async def list_dashboards_api(request: Request):
 @router.post("/api/dashboards", status_code=201)
 @scope_exempt("user-owned dashboard, owner-scoped; holds no host data")
 async def create_dashboard_api(payload: DashboardCreate, request: Request):
-    user = getattr(request.state, "user", None) or {}
-    owner = user.get("username", "") if isinstance(user, dict) else ""
     dashboard = await db.create_dashboard(
         name=payload.name,
         description=payload.description,
-        owner=owner,
+        # The session user; "" for the API token (admin-only rows).
+        owner=_session_user(request),
         layout_json=payload.layout_json,
         variables_json=payload.variables_json,
     )

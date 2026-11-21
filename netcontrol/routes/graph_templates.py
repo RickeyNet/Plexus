@@ -32,6 +32,7 @@ from netcontrol.object_scope import (
     scope_exempt,
     scoped,
 )
+from netcontrol.routes.shared import _session_user
 from netcontrol.telemetry import configure_logging
 
 router = APIRouter()
@@ -212,8 +213,7 @@ async def get_graph_template_api(template_id: int):
 @scoped("catalog")
 async def create_graph_template_api(payload: GraphTemplateCreate, request: Request):
     await require_model_write(request)
-    user = getattr(request.state, "user", None) or {}
-    created_by = user.get("username", "") if isinstance(user, dict) else ""
+    created_by = _session_user(request)
     tpl = await db.create_graph_template(
         name=payload.name,
         description=payload.description,
@@ -359,8 +359,7 @@ async def get_host_template_api(template_id: int):
 @scoped("catalog")
 async def create_host_template_api(payload: HostTemplateCreate, request: Request):
     await require_model_write(request)
-    user = getattr(request.state, "user", None) or {}
-    created_by = user.get("username", "") if isinstance(user, dict) else ""
+    created_by = _session_user(request)
     tpl = await db.create_host_template(
         name=payload.name,
         description=payload.description,
@@ -560,8 +559,7 @@ async def _visible_tree_nodes(request: Request, nodes: list[dict]) -> list[dict]
 @scoped("catalog")
 async def create_graph_tree_api(payload: GraphTreeCreate, request: Request):
     await require_model_write(request)
-    user = getattr(request.state, "user", None) or {}
-    created_by = user.get("username", "") if isinstance(user, dict) else ""
+    created_by = _session_user(request)
     tree = await db.create_graph_tree(
         name=payload.name,
         description=payload.description,

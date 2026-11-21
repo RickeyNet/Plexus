@@ -59,7 +59,12 @@ The map shows the most recent collection until you run another.
   else. A bare host is taken as https; `http` and a URL with a path are
   refused, and redirects are not followed, so the credentials cannot be sent
   elsewhere. Untick **Verify the FMC certificate** for an FMC that still has
-  its self-signed certificate.
+  its self-signed certificate. The address passes the
+  [outbound address check](webhooks.md#outbound-address-check) when saved
+  and when a collection connects: a cloud metadata address and a name that
+  does not resolve are refused, private addresses too when
+  `APP_SSRF_BLOCK_PRIVATE=true` (list the FMC in `APP_SSRF_ALLOW`). A
+  refusal fails the collection like an FMC that cannot be reached.
 - **Domain**: the FMC domain to read, by name (`Global`, `Global/Branch` or
   just `Branch`) or UUID. Blank reads the Global domain. One entry reads one
   domain; add an entry per domain to cover several.

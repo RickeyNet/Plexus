@@ -47,7 +47,7 @@ from typing import Any
 
 import httpx
 
-from netcontrol.integrations.http_common import RequestPacer, retry_delay, validate_https_host
+from netcontrol.integrations.http_common import RequestPacer, guard_api_host, retry_delay, validate_https_host
 
 DEFAULT_TIMEOUT_SECONDS = 60.0
 # The API is served by the firewall's own web server: a few requests a
@@ -156,8 +156,9 @@ class OpnsenseClient:
     async def __aexit__(self, *_exc: object) -> None:
         await self.close()
 
-    def _ensure_client(self) -> httpx.AsyncClient:
+    async def _ensure_client(self) -> httpx.AsyncClient:
         if self._client is None:
+            await guard_api_host(self.base_url, "OPNsense", lambda message: OpnsenseApiError(message, transport=True))
             # Redirects are never followed: the credentials must only ever
             # reach the validated firewall.
             self._client = httpx.AsyncClient(
@@ -181,7 +182,7 @@ class OpnsenseClient:
             await self._pacer.wait()
             self.stats["requests"] += 1
             try:
-                resp: httpx.Response | None = await self._ensure_client().request(
+                resp: httpx.Response | None = await (await self._ensure_client()).request(
                     method,
                     path,
                     params=params,

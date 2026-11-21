@@ -30,6 +30,7 @@ from typing import Any
 
 from netcontrol.integrations.meraki.collector import _SECRET_KEY_FRAGMENTS as _MERAKI_SECRET_KEY_FRAGMENTS
 from netcontrol.integrations.opnsense.secrets import mask_config_xml
+from netcontrol.secret_keys import SECRET_KEY_FRAGMENTS, should_mask
 
 MASK = "********"
 
@@ -260,31 +261,9 @@ def redact_config_text(text: str, *, keep_lines: bool = False) -> str:
 
 # ── Structured values ────────────────────────────────────────────────────────
 
-# Compared against the key lower-cased with "_", "-" and spaces removed.
-_DENY_KEY_FRAGMENTS: tuple[str, ...] = tuple(
-    dict.fromkeys(
-        (
-            "password",
-            "passwd",
-            "secret",
-            "token",
-            "apikey",
-            "community",
-            "psk",
-            "privatekey",
-            "passphrase",
-            "authkey",
-            "privkey",
-            *_MERAKI_SECRET_KEY_FRAGMENTS,
-        )
-    )
-)
-_KEY_SEPARATORS = str.maketrans("", "", "_- ")
-
-
-def _is_secret_key(key: object) -> bool:
-    compact = str(key).lower().translate(_KEY_SEPARATORS)
-    return any(fragment in compact for fragment in _DENY_KEY_FRAGMENTS)
+# The shared secret key names (``netcontrol.secret_keys``, also used by the
+# log redaction) plus the ones the Meraki collector scrubs.
+_DENY_KEY_FRAGMENTS: tuple[str, ...] = tuple(dict.fromkeys((*SECRET_KEY_FRAGMENTS, *_MERAKI_SECRET_KEY_FRAGMENTS)))
 
 
 def redact_value(value: Any) -> Any:
@@ -297,7 +276,7 @@ def redact_value(value: Any) -> Any:
     if isinstance(value, dict):
         masked: dict[Any, Any] = {}
         for key, item in value.items():
-            if _is_secret_key(key) and item is not None and not isinstance(item, bool) and item != "":
+            if should_mask(key, item, _DENY_KEY_FRAGMENTS):
                 masked[key] = MASK
             else:
                 masked[key] = redact_value(item)

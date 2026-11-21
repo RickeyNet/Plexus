@@ -33,6 +33,7 @@ from netcontrol.object_scope import (
     scoped,
 )
 from netcontrol.routes.monitoring import MONITORING_RULE, require_rule_change
+from netcontrol.routes.shared import _session_user
 from netcontrol.telemetry import configure_logging
 
 router = APIRouter()
@@ -392,8 +393,7 @@ async def get_rule(rule_id: int, request: Request):
 @scoped("create")
 async def create_rule(body: BaselineAlertRuleCreate, request: Request):
     await require_new_row(request, MONITORING_RULE.name, {"host_id": body.host_id, "group_id": body.group_id})
-    user = getattr(request.state, "user", None)
-    username = user.get("username", "") if user else ""
+    username = _session_user(request)
     rule_id = await db.create_baseline_alert_rule(
         **body.model_dump(),
         created_by=username,

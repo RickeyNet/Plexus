@@ -25,6 +25,16 @@ certs/
 # Databases
 *.db
 *.sqlite3
+# SQLite sidecar files (WAL pages can hold password hashes and encrypted
+# credentials), the legacy routes/auth.json and the auth.json.bak the user
+# migration leaves behind, backups and migration lock files, at any depth
+# ("**/" also matches the build context root).
+**/*.db-wal
+**/*.db-shm
+**/*.db-journal
+**/auth.json*
+**/*.bak
+**/*.migrate.lock
 
 # Software images (NOS/firmware blobs, often 700MB-1GB+ each).
 # Bind-mounted at runtime via docker-compose (./software_images ->

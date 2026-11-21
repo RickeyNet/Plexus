@@ -383,8 +383,41 @@ async def test_aws_json_key_binary_and_assume_role(monkeypatch):
 async def test_aws_error_mapping(monkeypatch, error, code):
     _fake_boto3(monkeypatch, {"x": error}, [])
     with pytest.raises(SecretsProviderError) as err:
-        await _aws(endpoint_url="https://secretsmanager.example.com").resolve(Reference("x"))
+        # A custom endpoint needs an explicit access key (see below).
+        provider = _aws(endpoint_url="https://secretsmanager.example.com", access_key_id="test-key-id")
+        await provider.resolve(Reference("x"))
     assert err.value.code == code
+
+
+def test_aws_custom_endpoint_needs_an_explicit_access_key():
+    # Signed with the default chain (the server's own instance role), the
+    # request would hand the role's session token to the endpoint's host.
+    with pytest.raises(ValueError, match="endpoint_url needs an explicit access key"):
+        _aws(endpoint_url="https://secretsmanager.example.com")
+    with pytest.raises(ValueError, match="endpoint_url needs an explicit access key"):
+        _aws(endpoint_url="https://secretsmanager.example.com", role_arn="arn:aws:iam::123456789012:role/test")
+    _aws(endpoint_url="https://secretsmanager.example.com", access_key_id="test-key-id")
+    _aws(role_arn="arn:aws:iam::123456789012:role/test")
+
+
+async def test_aws_endpoint_is_checked_by_the_guard_before_use(monkeypatch):
+    calls: list = []
+    _fake_boto3(monkeypatch, {"x": {"SecretString": FAKE_PASSWORD}}, calls)
+    stored = {"region": "us-east-1", "endpoint_url": "https://169.254.169.254"}
+    keyed = AwsSecretsManagerProvider(
+        {**stored, "access_key_id": "test-key-id"}, {"secret_access_key": "s"}, provider_id=2, name="aws-test"
+    )
+    with pytest.raises(SecretsProviderError, match="outbound address guard") as err:
+        await keyed.resolve(Reference("x"))
+    assert err.value.code == base.UNREACHABLE
+    # A row stored before the key rule is refused before anything is signed.
+    keyless = AwsSecretsManagerProvider(
+        {**stored, "endpoint_url": "https://secretsmanager.example.com"}, {}, provider_id=3, name="aws-old"
+    )
+    with pytest.raises(SecretsProviderError, match="explicit access key") as err:
+        await keyless.resolve(Reference("x"))
+    assert err.value.code == base.INVALID_CONFIG
+    assert not [c for c in calls if c[0] in ("client", "get")]
 
 
 async def test_aws_without_boto3_is_sdk_not_installed(monkeypatch):
@@ -512,6 +545,19 @@ def _create_vault(admin, name="corp-vault", **extra) -> int:
 
 def _audit_actions(category: str = "secrets_providers") -> list[str]:
     return [e["action"] for e in asyncio.run(db.get_audit_events(500, category))]
+
+
+def test_provider_save_runs_the_guard_on_address_settings(monkeypatch, request):
+    admin = admin_client(monkeypatch, request)
+    aws = {"name": "imds-aws", "provider_type": "aws", "secrets": {"secret_access_key": "x"}}
+    aws["config"] = {"region": "us-east-1", "access_key_id": "k", "endpoint_url": "https://169.254.169.254"}
+    refused = admin.post(API, json=aws)
+    assert refused.status_code == 400 and "endpoint_url refused by the outbound address guard" in refused.text
+    keyless = {**aws, "secrets": {}, "config": {"region": "us-east-1", "endpoint_url": "https://sm.example.com"}}
+    assert "explicit access key" in admin.post(API, json=keyless).text
+    pid = _create_vault(admin, name="guarded-vault")
+    moved = admin.put(f"{API}/{pid}", json={"config": {"url": "https://169.254.169.254"}, "secrets": {"token": "t"}})
+    assert moved.status_code == 400 and "url refused by the outbound address guard" in moved.text
 
 
 def test_provider_crud_never_returns_secrets(monkeypatch, request):

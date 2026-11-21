@@ -26,7 +26,7 @@ jobs:
       frontend: ${{ steps.diff.outputs.frontend }}
     steps:
       - name: Checkout (full history)
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
@@ -63,7 +63,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout (full history)
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
@@ -71,9 +71,17 @@ jobs:
       # this repo's Actions policy only allows GitHub-owned, RickeyNet-owned,
       # or Marketplace-verified actions, and gitleaks-action is none of those
       # (it caused a startup_failure that blocked the whole workflow).
+      # The expected SHA-256 is the linux_x64 line of the release's
+      # gitleaks_8.30.1_checksums.txt; update both together on a version bump.
       - name: Secret scan (gitleaks)
+        env:
+          GITLEAKS_TARBALL: gitleaks_8.30.1_linux_x64.tar.gz
+          GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
         run: |
-          curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz | tar -xz gitleaks
+          curl -sSfL -o "$GITLEAKS_TARBALL" "https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/$GITLEAKS_TARBALL"
+          echo "$GITLEAKS_SHA256  $GITLEAKS_TARBALL" | sha256sum -c -
+          tar -xzf "$GITLEAKS_TARBALL" gitleaks
+          rm "$GITLEAKS_TARBALL"
           ./gitleaks git --no-banner --redact .
 
   # On a change with no backend files (Markdown or frontend only) this job
@@ -117,10 +125,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Python
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: ${{ matrix.python-version }}
           cache: "pip"
@@ -183,7 +191,7 @@ jobs:
 
       - name: Upload SBOM artifact
         if: needs.changes.outputs.backend == 'true'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: sbom-cyclonedx-py${{ matrix.python-version }}
           path: |
@@ -236,10 +244,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Node
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24"
           cache: "npm"
@@ -281,7 +289,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Resolve image name and version
         id: meta
@@ -296,17 +304,17 @@ jobs:
           echo "version=${base}+edge.${short}" >> "$GITHUB_OUTPUT"
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       - name: Log in to GHCR
-        uses: docker/login-action@v4
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and publish edge image
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: ./Dockerfile

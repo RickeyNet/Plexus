@@ -310,10 +310,17 @@ def test_dashboard_omits_topology_without_monitoring_feature(client):
     resp = test_client.get("/api/dashboard")
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    assert "topology" not in body
-    assert "device_health" in body and "open_alerts" in body
-    # The cached object itself still carries the section for other users.
-    assert "topology" in app_module._dashboard_cache["data"]
+    # Only the counts: every other key belongs to a feature this user lacks.
+    assert set(body) == {"stats"}
+    # The cached object itself still carries every section for other users.
+    assert set(app_module._dashboard_cache["data"]) >= {
+        "topology",
+        "device_health",
+        "open_alerts",
+        "monitoring",
+        "recent_jobs",
+        "groups",
+    }
 
 
 def test_dashboard_includes_topology_with_monitoring_feature(client):
@@ -321,4 +328,35 @@ def test_dashboard_includes_topology_with_monitoring_feature(client):
     _login_user(test_client, csrf, "operator", ["dashboard", "monitoring"])
     resp = test_client.get("/api/dashboard")
     assert resp.status_code == 200, resp.text
-    assert resp.json()["topology"]["entity_counts"]["total"] == 5
+    body = resp.json()
+    assert body["topology"]["entity_counts"]["total"] == 5
+    assert {"device_health", "open_alerts", "monitoring"} <= set(body)
+    assert "recent_jobs" not in body and "groups" not in body
+
+
+async def _seed_jobs() -> None:
+    """One job launched by the admin and one by ``jobs-user``."""
+    from routes.db import jobs as jobs_db, playbooks as playbooks_db
+
+    playbook_id = await playbooks_db.create_playbook("Example check", "example_check.py")
+    await jobs_db.create_job(playbook_id, None, launched_by="admin")
+    await jobs_db.create_job(playbook_id, None, launched_by="jobs-user")
+
+
+def test_dashboard_jobs_and_groups_follow_features(client):
+    test_client, csrf = client
+    asyncio.run(_seed_jobs())
+    # The admin sees every user's jobs; the shared cache holds them too.
+    admin_jobs = test_client.get("/api/dashboard").json()["recent_jobs"]
+    assert {job["launched_by"] for job in admin_jobs} >= {"admin", "jobs-user"}
+    _login_user(test_client, csrf, "jobs-user", ["dashboard", "jobs", "inventory"])
+    resp = test_client.get("/api/dashboard")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    # A non-admin sees only the jobs they launched, even from the shared cache.
+    assert body["recent_jobs"] and {job["launched_by"] for job in body["recent_jobs"]} == {"jobs-user"}
+    assert isinstance(body["groups"], list)
+    assert not {"device_health", "open_alerts", "monitoring", "topology"} & set(body)
+    # The cache was not changed by the per-user filter.
+    cached = app_module._dashboard_cache["data"]["recent_jobs"]
+    assert {job["launched_by"] for job in cached} >= {"admin", "jobs-user"}

@@ -28,6 +28,8 @@ from urllib.parse import urlsplit
 
 import httpx
 
+from netcontrol.integrations.http_common import guard_api_host
+
 DEFAULT_BASE_URL = "https://api.catonetworks.com/api/v1/graphql2"
 DEFAULT_TIMEOUT_SECONDS = 60.0
 DEFAULT_REQUESTS_PER_SECOND = 1.0
@@ -136,8 +138,9 @@ class CatoClient:
     async def __aexit__(self, *_exc: object) -> None:
         await self.close()
 
-    def _ensure_client(self) -> httpx.AsyncClient:
+    async def _ensure_client(self) -> httpx.AsyncClient:
         if self._client is None:
+            await guard_api_host(self._url, "Cato API", CatoApiError)
             # Redirects are never followed: the API key must only ever reach
             # the validated Cato host.
             self._client = httpx.AsyncClient(
@@ -157,7 +160,7 @@ class CatoClient:
     async def _post(self, name: str, query: str, variables: dict[str, Any]) -> httpx.Response | None:
         self.stats["requests"] += 1
         try:
-            return await self._ensure_client().post(
+            return await (await self._ensure_client()).post(
                 self._url,
                 json={"query": query, "variables": variables, "operationName": name},
                 headers={

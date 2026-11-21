@@ -34,6 +34,8 @@ updates:
       # publishes a release whose peer range includes TypeScript 7.
       - dependency-name: "typescript"
         update-types: ["version-update:semver-major"]
+  # Dockerfile base images, pinned as tag@sha256:<index digest>: Dependabot
+  # bumps the digest when the tag moves and the tag on a new release.
   - package-ecosystem: "docker"
     directory: "/"
     schedule:
@@ -48,3 +50,14 @@ updates:
       # first (google-re2 had none for 3.15 when this was added).
       - dependency-name: "python"
         update-types: ["version-update:semver-major", "version-update:semver-minor"]
+  # docker-compose.yml service images (postgres, nginx), pinned the same way.
+  - package-ecosystem: "docker-compose"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 3
+    ignore:
+      # A PostgreSQL major upgrade needs a dump and restore of the data
+      # volume, so it is a deliberate change, never an automatic bump.
+      - dependency-name: "postgres"
+        update-types: ["version-update:semver-major"]

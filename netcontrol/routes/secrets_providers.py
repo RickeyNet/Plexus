@@ -34,11 +34,13 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from netcontrol.object_scope import refuse_scoped, scope_exempt, scoped
+from netcontrol.routes.outbound_http import OutboundRequestError, guard_url
 from netcontrol.routes.shared import _audit, _corr_id, _session_user
 from netcontrol.secrets_providers.base import SecretsProviderError, invalidate
 from netcontrol.secrets_providers.service import (
     CACHE_TTL_MAX,
     prepare_provider,
+    provider_class,
     provider_types,
     public_provider,
     resolve_reference,
@@ -101,6 +103,20 @@ def _prepared(
         raise HTTPException(400, str(exc)) from exc
 
 
+async def _guard_addresses(provider_type: str, config: dict, stored_config: dict | None = None) -> None:
+    """400 when an address setting (a ``url`` setting: the Vault address,
+    the Azure vault and authority, the AWS endpoint), new or changed, fails
+    the outbound address guard. The fetch checks it again before each use."""
+    for setting in provider_class(provider_type).SETTINGS:
+        value = str(config.get(setting.name) or "")
+        if setting.kind != "url" or not value or value == str((stored_config or {}).get(setting.name) or ""):
+            continue
+        try:
+            await guard_url(value)
+        except OutboundRequestError as exc:
+            raise HTTPException(400, f"{setting.name} refused by the outbound address guard: {exc}") from None
+
+
 async def _provider(provider_id: int, *, with_secret: bool = False) -> dict:
     row = await db.get_secrets_provider(provider_id, with_secret=with_secret)
     if not row:
@@ -144,6 +160,7 @@ async def create_provider(body: ProviderCreate, request: Request):
     await refuse_scoped(request)
     name = _name(body.name)
     config, secret_enc = _prepared(body.provider_type, body.config, body.secrets)
+    await _guard_addresses(body.provider_type, config)
     fields = {
         "name": name,
         "provider_type": body.provider_type,
@@ -194,6 +211,7 @@ async def update_provider(provider_id: int, body: ProviderUpdate, request: Reque
             str(row.get("secret_enc") or ""),
             stored_config,
         )
+        await _guard_addresses(row["provider_type"], config, stored_config)
         fields["config_json"] = json.dumps(config, sort_keys=True)
         fields["secret_enc"] = secret_enc
     try:
