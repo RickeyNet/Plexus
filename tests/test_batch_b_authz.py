@@ -12,8 +12,11 @@ Covers:
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+from typing import cast
+
 import pytest
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 
 # ── capacity-planning projection bound (HTTP) ────────────────────────────────
 
@@ -150,8 +153,17 @@ async def test_lab_promote_validates_credential(monkeypatch):
 
     monkeypatch.setattr(lab, "require_credential_access", fake_require)
 
+    # What the feature gate leaves on a request: promote_run also checks
+    # that the caller holds the deployments write feature.
+    request = SimpleNamespace(
+        state=SimpleNamespace(
+            auth_session={"user_id": 10, "user": "alice"},
+            auth_user={"id": 10, "role": "user"},
+            auth_features=["lab", "deployments", "deployments.write"],
+        )
+    )
     body = lab.PromoteRequest(name="p", credential_id=7, target_group_id=3)
     with pytest.raises(_Stop):
-        await lab.promote_run(run_id=1, body=body, request=None)
+        await lab.promote_run(run_id=1, body=body, request=cast(Request, request))
     assert captured["credential_id"] == 7
     assert captured["session"] == {"user_id": 10, "user": "alice"}
