@@ -6,7 +6,8 @@ Covers, with no network access (the fake firewall of
 ``test_opnsense_topology`` serves ``sample.sample_api_answers``):
   * collector  - the ARP / NDP tables and the lease backends read with GET
                  only, a missing backend skipped quietly, a refused call
-                 naming its privilege, the get_arp fallback, the option off
+                 naming its privilege (dropped for a Kea / Dnsmasq service
+                 config.xml shows as off), the get_arp fallback, the option off
   * normalize  - MAC normalisation, incomplete and duplicate entries, lease
                  states, times and subnets per backend, delegated prefixes,
                  the snapshot tables and counts
@@ -29,7 +30,13 @@ import httpx
 import pytest
 import routes.database as db
 from netcontrol.integrations.opnsense import collector as collector_module
-from netcontrol.integrations.opnsense.collector import LEASE_BACKENDS, PHASE_CLIENTS, collect_opnsense
+from netcontrol.integrations.opnsense.collector import (
+    LEASE_BACKENDS,
+    NO_LEASES_MESSAGE,
+    PHASE_CLIENTS,
+    collect_opnsense,
+    lease_backends_off,
+)
 from netcontrol.integrations.opnsense.normalize import (
     arp_entries,
     build_snapshot,
@@ -37,7 +44,7 @@ from netcontrol.integrations.opnsense.normalize import (
     dhcp_leases,
     ndp_entries,
 )
-from netcontrol.integrations.opnsense.sample import SAMPLE_URL, build_sample_raw
+from netcontrol.integrations.opnsense.sample import SAMPLE_CONFIG_XML, SAMPLE_URL, build_sample_raw
 from netcontrol.routes import opnsense_collection
 from netcontrol.routes.dhcp_adapters import is_collection_fed
 
@@ -99,10 +106,74 @@ async def test_collect_names_the_privilege_of_a_refused_table(no_sleep):  # noqa
     by_path = {e["path"]: e for e in raw["errors"]}
     assert set(by_path) == {"/diagnostics/interface/getArp", "/kea/leases4/search"}
     assert "Diagnostics: ARP Table" in by_path["/diagnostics/interface/getArp"]["message"]
-    assert "Kea DHCP" in by_path["/kea/leases4/search"]["message"]
+    # The name OPNsense shows for the privilege (its Kea ACL, 24.7 to 25.7).
+    assert by_path["/kea/leases4/search"]["message"].endswith("privilege needed: Services: DHCP: Kea(v4)")
     assert all(e["status"] == 403 and not e.get("info") for e in raw["errors"])
     assert raw["clients"]["arp"] is None and raw["clients"]["ndp"]
     assert set(raw["clients"]["leases"]) == {"isc4", "kea6", "dnsmasq"}
+
+
+def _config_with(extra: str) -> str:
+    """The sample config.xml with ``extra`` added to it."""
+    return SAMPLE_CONFIG_XML.replace("</opnsense>", extra + "</opnsense>")
+
+
+KEA4_ON = "<OPNsense><Kea><dhcp4><general><enabled>1</enabled></general></dhcp4></Kea></OPNsense>"
+DNSMASQ_DHCP_ON = "<dnsmasq><enable>1</enable><dhcp_ranges><interface>opt2</interface></dhcp_ranges></dnsmasq>"
+
+
+def test_lease_backends_off_reads_the_service_switches_of_config_xml():
+    every = {"kea4", "kea6", "dnsmasq"}
+    # A configuration that never set up Kea or Dnsmasq.
+    assert lease_backends_off(SAMPLE_CONFIG_XML) == every
+    assert lease_backends_off(_config_with(KEA4_ON)) == {"kea6", "dnsmasq"}
+    assert lease_backends_off(_config_with(KEA4_ON.replace(">1<", ">0<"))) == every
+    assert lease_backends_off(_config_with(KEA4_ON.replace("dhcp4", "dhcp6"))) == {"kea4", "dnsmasq"}
+    assert lease_backends_off(_config_with(DNSMASQ_DHCP_ON)) == {"kea4", "kea6"}
+    # Dnsmasq as a DNS forwarder only: enabled, no DHCP range.
+    assert lease_backends_off(_config_with("<dnsmasq><enable>1</enable><dhcp_ranges/></dnsmasq>")) == every
+    assert lease_backends_off(_config_with(DNSMASQ_DHCP_ON.replace(">1<", ">0<"))) == every
+    # No OPNsense configuration: nothing is known to be off.
+    assert lease_backends_off("<html>login</html>") == set()
+
+
+@pytest.mark.asyncio
+async def test_collect_drops_the_refused_lease_read_of_a_service_that_is_off(no_sleep):  # noqa: F811
+    fake = _FakeFirewall()
+    fake.fail = {"kea/leases4/search": 403, "kea/leases6/search": 403, "dnsmasq/leases/search": 403}
+    # config.xml: Kea DHCPv4 runs, Kea DHCPv6 and Dnsmasq do not.
+    fake.answers["core/backup/download/this"] = _config_with(KEA4_ON)
+    async with _client(fake) as client:
+        raw = await collect_opnsense(client, {"include_firmware_audit": False})
+    refused = [e for e in raw["errors"] if e["scope"] == "clients"]
+    assert [e["path"] for e in refused] == ["/kea/leases4/search"]
+    assert refused[0]["status"] == 403 and "Services: DHCP: Kea(v4)" in refused[0]["message"]
+    assert set(raw["clients"]["leases"]) == {"isc4"}
+
+
+@pytest.mark.asyncio
+async def test_collect_keeps_the_refused_lease_reads_without_config_xml(no_sleep):  # noqa: F811
+    fake = _FakeFirewall()
+    fake.fail = {"kea/leases6/search": 403, "dnsmasq/leases/search": 403}
+    async with _client(fake) as client:
+        raw = await collect_opnsense(client, {"include_firmware_audit": False, "config_backup": False})
+    by_path = {e["path"]: e["message"] for e in raw["errors"]}
+    assert set(by_path) == {"/kea/leases6/search", "/dnsmasq/leases/search"}
+    assert by_path["/kea/leases6/search"].endswith("privilege needed: Services: DHCP: Kea(v6)")
+    assert by_path["/dnsmasq/leases/search"].endswith("privilege needed: Services: Dnsmasq DNS/DHCP: Settings")
+
+
+@pytest.mark.asyncio
+async def test_collect_notes_no_leases_once_the_refused_idle_reads_are_dropped(no_sleep):  # noqa: F811
+    fake = _FakeFirewall()
+    for _key, _name, paths, _privilege in LEASE_BACKENDS:
+        fake.answers.pop(paths[0], None)
+    fake.fail = {"kea/leases4/search": 403, "kea/leases6/search": 403}
+    async with _client(fake) as client:
+        raw = await collect_opnsense(client, {"include_firmware_audit": False})
+    (warning,) = [e for e in raw["errors"] if e["scope"] == "clients"]
+    assert warning["info"] and warning["message"] == NO_LEASES_MESSAGE
+    assert raw["clients"]["leases"] is None
 
 
 @pytest.mark.asyncio

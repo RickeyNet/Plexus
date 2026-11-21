@@ -48,8 +48,12 @@ the API reference at docs.opnsense.org:
   - ``dhcpv4/leases/search_lease``,              DHCP leases of whichever
     ``dhcpv6/leases/search_lease`` (ISC),        backends the firewall has; a
     ``kea/leases4/search``,                      backend that answers 404 is not
-    ``kea/leases6/search`` (Kea),                there and is skipped quietly.
-    ``dnsmasq/leases/search`` (Dnsmasq)          The search actions are read
+    ``kea/leases6/search`` (Kea),                there and is skipped quietly,
+    ``dnsmasq/leases/search`` (Dnsmasq)          and so is a refused (403) Kea
+                                                 or Dnsmasq read when config.xml
+                                                 shows that service as off
+                                                 (``lease_backends_off``).
+                                                 The search actions are read
                                                  with GET (all rows); the Kea,
                                                  Dnsmasq and DHCPv6 row shapes
                                                  are not verified against a
@@ -169,7 +173,7 @@ from netcontrol.integrations.opnsense.ids import (
     row_time,
     rule_classtype,
 )
-from netcontrol.integrations.pathtrace.opnsense_config import parse_document
+from netcontrol.integrations.pathtrace.opnsense_config import parse_document, parse_xml
 from netcontrol.integrations.traffic import parse_time
 from netcontrol.telemetry import configure_logging
 
@@ -264,10 +268,19 @@ PATH_NDP = (
 LEASE_BACKENDS: tuple[tuple[str, str, tuple[str, ...], str], ...] = (
     ("isc4", "ISC DHCPv4", ("dhcpv4/leases/search_lease", "dhcpv4/leases/searchLease"), "Status: DHCP leases"),
     ("isc6", "ISC DHCPv6", ("dhcpv6/leases/search_lease", "dhcpv6/leases/searchLease"), "Status: DHCPv6 leases"),
-    ("kea4", "Kea DHCPv4", ("kea/leases4/search",), "Services: Kea DHCP: Leases (v4)"),
-    ("kea6", "Kea DHCPv6", ("kea/leases6/search",), "Services: Kea DHCP: Leases (v6)"),
-    ("dnsmasq", "Dnsmasq DHCP", ("dnsmasq/leases/search",), "Services: Dnsmasq DNS/DHCP: Leases"),
+    ("kea4", "Kea DHCPv4", ("kea/leases4/search",), "Services: DHCP: Kea(v4)"),
+    ("kea6", "Kea DHCPv6", ("kea/leases6/search",), "Services: DHCP: Kea(v6)"),
+    ("dnsmasq", "Dnsmasq DHCP", ("dnsmasq/leases/search",), "Services: Dnsmasq DNS/DHCP: Settings"),
 )
+# Where config.xml says whether a lease backend's service is on (the Kea and
+# Dnsmasq models: ``general/enabled``, ``enable``). ISC DHCP is enabled per
+# interface and is not listed: its refused read always warns.
+_LEASE_SWITCHES = {
+    "kea4": "OPNsense/Kea/dhcp4/general/enabled",
+    "kea6": "OPNsense/Kea/dhcp6/general/enabled",
+    "dnsmasq": "dnsmasq/enable",
+}
+NO_LEASES_MESSAGE = "No DHCP lease endpoint answered (ISC, Kea, Dnsmasq): no DHCP leases were read"
 PATH_RULE_STATS = ("firewall/filter_util/rule_stats", "firewall/filter_util/ruleStats")
 # The pf tables behind the aliases (``AliasUtilController``; read-only actions only).
 PATH_ALIAS_TABLES = ("firewall/alias_util/aliases",)
@@ -724,6 +737,9 @@ async def collect_opnsense(
             errors.append(_error("config", exc, paths=(PATH_CONFIG,)))
         done += 1
 
+    if clients is not None and config_xml:
+        await _drop_refused_idle_leases(clients, config_xml, errors)
+
     alias_tables: dict[str, Any] | None = None
     wanted: list[str] = []
     if opts["include_alias_tables"] and config_xml:
@@ -917,15 +933,61 @@ async def _collect_clients(client: OpnsenseClient, errors: list[dict[str, Any]])
         rows = await read(paths, privilege, quiet_404=True)
         if rows is not None:
             leases[key] = rows
-    if not leases and not any(e.get("scope") == "clients" and e.get("status") == 403 for e in errors):
-        errors.append(
-            info_warning(
-                "clients",
-                "/" + LEASE_BACKENDS[0][2][0],
-                "No DHCP lease endpoint answered (ISC, Kea, Dnsmasq): no DHCP leases were read",
-            )
-        )
+    if not leases:
+        _note_no_leases(errors)
     return {"arp": arp, "ndp": ndp, "leases": leases or None}, answered
+
+
+def _note_no_leases(errors: list[dict[str, Any]]) -> None:
+    """One ``info`` warning that no lease backend answered, unless a refused
+    clients call already says why."""
+    if not any(e.get("scope") == "clients" and e.get("status") == 403 for e in errors):
+        errors.append(info_warning("clients", "/" + LEASE_BACKENDS[0][2][0], NO_LEASES_MESSAGE))
+
+
+def lease_backends_off(config_xml: str) -> set[str]:
+    """The lease backends (keys of ``LEASE_BACKENDS``) whose service
+    ``config_xml`` shows as off: Kea DHCPv4 / DHCPv6 not enabled, Dnsmasq
+    not enabled or without a DHCP range. Empty when the text is no OPNsense
+    configuration. ISC DHCP is never in it."""
+    root = parse_xml(config_xml)
+    if root is None:
+        return set()
+    off = {key for key, path in _LEASE_SWITCHES.items() if (root.findtext(path) or "").strip() != "1"}
+    if not any(len(ranges) for ranges in root.findall("dnsmasq/dhcp_ranges")):
+        off.add("dnsmasq")
+    return off
+
+
+def _refused_lease_paths(errors: list[dict[str, Any]], keys: set[str] | None = None) -> set[str]:
+    """The warning paths of the refused (403) lease reads of the backends
+    ``keys`` (default: those config.xml can show as off)."""
+    wanted = _LEASE_SWITCHES.keys() if keys is None else keys
+    paths = {"/" + path for key, _name, backend, _privilege in LEASE_BACKENDS if key in wanted for path in backend}
+    return {
+        str(e.get("path"))
+        for e in errors
+        if e.get("scope") == "clients" and e.get("status") == 403 and e.get("path") in paths
+    }
+
+
+async def _drop_refused_idle_leases(clients: dict[str, Any], config_xml: str, errors: list[dict[str, Any]]) -> None:
+    """Take the refused (403) lease reads of the backends ``config_xml``
+    shows as off out of ``errors``: a firewall that does not run Kea or
+    Dnsmasq DHCP has no leases there, so its API user needs no privilege
+    for them (they also allow changing that service). Without
+    ``config_xml`` (**Config backup** off, the download refused) the
+    warnings stay."""
+    if not _refused_lease_paths(errors):
+        return
+    # Parsing config.xml is CPU work: kept off the event loop.
+    off = await asyncio.to_thread(lease_backends_off, config_xml)
+    dropped = _refused_lease_paths(errors, off)
+    if not dropped:
+        return
+    errors[:] = [e for e in errors if not (e.get("scope") == "clients" and e.get("path") in dropped)]
+    if not clients.get("leases"):
+        _note_no_leases(errors)
 
 
 # The fields kept of a ``core/service/search`` row.
