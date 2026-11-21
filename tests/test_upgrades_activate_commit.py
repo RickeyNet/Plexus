@@ -120,6 +120,11 @@ def _patched(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(upgrades, "_wait_for_down", fake_wait_for_down)
     monkeypatch.setattr(upgrades, "_wait_for_reboot", fake_wait_for_reboot)
     monkeypatch.setattr(upgrades, "_check_image_exists", fake_check_image_exists)
+    # The post-reload chassis wait never sleeps for real, and gives up at
+    # once unless a test passes ``chassis_health_wait``.
+    monkeypatch.setattr(upgrades, "CHASSIS_HEALTH_CHECK_INTERVAL", 0)
+    monkeypatch.setattr(upgrades, "CHASSIS_HEALTH_WAIT", 0)
+    monkeypatch.setattr(upgrades, "REDUNDANT_CHASSIS_HEALTH_WAIT", 0)
 
     return {"emits": emits, "db": db_writes, "status": status_emits, "holder": holder, "shared": shared}
 
@@ -349,10 +354,27 @@ async def test_cold_standby_plain_activate_overridable(monkeypatch: pytest.Monke
     conn = _FakeConn(versions=["17.15.04", "17.15.05", "17.15.05"], redundancy=_DUPLEX_COLD)
     _patched["holder"]["conn"] = conn
     await upgrades._device_activate(
-        campaign_id=1, dev=_DEV, credentials={}, image_map={}, options={"skip_health_check": True}
+        campaign_id=1, dev=_DEV, credentials={}, image_map={}, options={"allow_degraded_chassis": True}
     )
     assert _activate_cmds(conn) == ["install activate prompt-level none"]
-    assert any(lvl == "warn" and "Proceeding despite" in msg for lvl, msg in _patched["emits"])
+    assert any(
+        lvl == "warn" and "Proceeding despite" in msg and "allow_degraded_chassis" in msg
+        for lvl, msg in _patched["emits"]
+    )
+    # It was not HOT before the reload, so the commit does not wait for it.
+    assert _final_status(_patched["db"], "verify_status") == "completed"
+
+
+@pytest.mark.asyncio
+async def test_skip_health_check_no_longer_overrides_cold_standby(monkeypatch: pytest.MonkeyPatch, _patched) -> None:
+    conn = _FakeConn(versions=["17.15.04"], redundancy=_DUPLEX_COLD)
+    _patched["holder"]["conn"] = conn
+    await upgrades._device_activate(
+        campaign_id=1, dev=_DEV, credentials={}, image_map={}, options={"skip_health_check": True}
+    )
+    assert _activate_cmds(conn) == []
+    _, err = _final_verify_state(_patched["db"])
+    assert "STANDBY COLD" in (err or "")
 
 
 @pytest.mark.asyncio
@@ -515,16 +537,40 @@ async def test_issu_standby_timeout_skips_commit_and_fails(monkeypatch: pytest.M
 
 
 @pytest.mark.asyncio
-async def test_plain_activate_does_not_wait_for_standby(monkeypatch: pytest.MonkeyPatch, _patched) -> None:
-    """Non-ISSU full reload: both sups come up together; no standby wait."""
+async def test_plain_activate_waits_for_standby_before_commit(monkeypatch: pytest.MonkeyPatch, _patched) -> None:
+    """Non-ISSU full reload: a standby that was HOT before must be HOT again
+    before ``install commit`` (it can come up minutes after the active)."""
     conn = _SeqConn(
         versions=["17.15.04", "17.15.05", "17.15.05"],
-        redundancy_seq=[_DUPLEX_HOT, _DUPLEX_COLD],
+        redundancy_seq=[_DUPLEX_HOT, _DUPLEX_COLD, _SIMPLEX, _DUPLEX_HOT],
+    )
+    _patched["holder"]["conn"] = conn
+    await upgrades._device_activate(
+        campaign_id=1, dev=_DEV, credentials={}, image_map={}, options={"chassis_health_wait": 600}
+    )
+    assert "install commit" in conn.commands
+    assert _final_status(_patched["db"], "verify_status") == "completed"
+    commit_idx = conn.commands.index("install commit")
+    polls = [i for i, c in enumerate(conn.commands) if c == "show redundancy"]
+    assert len(polls) == 4 and commit_idx > polls[-1]
+    assert any(lvl == "dim" and "STANDBY COLD" in msg for lvl, msg in _patched["emits"])
+
+
+@pytest.mark.asyncio
+async def test_plain_activate_standby_never_hot_skips_commit(monkeypatch: pytest.MonkeyPatch, _patched) -> None:
+    conn = _SeqConn(
+        versions=["17.15.04", "17.15.05", "17.15.05"],
+        redundancy_seq=[_DUPLEX_HOT, _SIMPLEX],
     )
     _patched["holder"]["conn"] = conn
     await upgrades._device_activate(campaign_id=1, dev=_DEV, credentials={}, image_map={}, options={})
-    assert "install commit" in conn.commands
-    assert _final_status(_patched["db"], "verify_status") == "completed"
+    assert "install commit" not in conn.commands
+    assert _final_status(_patched["db"], "activate_status") == "failed"
+    assert _final_status(_patched["db"], "verify_status") == "failed"
+    _, err = _final_verify_state(_patched["db"])
+    assert "standby supervisor is DISABLED, not STANDBY HOT" in err
+    assert "install commit was NOT sent" in err
+    assert "auto-abort timer state unknown" in err
 
 
 # ── Install state gate, activate reply, diagnosis ───────────────────────────

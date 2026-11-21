@@ -807,6 +807,75 @@ class Driver:
         """
         return {}
 
+    def upgrade_boot_vars_show_command(self) -> str:
+        """Return the command that shows the boot variables of every supervisor.
+
+        IOS-XE: ``show boot``.  The route reads it before work that ends in
+        a reload: a BOOT variable naming a .bin (or nothing), manual boot
+        or a config register that stops at ROMMON means the activated
+        packages are never booted.  Platforms without the concept leave
+        this unimplemented and the route skips the check.
+        """
+        raise DriverCapabilityError(f"{type(self).__name__} does not implement upgrade_boot_vars_show_command()")
+
+    def parse_boot_vars(self, output: str) -> dict:
+        """Parse ``upgrade_boot_vars_show_command()`` output.
+
+        Returns ``{"entries": [...]}`` with one dict per supervisor or
+        stack member: ``scope`` (``"active"``, ``"standby"``,
+        ``"switch 1"``...), ``boot`` (first entry of the BOOT variable
+        that applies at the next reload, ``""`` when empty),
+        ``manual_boot`` (bool | None) and ``config_register`` (str |
+        None, the value at the next reload).  An empty dict means the
+        output was not recognised; the route never blocks on that.
+        """
+        raise DriverCapabilityError(f"{type(self).__name__} does not implement parse_boot_vars()")
+
+    def upgrade_module_show_command(self) -> str:
+        """Return the command that lists the chassis modules or stack members.
+
+        IOS-XE: ``show module``.  Read before an activate (as the baseline)
+        and after the reload, so a line card or supervisor that does not
+        come back, or comes back on another release, is caught before
+        ``install commit``.  Platforms without it leave this unimplemented.
+        """
+        raise DriverCapabilityError(f"{type(self).__name__} does not implement upgrade_module_show_command()")
+
+    def parse_module_state(self, output: str) -> dict:
+        """Parse ``upgrade_module_show_command()`` output.
+
+        Returns ``{"modular": bool, "chassis_type": str | None,
+        "modules": [...]}``; each module has ``chassis`` (int | None, the
+        StackWise Virtual member), ``slot`` (int), ``model``,
+        ``card_type``, ``sw`` (str | None), ``status`` (str | None when
+        the format has no status column), ``supervisor`` (bool) and
+        ``role`` (``"active"``, ``"standby"``, another lower-cased role,
+        or None).  An empty dict means the output was not recognised.
+        """
+        raise DriverCapabilityError(f"{type(self).__name__} does not implement parse_module_state()")
+
+    def upgrade_environment_show_commands(self) -> list[str]:
+        """Return the commands that report power supply and fan state."""
+        raise DriverCapabilityError(f"{type(self).__name__} does not implement upgrade_environment_show_commands()")
+
+    def parse_environment_state(self, outputs: dict[str, str]) -> dict:
+        """Parse the replies of ``upgrade_environment_show_commands()``.
+
+        ``outputs`` maps each command to its reply.  Returns ``{"problems":
+        [...]}``, one phrase per power supply or fan in a positively bad
+        state.  Absent or unknown readings are not problems.
+        """
+        raise DriverCapabilityError(f"{type(self).__name__} does not implement parse_environment_state()")
+
+    def upgrade_standby_flash_filesystems(self) -> list[str]:
+        """Return the standby supervisor's flash filesystems, in the order to try.
+
+        IOS-XE ``install add`` copies the unpacked packages to the standby,
+        so the route checks its free space too.  Platforms without a
+        standby filesystem leave this unimplemented.
+        """
+        raise DriverCapabilityError(f"{type(self).__name__} does not implement upgrade_standby_flash_filesystems()")
+
     def upgrade_commit_command(self) -> str:
         """Return the command that makes the new image permanent.
 

@@ -2093,6 +2093,21 @@ ISSU_DOWN_TIMEOUT = 1800
 ISSU_STANDBY_WAIT = 1800
 ISSU_STANDBY_CHECK_INTERVAL = 30
 
+# After the reload answers SSH, how long the activate waits for every line
+# card and supervisor (and stack member) to come back healthy before it
+# gives up without sending ``install commit``.  A chassis with line cards
+# or a second supervisor takes longer: line card firmware upgrades on the
+# first boot of a new release run after the supervisor is up.
+CHASSIS_HEALTH_WAIT = 1200
+REDUNDANT_CHASSIS_HEALTH_WAIT = 1800
+CHASSIS_HEALTH_CHECK_INTERVAL = 30
+
+_DO_NOT_POWER_CYCLE = (
+    "Do not power cycle the switch while it reloads: the first boot on a new release can upgrade "
+    "ROMMON/CPLD and line card firmware, which takes extra minutes and must not be interrupted. "
+    "Watch progress on the console."
+)
+
 # How long the activate command waits for its prompt, and how often the
 # channel is read afterwards while the switch is still working on it.
 ACTIVATE_READ_TIMEOUT = 120
@@ -2130,8 +2145,9 @@ async def _transfer_standby_gate(campaign_id, dev_id, ip, device_type, red, opti
     and the operator only finds out at activate time (which the
     redundancy gate there refuses).  Catching it here saves the 30-60
     minute SCP + unpack.  Only meaningful on platforms with a discrete
-    prestage step; ``skip_health_check`` downgrades it to a warning.
-    Returns an error string to abort on, else None.
+    prestage step.  Only ``allow_degraded_chassis`` downgrades it to a
+    warning; ``skip_health_check`` skips the Prestage health check and
+    nothing else.  Returns an error string to abort on, else None.
     """
     if not red or not red.get("redundant") or red.get("standby_hot"):
         return None
@@ -2142,8 +2158,8 @@ async def _transfer_standby_gate(campaign_id, dev_id, ip, device_type, red, opti
         f"Standby supervisor is {peer}, not STANDBY HOT - install add would not sync "
         "packages to it and activate would be refused"
     )
-    if options.get("skip_health_check"):
-        await _emit(campaign_id, dev_id, "warn", f"Proceeding despite: {problem} (skip_health_check set)", host=ip)
+    if options.get("allow_degraded_chassis"):
+        await _emit(campaign_id, dev_id, "warn", f"Proceeding despite: {problem} (allow_degraded_chassis set)", host=ip)
         return None
     return problem
 
@@ -2195,6 +2211,483 @@ async def _boot_mode_gate(conn, campaign_id, dev_id, ip, device_type) -> str | N
             "Boot mode could not be determined from show version - assuming INSTALL mode",
             host=ip,
         )
+    return None
+
+
+# ── Chassis checks (``show boot``, ``show module``, environment) ────────────
+#
+# Same pattern as the boot-mode gate: the driver names the command and
+# parses it; a platform without the capability skips the check, a failed
+# read or an unrecognised reply proceeds with a warning, and only a
+# positively bad reading blocks.
+
+
+async def _read_upgrade_show(conn, device_type, show_name: str, parse_name: str) -> tuple[dict | None, str]:
+    """Run a driver show command and parse it.
+
+    Returns ``(parsed, "")`` when recognised, ``(None, "")`` when the
+    platform has no such capability, and ``(None, reason)`` when the read
+    failed or the reply was not recognised.
+    """
+    driver = get_driver(device_type)
+    try:
+        show_cmd = getattr(driver, show_name)()
+    except DriverCapabilityError:
+        return None, ""
+    try:
+        output = await asyncio.to_thread(conn.send_command, show_cmd, read_timeout=60)
+        parsed = getattr(driver, parse_name)(output or "")
+    except DriverCapabilityError:
+        return None, ""
+    except Exception as exc:
+        return None, f"{show_cmd} failed ({exc})"
+    if not parsed:
+        return None, f"{show_cmd} reply not recognised"
+    return parsed, ""
+
+
+def _boot_scope_label(scope: str) -> str:
+    if scope == "active":
+        return "Active supervisor"
+    if scope == "standby":
+        return "Standby supervisor"
+    return scope[:1].upper() + scope[1:]
+
+
+def _boot_var_problems(state: dict) -> tuple[list[str], list[str]]:
+    """Blocking problems and warnings in parsed boot variables.
+
+    The activated packages are only booted when the BOOT variable names
+    the provisioning file (``packages.conf``), manual boot is off, and the
+    config register neither stops at ROMMON (boot field 0) nor ignores
+    the startup configuration (bit 0x40).
+    """
+    problems: list[str] = []
+    warnings: list[str] = []
+    for entry in state.get("entries") or []:
+        label = _boot_scope_label(str(entry.get("scope") or "switch"))
+        boot = str(entry.get("boot") or "")
+        if not boot:
+            problems.append(f"{label}: BOOT variable is empty, so the reload would not boot the activated packages")
+        elif not boot.lower().endswith(".conf"):
+            problems.append(
+                f"{label}: BOOT variable is {boot}, not a .conf file, so the reload would boot that image and "
+                "ignore the activated packages (set 'boot system' to packages.conf)"
+            )
+        elif not boot.lower().rsplit(":", 1)[-1].lstrip("/").endswith("packages.conf"):
+            warnings.append(
+                f"{label}: BOOT variable is {boot}, not packages.conf; check it is the file install updates"
+            )
+        if entry.get("manual_boot") is True:
+            problems.append(
+                f"{label}: manual boot is enabled, so the switch would stop at ROMMON after the reload "
+                "(configure 'no boot manual')"
+            )
+        creg = entry.get("config_register")
+        if creg:
+            try:
+                value = int(str(creg), 16)
+            except ValueError:
+                continue
+            if value & 0xF == 0:
+                problems.append(f"{label}: configuration register {creg} boots to ROMMON (boot field 0)")
+            if value & 0x40:
+                problems.append(f"{label}: configuration register {creg} ignores the startup configuration (0x40 set)")
+    return problems, warnings
+
+
+async def _boot_vars_gate(conn, campaign_id, dev_id, ip, device_type) -> str | None:
+    """Refuse work that ends in a reload when the boot variables would not
+    boot the activated packages.  No option overrides it: a switch that
+    stops at ROMMON or boots the old .bin is an outage, not a degraded
+    chassis.  Returns an error string to abort on, else None."""
+    state, note = await _read_upgrade_show(conn, device_type, "upgrade_boot_vars_show_command", "parse_boot_vars")
+    if state is None:
+        if note:
+            await _emit(campaign_id, dev_id, "warn", f"Boot variable check skipped: {note} - continuing", host=ip)
+        return None
+    problems, warnings = _boot_var_problems(state)
+    for warning in warnings:
+        await _emit(campaign_id, dev_id, "warn", warning, host=ip)
+    if problems:
+        return "Boot variables would not boot the new release: " + "; ".join(problems)
+    shown = ", ".join(
+        f"{_boot_scope_label(str(e.get('scope') or 'switch'))} {e.get('boot')}" for e in state.get("entries") or []
+    )
+    await _emit(campaign_id, dev_id, "info", f"Boot variables OK ({shown})", host=ip)
+    return None
+
+
+# A module software column that is a dotted release (``17.15.05``), as
+# opposed to a build stamp a provisioned in-chassis standby can show.
+_MODULE_RELEASE = re.compile(r"^\d+\.\d+\.\d+")
+
+
+def _module_key(mod: dict) -> tuple:
+    return (mod.get("chassis"), mod.get("slot"))
+
+
+def _module_label(mod: dict, modular: bool) -> str:
+    model = f" ({mod['model']})" if mod.get("model") else ""
+    if mod.get("chassis") is not None:
+        return f"Switch {mod['chassis']} slot {mod.get('slot')}{model}"
+    if modular:
+        return f"Slot {mod.get('slot')}{model}"
+    return f"Switch {mod.get('slot')}{model}"
+
+
+def _module_status_ok(mod: dict) -> bool:
+    status = str(mod.get("status") or "").strip().lower()
+    if status == "ok":
+        return True
+    # The fourth supervisor of a quad-sup pair idles as Provisioned.
+    return status == "provisioned" and str(mod.get("role") or "").startswith("inchassis")
+
+
+def _module_unhealthy(mod: dict) -> bool:
+    return mod.get("status") is not None and not _module_status_ok(mod)
+
+
+def _supervisors_without_standby(modules: list[dict]) -> int:
+    """The supervisor count when two or more are installed and none has
+    the standby role, else 0."""
+    supervisors = sum(1 for m in modules if m.get("supervisor"))
+    if supervisors >= 2 and not any(m.get("role") == "standby" for m in modules):
+        return supervisors
+    return 0
+
+
+def _module_problems(
+    state: dict | None, expected_version: str | None = None, baseline: dict | None = None
+) -> list[str]:
+    """What is wrong with the modules in a parsed ``show module``.
+
+    - a module whose status is shown and is not ``ok``;
+    - two or more supervisors but none in the standby role (a dead second
+      supervisor makes ``show redundancy`` report Simplex, so the chassis
+      would otherwise pass as standalone);
+    - with ``expected_version``: a module on another release;
+    - with ``baseline`` (the state before the reload): a module present
+      then and missing now.  A module already unhealthy in the baseline
+      is exempt from the status and version checks, and a chassis that
+      had no standby supervisor then is not failed for having none now,
+      so a chassis knowingly activated degraded is not failed for the
+      same fault.
+    """
+    if not state:
+        return []
+    modular = bool(state.get("modular"))
+    modules = state.get("modules") or []
+    base_modules = (baseline or {}).get("modules") or []
+    exempt = {_module_key(m) for m in base_modules if _module_unhealthy(m)}
+    problems: list[str] = []
+    for mod in modules:
+        if _module_key(mod) in exempt:
+            continue
+        label = _module_label(mod, modular)
+        if _module_unhealthy(mod):
+            problems.append(f"{label} is {mod.get('status')}")
+        sw = str(mod.get("sw") or "")
+        if expected_version and _MODULE_RELEASE.match(sw) and not _same_release(sw, expected_version):
+            problems.append(f"{label} runs {sw}, not {expected_version}")
+    # Already without a standby before the reload: the same exemption.
+    supervisors = _supervisors_without_standby(modules)
+    if supervisors and not _supervisors_without_standby(base_modules):
+        problems.append(f"{supervisors} supervisors installed but none is in the standby role")
+    present = {_module_key(m) for m in modules}
+    for mod in base_modules:
+        if _module_key(mod) not in present:
+            problems.append(f"{_module_label(mod, modular)} was present before the reload and is missing now")
+    return problems
+
+
+async def _module_gate(conn, campaign_id, dev_id, ip, device_type, issu, options) -> tuple[str | None, dict | None]:
+    """Pre-activate ``show module`` check.
+
+    Returns ``(error, state)``; ``state`` is kept as the baseline the
+    post-reload wait compares against.  ``allow_degraded_chassis``
+    downgrades the problems to a warning, except for ISSU, which needs
+    every module healthy.
+    """
+    state, note = await _read_upgrade_show(conn, device_type, "upgrade_module_show_command", "parse_module_state")
+    if state is None:
+        if note:
+            await _emit(campaign_id, dev_id, "warn", f"Module check skipped: {note} - continuing", host=ip)
+        return None, None
+    problems = _module_problems(state)
+    if not problems:
+        await _emit(campaign_id, dev_id, "info", f"Modules: {len(state.get('modules') or [])} ok", host=ip)
+        return None, state
+    if options.get("allow_degraded_chassis") and not issu:
+        await _emit(
+            campaign_id,
+            dev_id,
+            "warn",
+            f"Proceeding despite: {'; '.join(problems)} (allow_degraded_chassis set; "
+            "these modules are not checked again after the reload)",
+            host=ip,
+        )
+        return None, state
+    return (
+        f"Module check failed: {'; '.join(problems)}. Fix the chassis before activating, or turn on "
+        "'Allow a degraded chassis' in the campaign to activate anyway",
+        state,
+    )
+
+
+# ``show switch`` stack member rows: ``*1  Active  0000.5e00.5344  15  V02  Ready``.
+_STACK_MEMBER_LINE = re.compile(
+    r"\s*\*?(\d+)\s+\S+\s+.*?(Ready|Removed|Progressing|Provisioned|Invalid|Added|Syncing|Version Mismatch)"
+)
+
+
+def _stack_member_states(output: str) -> dict[str, str]:
+    """Member number -> state from ``show switch`` ({} when not a stack)."""
+    members: dict[str, str] = {}
+    for line in (output or "").splitlines():
+        match = _STACK_MEMBER_LINE.match(line)
+        if match:
+            members[match.group(1)] = match.group(2)
+    return members
+
+
+async def _read_stack_members(conn) -> dict[str, str] | None:
+    """``show switch`` member states; None when the read failed."""
+    try:
+        output = await asyncio.to_thread(conn.send_command, "show switch", read_timeout=30)
+    except Exception as exc:
+        LOGGER.debug("show switch failed: %s", exc)
+        return None
+    return _stack_member_states(output)
+
+
+async def _environment_problems(conn, device_type) -> list[str]:
+    """Power supply / fan readings that are positively bad ([] when none or no capability)."""
+    driver = get_driver(device_type)
+    try:
+        commands = driver.upgrade_environment_show_commands()
+    except DriverCapabilityError:
+        return []
+    outputs: dict[str, str] = {}
+    for command in commands:
+        try:
+            outputs[command] = await asyncio.to_thread(conn.send_command, command, read_timeout=60) or ""
+        except Exception as exc:
+            LOGGER.debug("%s failed: %s", command, exc)
+    try:
+        return list(driver.parse_environment_state(outputs).get("problems") or [])
+    except DriverCapabilityError:
+        return []
+
+
+async def _chassis_outstanding(
+    conn,
+    device_type,
+    *,
+    expected_version: str | None,
+    standby: str,
+    baseline_modules: dict | None = None,
+    baseline_stack: dict[str, str] | None = None,
+) -> tuple[list[str], dict | None, dict | None]:
+    """One read of the chassis after a reload: ``(problems, modules, red)``.
+
+    ``standby`` is ``"required"`` (it was STANDBY HOT before the reload,
+    so anything else, including a failed read, is outstanding),
+    ``"if_redundant"`` (only a redundant chassis' peer must be HOT) or
+    ``"skip"``.  A module or stack read that fails is outstanding only
+    when the same read worked before the reload.
+    """
+    problems: list[str] = []
+    red: dict | None = None
+    if standby != "skip":
+        try:
+            red = await _check_redundancy(conn, device_type)
+        except Exception as exc:
+            if standby == "required":
+                problems.append(f"show redundancy did not answer ({exc})")
+        else:
+            peer = (red or {}).get("peer_state") or "not reporting"
+            if red is not None and not red.get("standby_hot"):
+                if standby == "required" or red.get("redundant"):
+                    problems.append(f"standby supervisor is {peer}, not STANDBY HOT")
+    modules, note = await _read_upgrade_show(conn, device_type, "upgrade_module_show_command", "parse_module_state")
+    if modules is not None:
+        problems.extend(_module_problems(modules, expected_version, baseline_modules))
+    elif baseline_modules is not None:
+        problems.append(note or "show module not readable")
+    ready_before = [n for n, s in (baseline_stack or {}).items() if s == "Ready"]
+    if ready_before:
+        members = await _read_stack_members(conn)
+        if members is None:
+            problems.append("show switch did not answer")
+        else:
+            for number in ready_before:
+                if members.get(number) != "Ready":
+                    problems.append(f"stack member {number} is {members.get(number) or 'missing'}")
+    return problems, modules, red
+
+
+def _chassis_summary(modules: dict | None, red: dict | None, expected_version: str | None) -> str:
+    """``Modules: 7 ok, all on 17.15.05; standby supervisor STANDBY HOT``."""
+    parts = []
+    if modules:
+        text = f"Modules: {len(modules.get('modules') or [])} ok"
+        if expected_version:
+            text += f", all on {expected_version}"
+        parts.append(text)
+    if red and red.get("standby_hot"):
+        parts.append("standby supervisor STANDBY HOT")
+    return "; ".join(parts)
+
+
+async def _wait_for_chassis_health(
+    conn,
+    campaign_id,
+    dev_id,
+    ip,
+    device_type,
+    *,
+    expected_version,
+    standby: str,
+    baseline_modules,
+    baseline_stack,
+    max_wait: int,
+) -> list[str]:
+    """Poll the chassis after the reload until it is healthy; the problems
+    still outstanding when ``max_wait`` runs out ([] once healthy)."""
+    start = time.monotonic()
+    while True:
+        problems, modules, red = await _chassis_outstanding(
+            conn,
+            device_type,
+            expected_version=expected_version,
+            standby=standby,
+            baseline_modules=baseline_modules,
+            baseline_stack=baseline_stack,
+        )
+        if not problems:
+            summary = _chassis_summary(modules, red, expected_version)
+            if summary:
+                await _emit(campaign_id, dev_id, "success", f"Chassis healthy after the reload - {summary}", host=ip)
+            return []
+        elapsed = int(time.monotonic() - start)
+        if elapsed >= max_wait:
+            return problems
+        await _emit(
+            campaign_id,
+            dev_id,
+            "dim",
+            f"Waiting for the chassis to settle before commit ({elapsed}s of {max_wait}s): {'; '.join(problems)}",
+            host=ip,
+        )
+        await asyncio.sleep(CHASSIS_HEALTH_CHECK_INTERVAL)
+
+
+async def _post_reload_chassis_gate(
+    conn,
+    campaign_id,
+    dev_id,
+    ip,
+    device_type,
+    options,
+    *,
+    expected_version,
+    running_version,
+    standby: str,
+    baseline_modules,
+    baseline_stack,
+    wide: bool,
+) -> str | None:
+    """Wait for the chassis to settle after the reload, before ``install commit``.
+
+    Returns the failure message when it does not settle within the budget
+    (``chassis_health_wait``, else 20 minutes, 30 on a redundant or
+    modular chassis); the message names what is outstanding, says the
+    commit was not sent and how long the auto-abort timer leaves.
+    """
+    default_wait = REDUNDANT_CHASSIS_HEALTH_WAIT if wide else CHASSIS_HEALTH_WAIT
+    max_wait = int(options.get("chassis_health_wait", default_wait))
+    problems = await _wait_for_chassis_health(
+        conn,
+        campaign_id,
+        dev_id,
+        ip,
+        device_type,
+        expected_version=expected_version,
+        standby=standby,
+        baseline_modules=baseline_modules,
+        baseline_stack=baseline_stack,
+        max_wait=max_wait,
+    )
+    if not problems:
+        return None
+    state, _ = await _read_install_state(conn, device_type)
+    timer = _abort_timer_text(state) if state is not None else "auto-abort timer state unknown"
+    return (
+        f"Chassis not healthy {max_wait // 60} min after the reload: {'; '.join(problems)}. "
+        f"install commit was NOT sent ({timer}). Check the chassis, then either run 'install commit' "
+        f"on the switch to keep {running_version}, or run 'install abort' (or let an active auto-abort "
+        "timer expire) to roll back to the previous release."
+    )
+
+
+def _flash_space_needed(image_size: int, image_on_flash: bool, unpacks: bool = True) -> int:
+    """Free bytes the transfer needs.  Where ``install add`` unpacks the
+    image (``unpacks``): room for the copy plus the unpacked packages
+    (about the image size again), or only the packages when the image is
+    already there.  A platform that installs straight from the file needs
+    room for the copy only."""
+    return int(image_size * (2.2 if unpacks and not image_on_flash else 1.1))
+
+
+def _free_bytes(output: str | None) -> int | None:
+    match = re.search(r"(\d+)\s+bytes\s+free", output or "")
+    return int(match.group(1)) if match else None
+
+
+async def _standby_flash_gate(conn, campaign_id, dev_id, ip, device_type, image_path, image_name) -> str | None:
+    """Refuse ``install add`` when the standby supervisor's flash is too full.
+
+    ``install add`` copies the unpacked packages to the standby too, and
+    running out there fails late (or leaves the standby without the new
+    release).  The first filesystem in the driver's list that reports a
+    ``bytes free`` figure is used; none readable is logged and allowed.
+    """
+    try:
+        filesystems = get_driver(device_type).upgrade_standby_flash_filesystems()
+    except DriverCapabilityError:
+        return None
+    for fs in filesystems:
+        try:
+            output = await asyncio.to_thread(conn.send_command, f"dir {fs} | include bytes", read_timeout=60)
+        except Exception as exc:
+            LOGGER.debug("dir %s failed on %s: %s", fs, ip, exc)
+            continue
+        free = _free_bytes(output)
+        if free is None:
+            continue
+        try:
+            on_standby = await asyncio.to_thread(_check_image_exists, conn, image_name, fs)
+        except Exception:
+            on_standby = False
+        needed = _flash_space_needed(os.path.getsize(image_path), on_standby)
+        if free <= needed:
+            return (
+                f"Not enough free space on the standby supervisor ({fs}): {free / 1024 / 1024:.0f} MB free, "
+                f"{needed / 1024 / 1024:.0f} MB needed. install add copies the unpacked packages to the standby; "
+                "free space there first (for example 'install remove inactive')"
+            )
+        await _emit(
+            campaign_id, dev_id, "info", f"Standby flash space OK ({fs} {free / 1024 / 1024:.0f} MB free)", host=ip
+        )
+        return None
+    await _emit(
+        campaign_id,
+        dev_id,
+        "warn",
+        f"Standby flash space could not be read ({', '.join(filesystems)}) - continuing",
+        host=ip,
+    )
     return None
 
 
@@ -3059,14 +3552,16 @@ async def _device_prestage(campaign_id, dev, credentials, image_map, options):
 
         # Boot mode: install-mode upgrades (and ISSU) cannot run on a
         # BUNDLE-mode switch, so say so now rather than after the copy.
+        # The boot variables decide whether the reload boots the activated
+        # packages at all; no option overrides either check.
         boot_err = await _boot_mode_gate(conn, campaign_id, dev_id, ip, device_type)
+        if not boot_err:
+            boot_err = await _boot_vars_gate(conn, campaign_id, dev_id, ip, device_type)
         if boot_err:
-            await db.update_upgrade_device(dev_id, prestage_status="failed", phase="failed", error_message=boot_err)
-            await _emit_device_status(campaign_id, dev_id, prestage_status="failed", error_message=boot_err)
-            await _emit(campaign_id, dev_id, "error", boot_err, host=ip)
+            await _fail_upgrade_device(campaign_id, dev_id, ip, boot_err, status_keys=("prestage_status",))
             return
 
-        # Health check
+        # Health check (``skip_health_check`` skips only this)
         if not options.get("skip_health_check"):
             await _emit(campaign_id, dev_id, "info", "Running pre-flight health check...", host=ip)
             passed, warnings = await _health_check(conn, ip, device_type=device_type, issu=bool(options.get("issu")))
@@ -3303,24 +3798,38 @@ async def _device_transfer(campaign_id, dev, credentials, image_map, options):
             local_md5 = await asyncio.to_thread(_compute_md5, image_path)
             await _emit(campaign_id, dev_id, "info", f"Local MD5: {local_md5}", host=ip)
 
+        # Check if image already exists: it decides how much room the
+        # flash needs (the unpacked packages only, or the copy as well).
+        exists = await asyncio.to_thread(_check_image_exists, conn, image_name, dest_path)
+
         # Check flash space
         await _emit(campaign_id, dev_id, "info", "Checking flash space...", host=ip)
-        has_space, free_bytes = await _check_flash_space(conn, image_path, dest_path)
+        # Only a platform whose install add unpacks the image needs room
+        # for the packages as well.
+        unpacks = get_driver(device_type).upgrade_has_discrete_prestage()
+        has_space, free_bytes = await _check_flash_space(
+            conn, image_path, dest_path, image_on_flash=exists, unpacks=unpacks
+        )
         if not has_space:
-            await db.update_upgrade_device(
-                dev_id, transfer_status="failed", phase="failed", error_message="Insufficient flash space"
+            needed = _flash_space_needed(os.path.getsize(image_path), exists, unpacks)
+            space_err = (
+                f"Insufficient flash space on {dest_path}: {(free_bytes or 0) / 1024 / 1024:.0f} MB free, "
+                f"{needed / 1024 / 1024:.0f} MB needed for the image"
+                + (" and its unpacked packages" if unpacks else "")
             )
-            await _emit_device_status(
-                campaign_id, dev_id, transfer_status="failed", error_message="Insufficient flash space"
-            )
-            await _emit(campaign_id, dev_id, "error", "Insufficient flash space", host=ip)
+            await _fail_upgrade_device(campaign_id, dev_id, ip, space_err, status_keys=("transfer_status",))
             return
         await _emit(
             campaign_id, dev_id, "info", f"Flash space OK ({(free_bytes or 0) / 1024 / 1024:.0f} MB free)", host=ip
         )
+        if chassis_redundant and unpacks:
+            standby_space_err = await _standby_flash_gate(
+                conn, campaign_id, dev_id, ip, device_type, image_path, image_name
+            )
+            if standby_space_err:
+                await _fail_upgrade_device(campaign_id, dev_id, ip, standby_space_err, status_keys=("transfer_status",))
+                return
 
-        # Check if image already exists
-        exists = await asyncio.to_thread(_check_image_exists, conn, image_name, dest_path)
         if exists:
             await _emit(campaign_id, dev_id, "info", f"Image {image_name} already on flash", host=ip)
             should_prestage = False
@@ -3656,18 +4165,25 @@ async def _device_activate(campaign_id, dev, credentials, image_map, options):
             await _emit(campaign_id, dev_id, "error", msg, host=ip)
             return
         boot_err = await _boot_mode_gate(conn, campaign_id, dev_id, ip, device_type)
+        if not boot_err:
+            boot_err = await _boot_vars_gate(conn, campaign_id, dev_id, ip, device_type)
         if boot_err:
-            await db.update_upgrade_device(dev_id, activate_status="failed", phase="failed", error_message=boot_err)
-            await _emit_device_status(campaign_id, dev_id, activate_status="failed", error_message=boot_err)
-            await _emit(campaign_id, dev_id, "error", boot_err, host=ip)
+            await _fail_upgrade_device(campaign_id, dev_id, ip, boot_err)
             return
         red_err, red = await _redundancy_gate(conn, campaign_id, dev_id, ip, device_type, issu, options)
         chassis_redundant = bool(red and red.get("redundant"))
         if red_err:
-            await db.update_upgrade_device(dev_id, activate_status="failed", phase="failed", error_message=red_err)
-            await _emit_device_status(campaign_id, dev_id, activate_status="failed", error_message=red_err)
-            await _emit(campaign_id, dev_id, "error", red_err, host=ip)
+            await _fail_upgrade_device(campaign_id, dev_id, ip, red_err)
             return
+        # Modules: refuse a chassis with a line card or supervisor already
+        # down, and keep the reading as the baseline the post-reload wait
+        # compares against.  The stack table is kept for the same reason.
+        module_err, baseline_modules = await _module_gate(conn, campaign_id, dev_id, ip, device_type, issu, options)
+        if module_err:
+            await _fail_upgrade_device(campaign_id, dev_id, ip, module_err)
+            return
+        chassis_modular = bool(baseline_modules and baseline_modules.get("modular"))
+        baseline_stack = await _read_stack_members(conn) or {}
         # Install state: an install left open by an earlier upgrade makes
         # the switch refuse the activate, and a target that was never
         # added cannot be activated.  Refuse here, before any reload.
@@ -3683,12 +4199,27 @@ async def _device_activate(campaign_id, dev, credentials, image_map, options):
         # kills our session) and longer overall, so both windows are
         # widened when the in-service path is used.  ``down_timeout`` also
         # bounds how long a still-running activate is read below.
+        # A modular chassis reloads every line card even with one
+        # supervisor, so it gets the redundant chassis' windows.
         if issu:
             default_verify_wait, down_timeout = ISSU_VERIFY_WAIT, ISSU_DOWN_TIMEOUT
-        elif chassis_redundant:
+        elif chassis_redundant or chassis_modular:
             default_verify_wait, down_timeout = REDUNDANT_VERIFY_WAIT, REDUNDANT_DOWN_TIMEOUT
         else:
             default_verify_wait, down_timeout = DEFAULT_VERIFY_WAIT, DEFAULT_DOWN_TIMEOUT
+        verify_wait = int(options.get("verify_wait", default_verify_wait))
+        # A stack with a standby member also reports as redundant, so the
+        # stack table is asked before the supervisor wording is used.
+        if chassis_redundant and chassis_modular:
+            chassis_kind = "both supervisors and every line card reload"
+        elif chassis_modular:
+            chassis_kind = "the supervisor and every line card reload"
+        elif len(baseline_stack) > 1:
+            chassis_kind = f"all {len(baseline_stack)} stack members reload"
+        elif chassis_redundant:
+            chassis_kind = "both supervisors reload"
+        else:
+            chassis_kind = "the switch reloads"
 
         # Image already pre-staged during transfer (install add), just activate.
         # The driver supplies the platform-specific activate verb(s); for
@@ -3711,18 +4242,27 @@ async def _device_activate(campaign_id, dev, credentials, image_map, options):
         # Seconds spent reading a still-running activate; they count
         # against the same ``down_timeout`` the offline wait uses.
         reply_wait = 0
+        if issu:
+            await _emit(
+                campaign_id,
+                dev_id,
+                "info",
+                "ISSU: standby reloads first, then switchover, then old active reloads "
+                f"(allowing up to {verify_wait // 60} minutes)...",
+                host=ip,
+            )
+        else:
+            await _emit(
+                campaign_id,
+                dev_id,
+                "info",
+                f"This will trigger a reload: {chassis_kind}. Allowing up to {verify_wait // 60} minutes "
+                "for SSH to answer again...",
+                host=ip,
+            )
+        await _emit(campaign_id, dev_id, "warn", _DO_NOT_POWER_CYCLE, host=ip)
         for command in activate_commands:
             await _emit(campaign_id, dev_id, "cmd", f"Executing: {command}", host=ip)
-            if issu:
-                await _emit(
-                    campaign_id,
-                    dev_id,
-                    "info",
-                    "ISSU: standby reloads first, then switchover, then old active reloads (20-45 minutes)...",
-                    host=ip,
-                )
-            else:
-                await _emit(campaign_id, dev_id, "info", "This will trigger a reload (5-15 minutes)...", host=ip)
 
             # Read the reply.  A dropped session is the reload starting;
             # a reply (or late output) that says the activate failed
@@ -3790,7 +4330,6 @@ async def _device_activate(campaign_id, dev, credentials, image_map, options):
 
         # Wait for switch to come back.
         if options.get("verify_upgrade", True):
-            verify_wait = options.get("verify_wait", default_verify_wait)
             check_interval = options.get("check_interval", 30)
 
             await _emit(
@@ -3896,6 +4435,40 @@ async def _device_activate(campaign_id, dev, credentials, image_map, options):
                             await _emit(
                                 campaign_id, dev_id, "success", "Standby is STANDBY HOT - safe to commit", host=ip
                             )
+
+                        # Answering SSH on the new release is not the whole
+                        # chassis being back: a standby supervisor or line
+                        # card can still be booting, upgrading firmware or
+                        # failed.  Commit only once everything that was up
+                        # before the reload is up again on the target.
+                        health_err = await _post_reload_chassis_gate(
+                            new_conn,
+                            campaign_id,
+                            dev_id,
+                            ip,
+                            device_type,
+                            options,
+                            expected_version=expected_version,
+                            running_version=running_version,
+                            standby="required" if (not issu and red and red.get("standby_hot")) else "skip",
+                            baseline_modules=baseline_modules,
+                            baseline_stack=baseline_stack,
+                            wide=chassis_redundant or chassis_modular,
+                        )
+                        if health_err:
+                            await _fail_upgrade_device(
+                                campaign_id,
+                                dev_id,
+                                ip,
+                                health_err,
+                                status_keys=("activate_status", "verify_status"),
+                                current_version=running_version,
+                            )
+                            try:
+                                await asyncio.to_thread(new_conn.disconnect)
+                            except Exception as exc:
+                                LOGGER.debug("Disconnect failed for %s: %s", ip, exc)
+                            return
 
                         # Commit the install to make the new version permanent.
                         # Driver returns an empty string for platforms that
@@ -4067,26 +4640,15 @@ async def _device_activate(campaign_id, dev, credentials, image_map, options):
                 except Exception as exc:
                     LOGGER.debug("Disconnect failed for %s: %s", ip, exc)
             else:
-                await _emit(
-                    campaign_id,
-                    dev_id,
-                    "error",
-                    f"Switch did not come back within {verify_wait // 60} minutes",
-                    host=ip,
+                # A switch that is slow to answer is usually still booting
+                # or upgrading firmware; a power cycle then is what corrupts
+                # a supervisor.
+                unreachable = (
+                    f"Switch unreachable after reboot: no SSH within {verify_wait // 60} minutes. Do not power "
+                    "cycle it - check the console first; it may still be booting or upgrading firmware"
                 )
-                await db.update_upgrade_device(
-                    dev_id,
-                    activate_status="failed",
-                    verify_status="failed",
-                    phase="failed",
-                    error_message="Switch unreachable after reboot",
-                )
-                await _emit_device_status(
-                    campaign_id,
-                    dev_id,
-                    activate_status="failed",
-                    verify_status="failed",
-                    error_message="Switch unreachable after reboot",
+                await _fail_upgrade_device(
+                    campaign_id, dev_id, ip, unreachable, status_keys=("activate_status", "verify_status")
                 )
                 return
 
@@ -4193,6 +4755,25 @@ async def _device_verify(campaign_id, dev, credentials, image_map, options):
 
         # Compare versions
         if expected_version in running_version:
+            # The running release is not the whole chassis: a line card or
+            # the standby supervisor can be down or on another release.
+            device_type = await _upgrade_device_type(conn, device_type, campaign_id, dev_id, ip)
+            problems, modules, red = await _chassis_outstanding(
+                conn, device_type, expected_version=expected_version, standby="if_redundant"
+            )
+            if problems:
+                await _fail_upgrade_device(
+                    campaign_id,
+                    dev_id,
+                    ip,
+                    f"Running {running_version}, but the chassis is not healthy: {'; '.join(problems)}",
+                    status_keys=("verify_status",),
+                    current_version=running_version,
+                )
+                return
+            summary = _chassis_summary(modules, red, expected_version)
+            if summary:
+                await _emit(campaign_id, dev_id, "info", summary, host=ip)
             # Device is fully upgraded - mark all steps completed
             await _mark_device_on_target_version(campaign_id, dev_id, running_version)
             await _emit(
@@ -4298,7 +4879,16 @@ async def _device_verify_prestage(campaign_id, dev, credentials, image_map, opti
 
         # Read (and record) the boot mode for every device; it only blocks
         # below, once the device is known not to be on the target already.
+        # The boot variables get the same treatment.
         boot_err = await _boot_mode_gate(conn, campaign_id, dev_id, ip, device_type)
+        boot_detail = "BUNDLE boot mode"
+        if not boot_err:
+            boot_err = await _boot_vars_gate(conn, campaign_id, dev_id, ip, device_type)
+            boot_detail = "Boot variables"
+        # Modules are reported, never blocking: the Activate gate decides.
+        modules, _ = await _read_upgrade_show(conn, device_type, "upgrade_module_show_command", "parse_module_state")
+        for problem in _module_problems(modules):
+            await _emit(campaign_id, dev_id, "warn", f"Module check: {problem}", host=ip)
 
         target_image = dev.get("target_image", "")
         if not target_image and (model or dev.get("model")):
@@ -4341,7 +4931,7 @@ async def _device_verify_prestage(campaign_id, dev, credentials, image_map, opti
             )
             return
         if boot_err:
-            await _finish("failed", "error", boot_err, "BUNDLE boot mode", boot_err)
+            await _finish("failed", "error", boot_err, boot_detail, boot_err)
             return
         pending_msg = ""
         if _install_pending(install_state):
@@ -4483,11 +5073,12 @@ async def _redundancy_gate(conn, campaign_id, dev_id, ip, device_type, issu, opt
     platform has no redundancy concept) so the caller can size its
     reboot windows for a dual-sup chassis.
 
-    Runs even when ``skip_health_check`` is set if ISSU was requested -
-    an ISSU on a non-SSO box fails on-device anyway, so the check only
-    turns a confusing mid-install error into a clear pre-flight one.
-    Without ISSU, ``skip_health_check`` downgrades a cold standby to a
-    warning so an operator can knowingly push through.
+    ISSU ignores every override - an ISSU on a non-SSO box fails
+    on-device anyway, so the check only turns a confusing mid-install
+    error into a clear pre-flight one.  Without ISSU,
+    ``allow_degraded_chassis`` downgrades a cold standby to a warning so
+    an operator can knowingly push through; ``skip_health_check`` does
+    not.
     """
     await _emit(campaign_id, dev_id, "info", "Checking redundancy state...", host=ip)
     try:
@@ -4517,9 +5108,13 @@ async def _redundancy_gate(conn, campaign_id, dev_id, ip, device_type, issu, opt
         if issu:
             await _emit(campaign_id, dev_id, "success", "Redundancy OK - ISSU permitted", host=ip)
         return None, red
-    if not issu and options.get("skip_health_check"):
+    if not issu and options.get("allow_degraded_chassis"):
         await _emit(
-            campaign_id, dev_id, "warn", f"Proceeding despite: {'; '.join(problems)} (skip_health_check set)", host=ip
+            campaign_id,
+            dev_id,
+            "warn",
+            f"Proceeding despite: {'; '.join(problems)} (allow_degraded_chassis set)",
+            host=ip,
         )
         return None, red
     return "Redundancy check failed: " + "; ".join(problems), red
@@ -4559,19 +5154,10 @@ async def _health_check(conn, hostname, device_type="cisco_xe", issu=False):
         warnings.append(f"Memory check failed: {e}")
 
     # Stack health
-    try:
-        stack_output = await asyncio.to_thread(conn.send_command, "show switch", read_timeout=30)
-        if re.search(r"^\s*\d+\s+", stack_output, re.MULTILINE):
-            for line in stack_output.splitlines():
-                match = re.match(
-                    r"\s*(\d+)\s+\S+\s+.*?(Ready|Removed|Progressing|Provisioned|Invalid|Added|Syncing|Version Mismatch)",
-                    line,
-                )
-                if match and match.group(2) != "Ready":
-                    warnings.append(f"Stack member {match.group(1)}: {match.group(2)}")
-                    critical = True
-    except Exception as exc:
-        LOGGER.debug("Stack check skipped on %s (not a stack?): %s", hostname, exc)
+    for number, member_state in ((await _read_stack_members(conn)) or {}).items():
+        if member_state != "Ready":
+            warnings.append(f"Stack member {number}: {member_state}")
+            critical = True
 
     # Supervisor / StackWise Virtual redundancy.  ``show switch`` above
     # covers stack members, but a 9400/9600 chassis has no stack table -
@@ -4588,6 +5174,21 @@ async def _health_check(conn, hostname, device_type="cisco_xe", issu=False):
         else:
             LOGGER.debug("Redundancy check skipped on %s: %s", hostname, exc)
 
+    # Line cards and supervisors: ``show redundancy`` cannot see a second
+    # supervisor that never booted, and a line card that is not ``ok`` now
+    # will not be after the reload either.
+    modules, note = await _read_upgrade_show(conn, device_type, "upgrade_module_show_command", "parse_module_state")
+    if note:
+        LOGGER.debug("Module check skipped on %s: %s", hostname, note)
+    for problem in _module_problems(modules):
+        warnings.append(problem)
+        critical = True
+
+    # Power supplies and fans.
+    for problem in await _environment_problems(conn, device_type):
+        warnings.append(f"Power/fan: {problem}")
+        critical = True
+
     return not critical, warnings
 
 
@@ -4603,17 +5204,17 @@ def _compute_md5(filepath):
     return md5.hexdigest()
 
 
-async def _check_flash_space(conn, image_path, dest_path):
-    """Check if flash has enough space for the image."""
+async def _check_flash_space(conn, image_path, dest_path, image_on_flash=False, unpacks=True):
+    """Check if flash has room for the image and its unpacked packages
+    (see ``_flash_space_needed``).  Returns ``(ok, free_bytes)``."""
     image_size = os.path.getsize(image_path)
     output = await asyncio.to_thread(
         conn.send_command,
         f"dir {dest_path} | include bytes",
     )
-    match = re.search(r"(\d+)\s+bytes\s+free", output)
-    if match:
-        free = int(match.group(1))
-        return free > image_size * 1.1, free
+    free = _free_bytes(output)
+    if free is not None:
+        return free > _flash_space_needed(image_size, image_on_flash, unpacks), free
     return True, None  # Can't determine - proceed with warning
 
 

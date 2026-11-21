@@ -57,6 +57,7 @@ const DEFAULT_OPTIONS: Required<UpgradeCampaignOptions> = {
   verify_upgrade: true,
   issu: false,
   commit_pending_install: false,
+  allow_degraded_chassis: false,
   parallel: 4,
   retries: 2,
 };
@@ -67,12 +68,19 @@ type BooleanOptionKey =
   | 'skip_health_check'
   | 'verify_upgrade'
   | 'issu'
-  | 'commit_pending_install';
+  | 'commit_pending_install'
+  | 'allow_degraded_chassis';
 
 const BOOLEAN_OPTIONS: { key: BooleanOptionKey; label: string; help?: string }[] = [
   { key: 'skip_backup', label: 'Skip config backup' },
   { key: 'skip_md5', label: 'Skip MD5 verification' },
-  { key: 'skip_health_check', label: 'Skip health check' },
+  {
+    key: 'skip_health_check',
+    label: 'Skip health check',
+    help:
+      'Skips the Prestage health check only. The standby supervisor, module ' +
+      'and boot variable checks still apply.',
+  },
   { key: 'verify_upgrade', label: 'Verify upgrade after reboot' },
   { key: 'issu', label: 'ISSU (in-service; dual-sup / StackWise Virtual only)' },
   {
@@ -81,6 +89,14 @@ const BOOLEAN_OPTIONS: { key: BooleanOptionKey; label: string; help?: string }[]
     help:
       'If the switch is running a version that was activated but never committed, ' +
       'run install commit first. Without this the activate is refused.',
+  },
+  {
+    key: 'allow_degraded_chassis',
+    label: 'Allow a degraded chassis',
+    help:
+      'Continue when the standby supervisor is not STANDBY HOT or a module is ' +
+      'not ok before the reload. Leave off unless the fault is known and accepted. ' +
+      'ISSU ignores this.',
   },
 ];
 
@@ -187,6 +203,7 @@ export function CampaignFormModal({ mode, campaignId, onClose }: Props) {
           verify_upgrade: opts.verify_upgrade !== false,
           issu: Boolean(opts.issu),
           commit_pending_install: Boolean(opts.commit_pending_install),
+          allow_degraded_chassis: Boolean(opts.allow_degraded_chassis),
           parallel,
           retries,
         });
