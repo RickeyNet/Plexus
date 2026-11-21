@@ -1,5 +1,10 @@
 /** Pure helpers of the OPNsense rules view (filtering, labels, tones). */
-import type { OpnsenseAnalyzedRule, OpnsenseRuleEndpoint, OpnsenseRuleFlag } from '@/api/opnsenseRules';
+import type {
+  OpnsenseAliasTables,
+  OpnsenseAnalyzedRule,
+  OpnsenseRuleEndpoint,
+  OpnsenseRuleFlag,
+} from '@/api/opnsenseRules';
 import type { Tone } from '@/lib/severity';
 
 export const FLAG_LABELS: Record<OpnsenseRuleFlag, string> = {
@@ -43,6 +48,24 @@ export function flagLabel(rule: OpnsenseAnalyzedRule, flag: OpnsenseRuleFlag): s
 /** A rule side as one line: `! lan net port 443`. */
 export function endpointText(point: OpnsenseRuleEndpoint): string {
   return point.port && point.port !== 'any' ? `${point.text} port ${point.port}` : point.text;
+}
+
+/**
+ * The aliases of a rule side the path trace resolves from their collected
+ * pf table, one line each: `GeoBlock: pf table, 1,234 entries` (`truncated,
+ * 9,999 of 50,000 entries read` when cut). Matched by name, ignoring case.
+ */
+export function aliasTableLines(point: OpnsenseRuleEndpoint, tables: OpnsenseAliasTables | undefined): string[] {
+  const found = tables?.tables ?? {};
+  const byName = new Map(Object.entries(found).map(([name, table]) => [name.toLowerCase(), table]));
+  return point.aliases.flatMap((alias) => {
+    const table = byName.get(alias.toLowerCase());
+    if (!table) return [];
+    const size = table.truncated
+      ? `truncated, ${table.entry_count.toLocaleString()} of ${table.total.toLocaleString()} entries read`
+      : `${table.entry_count.toLocaleString()} ${table.entry_count === 1 ? 'entry' : 'entries'}`;
+    return [`${alias}: pf table, ${size}`];
+  });
 }
 
 /** The interfaces a rule shows under (`*` for a floating rule on every interface). */

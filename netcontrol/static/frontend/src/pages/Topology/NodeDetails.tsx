@@ -475,6 +475,12 @@ function OverviewTab(props: {
             </span>
           </>
         )}
+        {node.meraki?.ha_peer && (
+          <>
+            <span className="text-muted">CARP peer</span>
+            <span>{node.meraki.ha_peer}</span>
+          </>
+        )}
         {node.instance && (
           <>
             <span className="text-muted">AWS instance</span>

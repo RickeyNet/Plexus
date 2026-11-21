@@ -846,6 +846,43 @@ export interface TopologyAvailabilityEntity {
   muted: boolean;
   /** The mute that covers it; `site` (when sent) names a site mute's site, which an uplink or tunnel may not share. */
   mute: (Pick<TopologyMute, 'id' | 'scope' | 'reason' | 'created_by' | 'created_at'> & { site?: string }) | null;
+  /** Window means of what the vendor measures (null when it measures nothing: most entities). */
+  avg_latency_ms?: number | null;
+  jitter_ms?: number | null;
+  avg_packet_loss_pct?: number | null;
+  /** Traffic received / sent through the entity, bits per second (OPNsense tunnels and OpenVPN servers). */
+  avg_in_bps?: number | null;
+  avg_out_bps?: number | null;
+  sla_status?: SlaStatus | null;
+}
+
+/** One raw measurement of a topology entity (each value null when not measured). */
+export interface TopologyEntityMetricSample {
+  sampled_at: string;
+  latency_ms: number | null;
+  jitter_ms: number | null;
+  loss_pct: number | null;
+  in_bps?: number | null;
+  out_bps?: number | null;
+}
+
+/** GET /availability/topology/metrics: the measurements of one entity. */
+export interface TopologyEntityMetricHistory {
+  provider: string;
+  org_ref: number;
+  entity_type: string;
+  entity_id: string;
+  period_days: number;
+  window_start: string;
+  window_end: string;
+  summary: {
+    avg_latency_ms: number | null;
+    jitter_ms: number | null;
+    avg_packet_loss_pct: number | null;
+    avg_in_bps?: number | null;
+    avg_out_bps?: number | null;
+  };
+  samples: TopologyEntityMetricSample[];
 }
 
 export interface TopologyAvailabilityOrg {
@@ -915,6 +952,25 @@ export function useTopologyAvailabilitySummary(f: TopologyAvailabilityFilters = 
   return useQuery<TopologyAvailabilitySummary>({
     queryKey: ['topology-availability-summary', f.provider ?? null, f.orgRef ?? null, f.entityType ?? null, f.days ?? 7],
     queryFn: () => apiRequest(`/availability/topology/summary?${topologyAvailabilityQuery(f)}`),
+  });
+}
+
+/** The measurements (latency, loss, traffic) of one tracked entity; idle while `entity` is null. */
+export function useTopologyEntityMetrics(
+  entity: Pick<TopologyAvailabilityEntity, 'provider' | 'org_ref' | 'entity_type' | 'entity_id'> | null,
+  days = 7,
+) {
+  const params = new URLSearchParams({
+    provider: entity?.provider ?? '',
+    org_ref: String(entity?.org_ref ?? ''),
+    entity_type: entity?.entity_type ?? '',
+    entity_id: entity?.entity_id ?? '',
+    days: String(days),
+  });
+  return useQuery<TopologyEntityMetricHistory>({
+    queryKey: ['topology-entity-metrics', entity?.provider, entity?.org_ref, entity?.entity_type, entity?.entity_id, days],
+    queryFn: () => apiRequest(`/availability/topology/metrics?${params.toString()}`),
+    enabled: entity != null,
   });
 }
 

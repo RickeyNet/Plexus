@@ -38,6 +38,11 @@ const METRIC_OPTIONS: { value: string; label: string }[] = [
   { value: 'ups_output_voltage_v', label: 'UPS output voltage (V)' },
   { value: 'ups_battery_temperature_c', label: 'UPS battery temperature (°C)' },
   { value: 'ups_probe_temperature_c', label: 'UPS probe temperature (°C)' },
+  { value: 'fw_disk_used_pct', label: 'Firewall disk used % (fullest file system)' },
+  { value: 'fw_temperature_c', label: 'Firewall temperature (°C, hottest sensor)' },
+  { value: 'fw_pf_states', label: 'Firewall state table entries' },
+  { value: 'fw_pf_states_pct', label: 'Firewall state table % of its limit' },
+  { value: 'fw_load_avg_1m', label: 'Firewall load average (1 min)' },
 ];
 const OPERATOR_OPTIONS = ['>=', '>', '<=', '<', '==', '!='];
 const SEVERITY_OPTIONS: { value: string; label: string }[] = [

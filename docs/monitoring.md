@@ -98,6 +98,13 @@ at 90 % or more (critical from 95 %) and `fw_state_table` when the state
 table is at 80 % or more of its limit (critical from 95 %). Each resolves
 at the first poll below its threshold.
 
+The same poll also reads the firewall's VPN byte counters (when the
+source's **VPN tunnels** option is on) and stores the traffic rate of each
+tunnel since its previous reading, under the tunnel's integration entity
+(see [Tunnel traffic](opnsense-topology.md#tunnel-traffic)). So a tunnel
+of a firewall in the inventory gets a traffic sample every poll, not
+only every collection.
+
 ## Using the Monitoring page
 
 ### Devices
@@ -217,7 +224,8 @@ whose vendor reports byte counters (OPNsense tunnels and OpenVPN servers,
 see [Tunnel traffic](opnsense-topology.md#tunnel-traffic)), and
 **Measurements** opens the charts of what is measured for an entity: the
 latency, jitter and loss of an OPNsense gateway, the traffic in and out of
-a tunnel (an average between two collections). The
+a tunnel (an average between two readings: the monitoring polls of a
+firewall in the inventory, else its collections). The
 **Meraki alerts**, **Cato egress vs cloud allow-lists** and
 [**Cato shared hosts vs Azure**](cato-topology.md#shared-hosts-check-azure)
 panels follow.

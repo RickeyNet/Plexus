@@ -3,8 +3,12 @@
 An inventory host has no integration snapshot. What Plexus stores for it is
 its interfaces (SNMP), its address and aliases, the route table the
 monitoring poll captures over SSH (``show ip route`` or the platform's
-equivalent, with every VRF's table where the platform lists them) and, from
-Config Backups, its latest running configuration. ``forwarding_for_host``
+equivalent, with every VRF's table where the platform lists them; for an
+OPNsense firewall, the routing table and live interface addresses its
+collection stores, see ``opnsense_routes``) and, from Config Backups, its
+latest running configuration (an OPNsense ``config.xml``, read with the
+capture's live addresses and the alias tables its collection stores).
+``forwarding_for_host``
 turns those into the ``forwarding`` block every integration emits
 (``netcontrol.integrations.meraki.forwarding``). The host's ``device_type``
 picks its platform (``platforms``): the reader of its route captures and,
@@ -47,6 +51,7 @@ from netcontrol.integrations.pathtrace.route_tables import (
     CAPTURE_LIMIT,
     EMPTY_CAPTURE,
     LOCAL,
+    NO_CAPTURE,
     NOT_RECOGNISED,
     TRUNCATED,
     interface_key,
@@ -69,7 +74,6 @@ __all__ = [
 ]
 
 ACCESS_LISTS = "Access lists"
-NO_CAPTURE = "Route table (no SSH capture)"
 
 
 def parse_route_table(text: str, device_type: str) -> tuple[list[dict], list[str]]:
@@ -88,12 +92,23 @@ def _interface_kind(name: str, has_address: bool, conf: ConfigInterface | None =
     return "routed" if has_address else ""
 
 
-def _config(platform: Platform, config_backup: dict | None) -> RunningConfig | None:
-    """The parsed configuration backup of a host whose platform is read."""
+def _config(
+    platform: Platform, config_backup: dict | None, route_capture: dict | None, alias_tables: dict | None = None
+) -> RunningConfig | None:
+    """The parsed configuration backup of a host whose platform is read,
+    with the route capture and the alias tables when the platform's reader
+    takes them."""
     if config_backup is None or platform.config is None:
         return None
     text = str(config_backup.get("config_text") or "")
-    return platform.config(text) if text.strip() else None
+    if not text.strip():
+        return None
+    if alias_tables and platform.config_tables is not None:
+        capture = str((route_capture or {}).get("routes_text") or "")
+        return platform.config_tables(text, capture, alias_tables)
+    if route_capture is not None and platform.config_capture is not None:
+        return platform.config_capture(text, str(route_capture.get("routes_text") or ""))
+    return platform.config(text)
 
 
 def _zone(conf: ConfigInterface, names: dict[str, str]) -> str:
@@ -217,20 +232,23 @@ def forwarding_for_host(
     interfaces: list[dict],
     *,
     config_backup: dict | None = None,
+    alias_tables: dict | None = None,
 ) -> dict[str, Any]:
     """The forwarding block of an inventory host: its interfaces, the routes
-    of its latest SSH route capture and, from its latest configuration
+    of its latest route capture (SSH, or an OPNsense collection) and, from its latest configuration
     backup (``config_backup``, a ``config_backups`` row with
     ``config_text``) on Cisco IOS / IOS-XE and NX-OS, its interface access
     lists, addresses, VRFs, HSRP / VRRP addresses and the routes of the
     VRFs the capture lacks. Without a backup the access lists are not
-    collected."""
+    collected. ``alias_tables``: an OPNsense firewall's collected alias
+    tables (``{name: {"entries", "truncated"}}``), which resolve the
+    aliases its config.xml cannot."""
     block = new_block()
     platform = platform_of(str(host.get("device_type") or ""))
-    config = _config(platform, config_backup)
+    config = _config(platform, config_backup, route_capture, alias_tables)
     if route_capture is None:
         routes: list[dict] = []
-        missing = [NO_CAPTURE]
+        missing = [platform.no_capture]
     else:
         routes, missing = _parse_capture(str(route_capture.get("routes_text") or ""), platform.routes)
 

@@ -228,6 +228,8 @@ async def delete_meraki_org(org_ref: int) -> bool:
         # Explicit child delete: SQLite only cascades with foreign_keys=ON.
         await db.execute("DELETE FROM meraki_topology_snapshots WHERE org_ref = ?", (org_ref,))
         await db.execute("DELETE FROM meraki_clients WHERE org_ref = ?", (org_ref,))
+        # The last tunnel counter readings of the source (migration 0125).
+        await db.execute("DELETE FROM topology_traffic_counters WHERE org_ref = ?", (org_ref,))
         cursor = await db.execute("DELETE FROM meraki_orgs WHERE id = ?", (org_ref,))
         await db.commit()
         return cursor.rowcount > 0

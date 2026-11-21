@@ -41,6 +41,8 @@ import { sourceTypeLabel } from '@/pages/Topology/merakiHelpers';
 import { formatBackendDateTime } from '@/lib/datetime';
 
 import { AVAILABILITY_TABLE_MAX_HEIGHT, countTone, formatUptime, formatUptimePct } from './helpers';
+import { TopologyEntityMetricsModal } from './TopologyEntityMetricsModal';
+import { formatTraffic, hasEntityMetrics } from './topologyMetrics';
 
 type SubTab = 'entities' | 'outages' | 'transitions';
 
@@ -70,6 +72,7 @@ export function TopologyAvailabilityPanel({ days }: { days: number }) {
   const [stateFilter, setStateFilter] = useState<AvailabilityStateFilter | null>(() => parseAvailabilityState(linkedState));
   const [subTab, setSubTab] = useState<SubTab>('entities');
   const [muting, setMuting] = useState<TopologyAvailabilityEntity | null>(null);
+  const [measuring, setMeasuring] = useState<TopologyAvailabilityEntity | null>(null);
   const unmute = useUnmuteTopologyEntity();
   const unmuting = usePendingKeys<number>();
   const { confirm, alert } = useDialogs();
@@ -227,6 +230,7 @@ export function TopologyAvailabilityPanel({ days }: { days: number }) {
                   <th style={{ textAlign: 'right' }}>Uptime</th>
                   <th>Last change</th>
                   <th style={{ textAlign: 'right' }}>Outages</th>
+                  <th style={{ textAlign: 'right' }}>Avg traffic</th>
                   <th aria-label="Actions" />
                 </tr>
               </thead>
@@ -256,7 +260,19 @@ export function TopologyAvailabilityPanel({ days }: { days: number }) {
                     <td style={{ textAlign: 'right' }}>{formatUptimePct(e.uptime_pct)}</td>
                     <td style={{ whiteSpace: 'nowrap' }}>{formatBackendDateTime(e.last_change)}</td>
                     <td style={{ textAlign: 'right' }}>{e.outage_count}</td>
+                    <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>{formatTraffic(e.avg_in_bps, e.avg_out_bps)}</td>
                     <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
+                      {hasEntityMetrics(e) && (
+                        <button
+                          type="button"
+                          className="btn btn-sm btn-secondary"
+                          aria-label={`Show measurements of ${e.name}`}
+                          style={{ marginRight: 'var(--space-1)' }}
+                          onClick={() => setMeasuring(e)}
+                        >
+                          Measurements
+                        </button>
+                      )}
                       {e.muted ? (
                         e.mute && (
                           <BusyButton
@@ -286,6 +302,7 @@ export function TopologyAvailabilityPanel({ days }: { days: number }) {
         )
       )}
       {muting && <MuteEntityModal target={muting} onClose={() => setMuting(null)} />}
+      {measuring && <TopologyEntityMetricsModal entity={measuring} days={days} onClose={() => setMeasuring(null)} />}
 
       {subTab === 'outages' && (
         outages.error && !outages.data ? (

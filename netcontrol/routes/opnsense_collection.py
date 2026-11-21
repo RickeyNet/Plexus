@@ -45,6 +45,32 @@ is stored:
   - ``attach_rule_stats``: the filter rule counters (``rule_stats``) stay
     in the snapshot with the inventory host they belong to, for the rule
     views (``netcontrol.routes.opnsense_rules``).
+  - ``store_route_capture``: the routing table and the live interface
+    addresses become the route capture of the firewall's inventory host (a
+    ``route_snapshots`` row in the text of
+    ``netcontrol.integrations.pathtrace.opnsense_routes``, written only
+    when it changed), from which the path trace takes the firewall's routes
+    and the addresses DHCP or PPPoE assigned. Nothing is stored when the
+    routing table was not read or the firewall is no inventory host yet.
+    The firewall's "Route capture" section says what was stored.
+  - ``store_alias_tables``: the pf tables of the aliases config.xml cannot
+    resolve (``alias_tables``, popped from the raw collection) replace the
+    ``opnsense_alias_tables`` rows of the firewall's inventory host, with
+    when they were read and whether each is complete; the path trace
+    resolves those aliases from them and the rule views show their size.
+    Nothing is stored (the previous tables stay) when they were not read;
+    the firewall's "Alias tables" section says what was stored.
+  - ``opnsense_netflow.sync_flow_export``: the interface addresses become
+    the host's IP aliases (the flow collector resolves the exporter by
+    them) and the interface index names of the routing table are stored
+    for the flow views; the firewall's "Flow export" section says whether
+    Plexus receives its flows.
+
+  - ``note_health_host``: the firewall's inventory host goes into the
+    snapshot summary (``inventory_host_id``), from which the monitoring poll
+    knows to read that host's health over this source's API
+    (``netcontrol.routes.opnsense_health``); the "Health" section says
+    whether it is stored.
 
 All are best-effort: a failure is logged and noted in the snapshot, and
 the collection is stored anyway.
@@ -52,6 +78,7 @@ the collection is stored anyway.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Any
 
 import routes.database as db
@@ -63,16 +90,20 @@ from netcontrol.integrations.opnsense.normalize import (
     ADVISORY_SOURCE,
     DEVICE_NODE_PREFIX,
     PROVIDER,
+    SECTION_HEALTH,
     arp_entries,
     audit_advisories,
     client_counts,
     dhcp_leases,
+    interface_addresses,
     ndp_entries,
 )
 from netcontrol.integrations.opnsense.rules import parse_rule_stats
+from netcontrol.integrations.pathtrace.opnsense_routes import LiveInterface, capture_text
 from netcontrol.integrations.software.versions import canonical_version, snapshot_device_key, snapshot_devices
 from netcontrol.routes.device_config import store_device_config
 from netcontrol.routes.dhcp_adapters import DHCP_PROVIDER_OPNSENSE
+from netcontrol.routes.route_capture import store_route_snapshot
 from netcontrol.telemetry import configure_logging
 
 LOGGER = configure_logging("plexus.opnsense")
@@ -88,6 +119,8 @@ CLIENTS_NOT_IMPORTED_MESSAGE = (
     "The ARP and NDP tables were read but not added to MAC tracking: this firewall is not an inventory host yet. "
     "Import it into the inventory (Map sources, Import devices) to track them."
 )
+SECTION_ROUTE_CAPTURE = "Route capture"
+SECTION_ALIAS_TABLES = "Alias tables"
 LEASE_SERVER_NOTES = (
     "Leases collected by the OPNsense topology source of this firewall; replaced on every collection. "
     "Disable this server to stop storing them."
@@ -111,12 +144,15 @@ def _warn(snapshot: dict, warning: dict) -> None:
     snapshot.setdefault("collection", {}).setdefault("errors", []).append(warning)
 
 
-async def matching_host(snapshot: dict) -> dict | None:
-    """The inventory host that is the snapshot's firewall, or ``None``."""
+async def matching_host(snapshot: dict, hosts: list[dict] | None = None) -> dict | None:
+    """The inventory host that is the snapshot's firewall, or ``None``.
+    ``hosts``: the inventory hosts when the caller already read them (it
+    matches several snapshots against one read)."""
     firewall = _firewall(snapshot)
     if firewall is None:
         return None
-    hosts = await db.get_all_hosts()
+    if hosts is None:
+        hosts = await db.get_all_hosts()
     found = importable_devices(snapshot, PROVIDER, hosts)
     device = next((d for d in found["devices"] if d["key"] == firewall["id"]), None)
     existing = (device or {}).get("existing")
@@ -339,9 +375,10 @@ async def sync_clients(raw: dict, snapshot: dict) -> dict[str, Any] | None:
 
 
 async def after_collection(raw: dict, snapshot: dict, org_ref: int) -> None:
-    """Store the config backup, sync the audit advisories and feed the ARP
-    / NDP tables and DHCP leases into MAC tracking and IPAM, for one
-    collection of source ``org_ref``. Never raises."""
+    """Store the config backup, sync the audit advisories, feed the ARP
+    / NDP tables and DHCP leases into MAC tracking and IPAM and store the
+    routing table as the route capture, for one collection of source
+    ``org_ref``. Never raises."""
     try:
         if (raw.get("options") or {}).get("config_backup", True):
             await store_config_backup(raw, snapshot)
@@ -360,6 +397,97 @@ async def after_collection(raw: dict, snapshot: dict, org_ref: int) -> None:
         await attach_rule_stats(raw, snapshot)
     except Exception as exc:  # noqa: BLE001 - the snapshot is stored anyway
         LOGGER.warning("opnsense: rule counters not kept: %s", type(exc).__name__)
+    try:
+        await store_route_capture(raw, snapshot)
+    except Exception as exc:  # noqa: BLE001 - the snapshot is stored anyway
+        LOGGER.warning("opnsense: route capture not stored: %s", type(exc).__name__)
+    try:
+        await store_alias_tables(raw, snapshot)
+    except Exception as exc:  # noqa: BLE001 - the snapshot is stored anyway
+        LOGGER.warning("opnsense: alias tables not stored: %s", type(exc).__name__)
+    try:
+        # Imported here: opnsense_netflow imports this module's helpers.
+        from netcontrol.routes.opnsense_netflow import sync_flow_export
+
+        await sync_flow_export(raw, snapshot)
+    except Exception as exc:  # noqa: BLE001 - the snapshot is stored anyway
+        LOGGER.warning("opnsense: flow export state not stored: %s", type(exc).__name__)
+    try:
+        await note_health_host(raw, snapshot, org_ref)
+    except Exception as exc:  # noqa: BLE001 - the snapshot is stored anyway
+        LOGGER.warning("opnsense: health host not noted: %s", type(exc).__name__)
+
+
+async def note_health_host(raw: dict, snapshot: dict, org_ref: int) -> dict | None:
+    """Note the firewall's inventory host for the monitoring poll, which
+    reads the health of that host over this source's API
+    (``netcontrol.routes.opnsense_health``), and say in the firewall's
+    "Health" section where the numbers are kept. Returns the host."""
+    # Imported here: opnsense_health is imported by the monitoring routes.
+    from netcontrol.routes.opnsense_health import record_inventory_host
+
+    host = await matching_host(snapshot)
+    record_inventory_host(snapshot, org_ref, host)
+    firewall = _firewall(snapshot)
+    section = next(
+        (s for s in (firewall or {}).get("sections") or [] if s.get("title") == SECTION_HEALTH and s.get("rows")),
+        None,
+    )
+    if section is not None and isinstance(raw.get("health"), dict):
+        text = (
+            f"CPU, memory, disks, temperature and state table stored with the monitoring poll of "
+            f"{host.get('hostname') or host.get('ip_address')}"
+            if host
+            else "Shown here only: import the firewall into the inventory to store and alert on it"
+        )
+        section["rows"].insert(len(section["rows"]) - 1, ["History", text])
+    return host
+
+
+def live_interfaces(rows: Any) -> list[LiveInterface]:
+    """``(key, device, addresses)`` of each collected interface row."""
+    if not isinstance(rows, list):
+        return []
+    return [
+        (str(row.get("identifier") or ""), str(row.get("device") or ""), interface_addresses(row))
+        for row in rows
+        if isinstance(row, dict)
+    ]
+
+
+async def store_route_capture(raw: dict, snapshot: dict) -> dict[str, Any] | None:
+    """Store the collected routing table and the live interface addresses
+    as the route capture of the firewall's inventory host (a
+    ``route_snapshots`` row, written only when the text changed; see
+    ``netcontrol.integrations.pathtrace.opnsense_routes``), where the path
+    trace reads them. ``None`` when the routing table was not read (the
+    option is off or the call failed): nothing is stored then, and the
+    trace keeps the host's previous capture, or config.xml alone."""
+    routes = raw.get("routes")
+    if not isinstance(routes, list) or not routes:
+        return None
+    text, count = capture_text(routes, live_interfaces(raw.get("interfaces")))
+    result: dict[str, Any] = {"stored": False, "host_id": None}
+    rows: list[tuple[str, Any]] = []
+    try:
+        host = await matching_host(snapshot)
+        if host is None:
+            rows.append(("Result", "Not stored: import the firewall into the inventory"))
+        else:
+            written, _previous = await store_route_snapshot(int(host["id"]), text, count)
+            result = {"stored": True, "created": written, "host_id": host.get("id")}
+            rows += [
+                ("Result", "New capture stored" if written else "Unchanged since the newest capture"),
+                ("Inventory host", host.get("hostname") or host.get("ip_address")),
+            ]
+    except Exception as exc:  # noqa: BLE001 - the snapshot is stored anyway
+        LOGGER.warning("opnsense: route capture not stored: %s", type(exc).__name__)
+        rows.append(("Result", "Not stored: see the server log"))
+    rows += [("Routes", count), ("Source", "Routing table and interface addresses over the OPNsense API")]
+    firewall = _firewall(snapshot)
+    if firewall is not None:
+        _add(firewall["sections"], kv_section(SECTION_ROUTE_CAPTURE, rows))
+    return result
 
 
 async def attach_rule_stats(raw: dict, snapshot: dict) -> dict | None:
@@ -377,3 +505,53 @@ async def attach_rule_stats(raw: dict, snapshot: dict) -> dict | None:
         "rules": stats,
     }
     return snapshot["rule_stats"]
+
+
+def _utc_text(iso: Any) -> str:
+    """``YYYY-MM-DD HH:MM:SS`` (UTC) of an ISO timestamp, now when it is none."""
+    try:
+        moment = datetime.fromisoformat(str(iso))
+    except TypeError, ValueError:
+        moment = datetime.now(UTC)
+    if moment.tzinfo is not None:
+        moment = moment.astimezone(UTC)
+    return moment.strftime("%Y-%m-%d %H:%M:%S")
+
+
+async def store_alias_tables(raw: dict, snapshot: dict) -> dict[str, Any] | None:
+    """Replace the alias tables of the firewall's inventory host with the
+    ones the collection read (``alias_tables``, popped from ``raw``: it is
+    never part of the snapshot). ``None`` when none were read: the stored
+    ones stay, as the route capture does."""
+    found = raw.pop("alias_tables", None)
+    if not isinstance(found, dict):
+        return None
+    tables = [t for t in found.get("tables") or [] if isinstance(t, dict)]
+    rows: list[tuple[str, Any]] = []
+    result: dict[str, Any] = {"stored": False, "host_id": None}
+    try:
+        host = await matching_host(snapshot)
+        if host is None:
+            rows.append(("Result", "Not stored: import the firewall into the inventory"))
+        else:
+            stored = await db.replace_opnsense_alias_tables(int(host["id"]), tables, _utc_text(found.get("read_at")))
+            result = {"stored": True, "tables": stored, "host_id": host.get("id")}
+            rows += [
+                ("Result", f"{stored} tables stored for the path trace"),
+                ("Inventory host", host.get("hostname") or host.get("ip_address")),
+            ]
+    except Exception as exc:  # noqa: BLE001 - the snapshot is stored anyway
+        LOGGER.warning("opnsense: alias tables not stored: %s", type(exc).__name__)
+        rows.append(("Result", "Not stored: see the server log"))
+    rows.append(("Entries", sum(len(t.get("entries") or []) for t in tables)))
+    cut = [str(t.get("name")) for t in tables if t.get("truncated")]
+    if cut:
+        rows.append(("Truncated", ", ".join(cut)))
+    for key, label in (("skipped", "Never read (too large)"), ("not_read", "Not read (limit)")):
+        if found.get(key):
+            rows.append((label, ", ".join(str(n) for n in found[key])))
+    rows.append(("Source", "pf tables over the OPNsense API (firewall/alias_util)"))
+    firewall = _firewall(snapshot)
+    if firewall is not None:
+        _add(firewall["sections"], kv_section(SECTION_ALIAS_TABLES, rows))
+    return result

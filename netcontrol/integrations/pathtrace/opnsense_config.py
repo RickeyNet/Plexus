@@ -26,7 +26,8 @@ What is read:
   and port aliases resolve to addresses and ports (nested aliases too); URL
   tables, GeoIP, MAC, ASN, dynamic IPv6, OpenVPN group and external aliases
   and host names hold addresses only the firewall knows, so a rule that
-  names one is unresolved (a flow it may match is unknown);
+  names one is unresolved (a flow it may match is unknown), unless the
+  collection read the alias's pf table (see below);
 - the filter rules: the MVC rules (``<OPNsense><Firewall><Filter><rules>``,
   the automation / new rules model) first by their sequence, then the
   legacy ``<filter><rule>`` rules, floating ones first, then those of
@@ -43,7 +44,10 @@ What is read:
   ``(self)``; a negated one (``<not>``) is unresolved. ``ipprotocol``
   limits a rule to IPv4 or IPv6. Schedules, OS fingerprints, tags and ICMP
   types other than echo are unresolved; a rule's gateway (policy-based
-  routing) is a note. Disabled rules are kept, disabled;
+  routing) is a note. Disabled rules are kept, disabled. Each rule has the
+  pf ``label`` OPNsense gives it, which its firewall log lines and rule
+  counters name: an MVC rule's uuid, a legacy rule's
+  ``legacy_rule_label``;
 - the system rules OPNsense puts before them: the anti-lockout rule on
   ``lan`` and ``Block private networks`` on an interface that sets it;
   ``Block bogon networks`` is a note (the bogon table is downloaded);
@@ -63,6 +67,30 @@ What is read:
   (the FRR plugin) is listed by protocol; IPsec, OpenVPN and WireGuard and
   the rules of their interfaces are notes.
 
+With the host's route capture (the routing table and live interface
+addresses the collection stores, ``opnsense_routes``), ``parse_config``
+fills the address and network of each interface config.xml leaves to
+DHCP, PPPoE, DHCPv6 or track6 from its live address before the rules and
+NAT are resolved, and leaves out the route notes the routing table
+answers (the learned default gateway, static routes whose gateway or
+network is not read): the trace takes the routes from the capture. The
+rule views read config.xml alone (``parse_document`` without ``live``).
+
+With the host's alias tables (``tables``: the pf table contents the
+collection read, ``{name: {"entries", "truncated", "total"}}``), an alias
+the configuration cannot resolve (a dynamic type, a host name, an entry
+that is no address, a table OPNsense fills itself) is resolved from its
+table: a complete table is the alias (an address it holds matches, one it
+does not hold does not; for a host or network alias with host names the
+table, the union pf really uses, is taken over the configured entries); a
+truncated table matches the addresses it holds and leaves the others
+unresolved (``Endpoint.open``: the rule becomes an entry of what is known
+followed by an unresolved one); an alias without a table stays unresolved.
+``!`` entries of a table are carved out of its networks, as pf's most
+specific match does. Which aliases need a table is what
+``OpnsenseConfig.table_aliases`` lists, read without tables (the collector
+reads those).
+
 Nothing here talks to the firewall. Uses the standard library only.
 
 Pure (no I/O).
@@ -70,10 +98,14 @@ Pure (no I/O).
 
 from __future__ import annotations
 
+import hashlib
 import ipaddress
+import json
 import re
 import xml.etree.ElementTree as ElementTree  # nosec B405 - types and ParseError only; parsing goes through safe_xml
+from collections.abc import Mapping
 from dataclasses import dataclass, field
+from typing import Any
 
 from netcontrol.integrations.meraki.forwarding import ANY, INTERFACE, canonical, is_address, nat
 from netcontrol.integrations.pathtrace.device_config import (
@@ -84,6 +116,7 @@ from netcontrol.integrations.pathtrace.device_config import (
     VirtualAddress,
 )
 from netcontrol.integrations.pathtrace.ios_config import ROUTING_PROTOCOLS, add_note as _note
+from netcontrol.integrations.pathtrace.opnsense_routes import LiveInterface, has_routes, live_address, live_interfaces
 from netcontrol.integrations.safe_xml import DoctypeRefused, parse_xml as parse_untrusted_xml
 
 __all__ = [
@@ -94,6 +127,7 @@ __all__ = [
     "IPSEC",
     "OPENVPN",
     "POLICY_ROUTES",
+    "TABLE_WORDING",
     "WIREGUARD",
     "Alias",
     "Endpoint",
@@ -106,10 +140,12 @@ __all__ = [
     "PortForward",
     "Route",
     "evaluation_order",
+    "legacy_rule_label",
     "parse_config",
     "parse_document",
     "parse_xml",
     "rule_bindings",
+    "table_cidrs",
 ]
 
 # Notes (not collected) and the names of the entries OPNsense adds itself.
@@ -130,12 +166,17 @@ TIERS = ("automation", "floating", "group", "interface")
 _VPN_ZONES = {"enc0": IPSEC, "ipsec": IPSEC, "openvpn": OPENVPN, "wireguard": WIREGUARD}
 # Aliases OPNsense defines itself (their tables are filled by the firewall).
 _BUILTIN_ALIASES = ("bogons", "bogonsv6", "virusprot", "sshlockout", "__")
+# How a rule's hop text names an alias resolved from its collected pf table.
+TABLE_WORDING = "from its pf table as read at the last collection"
 # Alias types that resolve to addresses or ports.
 _ADDRESS_ALIASES = ("host", "network", "networkgroup")
 _PORT_ALIAS = "port"
 # RFC 1918 and unique local addresses: what ``Block private networks`` blocks.
 _PRIVATE = ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fc00::/7")
 _DEFAULT_ROUTES = {"inet": "0.0.0.0/0", "inet6": "::/0"}
+# The dynamic IPv6 address types of an interface (``<ipaddrv6>``); the
+# others (dhcp, pppoe, pptp, l2tp...) are IPv4.
+_DYNAMIC_V6 = ("dhcp6", "slaac", "track6", "6rd", "6to4")
 _V4_ANY, _V6_ANY = "0.0.0.0/0", "::/0"
 _PORT_NAMES = {
     "ftp": 21,
@@ -223,6 +264,89 @@ def _uuid(element: ElementTree.Element) -> str:
     return str(element.get("uuid") or "").strip()
 
 
+# ── The pf label of a legacy rule ────────────────────────────────────────────
+#
+# OPNsense labels a legacy ``<filter><rule>`` in pf with a hash of the rule
+# (filter.lib.inc: ``$rule['label'] = Util::calcRuleHash($rule)``), and its
+# log lines and rule counters name the rule by that label. ``calcRuleHash``
+# drops ``updated``, ``created`` and ``descr``, sorts the keys of the rule
+# and of each array in it (one level), and hashes ``json_encode`` of the
+# result with MD5. ``$rule`` is the rule as ``Config::toArray(listtags())``
+# reads config.xml: an element with children is an array (its attributes
+# under ``@attributes``), a leaf its text (its attributes in a sibling
+# ``<tag>@attributes``), a repeated tag a list, and a tag of ``listtags()``
+# always a list. ``_php_array`` and ``legacy_rule_label`` do the same.
+
+# config.inc listtags(): the tags read as lists even when they occur once.
+_LIST_TAGS = frozenset(
+    "acls alias aliasurl allowedip allowedhostname authserver bridged build_port_path ca cacert cert crl clone "
+    "config container columnitem dhcp_ranges disk dnsserver dnsupdate domainoverrides element "
+    "encryption-algorithm-option field fieldname gateway_item gateway_group gif gre group hash-algorithm-option "
+    "hosts ifgroupentry igmpentry interface_array item key lagg lbpool member menu mobilekey monitor_type mount "
+    "npt ntpserver onetoone openvpn-server openvpn-client openvpn-csc option package passthrumac phase1 phase2 "
+    "ppp pppoe priv proxyarpnet pool pages pipe radnsserver roll route row rrddatafile rule schedule service "
+    "servernat servers serversdisabled staticmap subqueue tab timerange tunnel user vip virtual_server vlan "
+    "winsserver wolentry widget".split()
+)
+_UNHASHED = ("updated", "created", "descr")
+
+
+def _php_append(holder: dict | list, value: object) -> None:
+    """``$array[] = value``: the next integer key of a PHP array."""
+    if isinstance(holder, list):
+        holder.append(value)
+        return
+    numbers = [int(k) for k in holder if isinstance(k, str) and k.isdigit()]
+    holder[str(max(numbers) + 1 if numbers else 0)] = value
+
+
+def _php_array(element: ElementTree.Element) -> dict:
+    """An element as OPNsense's ``Config::toArray`` reads it."""
+    result: dict = {}
+    if element.attrib:
+        result["@attributes"] = dict(element.attrib)
+    for child in element:
+        name = child.tag
+        if not isinstance(name, str):
+            continue  # a comment or processing instruction
+        if len(child):
+            value = _php_array(child)
+            if name in result:
+                if not isinstance(result[name], list):
+                    result[name] = [result[name]]
+                result[name].append(value)
+            elif name in _LIST_TAGS:
+                result[name] = [value]
+            else:
+                result[name] = value
+            continue
+        text = child.text or ""
+        if name in result:
+            if isinstance(result[name], str):
+                result[name] = [result[name]]
+            _php_append(result[name], text)
+            continue
+        if name in _LIST_TAGS:
+            result[name] = [text] if text.strip() else []
+        else:
+            result[name] = text
+        if child.attrib:
+            result[f"{name}@attributes"] = dict(child.attrib)
+    return result
+
+
+def legacy_rule_label(element: ElementTree.Element) -> str:
+    """The pf label OPNsense gives a legacy ``<filter><rule>``
+    (``Util::calcRuleHash``)."""
+    rule = {k: v for k, v in _php_array(element).items() if k not in _UNHASHED}
+    ordered = {
+        key: dict(sorted(value.items())) if isinstance(value, dict) else value for key, value in sorted(rule.items())
+    }
+    # PHP's json_encode: no spaces, non-ASCII as a \u escape, and "/" escaped.
+    text = json.dumps(ordered, separators=(",", ":"), ensure_ascii=True).replace("/", "\\/")
+    return hashlib.md5(text.encode("utf-8"), usedforsecurity=False).hexdigest()
+
+
 # ── The model ────────────────────────────────────────────────────────────────
 
 
@@ -278,6 +402,12 @@ class Endpoint:
     aliases: list[str] = field(default_factory=list)
     missing: list[str] = field(default_factory=list)
     unresolved: list[str] = field(default_factory=list)
+    # The aliases resolved from their collected pf table.
+    tables: list[str] = field(default_factory=list)
+    # A side whose only unresolved part is a truncated alias table: ``known``
+    # holds the addresses known to match (``cidrs`` stays any).
+    open: bool = False
+    known: list[str] = field(default_factory=list)
 
     @property
     def port_expression(self) -> str:
@@ -303,6 +433,8 @@ class FilterRule:
     gateway: str = ""
     log: bool = False
     unresolved: list[str] = field(default_factory=list)
+    # The pf label the firewall's log lines and rule counters name the rule by.
+    label: str = ""
 
 
 @dataclass
@@ -393,6 +525,9 @@ class OpnsenseConfig:
     anti_lockout: list[int] = field(default_factory=list)  # its ports; [] when disabled
     routing: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
+    # The aliases the rules and NAT name that only a pf table resolves
+    # (what the collector reads), in the order first met.
+    table_aliases: list[str] = field(default_factory=list)
 
     def zones(self, names: list[str]) -> list[str]:
         """Interface keys of rule interfaces (groups expanded); ``[]`` stays every interface."""
@@ -463,21 +598,106 @@ def _port_expression(ports: list[tuple[int, int]] | None) -> str:
     return ",".join(dict.fromkeys(str(low) if low == high else f"{low}-{high}" for low, high in ports))
 
 
-class _Resolver:
-    """Resolves rule addresses and ports against the interfaces and aliases."""
+def table_cidrs(entries: list[str]) -> list[str]:
+    """The networks a pf table's entries (``pfctl -T show``: addresses and
+    networks, ``!`` before a negated one) hold: each negated entry is cut
+    out of the less specific networks that hold it, as pf's most specific
+    match decides; a network more specific than a negated one stays."""
+    positives: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = []
+    negatives: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = []
+    for raw in entries:
+        text = str(raw or "").strip()
+        negated = text.startswith("!")
+        found = canonical(text.lstrip("!").strip())
+        if found:
+            (negatives if negated else positives).append(ipaddress.ip_network(found))
+    result: list[str] = []
+    for positive in dict.fromkeys(positives):
+        pieces: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = [positive]
+        for negative in negatives:
+            if negative.version != positive.version or not negative.subnet_of(positive):  # type: ignore[arg-type]
+                continue
+            kept: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = []
+            for piece in pieces:
+                if piece.subnet_of(negative):  # type: ignore[arg-type]
+                    continue
+                if negative.subnet_of(piece):  # type: ignore[arg-type]
+                    kept.extend(piece.address_exclude(negative))  # type: ignore[arg-type]
+                else:
+                    kept.append(piece)
+            pieces = kept
+        result.extend(str(piece) for piece in pieces)
+    return list(dict.fromkeys(result))
 
-    def __init__(self, config: OpnsenseConfig) -> None:
+
+class _Resolver:
+    """Resolves rule addresses and ports against the interfaces and aliases,
+    and the aliases the configuration cannot resolve against the collected
+    pf tables (``tables``)."""
+
+    def __init__(self, config: OpnsenseConfig, tables: Mapping[str, Any] | None = None) -> None:
         self.config = config
         lowered = {name.lower(): alias for name, alias in config.aliases.items()}
         self.aliases = lowered
+        self.tables = {str(name).lower(): table for name, table in (tables or {}).items() if isinstance(table, Mapping)}
+        self._table_cache: dict[str, tuple[list[str], bool, int, int]] = {}
+        # The notes of truncated tables: what they hold still matches.
+        self.open_notes: set[str] = set()
+        # The aliases (lower case) resolved from a table.
+        self.used_tables: set[str] = set()
 
     def alias(self, name: str) -> Alias | None:
         return self.aliases.get(name.lower())
 
+    def _table(self, name: str) -> tuple[list[str], bool, int, int] | None:
+        """``(networks, truncated, entries read, entries the table held)`` of
+        an alias's collected table."""
+        key = name.lower()
+        table = self.tables.get(key)
+        if table is None:
+            return None
+        if key not in self._table_cache:
+            entries = [str(e) for e in table.get("entries") or [] if str(e).strip()]
+            total = table.get("total")
+            held = int(total) if isinstance(total, int) and total > len(entries) else len(entries)
+            self._table_cache[key] = (table_cidrs(entries), bool(table.get("truncated")), len(entries), held)
+        return self._table_cache[key]
+
+    def _from_table(
+        self, name: str, extra: list[str] | None = None
+    ) -> tuple[list[str], list[str], list[str], list[str]] | None:
+        """An alias resolved from its collected pf table (``None`` without
+        one). A complete table is the alias; a truncated one adds what it
+        holds to ``extra`` (the configured entries already resolved) with an
+        open note: other addresses stay unresolved."""
+        if name.lower() not in (n.lower() for n in self.config.table_aliases):
+            self.config.table_aliases.append(name)
+        found = self._table(name)
+        if found is None:
+            return None
+        cidrs, truncated, read, held = found
+        self.used_tables.add(name.lower())
+        if truncated:
+            more = f"held {held} entries, of which" if held > read else "was cut short:"
+            note = f"alias {name} (its pf table as read at the last collection {more} only {read} were read)"
+            self.open_notes.add(note)
+            return list(dict.fromkeys([*(extra or []), *cidrs])), [note], [name], []
+        return list(cidrs), [], [name], []
+
     def address(
+        self, value: str, seen: frozenset[str] = frozenset(), *, partial: bool = False
+    ) -> tuple[list[str], list[str], list[str], list[str]]:
+        """``(cidrs, unresolved, aliases used, missing names)`` of one address
+        value. ``partial``: when only truncated tables are unresolved, the
+        cidrs are what is known to match (else any)."""
+        found = self._address(value, seen)
+        if found[1] and not partial:
+            return [ANY], found[1], found[2], found[3]
+        return found
+
+    def _address(
         self, value: str, seen: frozenset[str] = frozenset()
     ) -> tuple[list[str], list[str], list[str], list[str]]:
-        """``(cidrs, unresolved, aliases used, missing names)`` of one address value."""
         text = value.strip()
         lowered = text.lower()
         if lowered in ("", "any", "*"):
@@ -501,6 +721,9 @@ class _Resolver:
         if alias is not None:
             return self._alias_addresses(alias, seen)
         if lowered.startswith(_BUILTIN_ALIASES):
+            table = self._from_table(text)
+            if table is not None:
+                return table
             return [ANY], [f"alias {text} (a table the firewall fills)"], [text], []
         return [ANY], [f"alias {text} (not in the configuration)"], [], [text]
 
@@ -538,9 +761,13 @@ class _Resolver:
         if not alias.enabled:
             return [ANY], [f"alias {name} (disabled)"], [name], []
         kind = alias.type.lower()
+        if kind == _PORT_ALIAS:
+            return [ANY], [f"port alias {name}"], [name], []
         if kind not in _ADDRESS_ALIASES:
-            what = "port alias" if kind == _PORT_ALIAS else f"{kind or 'unknown'} alias"
-            return [ANY], [f"{what} {name}"], [name], []
+            table = self._from_table(name)
+            if table is not None:
+                return table
+            return [ANY], [f"{kind or 'unknown'} alias {name}"], [name], []
         cidrs: list[str] = []
         unresolved: list[str] = []
         used = [name]
@@ -555,20 +782,25 @@ class _Resolver:
                 more, problems, names, absent = self._alias_addresses(nested, seen | {name.lower()})
                 used.extend(names)
                 missing.extend(absent)
-                if problems:
-                    unresolved.extend(problems)
-                else:
+                unresolved.extend(problems)
+                if more != [ANY]:
                     cidrs.extend(more)
             elif _FQDN.match(entry):
                 unresolved.append(f"alias {name} (host name {entry})")
             else:
                 unresolved.append(f"alias {name} ({entry} is not in the configuration)")
                 missing.append(entry)
-        if unresolved:
+        if any(u not in self.open_notes for u in unresolved):
+            # pf's own table of the alias holds what the firewall resolved
+            # (host names, nested tables): taken over the configured entries.
+            table = self._from_table(name, cidrs)
+            if table is not None:
+                more, problems, names, _absent = table
+                return more, problems, list(dict.fromkeys([*used, *names])), missing
             return [ANY], unresolved, used, missing
-        if not cidrs:
+        if not cidrs and not unresolved:
             return [ANY], [f"alias {name} (empty)"], used, missing
-        return list(dict.fromkeys(cidrs)), [], used, missing
+        return list(dict.fromkeys(cidrs)), unresolved, used, missing
 
     def ports(
         self, value: str, seen: frozenset[str] = frozenset()
@@ -621,7 +853,7 @@ class _Resolver:
         cidrs: list[str] = []
         if not is_any:
             for value in values:
-                found, unresolved, used, missing = self.address(value)
+                found, unresolved, used, missing = self.address(value, partial=True)
                 cidrs.extend(found)
                 point.unresolved.extend(unresolved)
                 point.aliases.extend(used)
@@ -635,9 +867,14 @@ class _Resolver:
             point.unresolved.append(f"negated {point.text}")
         if is_any or point.unresolved or ANY in cidrs:
             point.cidrs = [ANY]
+            if not is_any and point.unresolved and ANY not in cidrs:
+                # Only truncated tables are unresolved: what they hold matches.
+                point.open = all(u in self.open_notes for u in point.unresolved)
+                point.known = list(dict.fromkeys(cidrs)) if point.open else []
         else:
             point.cidrs = list(dict.fromkeys(cidrs))
         point.aliases = list(dict.fromkeys(point.aliases))
+        point.tables = [a for a in point.aliases if a.lower() in self.used_tables]
         point.missing = list(dict.fromkeys(point.missing))
         point.unresolved = list(dict.fromkeys(point.unresolved))
         return point
@@ -807,6 +1044,7 @@ def _rules(root: ElementTree.Element, config: OpnsenseConfig, resolver: _Resolve
             gateway=_text(node, "gateway"),
             log=_on(node, "log"),
             unresolved=_criteria(node, protocol),
+            label=_uuid(node),
         )
         if _on(node, "interfacenot"):
             rule.unresolved.append("every interface but the ones it names")
@@ -847,6 +1085,7 @@ def _rules(root: ElementTree.Element, config: OpnsenseConfig, resolver: _Resolve
             gateway=_text(node, "gateway"),
             log=_flag(node, "log"),
             unresolved=_criteria(node, protocol),
+            label=legacy_rule_label(node),
         )
         read.append((TIERS.index(tier), order, rule))
     read.sort(key=lambda item: (item[0], item[1]))
@@ -1074,9 +1313,40 @@ def _services(root: ElementTree.Element, config: OpnsenseConfig) -> None:
         config.anti_lockout = list(dict.fromkeys(ports))
 
 
-def parse_document(text: str) -> OpnsenseConfig | None:
+def _fill_live(config: OpnsenseConfig, live: list[LiveInterface]) -> None:
+    """The address and network of each dynamic interface from the live
+    addresses of the collection (matched by interface key, else by device),
+    per family: a family filled from them is no longer dynamic. An
+    interface without a live address in a family stays as it is."""
+    by_key = {key.lower(): addresses for key, _device, addresses in live if key}
+    by_device = {device.lower(): addresses for _key, device, addresses in live if device}
+    for iface in config.interfaces.values():
+        if not iface.dynamic:
+            continue
+        addresses = by_key.get(iface.key) or by_device.get(iface.device.lower()) or []
+        pairs = [pair for pair in (live_address(a) for a in addresses) if pair is not None]
+        for v6 in (False, True):
+            types = [d for d in iface.dynamic if (d in _DYNAMIC_V6) == v6]
+            pair = next((p for p in pairs if (":" in p[0]) == v6), None)
+            if not types or pair is None or (iface.ipv6 if v6 else iface.ipv4) is not None:
+                continue
+            if v6:
+                iface.ipv6 = pair
+            else:
+                iface.ipv4 = pair
+            iface.dynamic = [d for d in iface.dynamic if d not in types]
+
+
+def parse_document(
+    text: str, live: list[LiveInterface] | None = None, tables: Mapping[str, Any] | None = None
+) -> OpnsenseConfig | None:
     """An OPNsense ``config.xml`` read into an ``OpnsenseConfig``; ``None``
-    when the text is not one."""
+    when the text is not one. ``live``: the interface addresses the
+    collection read (``opnsense_routes.live_interfaces``), which fill the
+    addresses of the interfaces config.xml leaves to DHCP, PPPoE, DHCPv6
+    or track6 before the rules and NAT are resolved. ``tables``: the alias
+    tables the collection read (``{name: {"entries", "truncated"}}``), which
+    resolve the aliases the configuration cannot (see the module docstring)."""
     root = parse_xml(text)
     if root is None:
         return None
@@ -1084,8 +1354,10 @@ def parse_document(text: str) -> OpnsenseConfig | None:
         hostname=".".join(p for p in (_text(root, "system/hostname"), _text(root, "system/domain")) if p)
     )
     _interfaces(root, config)
+    if live:
+        _fill_live(config, live)
     _aliases(root, config)
-    resolver = _Resolver(config)
+    resolver = _Resolver(config, tables)
     _rules(root, config, resolver)
     _nat(root, config, resolver)
     _gateways(root, config)
@@ -1141,31 +1413,58 @@ def _side(point: Endpoint, family: str) -> list[str] | None:
     return kept or None
 
 
+def _known_side(point: Endpoint, family: str) -> list[str] | None:
+    """The addresses known to match a side: what the truncated tables of an
+    open side hold, else the side's addresses."""
+    if not point.open:
+        return _side(point, family)
+    return _family_filter(point.known, family) or None
+
+
 def _entries(rule: FilterRule) -> list[AclEntry]:
+    """The access list entries of a rule. A side whose truncated alias table
+    leaves part of it unread (``Endpoint.open``) makes two: what the table
+    holds decides, then the rest is unresolved."""
     protocols = _protocols(rule.protocol, rule.family)
-    src = _side(rule.source, rule.family)
-    dst = _side(rule.destination, rule.family)
-    if protocols is None or src is None or dst is None:
+    if protocols is None:
         return []
-    unresolved = [*rule.unresolved, *rule.source.unresolved, *rule.destination.unresolved]
-    entries = []
-    for protocol in protocols:
-        ported = protocol in ("tcp", "udp")
-        entries.append(
-            AclEntry(
-                rule.number,
-                "allow" if rule.action == "pass" else "deny",
-                protocol=protocol,
-                src=src,
-                src_ports=rule.source.port_expression if ported else ANY,
-                dst=dst,
-                dst_ports=rule.destination.port_expression if ported else ANY,
-                comment=f"{rule.tier} rule",
-                unresolved=list(dict.fromkeys(unresolved)),
-                name=rule.description,
-                enabled=not rule.disabled,
+    unresolved = list(dict.fromkeys([*rule.unresolved, *rule.source.unresolved, *rule.destination.unresolved]))
+    comment = f"{rule.tier} rule"
+    tables = list(dict.fromkeys([*rule.source.tables, *rule.destination.tables]))
+    if tables:
+        comment += f"; alias {', '.join(tables)} {TABLE_WORDING}"
+    variants: list[tuple[list[str] | None, list[str] | None, list[str]]] = []
+    if rule.source.open or rule.destination.open:
+        partial = {u for side in (rule.source, rule.destination) if side.open for u in side.unresolved}
+        variants.append(
+            (
+                _known_side(rule.source, rule.family),
+                _known_side(rule.destination, rule.family),
+                [u for u in unresolved if u not in partial],
             )
         )
+    variants.append((_side(rule.source, rule.family), _side(rule.destination, rule.family), unresolved))
+    entries = []
+    for src, dst, notes in variants:
+        if src is None or dst is None:
+            continue
+        for protocol in protocols:
+            ported = protocol in ("tcp", "udp")
+            entries.append(
+                AclEntry(
+                    rule.number,
+                    "allow" if rule.action == "pass" else "deny",
+                    protocol=protocol,
+                    src=src,
+                    src_ports=rule.source.port_expression if ported else ANY,
+                    dst=dst,
+                    dst_ports=rule.destination.port_expression if ported else ANY,
+                    comment=comment,
+                    unresolved=list(notes),
+                    name=rule.description,
+                    enabled=not rule.disabled,
+                )
+            )
     return entries
 
 
@@ -1407,7 +1706,12 @@ def _automatic_nat(config: OpnsenseConfig, entries: list[dict]) -> None:
         )
 
 
-def _routes(config: OpnsenseConfig, running: RunningConfig) -> None:
+def _routes(config: OpnsenseConfig, running: RunningConfig, captured: bool = False) -> None:
+    """The static routes and the default routes of config.xml, and notes on
+    what it cannot say about them. ``captured``: the collection's routing
+    table is read too and says what is installed (the trace then takes the
+    routes from it, not from here), so those notes are not made."""
+
     def device(key: str) -> str:
         iface = config.interfaces.get(key)
         return iface.device if iface is not None else ""
@@ -1417,14 +1721,16 @@ def _routes(config: OpnsenseConfig, running: RunningConfig) -> None:
             continue
         prefix = canonical(route.network)
         if not prefix:
-            _note(running, f"Static route to {route.network} (not an address)")
+            if not captured:
+                _note(running, f"Static route to {route.network} (not an address)")
             continue
         if route.gateway.lower() in ("null4", "null6"):
             running.static_routes.append(StaticRoute(prefix, "", "Null", name=route.description))
             continue
         gateway = config.gateways.get(route.gateway)
         if gateway is None or gateway.disabled:
-            _note(running, f"Static route to {prefix} (gateway {route.gateway} is not read)")
+            if not captured:
+                _note(running, f"Static route to {prefix} (gateway {route.gateway} is not read)")
             continue
         running.static_routes.append(
             StaticRoute(prefix, gateway.address, device(gateway.interface), name=route.description or route.gateway)
@@ -1445,7 +1751,7 @@ def _routes(config: OpnsenseConfig, running: RunningConfig) -> None:
             dynamic = [i.key for i in config.interfaces.values() if i.upstream and i.dynamic and i.enabled]
             if dynamic:
                 learned.append(", ".join(dynamic))
-    if learned:
+    if learned and not captured:
         _note(running, f"Routes learned by DHCP or PPPoE (the default gateway of {', '.join(learned)})")
 
 
@@ -1474,11 +1780,16 @@ def _config_interfaces(config: OpnsenseConfig, running: RunningConfig) -> dict[s
     return found
 
 
-def parse_config(text: str) -> RunningConfig:
+def parse_config(text: str, capture: str = "", tables: Mapping[str, Any] | None = None) -> RunningConfig:
     """What an OPNsense ``config.xml`` says about forwarding: interfaces,
-    filter rules per interface, NAT, static and default routes."""
+    filter rules per interface, NAT, static and default routes.
+    ``capture``: the host's route capture stored by the collection
+    (``opnsense_routes``), whose live addresses fill the dynamic
+    interfaces and whose routing table supersedes the route notes.
+    ``tables``: the host's alias tables stored by the collection, which
+    resolve the aliases the configuration cannot."""
     running = RunningConfig(stateful=True)
-    config = parse_document(text)
+    config = parse_document(text, live=live_interfaces(capture) if capture else None, tables=tables)
     if config is None:
         _note(running, "Configuration (the backup is not an OPNsense config.xml)")
         return running
@@ -1486,7 +1797,7 @@ def parse_config(text: str) -> RunningConfig:
     running.interfaces = list(interfaces.values())
     _access_lists(config, running, interfaces)
     _nat_entries(config, running)
-    _routes(config, running)
+    _routes(config, running, captured=bool(capture) and has_routes(capture))
     running.routing = list(config.routing)
     for name in config.notes:
         _note(running, name)

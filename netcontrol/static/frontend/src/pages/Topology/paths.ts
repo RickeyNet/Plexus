@@ -2,7 +2,7 @@ import type { MerakiSubnet, PathAppSuggestion } from '@/api/meraki';
 import type { TopologyEdge, TopologyNode } from '@/api/topology';
 
 import { isEdgeDown, isRemoteUserNode, PROVIDER_INVENTORY } from './helpers';
-import { layoutGroupKey } from './layout';
+import { layoutGroupKey, siteBoxName } from './layout';
 import { searchHost } from './merakiHelpers';
 
 // Path mode: how a set of picked devices / sites reach one another over the
@@ -144,7 +144,7 @@ export function pathSites(nodes: TopologyNode[]): PathSite[] {
     const key = layoutGroupKey(node);
     const seen = best.get(key);
     if (!seen || rank < seen.rank) {
-      best.set(key, { site: { key, name: ref.site_name || ref.site_id, gateway: node.id }, rank });
+      best.set(key, { site: { key, name: siteBoxName(ref) || ref.site_id, gateway: node.id }, rank });
     }
   }
   return [...best.values()]

@@ -4,6 +4,7 @@ import type { OpnsenseAnalyzedRule, OpnsenseRuleEndpoint } from '@/api/opnsenseR
 
 import {
   actionTone,
+  aliasTableLines,
   changeText,
   countersText,
   endpointText,
@@ -96,5 +97,21 @@ describe('opnsense rules helpers', () => {
     expect(changeText(['lan', 'opt1'])).toBe('lan, opt1');
     expect(changeText(true)).toBe('yes');
     expect(changeText('')).toBe('-');
+  });
+
+  it('names the aliases resolved from a collected pf table, with their size', () => {
+    const point = side('Partners, GeoBlock', { aliases: ['Partners', 'geoblock', 'WebServers'] });
+    const tables = {
+      read_at: '2026-11-14 09:00:10',
+      tables: {
+        Partners: { entry_count: 1, total: 1, truncated: false },
+        GeoBlock: { entry_count: 9999, total: 50000, truncated: true },
+      },
+    };
+    expect(aliasTableLines(point, tables)).toEqual([
+      'Partners: pf table, 1 entry',
+      `geoblock: pf table, truncated, ${(9999).toLocaleString()} of ${(50000).toLocaleString()} entries read`,
+    ]);
+    expect(aliasTableLines(point, undefined)).toEqual([]);
   });
 });

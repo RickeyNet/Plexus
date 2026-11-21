@@ -128,9 +128,10 @@ def _state_row(row: dict) -> dict:
 # ── Mutes ────────────────────────────────────────────────────────────────────
 
 MUTE_SCOPES = ("entity", "site")
-# Edge entities: muting the device at either end (meta ``a`` / ``b``) mutes
-# them, as removing that device removes them.
-_EDGE_TYPES = ("uplink", "tunnel", "link")
+# Edge entities, and services that run on a device (an OPNsense firewall's):
+# muting the device at either end (meta ``a`` / ``b``) mutes them, as
+# removing that device removes them.
+_EDGE_TYPES = ("uplink", "tunnel", "link", "service")
 # What an entity of the availability summary carries of the mute covering it.
 _ENTITY_MUTE_FIELDS = ("id", "scope", "site", "reason", "created_by", "created_at")
 _MUTE_COLUMNS = "id, provider, org_ref, scope, entity_type, entity_id, site, reason, created_by, created_at"
@@ -231,8 +232,9 @@ class TopologyMuteIndex:
     """Which mute, if any, covers an entity. First hit wins:
 
     1. an ``entity`` mute of the entity itself;
-    2. for an uplink, tunnel or link: an ``entity`` mute of the device at
-       either end (meta ``a`` / ``b``);
+    2. for an uplink, tunnel, link or service: an ``entity`` mute of the
+       device at either end (meta ``a`` / ``b``; a service names the device
+       it runs on as ``a``);
     3. a ``site`` mute of the entity's site;
     4. for an uplink, tunnel or link: a ``site`` mute of the site of the
        device at either end (a hub-to-branch tunnel is stored under the hub's
@@ -918,6 +920,10 @@ async def get_topology_transitions(
 # of the day (count, sum, sum of squares, min, max). Raw rows are purged
 # with the monitoring retention, daily rows with the SLA retention, so a
 # window longer than the raw retention is read from the daily rows.
+# Migration 0124 adds the traffic rate of a tunnel (``in_bps`` /
+# ``out_bps``, daily metrics ``traffic_in`` / ``traffic_out``), computed
+# from byte counters when a collection is stored
+# (``netcontrol.integrations.traffic``).
 
 
 def _metric_value(value: Any) -> float | None:
@@ -934,8 +940,9 @@ async def record_topology_entity_metrics(
     now: str | None = None,
 ) -> int:
     """Store one collection's measurements: ``samples`` are ``{"entity_type",
-    "entity_id", "metrics": {"latency_ms", "jitter_ms", "loss_pct"}}`` (a
-    missing or non-numeric value is skipped). Returns the raw rows written."""
+    "entity_id", "metrics": {"latency_ms", "jitter_ms", "loss_pct",
+    "in_bps", "out_bps"}}`` (``METRIC_KEYS``; a missing or non-numeric value
+    is skipped). Returns the raw rows written."""
     now = now or _now()
     day = now[:10]
     raw: list[tuple] = []
@@ -946,7 +953,17 @@ async def record_topology_entity_metrics(
         if all(v is None for v in values.values()):
             continue
         key = (str(provider), int(org_ref), str(sample["entity_type"]), str(sample["entity_id"]))
-        raw.append((*key, now, values["latency_ms"], values["jitter_ms"], values["loss_pct"]))
+        raw.append(
+            (
+                *key,
+                now,
+                values["latency_ms"],
+                values["jitter_ms"],
+                values["loss_pct"],
+                values["in_bps"],
+                values["out_bps"],
+            )
+        )
         for metric_key, metric in METRIC_KEYS.items():
             value = values[metric_key]
             if value is not None:
@@ -957,8 +974,9 @@ async def record_topology_entity_metrics(
     try:
         await db.executemany(
             """INSERT INTO topology_entity_metrics
-               (provider, org_ref, entity_type, entity_id, sampled_at, latency_ms, jitter_ms, loss_pct)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+               (provider, org_ref, entity_type, entity_id, sampled_at, latency_ms, jitter_ms, loss_pct,
+                in_bps, out_bps)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             raw,
         )
         await db.executemany(
@@ -993,8 +1011,8 @@ def _metric_window(days: int, now: str | None) -> tuple[str, str, str]:
 
 
 def _metric_stats(sums: dict[str, list[float]]) -> dict[str, Any]:
-    """Mean latency, mean jitter and mean loss with their sample counts from
-    ``{metric: [count, sum]}``."""
+    """Mean latency, mean jitter, mean loss and mean traffic in / out (bits
+    per second) with their sample counts from ``{metric: [count, sum]}``."""
 
     def mean(metric: str) -> float | None:
         count, total = sums.get(metric, [0, 0.0])
@@ -1004,9 +1022,13 @@ def _metric_stats(sums: dict[str, list[float]]) -> dict[str, Any]:
         "avg_latency_ms": mean("latency"),
         "jitter_ms": mean("jitter"),
         "avg_packet_loss_pct": mean("packet_loss"),
+        "avg_in_bps": mean("traffic_in"),
+        "avg_out_bps": mean("traffic_out"),
         "latency_samples": int(sums.get("latency", [0, 0.0])[0]),
         "jitter_samples": int(sums.get("jitter", [0, 0.0])[0]),
         "packet_loss_samples": int(sums.get("packet_loss", [0, 0.0])[0]),
+        "traffic_in_samples": int(sums.get("traffic_in", [0, 0.0])[0]),
+        "traffic_out_samples": int(sums.get("traffic_out", [0, 0.0])[0]),
     }
 
 
@@ -1034,7 +1056,9 @@ async def get_topology_entity_metric_values(
             f"""SELECT m.provider, m.org_ref, m.entity_type, m.entity_id,
                        COUNT(m.latency_ms) AS latency_n, COALESCE(SUM(m.latency_ms), 0) AS latency_sum,
                        COUNT(m.jitter_ms) AS jitter_n, COALESCE(SUM(m.jitter_ms), 0) AS jitter_sum,
-                       COUNT(m.loss_pct) AS loss_n, COALESCE(SUM(m.loss_pct), 0) AS loss_sum
+                       COUNT(m.loss_pct) AS loss_n, COALESCE(SUM(m.loss_pct), 0) AS loss_sum,
+                       COUNT(m.in_bps) AS in_n, COALESCE(SUM(m.in_bps), 0) AS in_sum,
+                       COUNT(m.out_bps) AS out_n, COALESCE(SUM(m.out_bps), 0) AS out_sum
                 FROM topology_entity_metrics m
                 WHERE m.sampled_at >= ? AND m.sampled_at < ? AND m.sampled_at <= ?{extra}
                 GROUP BY m.provider, m.org_ref, m.entity_type, m.entity_id""",
@@ -1042,7 +1066,13 @@ async def get_topology_entity_metric_values(
         )
         for r in rows_to_list(await cursor.fetchall()):
             entry = sums.setdefault(_key(r), {})
-            for metric, prefix in (("latency", "latency"), ("jitter", "jitter"), ("packet_loss", "loss")):
+            for metric, prefix in (
+                ("latency", "latency"),
+                ("jitter", "jitter"),
+                ("packet_loss", "loss"),
+                ("traffic_in", "in"),
+                ("traffic_out", "out"),
+            ):
                 entry[metric] = [int(r[f"{prefix}_n"] or 0), float(r[f"{prefix}_sum"] or 0)]
         cursor = await db.execute(
             f"""SELECT m.provider, m.org_ref, m.entity_type, m.entity_id, m.metric,
@@ -1083,7 +1113,7 @@ async def get_topology_entity_metric_history(
     db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
-            """SELECT sampled_at, latency_ms, jitter_ms, loss_pct FROM topology_entity_metrics
+            """SELECT sampled_at, latency_ms, jitter_ms, loss_pct, in_bps, out_bps FROM topology_entity_metrics
                WHERE provider = ? AND org_ref = ? AND entity_type = ? AND entity_id = ?
                  AND sampled_at >= ? AND sampled_at <= ?
                ORDER BY sampled_at, id LIMIT ?""",
@@ -1139,6 +1169,9 @@ async def purge_topology_entity_metrics(raw_retention_days: int, rollup_retentio
         deleted = cursor.rowcount or 0
         cursor = await db.execute("DELETE FROM topology_entity_metric_daily WHERE day < ?", (rollup_cutoff[:10],))
         deleted += cursor.rowcount or 0
+        # Counter readings of keys no longer read (migration 0125): far past
+        # ``MAX_RATE_GAP_SECONDS``, so they could not give a rate anyway.
+        await db.execute("DELETE FROM topology_traffic_counters WHERE read_at < ?", (raw_cutoff,))
         await db.execute("DELETE FROM topology_sla_target_status_history WHERE evaluated_at < ?", (rollup_cutoff,))
         await db.commit()
         return deleted

@@ -34,6 +34,8 @@ from netcontrol.integrations.meraki.normalize import (
     _worst,
     kv_section,
 )
+from netcontrol.integrations.opnsense.ha import carp_pairs
+from netcontrol.integrations.opnsense.normalize import PROVIDER as PROVIDER_OPNSENSE
 
 # Meraki nodes carry layout hints so a large organization opens instantly
 # instead of going through force-directed physics. The block is placed to the
@@ -286,13 +288,25 @@ def merge_meraki_into_graph(
     address: the device that answers on an address (its own, or that of its
     WAN uplink) is the far end of any VPN peer configured with that address.
     A cloud instance that is a device of another snapshot becomes that device
-    (``virtual_appliance_pairs``).
+    (``virtual_appliance_pairs``). The two firewalls of an OPNsense CARP pair
+    (two sources, ``opnsense.ha.carp_pairs``) and the nodes of their sites
+    share one box (``box`` / ``box_name`` of their refs; each firewall's
+    ref names its peer as ``ha_peer``) and are joined by an HA link
+    (``stack``) whose status is the pair's, for display only.
     """
     y_cursor = 0.0
     # Public address -> graph node that answers on it. First claim wins.
     claims: dict[str, Any] = {}
     plans: list[dict[str, Any]] = []
     virtual = virtual_appliance_pairs(snapshots)
+    # Two OPNsense sources that are one CARP pair: their sites share a box.
+    ha_pairs = carp_pairs(snapshots)
+    ha_boxes = {(m["org_ref"], m["site_id"]): pair for pair in ha_pairs for m in pair["members"]}
+    ha_peers = {
+        (m["org_ref"], m["node_id"]): pair["members"][1 - i]["label"]
+        for pair in ha_pairs
+        for i, m in enumerate(pair["members"])
+    }
 
     def claim(plan: dict, node: dict, graph_id: Any) -> None:
         for address in _global_ips(node.get("ip"), node.get("alias_ips")):
@@ -416,6 +430,11 @@ def merge_meraki_into_graph(
             if node.get("instance_id"):
                 ref["instance_id"] = node["instance_id"]
                 ref["subnet"] = node.get("subnet") or ""
+            box = ha_boxes.get((org_ref, ref["site_id"]))
+            if box is not None:
+                ref["box"], ref["box_name"] = box["id"], box["name"]
+            if (org_ref, node["id"]) in ha_peers:
+                ref["ha_peer"] = ha_peers[(org_ref, node["id"])]
             x = round(node.get("x", 0.0) - min_x + MERAKI_X_OFFSET, 1)
             y = round(node.get("y", 0.0) - min_y + y_cursor, 1)
             if node["kind"] == "vpn_peer":
@@ -537,6 +556,31 @@ def merge_meraki_into_graph(
                 }
             )
 
+    # The HA link of each CARP pair, between its two firewalls.
+    id_maps = {plan["org_ref"]: plan["id_map"] for plan in plans}
+    for pair in ha_pairs:
+        a_ref, b_ref = pair["members"]
+        a = id_maps.get(a_ref["org_ref"], {}).get(a_ref["node_id"])
+        b = id_maps.get(b_ref["org_ref"], {}).get(b_ref["node_id"])
+        if a is None or b is None or a == b:
+            continue
+        edges.append(
+            {
+                "id": pair["id"],
+                "from": a,
+                "to": b,
+                "label": f"{a_ref['role']} -- {b_ref['role']}",
+                "protocol": "stack",
+                "source_interface": a_ref["role"],
+                "target_interface": b_ref["role"],
+                "color": "#808080",
+                "width": 1,
+                "source": "meraki",
+                "provider": PROVIDER_OPNSENSE,
+                "status": pair["status"],
+            }
+        )
+
 
 # ── Node details and search ──────────────────────────────────────────────────
 
@@ -654,7 +698,7 @@ def _viewer_status(status: str) -> str:
 
 
 _LAYOUT_NODE_FIELDS = ("device_category", "device_type", "group_name", "source")
-_LAYOUT_REF_FIELDS = ("provider", "node_id", "kind", "org_ref", "site_id", "site_name")
+_LAYOUT_REF_FIELDS = ("provider", "node_id", "kind", "org_ref", "site_id", "site_name", "box", "box_name")
 
 
 def _layout_fields(g: dict) -> dict:
@@ -694,6 +738,20 @@ def graph_to_snapshot(
 
     def site_for(node: dict) -> str:
         ref = node.get("meraki")
+        if ref and ref.get("box"):
+            # The two firewalls of a CARP pair (``carp_pairs``): one box.
+            site_id = f"box:{ref['box']}"
+            sites.setdefault(
+                site_id,
+                {
+                    "id": site_id,
+                    "name": ref.get("box_name") or "HA pair",
+                    "tags": ["ha"],
+                    "vpn_mode": "none",
+                    "sections": [],
+                },
+            )
+            return site_id
         if ref:
             site_id = f"m{ref['org_ref']}:{ref['site_id']}"
             if site_id not in sites:

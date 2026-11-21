@@ -79,7 +79,7 @@ import {
   type SourceFilter,
   type TopoThemeColors,
 } from './helpers';
-import { crowdedGroups, fitTitles, labelWidth, straighten, tidyLabel, tidyTree, type XY } from './layout';
+import { crowdedGroups, fitTitles, labelWidth, siteBoxName, straighten, tidyLabel, tidyTree, type XY } from './layout';
 import { distanceToRoute, routeSourceLinks, traceRoute } from './routes';
 import { EdgeDetails } from './EdgeDetails';
 import { MAX_PATH_ENDPOINTS, appCandidate, appOptions, appPick, connectPicks, findNamedHosts, findSubnets, hostAddress, isAddressText, pickEnd, pickNodes, suggestHosts, parseTraffic, pathModeHint, pathSites, subnetOptionLabel, subnetPick, userPick, type PathPick } from './paths';
@@ -822,8 +822,8 @@ export function Topology() {
 
   // The frame a site member is drawn in: its site, or in the tidy layout the
   // piece of its site the tree placed it in.
-  function frameKey(id: number | string, orgRef: number, siteId: string): string {
-    return (tidyPosRef.current && tidyPiecesRef.current.get(id)) || merakiNodeKey(orgRef, siteId);
+  function frameKey(id: number | string, site: string): string {
+    return (tidyPosRef.current && tidyPiecesRef.current.get(id)) || site;
   }
 
   // The site frame a node is drawn in, or '' for none: its own site's, or in
@@ -831,7 +831,9 @@ export function Topology() {
   // whose linked neighbours are all in that site).
   function nodeFrameKey(node: TopologyNode): string {
     const ref = node.meraki;
-    if (ref?.site_id) return frameKey(node.id, ref.org_ref, ref.site_id);
+    // The two firewalls of a CARP pair (two sources) share one frame.
+    if (ref?.box) return frameKey(node.id, `box|${ref.box}`);
+    if (ref?.site_id) return frameKey(node.id, merakiNodeKey(ref.org_ref, ref.site_id));
     const piece = tidyPosRef.current ? tidyPiecesRef.current.get(node.id) : undefined;
     return piece?.startsWith('m:') ? piece : '';
   }
@@ -1109,11 +1111,11 @@ export function Topology() {
         if (!key || crowdedSitesRef.current.has(key)) continue;
         const box = boxes.get(key);
         if (!box) {
-          boxes.set(key, { name: ref?.site_name ?? '', x0: pos.x, y0: pos.y, x1: pos.x, y1: pos.y });
+          boxes.set(key, { name: siteBoxName(ref), x0: pos.x, y0: pos.y, x1: pos.x, y1: pos.y });
           members.set(key, [meta.raw.id]);
         } else {
           // The name comes from the site's own devices, not one drawn in it.
-          if (!box.name && ref?.site_name) box.name = ref.site_name;
+          if (!box.name && siteBoxName(ref)) box.name = siteBoxName(ref);
           members.get(key)!.push(meta.raw.id);
           box.x0 = Math.min(box.x0, pos.x);
           box.y0 = Math.min(box.y0, pos.y);

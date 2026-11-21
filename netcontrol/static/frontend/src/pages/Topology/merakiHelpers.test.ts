@@ -745,6 +745,8 @@ describe("opnsense collection options", () => {
       "Security audit of installed packages",
       "ARP, NDP and DHCP leases (MAC tracking and IPAM)",
       "Rule counters (unused firewall rules)",
+      "Health and services",
+      "Alias tables (URL tables, GeoIP, host names)",
       "Store config.xml as a config backup (the firewall must be an inventory host)",
       "Correlate with Plexus inventory",
     ]);

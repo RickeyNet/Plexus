@@ -5,8 +5,10 @@ import type { TopologyEdge, TopologyNode } from '@/api/topology';
 import {
   crowdedGroups,
   fitTitles,
+  layoutGroupKey,
   layoutSites,
   orderSources,
+  siteBoxName,
   SOURCE_GAP,
   tidyLabel,
   tidyTree,
@@ -787,5 +789,49 @@ describe('inventory devices drawn in their neighbours site', () => {
     expect(pieces.get(21)).toBe(pieces.get('core'));
     expect(pieces.get('ext_phone')).toBe(pieces.get('core'));
     expect(pieces.has(3)).toBe(false);
+  });
+});
+
+describe('OPNsense CARP pair box', () => {
+  const firewall = (id: string, orgRef: number, kind = 'appliance'): TopologyNode => ({
+    id,
+    label: id,
+    in_inventory: false,
+    source: 'meraki',
+    meraki: {
+      org_ref: orgRef,
+      node_id: id,
+      site_id: `opnsense:${orgRef}`,
+      site_name: `Edge ${orgRef}`,
+      kind,
+      status: 'online',
+      provider: 'opnsense',
+      box: 'opnsense-ha:3:4',
+      box_name: 'Edge 3 / Edge 4 (CARP)',
+    },
+  });
+
+  it('keys both sources of a pair to one box titled after the pair', () => {
+    const a = firewall('fw-a', 3);
+    const b = firewall('fw-b', 4);
+    expect(layoutGroupKey(a)).toBe('m:box:opnsense-ha:3:4');
+    expect(layoutGroupKey(b)).toBe(layoutGroupKey(a));
+    expect(siteBoxName(a.meraki)).toBe('Edge 3 / Edge 4 (CARP)');
+  });
+
+  it('keeps the site box of a firewall with no pair', () => {
+    const lone = meraki('fw-c', 'appliance', 'opnsense:5', 'opnsense');
+    expect(layoutGroupKey(lone)).toBe('m:1:opnsense:5');
+    expect(siteBoxName(lone.meraki)).toBe('opnsense:5');
+    expect(siteBoxName(undefined)).toBe('');
+  });
+
+  it('frames the two firewalls and their gateways in one piece', () => {
+    const nodes = [firewall('fw-a', 3), firewall('w:a', 3, 'wan'), firewall('fw-b', 4), firewall('w:b', 4, 'wan')];
+    const edges = [link('w:a', 'fw-a', 'wan'), link('w:b', 'fw-b', 'wan'), link('fw-a', 'fw-b', 'stack')];
+    const { group } = layoutSites(nodes, edges);
+    expect(new Set(nodes.map((n) => group.get(n.id)))).toEqual(new Set(['m:box:opnsense-ha:3:4']));
+    const { pieces } = tidyTree(nodes, edges);
+    expect(new Set(nodes.map((n) => pieces.get(n.id))).size).toBe(1);
   });
 });

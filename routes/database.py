@@ -3005,6 +3005,7 @@ from routes.db.syslog_rules import *  # noqa: E402,F403
 from routes.db.tool_history import *  # noqa: E402,F403
 from routes.db.topology import *  # noqa: E402,F403
 from routes.db.topology_availability import *  # noqa: E402,F403
+from routes.db.topology_traffic import *  # noqa: E402,F403
 from routes.db.users import *  # noqa: E402,F403
 from routes.db.validation_rules import *  # noqa: E402,F403
 from routes.db.vendor_status import *  # noqa: E402,F403

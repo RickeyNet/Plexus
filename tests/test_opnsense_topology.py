@@ -14,7 +14,8 @@ Covers, with no network access (a fake firewall serves the answers of
                   gateway / WireGuard / OpenVPN status vocabularies, the
                   firmware and audit warnings, an incomplete audit, IPsec
                   phase 2 (degraded tunnel, child SA details), the High
-                  availability section and its warnings, gateway metrics,
+                  availability section and its (informational) warnings,
+                  gateway metrics,
                   no config.xml in the snapshot
   * HTTP API    - CRUD with a write-only key:secret, the sample, a build job
                   against the fake firewall: config backup skipped until the
@@ -282,6 +283,8 @@ def test_sanitize_options_defaults_and_coerces():
         "include_firmware_audit",
         "include_clients",
         "include_rule_stats",
+        "include_health",
+        "include_alias_tables",
         "config_backup",
         "inventory_enrich",
     }
@@ -308,6 +311,7 @@ async def test_collect_reads_every_part_and_reports_the_phases(no_sleep):
         "opnsense routes",
         "opnsense clients",
         "opnsense rules",
+        "opnsense health",
         "opnsense firmware",
         "opnsense config",
         "collected",
@@ -542,6 +546,8 @@ def test_snapshot_firewall_sections(snapshot):
         "WireGuard peers",
         "OpenVPN instances",
         "High availability",
+        "Health",
+        "Services",
         "ARP table",
         "NDP table",
         "DHCP leases",
@@ -698,20 +704,25 @@ def test_ipsec_child_sa_and_gateway_metric_rules():
     }
 
 
-def test_carp_init_or_demotion_is_a_real_warning():
+def test_carp_init_or_demotion_is_an_informational_warning():
     raw = build_sample_raw()
     raw["carp"]["rows"][1].update(status="INIT", status_txt="INIT")
     raw["carp"]["carp"]["demotion"] = "240"
     raw["carp"]["carp"]["maintenancemode"] = True
     built = build_snapshot(raw)
     warnings = [w for w in built["collection"]["errors"] if w["scope"] == "ha"]
-    assert len(warnings) == 2 and not any(w.get("info") for w in warnings)
+    assert len(warnings) == 2 and all(w.get("info") for w in warnings)
     assert "wan VHID 2 (203.0.113.11)" in warnings[0]["message"] and "240" in warnings[1]["message"]
     ha = _table(_node(built, FIREWALL), "High availability")
     assert ha[1]["State"] == "INIT"
     assert {r["Maintenance mode"] for r in ha} == {"Yes"}
-    # A real warning: availability tracking no longer trusts the collection to remove entities.
-    assert availability_clean(built) == frozenset()
+    # Informational: the CARP groups carry the state as tracked entities, so
+    # the collection still proves what is gone.
+    assert "link" in availability_clean(built)
+    assert {e.entity_id: e.state for e in extract_entity_states("opnsense", 1, built) if e.model == "CARP"} == {
+        "carp:lan:1": "degraded",
+        "carp:wan:2": "down",
+    }
     # Only one firewall node, whatever the CARP state.
     assert sum(1 for n in built["nodes"] if n["kind"] == "appliance") == 1
     assert carp_problems(None) == [] and carp_problems({"rows": [{"status": "DISABLED", "vhid": "3"}]}) == []

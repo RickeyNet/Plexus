@@ -311,6 +311,8 @@ export const FALLBACK_OPNSENSE_OPTIONS: OpnsenseBuildOptions = {
   include_firmware_audit: true,
   include_clients: true,
   include_rule_stats: true,
+  include_health: true,
+  include_alias_tables: true,
   config_backup: true,
   inventory_enrich: true,
 };
@@ -357,6 +359,16 @@ export const OPNSENSE_OPTION_TOGGLES: {
     key: "include_rule_stats",
     label: "Rule counters (unused firewall rules)",
     hint: "The packet and state counters of each filter rule, so the Rules view can flag rules that matched nothing (OPNsense 24.1+).",
+  },
+  {
+    key: "include_health",
+    label: "Health and services",
+    hint: "CPU, memory, disks, temperature and the state table, and the services the firewall runs: a stopped service alerts. An inventory host also gets them in its monitoring poll, with no SNMP profile.",
+  },
+  {
+    key: "include_alias_tables",
+    label: "Alias tables (URL tables, GeoIP, host names)",
+    hint: "The pf tables of the aliases config.xml cannot resolve, so a path trace can decide the rules that name them. Needs config.xml; the bogon tables are never read.",
   },
   {
     key: "config_backup",

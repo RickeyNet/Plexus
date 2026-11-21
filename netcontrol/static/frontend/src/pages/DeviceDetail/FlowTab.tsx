@@ -9,19 +9,21 @@ import { formatBackendDateTime } from '@/lib/datetime';
 import { BarChart, TimeSeriesChart } from '@/lib/echart';
 import type { TimeRangePreset } from '@/lib/timeRange-context';
 import { clampPreset, toHours } from '@/lib/timeRangeMap';
-import { formatBytes } from '@/pages/NetworkTools/formatting';
+import { flowInterfaceLabel, formatBytes } from '@/pages/NetworkTools/formatting';
 import {
   FLOW_RANGES,
   FlowApplication,
   FlowConversation,
   FlowDirection,
   FlowExporter,
+  FlowInterface,
   FlowTalker,
   FlowTimelinePoint,
   useFlowExporters,
   useFlowTimeline,
   useFlowTopApplications,
   useFlowTopConversations,
+  useFlowTopInterfaces,
   useFlowTopTalkers,
 } from '@/api/networkTools';
 
@@ -30,12 +32,13 @@ interface Props {
   range: TimeRangePreset;
 }
 
-type SubTab = 'talkers' | 'applications' | 'conversations' | 'timeline';
+type SubTab = 'talkers' | 'applications' | 'conversations' | 'interfaces' | 'timeline';
 
 const SUB_TABS: { key: SubTab; label: string }[] = [
   { key: 'talkers', label: 'Top Talkers' },
   { key: 'applications', label: 'Applications' },
   { key: 'conversations', label: 'Conversations' },
+  { key: 'interfaces', label: 'Interfaces' },
   { key: 'timeline', label: 'Timeline' },
 ];
 
@@ -65,6 +68,7 @@ export function FlowTab({ hostId, range }: Props) {
       {sub === 'talkers' && <TalkersView hostId={hostId} hours={hours} />}
       {sub === 'applications' && <ApplicationsView hostId={hostId} hours={hours} />}
       {sub === 'conversations' && <ConversationsView hostId={hostId} hours={hours} />}
+      {sub === 'interfaces' && <InterfacesView hostId={hostId} hours={hours} />}
       {sub === 'timeline' && <TimelineView hostId={hostId} hours={hours} />}
     </div>
   );
@@ -300,6 +304,49 @@ function ConversationsView({ hostId, hours }: { hostId: number; hours: number })
           ))}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+// ── Interfaces ──────────────────────────────────────────────────────────────
+
+function InterfacesView({ hostId, hours }: { hostId: number; hours: number }) {
+  const q = useFlowTopInterfaces({ hours, hostId });
+
+  if (q.isPending) return <Skeleton />;
+  if (q.error) return <ErrorRow message={q.error.message} />;
+  const rows = (q.data ?? []).slice(0, 15);
+  if (rows.length === 0) return <NoData />;
+
+  return (
+    <div className="card-inset">
+      <h4 style={{ margin: '0 0 0.5rem', fontSize: '0.95rem' }}>Top Interfaces</h4>
+      <table className="data-table table-sm">
+        <thead>
+          <tr>
+            <th>Interface</th>
+            <th style={{ textAlign: 'right' }}>Index</th>
+            <th style={{ textAlign: 'right' }}>In</th>
+            <th style={{ textAlign: 'right' }}>Out</th>
+            <th style={{ textAlign: 'right' }}>Flows</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r: FlowInterface) => (
+            <tr key={`${r.exporter_ip}-${r.if_index}`}>
+              <td>{flowInterfaceLabel(r)}</td>
+              <td style={{ textAlign: 'right' }}>{r.if_index}</td>
+              <td style={{ textAlign: 'right' }}>{formatBytes(r.in_bytes)}</td>
+              <td style={{ textAlign: 'right' }}>{formatBytes(r.out_bytes)}</td>
+              <td style={{ textAlign: 'right' }}>{r.flow_count}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <div className="text-muted" style={{ fontSize: '0.78rem', marginTop: '0.25rem' }}>
+        In: flows that entered on the interface; out: flows that left on it. Names come from
+        SNMP polling or the device&apos;s OPNsense collection; without them the index is shown.
+      </div>
     </div>
   );
 }

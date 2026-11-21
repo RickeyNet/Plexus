@@ -315,6 +315,8 @@ export function edgeProtocolLabel(edge: TopologyEdge, a?: TopologyNode, b?: Topo
     if (sites.some((s) => s.startsWith('ha:'))) return 'HA';
     return 'HA / CLUSTER';
   }
+  // The CARP link between the two firewalls of an OPNsense pair.
+  if (edge.protocol === 'stack' && edge.provider === 'opnsense') return 'HA';
   return (edge.protocol ?? 'L2').toUpperCase();
 }
 

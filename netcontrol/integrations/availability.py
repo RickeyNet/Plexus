@@ -12,12 +12,15 @@ and ``unknown`` when it is not monitored), ``reachable`` / ``ready`` /
 
 ``extract_entity_states`` reads one snapshot and returns what availability
 tracking keeps of it: one ``EntityState`` per device, site, uplink, tunnel,
-VPN connection, circuit, peering, HA / peer link or cloud managed service
+VPN connection, circuit, peering, HA / peer link, redundancy group (the
+snapshot's ``ha`` block: an OPNsense firewall's CARP groups, a ``link``
+each, see ``ha_entity_states``) or service
 (the snapshot's ``services``, see ``cloud_services.service_states``: an
-AWS, Azure or GCP database, load balancer, private endpoint... with its
+AWS, Azure or GCP database, load balancer, private endpoint...; an OPNsense
+firewall's services, which name their ``device``; each with its
 state already in the node vocabulary), with that status mapped
 to ``up`` / ``degraded`` / ``down`` / ``unknown``, and the latency / jitter /
-loss the vendor reported for it (``metrics``, see ``METRIC_KEYS``). Pure: no
+loss / traffic rate reported for it (``metrics``, see ``METRIC_KEYS``). Pure: no
 database, no network.
 
 What is left out, because it is no entity whose availability means anything:
@@ -32,6 +35,7 @@ their devices', which are tracked one by one).
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -63,9 +67,22 @@ EDGE_STATES: dict[str, str] = {
 }
 
 # Measurements a normaliser may put on an edge or node as ``metrics``
-# (an OPNsense gateway's dpinger loss, RTT and RTT deviation), and the
-# metric name each is stored and evaluated under by SLA targets.
-METRIC_KEYS: dict[str, str] = {"latency_ms": "latency", "jitter_ms": "jitter", "loss_pct": "packet_loss"}
+# (an OPNsense gateway's dpinger loss, RTT and RTT deviation; the traffic
+# rate of a tunnel in bits per second, received / sent by the device,
+# ``netcontrol.integrations.traffic``), and the metric name each is stored
+# under in the daily rollups (SLA targets evaluate latency, jitter and loss).
+METRIC_KEYS: dict[str, str] = {
+    "latency_ms": "latency",
+    "jitter_ms": "jitter",
+    "loss_pct": "packet_loss",
+    "in_bps": "traffic_in",
+    "out_bps": "traffic_out",
+}
+
+# Roles of a redundancy group member (``meta["role"]`` of an ``ha`` entity)
+# between which a change is a failover: the tracker alerts on it although
+# both are healthy (``topology_availability.failovers``).
+FAILOVER_ROLES = ("master", "backup")
 
 _SKIPPED_NODE_KINDS = frozenset({"wan", "external", "users", "user", "vpc", "vpn_peer"})
 _USER_KINDS = frozenset({"users", "user"})
@@ -135,6 +152,16 @@ def node_state(status: Any) -> str:
 
 def edge_state(status: Any) -> str:
     return EDGE_STATES.get(_text(status).lower(), "unknown")
+
+
+def traffic_meta(item: dict) -> dict[str, str]:
+    """``{"traffic_key": ...}`` of an edge or node that carries a
+    ``traffic`` block (``netcontrol.integrations.traffic``): how the counter
+    store ties a key to the entity, so a monitoring poll can file its
+    samples under it."""
+    found = item.get("traffic")
+    key = _text(found.get("key")) if isinstance(found, dict) else ""
+    return {"traffic_key": key} if key else {}
 
 
 def entity_metrics(item: dict) -> dict[str, float]:
@@ -224,9 +251,9 @@ def clean_entity_types(provider: str, snapshot: dict | None) -> frozenset[str]:
       detail call does not feed any tracked entity.
     - Every other provider: every type when the collection reported no
       error, else none (its errors do not say which entity type they feed).
-      A warning marked ``info`` (an OPNsense firmware update or audit
-      finding) reports what the device said, not a failed call: it does not
-      count.
+      A warning marked ``info`` (an OPNsense firmware update, audit finding
+      or CARP problem) reports what the device said, not a failed call: it
+      does not count.
     """
     if not snapshot:
         return frozenset()
@@ -242,6 +269,57 @@ def clean_entity_types(provider: str, snapshot: dict | None) -> frozenset[str]:
             return frozenset({"device"})
         return frozenset({"device", "uplink", "tunnel", "link"})
     return frozenset() if errors else frozenset(ENTITY_TYPES)
+
+
+def ha_entity_states(
+    provider: str, org_ref: int, snapshot: dict, nodes: dict[str, dict], site_name: Callable[[str], str]
+) -> list[EntityState]:
+    """The redundancy groups of the snapshot's ``ha`` block (an OPNsense
+    firewall's CARP groups, see ``opnsense.normalize.ha_block``), as ``link``
+    entities (the tracker's HA type): ``host_id`` and site of the device
+    that reports them, ``raw_status`` and ``meta["role"]`` the lower-case
+    role (which the tracker watches for failovers, ``FAILOVER_ROLES``),
+    ``meta["a"]`` the device, so muting or removing it covers them."""
+    ha = snapshot.get("ha")
+    if not isinstance(ha, dict):
+        return []
+    device_id = _text(ha.get("device"))
+    device = nodes.get(device_id) or {}
+    label = _text(device.get("label")) or device_id
+    protocol = _text(ha.get("protocol")) or "HA"
+    found: list[EntityState] = []
+    for vip in ha.get("vips") or []:
+        if not isinstance(vip, dict) or not _text(vip.get("id")):
+            continue
+        addresses = [_text(a) for a in vip.get("addresses") or [] if _text(a)]
+        interface, vhid = _text(vip.get("interface")), _text(vip.get("vhid"))
+        role = _text(vip.get("role")).lower()
+        name = f"{label} {protocol} {interface} VHID {vhid}" + (f" ({', '.join(addresses)})" if addresses else "")
+        found.append(
+            EntityState(
+                provider=provider,
+                org_ref=org_ref,
+                entity_type="link",
+                entity_id=_text(vip.get("id")),
+                name=name.strip(),
+                state=node_state(vip.get("status")),
+                raw_status=role,
+                site=site_name(_text(device.get("site"))) if device else "",
+                model=protocol,
+                host_id=_host_id(device),
+                meta={
+                    "kind": protocol.lower(),
+                    "a": device_id,
+                    "interface": interface,
+                    "vhid": vhid,
+                    "addresses": addresses,
+                    "advbase": _text(vip.get("advbase")),
+                    "advskew": _text(vip.get("advskew")),
+                    "role": role,
+                },
+            )
+        )
+    return found
 
 
 def extract_entity_states(provider: str, org_ref: int, snapshot: dict | None) -> list[EntityState]:
@@ -288,7 +366,7 @@ def extract_entity_states(provider: str, org_ref: int, snapshot: dict | None) ->
                 site=site_name(_text(node.get("site"))),
                 model=_text(node.get("model")),
                 host_id=_host_id(node),
-                meta={k: node[k] for k in ("kind", "ip", "serial") if _text(node.get(k))},
+                meta={k: node[k] for k in ("kind", "ip", "serial") if _text(node.get(k))} | traffic_meta(node),
                 metrics=entity_metrics(node),
             )
         )
@@ -329,7 +407,7 @@ def extract_entity_states(provider: str, org_ref: int, snapshot: dict | None) ->
         tag = label or _text(edge.get("a_port")) or _text(edge.get("b_port"))
         entity_id = f"{_text(edge.get('kind'))}:{a_id}>{b_id}" + (f":{tag}" if tag else "")
         device = b if entity_type == "uplink" else (a if a.get("kind") not in ("wan", "vpn_peer") else b)
-        meta = {"kind": _text(edge.get("kind")), "a": a_id, "b": b_id}
+        meta = {"kind": _text(edge.get("kind")), "a": a_id, "b": b_id, **traffic_meta(edge)}
         if _edge_detail(edge):
             meta["detail"] = _edge_detail(edge)
         add(
@@ -348,23 +426,32 @@ def extract_entity_states(provider: str, org_ref: int, snapshot: dict | None) ->
             )
         )
 
-    if provider in CLOUD_PROVIDERS:
-        for service in snapshot.get("services") or []:
-            if not isinstance(service, dict) or not _text(service.get("id")):
-                continue
-            raw = _text(service.get("status")).lower()
-            add(
-                EntityState(
-                    provider=provider,
-                    org_ref=org_ref,
-                    entity_type="service",
-                    entity_id=_text(service.get("id")),
-                    name=_text(service.get("name")) or _text(service.get("id")),
-                    state=node_state(raw),
-                    raw_status=_text(service.get("raw_status")) or raw,
-                    site=site_name(_text(service.get("site"))) if _text(service.get("site")) else "",
-                    model=_text(service.get("kind")),
-                    meta={k: _text(service.get(k)) for k in ("type", "kind", "region") if _text(service.get(k))},
-                )
+    for entity in ha_entity_states(provider, org_ref, snapshot, nodes, site_name):
+        add(entity)
+
+    for service in snapshot.get("services") or []:
+        if not isinstance(service, dict) or not _text(service.get("id")):
+            continue
+        raw = _text(service.get("status")).lower()
+        # A service that runs on one device (an OPNsense firewall's unbound):
+        # its host, and meta "a", so muting or removing the device covers it.
+        device_id = _text(service.get("device"))
+        meta = {k: _text(service.get(k)) for k in ("type", "kind", "region") if _text(service.get(k))}
+        if device_id:
+            meta["a"] = device_id
+        add(
+            EntityState(
+                provider=provider,
+                org_ref=org_ref,
+                entity_type="service",
+                entity_id=_text(service.get("id")),
+                name=_text(service.get("name")) or _text(service.get("id")),
+                state=node_state(raw),
+                raw_status=_text(service.get("raw_status")) or raw,
+                site=site_name(_text(service.get("site"))) if _text(service.get("site")) else "",
+                model=_text(service.get("kind")),
+                host_id=_host_id(nodes.get(device_id) or {}) if device_id else None,
+                meta=meta,
             )
+        )
     return found

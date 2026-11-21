@@ -76,6 +76,16 @@ export interface TopologyMerakiRef {
   instance_id?: string;
   /** Subnet the AWS instance sits in, present when the ref is an AWS instance. */
   subnet?: string;
+  /**
+   * Box shared with another source's site: the two firewalls of an OPNsense
+   * CARP pair (each its own source) and the nodes of their sites, e.g.
+   * 'opnsense-ha:3:4'. Drawn instead of the site's own box.
+   */
+  box?: string;
+  /** Title of the shared box, e.g. 'Edge A / Edge B (CARP)'. */
+  box_name?: string;
+  /** The firewall's CARP peer (another source), when the pair is known. */
+  ha_peer?: string;
 }
 
 /** An AWS instance a topology node maps to (see `TopologyNode.instance`). */

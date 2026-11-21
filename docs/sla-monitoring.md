@@ -147,4 +147,4 @@ through the API (`POST /api/sla/targets` with `provider`).
 | `POST /api/sla/evaluate` | Admin: roll up and evaluate now; returns the rollup and evaluation counts (`topology_evaluation` for the targets of integration entities) |
 | `GET /api/sla/compliance?scope=topology&provider=&org_ref=&entity_type=&entity_id=&target_id=` | Latest status of every (target, integration entity) |
 | `GET /api/sla/compliance/history?scope=topology&target_id=&provider=&org_ref=&entity_id=&limit=` | Their status changes |
-| `GET /api/availability/topology/metrics?provider=&org_ref=&entity_type=&entity_id=&days=` | Latency / jitter / loss history of one integration entity: raw samples, daily rollups, window means |
+| `GET /api/availability/topology/metrics?provider=&org_ref=&entity_type=&entity_id=&days=` | Latency / jitter / loss and traffic (`in_bps` / `out_bps`) history of one integration entity: raw samples, daily rollups, window means |

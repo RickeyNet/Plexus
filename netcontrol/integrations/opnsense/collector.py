@@ -60,6 +60,27 @@ the API reference at docs.opnsense.org:
                                                  states) by rule uuid, for the
                                                  rule views (24.1+; an older
                                                  release answers 404, a warning)
+  - health (``collect_health``; 24.7+, the dashboard widgets' calls):
+    ``diagnostics/system/system_resources``      memory (``hw.physmem``, used,
+                                                 ZFS ARC)
+    ``diagnostics/system/system_disk``           the file systems (``df``)
+    ``diagnostics/system/system_temperature``    the temperature sensors
+    ``diagnostics/system/system_time``           uptime and load averages (load
+                                                 averages since 25.1)
+    ``diagnostics/activity/get_activity``        ``top``'s header lines, for the
+                                                 CPU line (``CPU: x% user ...
+                                                 y% idle``); the process list is
+                                                 dropped. Never the streaming
+                                                 ``diagnostics/cpu_usage/stream``
+    ``diagnostics/firewall/pf_states``           the state table: ``current``
+                                                 and ``limit``
+    ``core/service/search``                      the services the configuration
+                                                 enables (``pluginctl -S``), each
+                                                 with ``running``; never start,
+                                                 stop or restart.
+                                                 An endpoint that answers 404 is
+                                                 left out with one ``info``
+                                                 warning naming all of them
   - ``core/firmware/running``, ``core/firmware/audit`` (POST),
     ``core/firmware/upgradestatus``              the security audit
                                                  (``pkg audit -F``), run in the
@@ -67,6 +88,27 @@ the API reference at docs.opnsense.org:
   - ``core/backup/download/this``                ``config.xml`` (the newest
                                                  entry of the configuration
                                                  history, written on every save)
+  - ``firewall/alias_util/aliases``,             the pf tables behind the
+    ``firewall/alias_util/list/{alias}``         aliases config.xml cannot
+                                                 resolve (URL tables, GeoIP,
+                                                 host names...; which ones:
+                                                 ``opnsense_config``'s
+                                                 ``table_aliases`` of the XML
+                                                 just read), for the path
+                                                 trace. ``aliases`` lists the
+                                                 loaded tables (``pfctl -sT``,
+                                                 a plain list of names);
+                                                 ``list`` answers a search
+                                                 (``total``, ``rows`` of
+                                                 ``{"ip": ...}``, ``!`` before
+                                                 a negated entry) of at most
+                                                 9999 rows on a GET. Only
+                                                 after config.xml was read;
+                                                 never ``add``, ``delete``,
+                                                 ``flush`` or
+                                                 ``find_references``. Bounded
+                                                 by ``ALIAS_TABLE_*`` (see
+                                                 ``_collect_alias_tables``)
 
 Failure policy: every call is best-effort. A failed call is recorded in
 ``errors`` (named by its path and HTTP status, so a missing privilege or an
@@ -90,10 +132,11 @@ import re
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 from netcontrol.integrations.meraki.collector import scrub_secrets
 from netcontrol.integrations.opnsense.client import OpnsenseApiError, OpnsenseClient
+from netcontrol.integrations.pathtrace.opnsense_config import parse_document
 from netcontrol.telemetry import configure_logging
 
 LOGGER = configure_logging("plexus.opnsense")
@@ -116,6 +159,12 @@ DEFAULT_OPTIONS: dict[str, Any] = {
     "include_clients": True,
     # The filter rule counters (unused rules in the rule views).
     "include_rule_stats": True,
+    # Health (CPU, memory, disks, temperature, state table) and the services
+    # with whether each runs.
+    "include_health": True,
+    # The pf tables of the aliases config.xml cannot resolve (URL tables,
+    # GeoIP, host names), for the path trace. Needs config.xml.
+    "include_alias_tables": True,
     # Store config.xml as a configuration backup of the matching inventory host.
     "config_backup": True,
     # Attach data Plexus already collected over SNMP/SSH for the inventory
@@ -136,8 +185,10 @@ PHASE_ROUTES = "opnsense routes"
 PHASE_HA = "opnsense ha"
 PHASE_CLIENTS = "opnsense clients"
 PHASE_RULES = "opnsense rules"
+PHASE_HEALTH = "opnsense health"
 PHASE_FIRMWARE = "opnsense firmware"
 PHASE_CONFIG = "opnsense config"
+PHASE_ALIAS_TABLES = "opnsense alias tables"
 
 # API paths, newer form first.
 PATH_SYSTEM = ("diagnostics/system/system_information", "diagnostics/system/systemInformation")
@@ -176,6 +227,42 @@ LEASE_BACKENDS: tuple[tuple[str, str, tuple[str, ...], str], ...] = (
     ("dnsmasq", "Dnsmasq DHCP", ("dnsmasq/leases/search",), "Services: Dnsmasq DNS/DHCP: Leases"),
 )
 PATH_RULE_STATS = ("firewall/filter_util/rule_stats", "firewall/filter_util/ruleStats")
+# The pf tables behind the aliases (``AliasUtilController``; read-only actions only).
+PATH_ALIAS_TABLES = ("firewall/alias_util/aliases",)
+PATH_ALIAS_TABLE = "firewall/alias_util/list/"
+ALIAS_TABLE_PRIVILEGE = "Diagnostics: PF Table IP addresses"
+# Bounds of the alias table reads: entries kept per table (the 9999 rows a
+# GET of ``list`` answers at most), entries over all tables, tables read.
+# The built-in giants (the downloaded bogon tables, 100,000+ entries) are
+# never read.
+ALIAS_TABLE_MAX_ENTRIES = 9999
+ALIAS_TABLES_MAX_ENTRIES = 30000
+ALIAS_TABLES_MAX_READS = 30
+ALIAS_TABLES_SKIPPED = ("bogons", "bogonsv6")
+# Health: (key, paths, the privilege that grants them). The monitoring poll
+# reads all but ``services`` (``POLL_HEALTH_PARTS``).
+HEALTH_PARTS: tuple[tuple[str, tuple[str, ...], str], ...] = (
+    (
+        "resources",
+        ("diagnostics/system/system_resources", "diagnostics/system/systemResources"),
+        "Lobby: Dashboard",
+    ),
+    ("disk", ("diagnostics/system/system_disk", "diagnostics/system/systemDisk"), "Lobby: Dashboard"),
+    (
+        "temperature",
+        ("diagnostics/system/system_temperature", "diagnostics/system/systemTemperature"),
+        "Lobby: Dashboard",
+    ),
+    ("time", ("diagnostics/system/system_time", "diagnostics/system/systemTime"), "Lobby: Dashboard"),
+    (
+        "activity",
+        ("diagnostics/activity/get_activity", "diagnostics/activity/getActivity"),
+        "Diagnostics: System Activity",
+    ),
+    ("pf_states", ("diagnostics/firewall/pf_states", "diagnostics/firewall/pfStates"), "Lobby: Dashboard"),
+    ("services", ("core/service/search",), "Status: Services"),
+)
+POLL_HEALTH_PARTS = tuple(key for key, _paths, _privilege in HEALTH_PARTS if key != "services")
 PATH_FIRMWARE_RUNNING = "core/firmware/running"
 PATH_AUDIT = "core/firmware/audit"
 PATH_AUDIT_STATUS = "core/firmware/upgradestatus"
@@ -432,6 +519,7 @@ async def collect_opnsense(
     total += int(opts["include_ha"]) + 3 * int(opts["include_firmware_audit"]) + int(want_config)
     total += (2 + len(LEASE_BACKENDS)) * int(opts["include_clients"])
     total += int(opts["include_rule_stats"])
+    total += len(HEALTH_PARTS) * int(opts["include_health"])
     done = 0
     answered = 0
     first_error: OpnsenseApiError | None = None
@@ -480,22 +568,17 @@ async def collect_opnsense(
         gateways = scrub_secrets(_rows(found, "items")) if found is not None else None
         report(PHASE_GATEWAYS, gateways=len(gateways or []))
 
-    ipsec = wireguard = openvpn = None
-    ipsec_phase2: dict[str, list[dict]] | None = None
-    ipsec_child_config: dict[str, list[dict]] | None = None
+    vpn: dict[str, Any] = dict.fromkeys(VPN_KEYS)
     if opts["include_vpn"]:
         report(PHASE_VPN)
-        found = await best_effort("vpn", PATH_IPSEC)
-        ipsec = scrub_secrets(_rows(found)) if found is not None else None
-        if ipsec:
+
+        def count_children(ipsec: list[dict]) -> None:
+            nonlocal total
             total += sum(1 for r in ipsec if r.get("connected") and r.get("name"))
             total += sum(1 for r in ipsec if _UUID.match(str(r.get("ikeid") or "")))
-            ipsec_phase2, ipsec_child_config = await _collect_ipsec_children(ipsec, best_effort)
-        found = await best_effort("vpn", PATH_WIREGUARD)
-        wireguard = scrub_secrets(_rows(found)) if found is not None else None
-        found = await best_effort("vpn", PATH_OPENVPN)
-        openvpn = scrub_secrets(_rows(found)) if found is not None else None
-        report(PHASE_VPN, tunnels=len(ipsec or []) + len(wireguard or []) + len(openvpn or []))
+
+        vpn = await collect_vpn(best_effort, on_ipsec=count_children)
+        report(PHASE_VPN, tunnels=sum(len(vpn[k] or []) for k in ("ipsec", "wireguard", "openvpn")))
 
     carp: dict[str, Any] | None = None
     if opts["include_ha"]:
@@ -530,6 +613,14 @@ async def collect_opnsense(
         found = await best_effort("rules", PATH_RULE_STATS)
         rule_stats = scrub_secrets(found) if isinstance(found, dict) else None
 
+    health: dict[str, Any] | None = None
+    if opts["include_health"]:
+        report(PHASE_HEALTH)
+        health, answered_health = await collect_health(client, errors)
+        done += len(HEALTH_PARTS)
+        answered += answered_health
+        report(PHASE_HEALTH, services=len(health["services"] or []))
+
     audit: dict[str, Any] | None = None
     if opts["include_firmware_audit"]:
         report(PHASE_FIRMWARE)
@@ -562,6 +653,28 @@ async def collect_opnsense(
             errors.append(_error("config", exc, paths=(PATH_CONFIG,)))
         done += 1
 
+    alias_tables: dict[str, Any] | None = None
+    wanted: list[str] = []
+    if opts["include_alias_tables"] and config_xml:
+        # Parsing config.xml is CPU work: kept off the event loop.
+        wanted = await asyncio.to_thread(tables_wanted, config_xml)
+    if wanted:
+        report(PHASE_ALIAS_TABLES)
+        total += 1
+        listed = await best_effort("alias tables", PATH_ALIAS_TABLES)
+        _name_privilege(errors, "alias tables", ALIAS_TABLE_PRIVILEGE)
+        if listed is not None:
+            plan = plan_alias_tables(wanted, listed)
+            started = done
+            total += len(plan["read"])
+            alias_tables = await _collect_alias_tables(plan, best_effort, errors)
+            # Fewer reads than planned when a refusal or the entry bound stopped them.
+            total -= len(plan["read"]) - (done - started)
+            report(PHASE_ALIAS_TABLES, tables=len(alias_tables["tables"]))
+    elif opts["include_alias_tables"] and config_xml:
+        # No alias needs a table: none is stored (any older ones are dropped).
+        alias_tables = await _collect_alias_tables(plan_alias_tables([], []), best_effort, errors)
+
     if not answered and first_error is not None:
         raise first_error
 
@@ -586,35 +699,94 @@ async def collect_opnsense(
         "interfaces": interfaces,
         "gateways": gateways,
         "routes": routes,
-        "ipsec": ipsec,
-        "ipsec_phase2": ipsec_phase2,
-        "ipsec_child_config": ipsec_child_config,
-        "wireguard": wireguard,
-        "openvpn": openvpn,
+        **vpn,
         "carp": carp,
         "clients": clients,
         "rule_stats": rule_stats,
+        "health": health,
         "audit": audit,
         # Never part of the snapshot: the caller stores it as a config backup.
         "config_xml": config_xml,
+        # Never part of the snapshot: the caller stores it for the path trace.
+        "alias_tables": alias_tables,
         "errors": errors,
         "stats": dict(client.stats),
         "options": opts,
     }
 
 
+# The VPN part of a collection (``collect_vpn``), as raw keys.
+VPN_KEYS = ("ipsec", "ipsec_phase2", "ipsec_child_config", "wireguard", "openvpn", "vpn_read_at")
+
+
+async def collect_vpn(
+    best_effort: Callable[..., Awaitable[Any]],
+    *,
+    configured: bool = True,
+    on_ipsec: Callable[[list[dict]], None] | None = None,
+) -> dict[str, Any]:
+    """The VPN payloads (``VPN_KEYS``): the IPsec connections with their
+    child SAs (``_collect_ipsec_children``; the configured ones only with
+    ``configured``), the WireGuard interfaces and peers and the OpenVPN
+    instances and sessions, and when they were read (``vpn_read_at``, UTC
+    ISO; the traffic rates are computed over it). A part that did not
+    answer is ``None``. ``best_effort(scope, paths, params=, body=)``
+    answers a call or ``None`` (``collect_opnsense``'s, or ``call_reader``'s
+    for the monitoring poll); ``on_ipsec`` is told the connections before
+    their child SAs are read."""
+    found = await best_effort("vpn", PATH_IPSEC)
+    ipsec = scrub_secrets(_rows(found)) if found is not None else None
+    ipsec_phase2 = ipsec_child_config = None
+    if ipsec:
+        if on_ipsec is not None:
+            on_ipsec(ipsec)
+        ipsec_phase2, ipsec_child_config = await _collect_ipsec_children(ipsec, best_effort, configured=configured)
+    found = await best_effort("vpn", PATH_WIREGUARD)
+    wireguard = scrub_secrets(_rows(found)) if found is not None else None
+    found = await best_effort("vpn", PATH_OPENVPN)
+    openvpn = scrub_secrets(_rows(found)) if found is not None else None
+    return {
+        "ipsec": ipsec,
+        "ipsec_phase2": ipsec_phase2,
+        "ipsec_child_config": ipsec_child_config,
+        "wireguard": wireguard,
+        "openvpn": openvpn,
+        "vpn_read_at": datetime.now(UTC).isoformat(timespec="seconds"),
+    }
+
+
+def call_reader(client: OpnsenseClient, errors: list[dict[str, Any]]) -> Callable[..., Awaitable[Any]]:
+    """A ``best_effort`` for ``collect_vpn`` outside a collection: one
+    call's answer, or ``None`` with a warning in ``errors``. A rejected key
+    or an unreachable firewall raises."""
+
+    async def read(scope: str, paths: tuple[str, ...], *, params: dict | None = None, body: dict | None = None) -> Any:
+        try:
+            if body is not None:
+                return (await client.post_first(paths, body))[1]
+            return (await client.get_first(paths, params))[1]
+        except OpnsenseApiError as exc:
+            if exc.transport or exc.status_code == 401:
+                raise
+            errors.append(_error(scope, exc, paths=paths))
+            return None
+
+    return read
+
+
 async def _collect_ipsec_children(
-    ipsec: list[dict], best_effort: Callable[..., Awaitable[Any]]
+    ipsec: list[dict], best_effort: Callable[..., Awaitable[Any]], *, configured: bool = True
 ) -> tuple[dict[str, list[dict]] | None, dict[str, list[dict]] | None]:
     """The child SAs of each IPsec connection: the installed ones of every
-    connection that has an SA (``search_phase2``, by phase 1 name) and the
-    configured ones of every connection of the Connections model
-    (``search_child``, by its UUID). A call that is refused or unknown is
-    not repeated for the next connection (one warning, the map without
-    that part). ``None`` for a part that never answered."""
+    connection that has an SA (``search_phase2``, by phase 1 name) and,
+    with ``configured``, the configured ones of every connection of the
+    Connections model (``search_child``, by its UUID). A call that is
+    refused or unknown is not repeated for the next connection (one
+    warning, the map without that part). ``None`` for a part that never
+    answered or was not read."""
     phase2: dict[str, list[dict]] | None = None
-    configured: dict[str, list[dict]] | None = None
-    phase2_ok = config_ok = True
+    found_config: dict[str, list[dict]] | None = None
+    phase2_ok, config_ok = True, configured
     for row in ipsec:
         name = str(row.get("name") or "")
         if phase2_ok and row.get("connected") and name:
@@ -630,9 +802,9 @@ async def _collect_ipsec_children(
             if found is None:
                 config_ok = False
             else:
-                configured = configured if configured is not None else {}
-                configured[ikeid] = scrub_secrets(_rows(found))
-    return phase2, configured
+                found_config = found_config if found_config is not None else {}
+                found_config[ikeid] = scrub_secrets(_rows(found))
+    return phase2, found_config
 
 
 async def _collect_clients(client: OpnsenseClient, errors: list[dict[str, Any]]) -> tuple[dict[str, Any], int]:
@@ -679,6 +851,68 @@ async def _collect_clients(client: OpnsenseClient, errors: list[dict[str, Any]])
     return {"arp": arp, "ndp": ndp, "leases": leases or None}, answered
 
 
+# The fields kept of a ``core/service/search`` row.
+_SERVICE_KEPT = ("id", "name", "description", "running", "locked")
+# ``top`` prints a handful of header lines; more is not a header.
+_MAX_ACTIVITY_HEADERS = 20
+
+
+def _health_part(key: str, body: Any) -> Any:
+    """One health answer as it is kept: the activity's header lines only
+    (its process list names every command line), the service rows with
+    ``_SERVICE_KEPT``, the temperature rows, else the scrubbed answer."""
+    if key == "activity":
+        headers = body.get("headers") if isinstance(body, dict) else None
+        if not isinstance(headers, list):
+            return None
+        return {"headers": [h for h in headers if isinstance(h, str)][:_MAX_ACTIVITY_HEADERS]}
+    if key == "services":
+        return [{k: row.get(k) for k in _SERVICE_KEPT} for row in _rows(body)]
+    if key == "temperature":
+        return scrub_secrets(_rows(body))
+    return scrub_secrets(body) if isinstance(body, dict) else None
+
+
+async def collect_health(
+    client: OpnsenseClient, errors: list[dict[str, Any]], parts: tuple[str, ...] | None = None
+) -> tuple[dict[str, Any], int]:
+    """The health answers (``HEALTH_PARTS``; ``parts``: only those keys)
+    and how many calls answered. A part that was not read is ``None``. A
+    refused call is a warning that names the privilege it needs; an
+    endpoint the release lacks (404) is left out, with one ``info`` warning
+    for all of them. A rejected key or an unreachable firewall raises."""
+    health: dict[str, Any] = {key: None for key, _paths, _privilege in HEALTH_PARTS}
+    missing: list[str] = []
+    answered = 0
+    for key, paths, privilege in HEALTH_PARTS:
+        if parts is not None and key not in parts:
+            continue
+        try:
+            _path, found = await client.get_first(paths)
+        except OpnsenseApiError as exc:
+            if exc.transport or exc.status_code == 401:
+                raise
+            if exc.status_code == 404:
+                missing.append("/" + paths[0])
+                continue
+            warning = _error("health", exc, paths=paths)
+            if exc.status_code == 403:
+                warning["message"] += f"; privilege needed: {privilege}"
+            errors.append(warning)
+            continue
+        answered += 1
+        health[key] = _health_part(key, found)
+    if missing:
+        errors.append(
+            info_warning(
+                "health",
+                missing[0],
+                "This OPNsense release has no " + ", ".join(missing) + ": that part of the health was not read",
+            )
+        )
+    return health, answered
+
+
 async def _run_audit(client: OpnsenseClient, errors: list[dict[str, Any]]) -> dict[str, Any] | None:
     """Start the security audit and wait for its result. ``None`` (with a
     warning) when it could not be started; an audit that started but did
@@ -714,3 +948,118 @@ async def _run_audit(client: OpnsenseClient, errors: list[dict[str, Any]]) -> di
         errors.append(_error("firmware", exc, paths=(PATH_AUDIT,)))
         return None
     return incomplete_audit(log, "the audit did not finish while the collection waited for it")
+
+
+# ── Alias tables ─────────────────────────────────────────────────────────────
+
+
+def _name_privilege(errors: list[dict[str, Any]], scope: str, privilege: str) -> None:
+    """Name the privilege a refused (403) call of ``scope`` needs in its warning."""
+    for warning in errors:
+        if (
+            warning.get("scope") == scope
+            and warning.get("status") == 403
+            and "privilege needed" not in warning["message"]
+        ):
+            warning["message"] += f"; privilege needed: {privilege}"
+
+
+def tables_wanted(config_xml: str) -> list[str]:
+    """The aliases of ``config_xml`` whose pf table the path trace needs:
+    those the configuration cannot resolve, as the path trace reader finds
+    them (``OpnsenseConfig.table_aliases``)."""
+    config = parse_document(config_xml)
+    return list(config.table_aliases) if config is not None else []
+
+
+def plan_alias_tables(wanted: list[str], listed: Any) -> dict[str, list[str]]:
+    """Which wanted tables to read (``read``, in order, at most
+    ``ALIAS_TABLES_MAX_READS``), which are built-in giants never read
+    (``skipped``), which pf has not loaded (``missing``: the ``aliases``
+    answer lacks them) and which the read bound leaves out (``not_read``).
+    Names match the loaded tables case-insensitively, spelled as pf has them."""
+    loaded = {str(n).lower(): str(n) for n in (listed if isinstance(listed, list) else []) if str(n or "").strip()}
+    plan: dict[str, list[str]] = {"read": [], "skipped": [], "missing": [], "not_read": []}
+    for name in dict.fromkeys(wanted):
+        if name.lower() in ALIAS_TABLES_SKIPPED:
+            plan["skipped"].append(name)
+        elif name.lower() not in loaded:
+            plan["missing"].append(name)
+        elif len(plan["read"]) < ALIAS_TABLES_MAX_READS:
+            plan["read"].append(loaded[name.lower()])
+        else:
+            plan["not_read"].append(name)
+    return plan
+
+
+def table_entries(body: Any) -> tuple[list[str], int]:
+    """The entries of a ``list/{alias}`` answer and how many the table holds:
+    a search answer (``{"total", "rows": [{"ip": ...}]}``) or the plain
+    ``{"items": [...]}`` of older releases (rows or strings)."""
+    if isinstance(body, dict):
+        rows = body.get("rows") if isinstance(body.get("rows"), list) else body.get("items")
+    else:
+        rows = body
+    entries = [
+        str((row.get("ip") if isinstance(row, dict) else row) or "").strip() for row in rows or [] if row is not None
+    ]
+    entries = [e for e in entries if e]
+    total = body.get("total") if isinstance(body, dict) else None
+    count = int(total) if isinstance(total, int | str) and str(total).isdigit() else len(entries)
+    return entries, max(count, len(entries))
+
+
+async def _collect_alias_tables(
+    plan: dict[str, list[str]], best_effort: Callable[..., Awaitable[Any]], errors: list[dict[str, Any]]
+) -> dict[str, Any]:
+    """Read the planned tables within the bounds: at most
+    ``ALIAS_TABLE_MAX_ENTRIES`` entries kept per table and
+    ``ALIAS_TABLES_MAX_ENTRIES`` over all of them; a table cut short is
+    ``truncated``. A refused or failed read is a warning (one only: the
+    next tables are not tried after a 403) and the table is left out, so
+    the trace leaves its alias unresolved. What was skipped is an ``info``
+    warning."""
+    tables: list[dict[str, Any]] = []
+    budget = ALIAS_TABLES_MAX_ENTRIES
+    not_read = list(plan["not_read"])
+    for position, name in enumerate(plan["read"]):
+        if budget <= 0:
+            not_read.extend(plan["read"][position:])
+            break
+        before = len(errors)
+        found = await best_effort("alias tables", (PATH_ALIAS_TABLE + quote(name, safe=""),))
+        if found is None:
+            _name_privilege(errors, "alias tables", ALIAS_TABLE_PRIVILEGE)
+            if any(e.get("status") == 403 for e in errors[before:]):
+                not_read.extend(plan["read"][position + 1 :])
+                break
+            continue
+        entries, total = table_entries(found)
+        kept = entries[: min(ALIAS_TABLE_MAX_ENTRIES, budget)]
+        budget -= len(kept)
+        tables.append({"name": name, "entries": kept, "total": total, "truncated": total > len(kept)})
+    cut = [t["name"] for t in tables if t["truncated"]]
+    notes = []
+    if cut:
+        notes.append(f"cut at the entry limit: {', '.join(cut)}")
+    if not_read:
+        notes.append(f"not read (over the limit of {ALIAS_TABLES_MAX_READS} tables or entries): {', '.join(not_read)}")
+    if plan["skipped"]:
+        notes.append(f"never read (built-in tables too large): {', '.join(plan['skipped'])}")
+    if plan["missing"]:
+        notes.append(f"not loaded in pf: {', '.join(plan['missing'])}")
+    if notes:
+        errors.append(
+            info_warning(
+                "alias tables",
+                "/" + PATH_ALIAS_TABLES[0],
+                f"Alias tables {'; '.join(notes)}. The path trace leaves what they do not hold unresolved",
+            )
+        )
+    return {
+        "read_at": datetime.now(UTC).isoformat(timespec="seconds"),
+        "tables": tables,
+        "skipped": list(plan["skipped"]),
+        "missing": list(plan["missing"]),
+        "not_read": not_read,
+    }

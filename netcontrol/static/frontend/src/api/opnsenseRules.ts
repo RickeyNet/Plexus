@@ -31,10 +31,55 @@ export interface OpnsenseRuleCounters {
   pf_rules?: number;
 }
 
+/** One distinct flow the firewall log showed for a rule (newest first). */
+export interface OpnsenseLogFlow {
+  action: string;
+  source: string;
+  destination: string;
+  protocol: string;
+  destination_port: number | null;
+  hits: number;
+  /** UTC 'YYYY-MM-DD HH:MM:SS'. */
+  last_seen: string;
+}
+
+/** Pass / block evidence of a rule from its firewall log lines (filterlog). */
+export interface OpnsenseLogEvidence {
+  rule_key: string;
+  /** In the view's window (log_evidence.window_hours). */
+  passes: number;
+  blocks: number;
+  /** In the last log_evidence.recent_hours. */
+  passes_recent: number;
+  blocks_recent: number;
+  last_seen: string;
+  /** 'igb1 in' - the interfaces and directions it was logged on. */
+  seen_on: string[];
+  flows: OpnsenseLogFlow[];
+}
+
+/** Evidence under a label no rule of the backup has (default deny, bogons...). */
+export interface OpnsenseUnmatchedLogEvidence extends OpnsenseLogEvidence {
+  name: string;
+}
+
+export interface OpnsenseLogEvidenceInfo {
+  /** The filterlog_evidence switch of the event receiver settings. */
+  enabled: boolean;
+  /** When the newest evidence of this firewall was received; null when never. */
+  received_at: string | null;
+  window_hours: number;
+  recent_hours: number;
+  bucket_seconds: number;
+  unmatched: OpnsenseUnmatchedLogEvidence[];
+}
+
 export interface OpnsenseRule {
   number: number;
   key: string;
   uuid: string;
+  /** The pf label the firewall's log lines and counters name the rule by. */
+  label?: string;
   tier: string;
   action: string;
   interfaces: string[];
@@ -59,6 +104,8 @@ export interface OpnsenseAnalyzedRule extends OpnsenseRule {
   shadow: '' | 'redundant' | 'conflicting';
   missing_aliases: string[];
   stats: OpnsenseRuleCounters | null;
+  /** Absent on an older server; null when the log showed nothing of the rule. */
+  log_evidence?: OpnsenseLogEvidence | null;
 }
 
 export interface OpnsenseInterfaceInfo {
@@ -76,6 +123,21 @@ export interface OpnsenseAlias {
   content: string[];
   description: string;
   enabled: boolean;
+}
+
+/** The size of an alias's pf table the collection read for path tracing. */
+export interface OpnsenseAliasTable {
+  entry_count: number;
+  /** How many entries the table held when read. */
+  total: number;
+  /** Cut at the collection's limit: only entry_count of total were read. */
+  truncated: boolean;
+}
+
+export interface OpnsenseAliasTables {
+  /** UTC 'YYYY-MM-DD HH:MM:SS' of the last collection that read them; null when none. */
+  read_at: string | null;
+  tables: Record<string, OpnsenseAliasTable>;
 }
 
 export interface OpnsenseBackupRef {
@@ -107,6 +169,40 @@ export interface OpnsenseRulesView {
   };
   notes: string[];
   summary: Record<OpnsenseRuleFlag | 'rules', number>;
+  /** Absent when the view is not available. */
+  log_evidence?: OpnsenseLogEvidenceInfo;
+  /** The alias tables the path trace resolves aliases from (absent on an older server). */
+  alias_tables?: OpnsenseAliasTables;
+}
+
+/** A rule a path trace hop names, with its firewall log evidence. */
+export interface PathLogRuleEvidence {
+  number: number;
+  description: string;
+  rule_key: string;
+  /** Whether the rule has "Log packets" on (only logged rules produce evidence). */
+  logs_packets: boolean;
+  passes: number;
+  blocks: number;
+  last_seen: string;
+}
+
+/** Firewall log evidence on a path trace hop through an OPNsense firewall (server-side only). */
+export interface PathLogEvidence {
+  window_hours: number;
+  /** What the trace decided at this hop: 'allowed', 'blocked' or ''. */
+  trace_says: string;
+  rules: PathLogRuleEvidence[];
+  /** Null when the trace ends are not addresses or networks. */
+  flow: {
+    matched: boolean;
+    passes: number;
+    blocks: number;
+    last_seen: string;
+    rules: string[];
+  } | null;
+  /** '' when the log agrees with the trace. */
+  contradiction: string;
 }
 
 export interface OpnsenseFieldChange {

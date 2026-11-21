@@ -20,7 +20,9 @@ resolved, and flags each one:
   define (``missing_aliases``);
 - ``unused``: the firewall's rule counters (``rule_stats``, read by the
   collection) show the enabled rule matched no packet since they were last
-  reset. Without counters for a rule the flag is not set.
+  reset. Without counters for a rule the flag is not set. The counters are
+  keyed by the rule's pf label (``FilterRule.label``: the uuid of an MVC
+  rule, the hash of a legacy one), and by its uuid as a fallback.
 
 ``diff`` compares two configurations of the same firewall: rules matched
 by their uuid (a legacy rule without one by what it matches), aliases by
@@ -72,7 +74,7 @@ _RULE_FIELDS = (
 
 
 def parse_rule_stats(body: Any) -> dict[str, dict[str, int]]:
-    """The counters by rule label (a rule's uuid) of a ``rule_stats``
+    """The counters by rule label (a rule's pf label) of a ``rule_stats``
     answer (``{"status": "ok", "stats": {label: {...}}}``, or the map alone)."""
     found = body.get("stats", body) if isinstance(body, dict) else None
     if not isinstance(found, dict):
@@ -203,6 +205,7 @@ def rule_view(rule: FilterRule, config: OpnsenseConfig) -> dict[str, Any]:
         "number": rule.number,
         "key": rule.key,
         "uuid": rule.uuid,
+        "label": rule.label,
         "tier": rule.tier,
         "action": rule.action,
         "interfaces": list(rule.interfaces),
@@ -235,6 +238,14 @@ def _any_any(rule: FilterRule) -> bool:
     )
 
 
+def _counters_of(rule: FilterRule, stats: dict[str, dict[str, int]]) -> dict[str, int] | None:
+    """A rule's counters: by its pf label, else by its uuid."""
+    for key in (rule.label, rule.uuid):
+        if key and key in stats:
+            return stats[key]
+    return None
+
+
 def analyze(config: OpnsenseConfig, stats: dict[str, dict[str, int]] | None = None) -> dict[str, Any]:
     """The rules view of a configuration: interfaces, rules in evaluation
     order with their flags and counters, aliases, NAT and a summary."""
@@ -258,7 +269,7 @@ def analyze(config: OpnsenseConfig, stats: dict[str, dict[str, int]] | None = No
         view["missing_aliases"] = missing
         if missing:
             flags.append("missing_alias")
-        counters = (stats or {}).get(rule.uuid) if rule.uuid else None
+        counters = _counters_of(rule, stats or {})
         view["stats"] = counters
         if counters is not None and not rule.disabled and counters.get("packets", 1) == 0:
             flags.append("unused")
