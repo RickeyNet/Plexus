@@ -29,6 +29,7 @@ import netcontrol.routes.state as state
 from netcontrol.drivers import supports_cli
 from netcontrol.integrations.apc import snmp as apc_snmp
 from netcontrol.integrations.availability import ENTITY_TYPES as TOPOLOGY_ENTITY_TYPES
+from netcontrol.integrations.opnsense import health as opnsense_health
 from netcontrol.object_scope import (
     HOST_NOT_FOUND,
     READ_ONLY_DETAIL,
@@ -44,7 +45,7 @@ from netcontrol.object_scope import (
     require_row,
     scoped,
 )
-from netcontrol.routes import topology_availability as topology_tracking
+from netcontrol.routes import opnsense_health as opnsense_health_poll, topology_availability as topology_tracking
 from netcontrol.routes.icmp import ICMP_AVAILABLE, ping_host
 from netcontrol.routes.maintenance_windows import _parse_iso
 from netcontrol.routes.metrics_engine import (
@@ -735,6 +736,9 @@ async def _poll_host_monitoring(host: dict, cred: dict, snmp_cfg: dict) -> dict:
                 result["poll_status"] = "error"
                 result["poll_error"] = str(exc)[:500]
 
+    # ── An OPNsense firewall's health over its API (no SNMP profile needed) ──
+    await opnsense_health_poll.add_to_poll(host, result)
+
     # ── ICMP results: real RTT + loss override the wall-clock placeholder ──
     icmp_result = None
     if icmp_task is not None:
@@ -783,6 +787,8 @@ def _metric_value_from_poll(res: dict, metric: str) -> float | None:
     }
     if metric in apc_snmp.UPS_METRICS:
         return apc_snmp.ups_metric_value(res.get("ups"), metric)
+    if metric in opnsense_health.FIREWALL_METRICS:
+        return opnsense_health.firewall_metric_value(res.get("opnsense_health"), metric)
     return metric_map.get(metric)
 
 
@@ -917,6 +923,14 @@ async def _evaluate_alerts_for_poll(
     built_in_checks.extend(ups_checks)
     for metric in apc_snmp.ups_cleared_alerts(ups_status, ups_checks):
         await db.resolve_monitoring_alerts(apc_snmp.alert_dedup_key(host_id, metric))
+
+    # An OPNsense firewall read over its API: a nearly full file system, a
+    # state table near its limit; each clears its open alert once below.
+    firewall_health = res.get("opnsense_health") or {}
+    firewall_checks = opnsense_health.firewall_alert_checks(firewall_health)
+    built_in_checks.extend(firewall_checks)
+    for metric in opnsense_health.firewall_cleared_alerts(firewall_health, firewall_checks):
+        await db.resolve_monitoring_alerts(opnsense_health.alert_dedup_key(host_id, metric))
 
     # Fire built-in checks with dedup + suppression
     for chk in built_in_checks:
@@ -2478,7 +2492,9 @@ async def topology_availability_summary_api(
     """Uptime of the devices, sites, uplinks, tunnels, VPN connections,
     circuits, peerings and links that integrations collect. Each entity also
     carries the window means of the latency, jitter and loss its vendor
-    reports (``null`` when none: only OPNsense gateways today) and
+    reports (``null`` when none: only OPNsense gateways today), of its
+    traffic in / out in bits per second (``avg_in_bps`` / ``avg_out_bps``,
+    ``null`` when none: OPNsense tunnels and OpenVPN servers today) and
     ``sla_status``, the worst latest status of the SLA targets that apply
     to it (``null`` when none)."""
     summary = await db.get_topology_availability_summary(
@@ -2495,7 +2511,7 @@ async def topology_availability_summary_api(
     for entity in summary["entities"]:
         key = (entity["provider"], int(entity["org_ref"]), entity["entity_type"], entity["entity_id"])
         values = metrics["entities"].get(key) or {}
-        for field in ("avg_latency_ms", "jitter_ms", "avg_packet_loss_pct"):
+        for field in ("avg_latency_ms", "jitter_ms", "avg_packet_loss_pct", "avg_in_bps", "avg_out_bps"):
             entity[field] = values.get(field)
         found = statuses.get(key)
         entity["sla_status"] = max(found, key=lambda s: rank.get(s, 0)) if found else None
@@ -2513,10 +2529,11 @@ async def topology_availability_metrics_api(
     days: int = Query(default=7, ge=1, le=365),
     limit: int = Query(default=5000, ge=1, le=50000),
 ):
-    """The latency, jitter and loss history of one tracked entity (an
-    OPNsense gateway uplink): the raw samples still retained, one row per
-    day from the daily rollups (which outlive the raw retention), and the
-    window means."""
+    """The latency, jitter, loss and traffic history of one tracked entity
+    (an OPNsense gateway uplink; an OPNsense tunnel or OpenVPN server for
+    traffic, ``in_bps`` / ``out_bps``): the raw samples still retained, one
+    row per day from the daily rollups (which outlive the raw retention),
+    and the window means."""
     keys = await _topology_keys(request)
     if keys is not None and (provider, org_ref, entity_type, entity_id) not in keys:
         raise HTTPException(status_code=404, detail=_ENTITY_NOT_FOUND)

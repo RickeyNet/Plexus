@@ -7,7 +7,14 @@ which names the parser of its configuration backups (``config``, a
 lists are not collected) and of its route table captures (``routes``, the
 forwarding routes of the lines the monitoring poll stored; ``None``: not
 read), and whether its rule sets are stateful (a firewall) or match the
-replies again (a switch or router access list).
+replies again (a switch or router access list). A platform whose
+configuration reader also reads the route capture names it as
+``config_capture`` (OPNsense: the live interface addresses the collection
+stores with the routing table fill the addresses config.xml leaves to DHCP
+or PPPoE); one that also reads the alias tables a collection stores names
+it as ``config_tables`` (OPNsense: the pf tables of the aliases config.xml
+cannot resolve); ``no_capture`` is what a trace says when a host has no
+capture.
 
 ``platform_of`` is forgiving: it matches the vendor words of the type, and
 takes an empty or unknown type as Cisco IOS, as the monitoring poll does.
@@ -17,8 +24,9 @@ Pure (no I/O).
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from typing import Any
 
 from netcontrol.integrations.pathtrace import (  # noqa: F401  (the vendor readers register here)
     aruba_config,
@@ -27,6 +35,7 @@ from netcontrol.integrations.pathtrace import (  # noqa: F401  (the vendor reade
     ios_config,
     junos_config,
     opnsense_config,
+    opnsense_routes,
     route_tables,
 )
 from netcontrol.integrations.pathtrace.device_config import RunningConfig
@@ -34,6 +43,11 @@ from netcontrol.integrations.pathtrace.device_config import RunningConfig
 __all__ = ["PLATFORMS", "Platform", "interface_addresses", "platform_of"]
 
 ConfigParser = Callable[[str], RunningConfig]
+# A configuration parser that also reads the host's route capture text.
+CaptureConfigParser = Callable[[str, str], RunningConfig]
+# A configuration parser that also reads the route capture and the host's
+# collected alias tables (``{name: {"entries", "truncated"}}``).
+TableConfigParser = Callable[[str, str, Mapping[str, Any] | None], RunningConfig]
 
 
 @dataclass(frozen=True)
@@ -45,6 +59,9 @@ class Platform:
     stateful: bool = False
     config: ConfigParser | None = None
     routes: route_tables.RouteParser | None = None
+    config_capture: CaptureConfigParser | None = None
+    config_tables: TableConfigParser | None = None
+    no_capture: str = route_tables.NO_CAPTURE
 
 
 IOS = Platform(
@@ -59,9 +76,21 @@ IOS = Platform(
 # so the platforms whose words are part of another's come first.
 PLATFORMS: tuple[Platform, ...] = (
     # An OPNsense firewall imported from its collection: its config.xml
-    # backup (stored by the collection) gives the interfaces, filter rules,
-    # NAT and routes. Its routes are not captured over SSH.
-    Platform("opnsense", "OPNsense", ("opnsense",), stateful=True, config=opnsense_config.parse_config),
+    # backup gives the interfaces, filter rules, NAT and configured routes;
+    # its routing table and live interface addresses, which the collection
+    # stores as its route capture (not read over SSH), give the routes and
+    # the addresses DHCP or PPPoE assigned.
+    Platform(
+        "opnsense",
+        "OPNsense",
+        ("opnsense",),
+        stateful=True,
+        config=opnsense_config.parse_config,
+        routes=opnsense_routes.parse_routes,
+        config_capture=opnsense_config.parse_config,
+        config_tables=opnsense_config.parse_config,
+        no_capture="Route table (not read by the OPNsense collection yet)",
+    ),
     Platform(
         "asa",
         "Cisco ASA / FTD",

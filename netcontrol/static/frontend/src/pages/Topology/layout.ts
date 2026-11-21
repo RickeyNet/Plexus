@@ -1,4 +1,4 @@
-import type { TopologyEdge, TopologyNode } from '@/api/topology';
+import type { TopologyEdge, TopologyMerakiRef, TopologyNode } from '@/api/topology';
 
 import { nodeProvider, PROVIDER_ORDER } from './helpers';
 
@@ -103,10 +103,19 @@ export function tidyLabel(label: string): string {
   return label.length > TIDY_LABEL_MAX ? `${label.slice(0, TIDY_LABEL_MAX - 1)}…` : label;
 }
 
-/** Site (Meraki network) or inventory group a node is drawn with. */
+/**
+ * Site (Meraki network) or inventory group a node is drawn with. The sites
+ * of an OPNsense CARP pair (two sources) share one box (`meraki.box`).
+ */
 export function layoutGroupKey(node: TopologyNode): string {
+  if (node.meraki?.box) return `m:box:${node.meraki.box}`;
   if (node.meraki?.site_id) return `m:${node.meraki.org_ref}:${node.meraki.site_id}`;
   return node.group_name ? `g:${node.group_name}` : '';
+}
+
+/** Title of the box a source's node is drawn in: its shared box's, else its site's. */
+export function siteBoxName(ref: TopologyMerakiRef | null | undefined): string {
+  return ref?.box_name || ref?.site_name || '';
 }
 
 /** The sources on a map in the order they are drawn: the inventory, then each integration. */
@@ -419,7 +428,7 @@ function placeSource(
     // A site's name comes from its own members, not an inventory device
     // drawn in it (whose group name is its inventory group's).
     const key = group.get(n.id)!;
-    if (n.meraki || !siteName.has(key)) siteName.set(key, n.meraki?.site_name || n.group_name || '');
+    if (n.meraki || !siteName.has(key)) siteName.set(key, siteBoxName(n.meraki) || n.group_name || '');
   }
   // Sites in name order.
   const compareSites = (a: string, b: string) =>

@@ -79,6 +79,11 @@ describe('edgeProtocolLabel', () => {
     expect(edgeProtocolLabel(link('stack', 'panorama'))).toBe('HA / CLUSTER');
   });
 
+  it('names the CARP link of an OPNsense pair HA', () => {
+    expect(edgeProtocolLabel(link('stack', 'opnsense'))).toBe('HA');
+    expect(edgeProtocolLabel(link('wan', 'opnsense'))).toBe('WAN');
+  });
+
   it('keeps the protocol for every other link', () => {
     expect(edgeProtocolLabel(link('stack', 'meraki'))).toBe('STACK');
     expect(edgeProtocolLabel(link('vpn-ipsec', 'fmc'))).toBe('VPN-IPSEC');

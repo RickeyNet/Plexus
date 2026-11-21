@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { PathPick, TrafficFilter } from "@/pages/Topology/paths";
 
 import { apiRequest } from "./client";
+import type { PathLogEvidence } from "./opnsenseRules";
 
 export interface MerakiBuildOptions {
   network_tags: string[];
@@ -162,6 +163,10 @@ export interface OpnsenseBuildOptions {
   include_clients: boolean;
   /** The filter rule counters (unused rules in the rule views). */
   include_rule_stats: boolean;
+  /** CPU, memory, disks, temperature, state table and the services with whether each runs. */
+  include_health: boolean;
+  /** The pf tables of the aliases config.xml cannot resolve (URL tables, GeoIP, host names), for path tracing. */
+  include_alias_tables: boolean;
   /** Store config.xml as a config backup of the matching inventory host. */
   config_backup: boolean;
   inventory_enrich: boolean;
@@ -522,6 +527,8 @@ export interface PathHop {
   /** Worst of the items: blocked > unknown > partial > ok; info is ignored. */
   status: ReachabilityStatus;
   items: PathItem[];
+  /** Firewall log evidence of an OPNsense firewall with logs in the window; absent otherwise. */
+  log_evidence?: PathLogEvidence;
 }
 
 /** The request or the replies of a traced flow. */

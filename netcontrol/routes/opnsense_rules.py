@@ -12,7 +12,14 @@ contacted here.
     (``netcontrol.integrations.opnsense.rules.analyze``). The rule
     counters come from the newest collection of the OPNsense source that
     is this host (``rule_stats`` of its snapshot, see
-    ``opnsense_collection.attach_rule_stats``). A host without a backup, or
+    ``opnsense_collection.attach_rule_stats``); the live pass / block
+    evidence of each rule from the firewall log the host sends to the
+    syslog receiver (``log_evidence``, ``opnsense_filterlog.rules_evidence``).
+    ``alias_tables``: the pf tables of aliases the collection read for the
+    path trace (``read_at``, and per alias ``entry_count``, ``total``,
+    ``truncated``; never the entries), so the view can say which aliases
+    the trace resolves from a table.
+    A host without a backup, or
     whose backup is no ``config.xml``, gets an empty view with
     ``available`` false and a ``message``.
   - ``GET /api/opnsense/hosts/{host_id}/rules/diff?from_backup=&to_backup=``:
@@ -36,6 +43,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from netcontrol.integrations.opnsense.rules import analyze, diff
 from netcontrol.integrations.pathtrace.opnsense_config import OpnsenseConfig, parse_document
 from netcontrol.object_scope import require_host, scoped
+from netcontrol.routes.opnsense_filterlog import rules_evidence
 from netcontrol.telemetry import configure_logging
 
 LOGGER = configure_logging("plexus.opnsense")
@@ -89,6 +97,21 @@ async def rule_stats_for_host(host_id: int) -> dict[str, Any] | None:
     return found
 
 
+async def alias_tables_for_host(host_id: int) -> dict[str, Any]:
+    """The sizes of the alias tables the collection stored for the host:
+    ``{"read_at", "tables": {name: {"entry_count", "total", "truncated"}}}``."""
+    found = (await db.get_opnsense_alias_tables([host_id], with_entries=False)).get(host_id)
+    if not found:
+        return {"read_at": None, "tables": {}}
+    return {
+        "read_at": found["read_at"] or None,
+        "tables": {
+            name: {"entry_count": t["entry_count"], "total": t["total"], "truncated": t["truncated"]}
+            for name, t in found["tables"].items()
+        },
+    }
+
+
 @router.get("/api/opnsense/hosts/{host_id}/rules")
 @scoped("host")
 async def get_host_rules(host_id: int, request: Request) -> dict[str, Any]:
@@ -100,6 +123,7 @@ async def get_host_rules(host_id: int, request: Request) -> dict[str, Any]:
         "message": "",
         "backup": None,
         "stats_collected_at": None,
+        "alias_tables": {"read_at": None, "tables": {}},
     }
     newest = await db.get_config_backups(host_id=host_id, limit=1, status="success")
     config = None
@@ -117,7 +141,16 @@ async def get_host_rules(host_id: int, request: Request) -> dict[str, Any]:
         LOGGER.warning("opnsense: rule counters of host %s not read: %s", host_id, type(exc).__name__)
         stats = None
     answer.update(available=True, stats_collected_at=stats["collected_at"] if stats else None)
-    return {**answer, **analyze(config, stats["rules"] if stats else None)}
+    view = {**answer, **analyze(config, stats["rules"] if stats else None)}
+    try:
+        view["alias_tables"] = await alias_tables_for_host(host_id)
+    except Exception as exc:  # noqa: BLE001 - the rules are shown without the table sizes
+        LOGGER.warning("opnsense: alias tables of host %s not read: %s", host_id, type(exc).__name__)
+    try:
+        await rules_evidence(host_id, config, view)
+    except Exception as exc:  # noqa: BLE001 - the rules are shown without the log evidence
+        LOGGER.warning("opnsense: firewall log evidence of host %s not read: %s", host_id, type(exc).__name__)
+    return view
 
 
 @router.get("/api/opnsense/hosts/{host_id}/rules/diff")

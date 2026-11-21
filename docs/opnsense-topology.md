@@ -87,7 +87,7 @@ default) as described in [Scheduled collection](meraki-topology.md#scheduled-col
 
 | Privilege (OPNsense name) | What Plexus reads with it |
 |---|---|
-| Lobby: Dashboard | system information (host name, version strings) |
+| Lobby: Dashboard | system information (host name, version strings); with **Health and services**: memory, file systems, temperature, uptime and load, the state table |
 | System: Firmware | firmware status, pending updates, the security audit |
 | Status: Interfaces | interfaces, addresses, link state, VLAN tags |
 | System: Gateways | gateway status (loss, delay, deviation) |
@@ -99,18 +99,28 @@ default) as described in [Scheduled collection](meraki-topology.md#scheduled-col
 | Status: OpenVPN | OpenVPN instances and connected clients |
 | Diagnostics: Configuration History | the config.xml download (only with **Config backup** on) |
 | Firewall: Rules (the privilege that lists `api/firewall/filter_util/*`) | the filter rule counters (only with **Rule counters** on; 24.1+) |
+| Diagnostics: PF Table IP addresses (`api/firewall/alias_util/*`) | the pf tables of the aliases `config.xml` cannot resolve, for path tracing (only with **Alias tables** and **Config backup** on) |
 | Diagnostics: ARP Table | the ARP table (only with **ARP, NDP and DHCP leases** on) |
 | Diagnostics: NDP Table | the NDP (IPv6 neighbour) table (same option) |
+| Diagnostics: System Activity | the header lines of `top`, for the CPU use (only with **Health and services** on) |
+| Status: Services | the services and whether each runs (same option) |
 | Status: DHCP leases / Status: DHCPv6 leases | ISC DHCP leases (same option; only if the firewall runs ISC DHCP) |
 | the Kea DHCP leases page (v4 and v6) | Kea DHCP leases (same option; only if the firewall runs Kea) |
 | the Dnsmasq DNS/DHCP leases page | Dnsmasq DHCP leases (same option; 25.1+, only if the firewall runs Dnsmasq DHCP) |
 
 The ARP, NDP and lease privileges also allow flushing the ARP / NDP table
-or deleting a lease; Plexus never sends those calls. The exact names of the
+or deleting a lease, and **Status: Services** allows starting, stopping
+and restarting a service; Plexus never sends those calls. The exact names of the
 Kea and Dnsmasq lease privileges vary between releases and were not checked
 against a firewall: pick the ones whose description lists
 `api/kea/leases4/*`, `api/kea/leases6/*` or `api/dnsmasq/leases/*`. A
 refused lease call names the privilege Plexus expects.
+
+**Diagnostics: PF Table IP addresses** also allows adding an address to a
+table, deleting one and flushing a table. Plexus only lists the tables and
+reads their entries; it never sends those calls, nor the bogon update.
+Leave the privilege out (or turn **Alias tables** off) if you do not accept
+that: the aliases it would resolve stay unresolved in the trace.
 
 Two of these privileges allow more than reading, and a stolen key could use
 them:
@@ -151,6 +161,7 @@ A call of a plugin that is not installed does the same.
 | OpenVPN server | Each OpenVPN server instance (`ovpn:server:<id>`): online when it runs, offline when it is enabled but not running |
 | **VPN peers** box | The far end of each IPsec connection, WireGuard peer and OpenVPN client instance |
 | Dashed tunnel | **IPsec**, **WireGuard** or **OpenVPN**, from the firewall to the peer |
+| **HA** link, shared box | The two firewalls of a CARP pair when both are sources (see [CARP pairs](#carp-pairs)) |
 
 A gateway uplink's status follows the gateway's monitor (`dpinger`):
 `active` when it reports no alarm, `degraded` for a latency or loss alarm,
@@ -168,6 +179,27 @@ A tunnel is `reachable` (up), `degraded` or `unreachable` (down):
 A WireGuard peer that is a road warrior (a laptop or phone) is down while it
 is not connected. Mute it under **Monitoring > Availability** if that is
 expected (see [Muting](meraki-topology.md#muting)).
+
+### CARP pairs
+
+Each firewall of a CARP pair is a source of its own. When two OPNsense
+sources both report the same VHID with the same virtual address, the map
+draws them as one HA cluster: the two firewalls, their gateway stubs and
+OpenVPN servers share one box named after both sources (for example
+`Edge A / Edge B (CARP)`), and an **HA** link joins the two firewalls. A
+firewall that is also an inventory host is drawn as that host, still in the
+pair's box. The link is labelled with each firewall's role across the
+shared VIPs (`MASTER`, `BACKUP`, or `mixed` when it holds different roles
+on different VIPs) and is shown `active` when every shared VIP has exactly
+one `MASTER`, and `failed` when one has two (a split brain) or none.
+
+That status is for display only and raises no alert: the two firewalls are
+collected at different times, so their roles can disagree for a moment
+without anything being wrong. Alerts come from each firewall's own CARP
+groups (see [Availability tracking](#availability-tracking)). When only one
+firewall of a pair is a source, nothing changes. Three or more sources that
+report the same VHID and address are not drawn as a pair, and neither is
+one firewall added twice. The HTML export draws the pair the same way.
 
 ### Device details
 
@@ -191,9 +223,18 @@ Click the firewall for its sections:
 - **High availability**: each CARP virtual IP with its interface, VHID,
   address, state (`MASTER`, `BACKUP`, `INIT`, `DISABLED`), advertisement
   base and skew, and the firewall's maintenance mode and CARP demotion. A
-  VIP in `INIT` or a demotion other than 0 is a collection warning (not an
-  informational one). Only this firewall is drawn: its CARP peer is a
-  firewall of its own, added as another source
+  VIP in `INIT` or a demotion other than 0 is an informational collection
+  warning: the state itself is tracked per CARP group (see [Availability
+  tracking](#availability-tracking)). The CARP peer is a firewall of its
+  own, added as another source; when both are sources, the pair is drawn
+  as one HA cluster (see [CARP pairs](#carp-pairs)) and the details name
+  the peer as **CARP peer**
+- **Health**: CPU, load average, memory, the fullest file system and every
+  file system, the hottest temperature sensor and every sensor, the state
+  table, uptime, how many services run and which are stopped, and where
+  the numbers are kept (see [Health and services](#health-and-services))
+- **Services**: each service the firewall's configuration enables, with
+  its name and whether it runs
 - **Firmware**: version, latest version, whether an update is pending, the
   status message, packages to update, reboot required, major upgrade, last
   check
@@ -207,6 +248,13 @@ Click the firewall for its sections:
   the collection stored in MAC tracking and IPAM (see
   [ARP, NDP and DHCP leases](#arp-ndp-and-dhcp-leases))
 - **Config backup**: what the collection did with config.xml
+- **Route capture**: what the collection did with the routing table and
+  the interface addresses (see
+  [Routing table and live addresses](#routing-table-and-live-addresses))
+- **Flow export**: whether Plexus receives NetFlow from the firewall (per
+  flow type and source address: packets and last seen), the state of the
+  flow collector and what the collection stored for it (see
+  [NetFlow](#netflow))
 - **Plexus inventory**: the inventory host the firewall matched
 
 Click a gateway stub for its **Gateway** details, a peer for its **IPsec
@@ -238,7 +286,8 @@ The connected subnets and static routes join the subnet index, so they can
 be picked in **Path Mode** and appear on the **IPAM** page as subnets of
 source **topology**, owned by the firewall. Once the firewall is an
 inventory host with a config backup, Path Mode traces through it with its
-interfaces, filter rules, NAT and routes read from `config.xml` (see
+interfaces, filter rules and NAT read from `config.xml` and the routes of
+its collected routing table (see
 [Firewall rules and path trace](#firewall-rules-and-path-trace)).
 
 ## Availability tracking
@@ -253,6 +302,31 @@ and alerts, the same way as for every other source:
   anything else (no monitor data, pending) is unknown
 - each IPsec connection, WireGuard peer and OpenVPN client instance, as a
   tunnel, mapped as in the table above
+- each CARP group (one interface and VHID; several addresses on one VHID
+  are one group), as a link named after the firewall, interface, VHID and
+  addresses (`carp:<interface>:<vhid>`), on this firewall alone: `MASTER`
+  and `BACKUP` are up (a standby is healthy), `DISABLED` is degraded (CARP
+  is off on this node, so it gives no redundancy), `INIT` is down, and
+  `MASTER` or `BACKUP` while the firewall's CARP demotion is not 0 or it is
+  in maintenance mode is degraded; anything else is unknown. The role is
+  the entity's status. A CARP group belongs to the firewall: it is alerted
+  on the firewall's inventory host when it has one, and muting or removing
+  the firewall covers it
+- each service the firewall's configuration enables (unbound, the DHCP
+  servers, Suricata, ...), as a service named after the firewall and the
+  service (`svc:<name>[/<instance>]`): up while it runs, down when it does
+  not. It belongs to the firewall like a CARP group (alerted on its
+  inventory host, covered by muting or removing the firewall); see
+  [Health and services](#health-and-services)
+
+When a CARP group's role changes between `MASTER` and `BACKUP` from one
+collection to the next, a failover warning is raised (on the inventory
+host, else to the notification channels), naming the firewall, interface,
+VHID, address and both roles. A failover is an event, not an outage: the
+group stays up, and after a failover that does not preempt back, the new
+arrangement is simply the new normal. A group seen for the first time, or
+whose role comes from `INIT`, `DISABLED` or a collection that missed it,
+raises no failover warning (the state alert covers it). Mutes apply to it.
 
 The loss, RTT and RTT deviation of each gateway are in its details, and
 are stored at every collection as the uplink's loss, latency and jitter
@@ -269,12 +343,171 @@ alerts or the notification channels. Gateway stubs and VPN peers are not
 devices of their own. The state mapping, alerting, muting and retention
 are described in [Meraki in the Topology Map](meraki-topology.md#availability-tracking).
 
-A firmware update, an audit finding or an incomplete audit is added to
-the collection's warnings, so the collection shows as **partial**, but such
-a warning does not stop availability tracking from removing a tunnel or
-gateway the firewall no longer reports. A CARP warning (a VIP in `INIT`, a
-demotion) and a failed call do: until a collection without them, a missing
-entity turns unknown instead of being removed.
+### Tunnel traffic
+
+Each tunnel and each OpenVPN server also has its traffic measured, from
+the byte counters the firewall reports for it with the calls a collection
+already makes:
+
+| Entity | Counters read | Counter per |
+|---|---|---|
+| IPsec connection | `bytes-in` / `bytes-out` of the phase 1 row (totals: OPNsense sums them over the child SAs of the connection) and of each child SA row of `search_phase2` (rate) | child SA (strongSwan unique id) |
+| WireGuard peer | `transfer-rx` / `transfer-tx` of `wg show` | peer |
+| OpenVPN client instance | `bytes_received` / `bytes_sent` of the instance | session (address and start time) |
+| OpenVPN server instance | `bytes_received` / `bytes_sent` of each connected client, summed | client session |
+
+"In" is what the firewall received through the tunnel, "out" what it sent.
+The counters are cumulative, so Plexus keeps the last reading of each
+tunnel's counters in the database (it does not matter which worker reads
+them or whether Plexus restarted) and turns each new reading into the
+average rate in bits per second, in each direction, since that last
+reading; then the new reading replaces it. Readings come from two places:
+
+- every stored collection (hourly by default, sooner when started by hand
+  or by syslog). It also names the tracked entity of each tunnel, and a
+  collection without failed calls drops the readings of tunnels the
+  firewall no longer reports;
+- every monitoring poll of the firewall, when the firewall is an
+  inventory host (see [Stored with the monitoring poll](#stored-with-the-monitoring-poll)):
+  in the same API session as the health, the poll reads the IPsec
+  connections and their installed child SAs, the WireGuard peers and the
+  OpenVPN sessions (`include_vpn`; not the configured child SAs), so the
+  counters are read every poll interval (5 minutes by default) and not
+  only hourly. A tunnel no collection has named yet is left out until one
+  does. A failed VPN read loses only that part of the poll.
+
+Each reading gives one sample covering the time since the previous one,
+so collections and polls interleave without overlap. A tunnel's details
+show a **Traffic** section with the totals and the rate since the
+previous reading (or why there is none), and the rate is stored like a
+gateway's latency: raw samples for the monitoring retention, one row per
+day (`traffic_in`, `traffic_out`) for the SLA retention. The **Integrations and cloud** table shows each entity's
+average traffic over the period, and **Measurements** charts its samples.
+
+No rate is stored, rather than a wrong one, when:
+
+- there is no previous reading of the entity (its first reading, or the
+  previous one did not have its counters);
+- a counter of the previous reading is gone: an IPsec child SA was rekeyed
+  or deleted (by default strongSwan rekeys a child SA about every hour), an
+  OpenVPN client reconnected or disconnected. What it carried after the
+  previous reading is unknown;
+- a counter went down: the WireGuard interface or an OpenVPN instance
+  restarted, the firewall rebooted;
+- the two readings are more than three hours apart, or the newer one was
+  read before the stored one.
+
+A new IPsec child SA or OpenVPN session that appeared since the previous
+reading counts whole, since it started after it. A tunnel that is down has
+no counters and stores a rate of 0.
+
+The rate is an average between two readings, so bursts shorter than the
+poll interval do not show. With polls every 5 minutes, an IPsec rekey (by
+default about every hour) or an OpenVPN reconnect costs the one interval
+it falls in. A firewall that is not an inventory host is read by its
+collections only: its IPsec tunnels then rarely get a sample, since a
+child SA is usually rekeyed between two hourly collections. Add the
+firewall to the inventory (the steps after adding the source) for
+per-poll readings.
+
+A firmware update, an audit finding, an incomplete audit or a CARP
+warning (a VIP in `INIT`, a demotion) is added to the collection's
+warnings, so the collection shows as **partial**, but such a warning does
+not stop availability tracking from removing a tunnel, gateway or CARP
+group the firewall no longer reports. A failed call does: until a
+collection without one, a missing entity turns unknown instead of being
+removed. A source whose high availability part is turned off reports no
+CARP groups, so its tracked groups are removed at the next clean
+collection.
+
+## Health and services
+
+With **Health and services** on (`include_health`, the default), each
+collection reads the firewall's health with the calls of the OPNsense
+dashboard widgets, so no SNMP profile is needed:
+
+- **CPU**: 100 % minus the idle share of the `CPU:` line `top` prints
+  (`diagnostics/activity/get_activity`; only its header lines are kept,
+  never the process list). The streaming CPU call of the dashboard is not
+  used.
+- **Load average** (1, 5 and 15 minutes) and **uptime**
+  (`diagnostics/system/system_time`; before 25.1 the load average comes
+  from the same `top` header)
+- **Memory**: used and total, the ZFS ARC left out of "used" as on the
+  OPNsense dashboard (the cache gives memory back when it is needed)
+- **File systems**: each one with its use; the fullest (CD and DVD media,
+  always full, are left out) is the disk use
+- **Temperature**: every sensor; the hottest is the temperature
+- **State table**: the entries in use and the limit (`pf_states`)
+- **Services**: every service the firewall's configuration enables, with
+  whether it runs (`core/service/search`, the list of **System →
+  Diagnostics → Services**)
+
+They are shown in the firewall's **Health** and **Services** sections. A
+file system at 90 % or more and a state table at 80 % or more of its limit
+are informational collection warnings. An endpoint the release does not
+have (404) is skipped with one informational warning naming it.
+
+### What alerts
+
+Each service is tracked as a service entity of the firewall (see
+[Availability tracking](#availability-tracking)): **down** when OPNsense
+says it is not running, **up** when it runs. A service going down raises an
+alert like any other entity, on the firewall's inventory host when it has
+one, else to the notification channels; it recovers when the service runs
+again. This covers unbound, the DHCP servers (ISC `dhcpd` / `dhcpd6`, Kea
+`kea-dhcp/v4` and `/v6`, Dnsmasq), Suricata (`suricata`, listed as
+Intrusion Detection) and every other service a plugin registers.
+
+`core/service/search` lists only the services the configuration enables
+(each plugin adds its service only when it is turned on), so a service an
+administrator turned off is not listed: at the next collection without
+warnings its entity is removed and any open alert on it is resolved. It
+never alerts while it stays off. A service that is enabled but stopped by
+hand does alert, since it is meant to run. Services OPNsense does not
+check (it reports them running) never alert. When the services call fails,
+the entities are kept as missing (no alert, none removed) until a
+collection reads them again. Muting the firewall, or its site, mutes its
+services; each service can also be muted alone.
+
+### Stored with the monitoring poll
+
+When the firewall is an inventory host (the host its collections match:
+the firewall's **Health** section says which, as **History**), its
+monitoring poll also reads the health over the source's API key at every
+poll interval, without the services (the collection tracks them): memory,
+file systems, temperature, uptime and load, `top`'s CPU line and the state
+table, six calls. Then:
+
+- CPU, memory and uptime are stored as the poll's own values, so the
+  device's charts, the built-in CPU and memory thresholds, baseline alerts
+  and SLA views work as for an SNMP host. A host that SNMP also polls
+  keeps its SNMP values: the API fills only what SNMP left empty, so there
+  is one sample per poll, and an SNMP poll that fails falls back to the
+  API values.
+- the disk use, temperature, state table and load are stored as metric
+  samples `fw_disk_used_pct`, `fw_temperature_c`, `fw_pf_states`,
+  `fw_pf_states_pct` and `fw_load_avg_1m`, which alert rules can name
+  (see [Monitoring](monitoring.md#opnsense-firewall-metrics)).
+- a file system at 90 % or more raises the built-in alert `fw_disk_full`
+  (critical from 95 %), and a state table at 80 % or more of its limit the
+  built-in alert `fw_state_table` (critical from 95 %); each resolves at
+  the first poll below its threshold. Alert suppressions apply as for the
+  other built-in checks.
+- a poll whose SNMP or SSH part failed while the API answered counts as
+  up: the firewall answered.
+- with **VPN tunnels** on (`include_vpn`), the same session reads the
+  tunnels' byte counters (IPsec connections and installed child SAs,
+  WireGuard peers, OpenVPN sessions) and stores their traffic rates (see
+  [Tunnel traffic](#tunnel-traffic)). A failure there loses only the
+  traffic of that poll.
+
+The source must have an API key, automatic collection on and **Health and
+services** or **VPN tunnels** on (each part is read only when its option is); the host is learned from its newest collection, so a
+firewall imported into the inventory is read from the collection after
+the import. A firewall that is not in the inventory still shows its health
+in its details and still has its services tracked, but its numbers are not
+stored (import it to keep them).
 
 ## ARP, NDP and DHCP leases
 
@@ -417,9 +650,12 @@ are in `netcontrol/integrations/opnsense/secrets.py`.
 
 Once the firewall is an inventory host with a config backup (see
 [Config backup](#config-backup)), Plexus reads its filter rules, aliases,
-NAT and routes from the stored `config.xml`. Nothing is read from the
-firewall for this beyond the collection itself, and nothing is ever
-written to it.
+NAT and configured routes from the stored `config.xml`, and the trace
+takes its routes and the addresses DHCP or PPPoE assigned from the
+routing table and interface addresses the collection stores (see
+[Routing table and live addresses](#routing-table-and-live-addresses)).
+Nothing is read from the firewall for this beyond the collection itself,
+and nothing is ever written to it.
 
 ### The Rules tab
 
@@ -470,8 +706,12 @@ now goes through it hop by hop:
 2. **Rules in**: the rules of the interface the flow arrives on, in the
    order above, ending in the default block. The item names the deciding
    rule by number and description.
-3. **Route**: the connected networks, the static routes (gateways resolved
-   to their address and interface; `Null4` / `Null6` routes drop the flow)
+3. **Route**: the routes of the collected routing table: the connected
+   networks, the static and default routes, the routes DHCP, PPPoE or a
+   router advertisement installed and the routes of FRR (OSPF, BGP, RIP);
+   blackhole and reject routes (`Null4` / `Null6`) drop the flow. Without
+   a collected table, the routes of `config.xml`: the connected networks,
+   the static routes (gateways resolved to their address and interface)
    and the default gateway.
 4. **Rules out**: the floating `out` rules of the egress interface, if any.
 5. **NAT out**: 1:1 NAT, the source NAT and manual outbound rules (in
@@ -480,12 +720,193 @@ now goes through it hop by hop:
    upstream interface (one with a gateway, or `wan`) as its address.
 
 Replies pass by state. A rule that names something Plexus cannot evaluate
-(an alias of host names, a URL table, GeoIP, a negated address, a
-schedule) makes a flow it may match **unknown** rather than allowed or
-blocked. Plexus has no SSH route capture of an OPNsense firewall, so a
-destination that only the default route covers is marked **unknown** at
-the route step (a learned route might be more specific); the rules and NAT
-are still evaluated.
+(a negated address, a schedule, an alias of host names, a URL table or
+GeoIP whose pf table was not collected) makes a flow it may match
+**unknown** rather than allowed or blocked; with the alias's table
+collected, the table decides (see [Alias tables](#alias-tables)). Without a collected routing table (the firewall was collected
+with **Routing table** off, or not since it became an inventory host) the
+routes come from `config.xml` alone, so a destination that only the
+default route covers is marked **unknown** at the route step (a learned
+route might be more specific) and routes learned by DHCP, PPPoE or FRR
+are missing; the rules and NAT are still evaluated. A policy-based route
+(a rule with a gateway) keeps such a destination **unknown** with a table
+too, as the gateway the rule picks is not followed.
+
+When the firewall sends its firewall log to Plexus (see
+[Firewall log evidence](#firewall-log-evidence)), the firewall's hop in
+the trace adds what the log showed in the last 24 hours: the passes and
+blocks of the rule the trace names, and whether a logged flow matches the
+traced one (its addresses inside the traced source and destination, the
+same protocol and port) and with which action. When the log disagrees
+with the trace, it says so plainly, for example *The trace allows this
+flow here, but the firewall log shows it blocked 5 times*: a rule the
+trace could not read, a rule changed since the backup, or a flow that
+arrives on another interface. A trace through a firewall without log
+lines in the window looks exactly as before.
+
+### Firewall log evidence
+
+The rule counters say how often a rule matched since the last filter
+reload; the firewall log says what it did just now, and to which flows.
+When the firewall sends its firewall log (`filterlog`) to the Plexus
+syslog receiver, Plexus ties each log line to the rule that wrote it and
+keeps, per rule, how many packets it passed and blocked and a few recent
+flows. The **Rules** tab and path traces through the firewall show it.
+
+Setup:
+
+1. In Plexus, turn on the syslog receiver (Settings > Syslog & Traps; see
+   [Syslog](#syslog) for the ports). **Keep OPNsense firewall log
+   evidence per rule** is on by default in the same settings.
+2. On the firewall, **System > Settings > Logging**, **Remote** tab, add a
+   destination for the Plexus address (UDP, port 514 or 1514, RFC 5424 on
+   or off). Under **Applications** pick the firewall log (`filter` /
+   `filterlog`), or leave the list empty to send everything.
+3. On each rule to watch, turn on **Log packets that are handled by this
+   rule**: only logged rules write lines. **Firewall > Settings >
+   Advanced** has the switches that log the default block rule and the
+   default pass rule.
+4. The firewall must be an inventory host and send from an address Plexus
+   knows for it (its address or a recorded interface address): lines from
+   any other address are counted and dropped.
+
+How a line is tied to its rule: each line names the rule's pf label. For a
+rule of the automation / new rules model that is its uuid; for a legacy
+rule (**Firewall > Rules**), a hash OPNsense computes from the rule's
+fields (`calcRuleHash`), which Plexus computes the same way from the
+stored `config.xml`. The firewall's rule counters are keyed by the same
+label. Lines of rules that are not in the newest backup, such as the
+automatic default deny, anti-lockout, bogon and private network rules or a
+rule added since the last backup, are kept under their label and listed
+under **Logged by automatic or unknown rules**.
+
+What is shown:
+
+- **Rules tab**: when the firewall log was last received, and for each
+  rule a **Log (24 h)** column with the packets passed and blocked in the
+  last 24 hours; hovering it shows the last hour, when the rule was last
+  logged and its most recent flows. Without any log line from the
+  firewall, the tab says what to set up.
+- **Path trace**: see [Path trace through the firewall](#path-trace-through-the-firewall).
+
+What is kept, and for how long:
+
+- Raw log lines are **never stored**: not in the syslog event list, not
+  matched by the syslog alert rules. Each line is counted in memory and
+  written every 30 seconds as a count per rule, action, interface and
+  direction in 10-minute buckets, plus up to 25 recent distinct flows
+  (source, destination, protocol, destination port) per rule and action.
+- Both are kept 7 days (the metrics retention cleanup removes older ones)
+  and removed with the inventory host.
+- With the switch off, firewall log lines are dropped (still never stored).
+  Settings > Syslog & Traps shows how many lines were counted and dropped
+  since Plexus started.
+
+Limits:
+
+- Only rules with logging on produce evidence; a rule without lines may
+  simply not log. The counts are of logged packets (pf logs the first
+  packet of a connection for a pass rule that keeps state, every packet
+  for a block rule).
+- A busy firewall can send more than the receiver's buffer holds
+  (10,000 messages a second for all devices together): the excess is
+  dropped and counted with the receiver's dropped events. Up to 30
+  seconds of counts are lost when Plexus stops.
+- The time of a count is when Plexus received the line, not the
+  timestamp in it.
+- A legacy rule's label changes with any field but its description, so a
+  rule edited since the newest backup is listed as unknown until the next
+  backup. The label is computed as OPNsense computes it; if a release
+  computes it differently, the rule's lines show up under **Logged by
+  automatic or unknown rules** (the rule counters are still matched by
+  uuid).
+- Lines of NAT (`rdr`, `nat`, `binat`) and `match` rules are not counted.
+
+### Routing table and live addresses
+
+With **Routing table** on (`include_routes`, the default), each collection
+of a firewall that is an inventory host stores its routing table and the
+addresses of its interfaces as the route capture of that host (the
+**Route capture** section says what was stored). It holds, per interface,
+its key (`wan`, `lan`, `optN`), device and addresses, and per route its
+family, destination, gateway, flags and interface. Counters, MTU and
+expiry times are left out, so a new capture is written only when the
+routing or the addressing changes; an unchanged table keeps the newest
+capture, which retention never deletes. Nothing is stored when the
+routing table could not be read: the trace then keeps the previous
+capture, or `config.xml` alone.
+
+The trace reads the capture this way:
+
+- **Routes**: connected networks (`U`, no gateway), static routes (`S`,
+  the default route by its destination), routes a routing daemon installed
+  (flag `1`, `2` or `3`: FRR) and other gateway routes (DHCP, PPPoE, a
+  router advertisement) as learned routes, blackhole (`B`) and reject
+  (`R`) routes as dropping the flow. The firewall's own addresses (host
+  routes through `lo0`) are addresses of the interface they belong to.
+  Link-local, multicast and loopback routes are left out. With a capture,
+  the static routes and default gateway of `config.xml` are not used: the
+  table says what is installed.
+- **Addresses**: an interface whose address `config.xml` leaves to DHCP,
+  PPPoE, DHCPv6 or track6 gets its live address (matched by its key, else
+  its device), so rules and NAT that name `wan address`, `wan net` or
+  **This Firewall**, the automatic outbound NAT and port forwards to the
+  WAN address resolve. An interface without a live address (a PPPoE
+  session that is down) stays unresolved and listed under **Not
+  checked**.
+
+### Alias tables
+
+Some aliases hold addresses only the firewall knows: URL tables, GeoIP,
+ASN, dynamic IPv6 hosts, MAC and OpenVPN group aliases, a host alias that
+names a host name, and the tables OPNsense fills itself (`virusprot`,
+`sshlockout`). `config.xml` cannot resolve them, so without more a rule
+that names one makes the flows it may match **unknown**.
+
+With **Alias tables** on (`include_alias_tables`, the default) and
+**Config backup** on, each collection reads the pf tables of the aliases
+the rules and NAT of the `config.xml` it just downloaded cannot resolve
+(nested ones too), and stores them for the firewall's inventory host,
+replacing the previous ones as a whole, with when they were read and
+whether each one is complete (the **Alias tables** section says what was
+stored). The calls are `GET firewall/alias_util/aliases` (the tables pf
+has loaded) and one `GET firewall/alias_util/list/<alias>` per table. A
+configuration without such aliases makes no call. When the tables could
+not be read (the call was refused, or the option is off) the previous ones
+stay.
+
+The trace then resolves such an alias from its table:
+
+- An address the table holds matches the alias. An address a **complete**
+  table does not hold does not match, so the rule is skipped and the next
+  one decides.
+- A table cut at the limits below is **truncated**: an address it holds
+  still matches, any other address leaves the rule **unknown**, as an
+  alias with no collected table always does.
+- `!` entries (negated addresses in the table) are cut out of the networks
+  that hold them, as pf's most specific match does. A negated rule source
+  or destination stays unresolved, tables or not; nested aliases resolve
+  through their own tables.
+- A host alias that holds both addresses and host names is resolved from
+  its table when it is complete (the table is what pf really matches: the
+  addresses and what the host names resolved to); with a truncated table,
+  what the table and the configured addresses hold matches and the rest is
+  unknown.
+
+The contents are a reading of the moment: host names resolve again and
+URL tables refresh between collections. The hop says so: the rule's text
+names the alias "from its pf table as read at the last collection", and a
+truncated table's unknown item says how many entries it held and how many
+were read. The Rules tab marks each alias resolved this way ("pf table",
+with its number of entries, or "truncated") and says when the tables were
+read.
+
+Limits: at most 9,999 entries per table (what one read returns), 30,000
+entries over all tables and 30 tables per collection; what is past them is
+truncated or not read, and the collection gets an information warning
+naming those tables. The downloaded bogon tables (`bogons`, `bogonsv6`,
+100,000 entries and more) are never read, so **Block bogon networks** stays
+a note. A table pf has not loaded is skipped.
 
 ### What the trace does not read
 
@@ -493,10 +914,95 @@ Listed under **Not checked** on the hop when the configuration uses them:
 IPsec, OpenVPN and WireGuard tunnels and the rules of their interfaces,
 policy-based routing (a rule with a gateway: the rule is evaluated, the
 gateway is not followed), the bogon table (**Block bogon networks**),
-NPTv6, interface addresses learned by DHCP, PPPoE or tracking, and port
-forwards or outbound rules that match on what is not read (source ports,
-negations, unresolved aliases). Traffic shaping, captive portal and the
+NPTv6, interface addresses learned by DHCP, PPPoE or tracking that the
+collected interface addresses do not hold (all of them without a route
+capture), and port forwards or outbound rules that match on what is not
+read (source ports, negations, unresolved aliases). An alias whose pf
+table was not collected (the option is off, the privilege is missing, it
+is past the limits or pf has not loaded it), or the part of a truncated
+table that was not read, is unresolved, and so are the bogon tables;
+port forwards and outbound NAT never use the collected tables. Traffic shaping, captive portal and the
 firewall's own services are not modelled.
+
+## NetFlow
+
+The firewall can export NetFlow v5 / v9 to the Plexus flow collector
+(**Reporting > NetFlow** on the firewall; the settings are in
+[NetFlow / sFlow / IPFIX](flow-collector.md#opnsense-firewalls)). For a
+firewall that is an inventory host, each collection prepares the flow
+views for it from what it already reads, with no extra call or privilege:
+
+- the addresses of its interfaces are recorded as the host's interface
+  addresses, so flows the firewall sends from its WAN or any other
+  interface are attributed to it, not to an unknown exporter (flows that
+  arrived before the first collection are attributed then);
+- the kernel interface index of each interface with an address is read off
+  its routing table (the `link#N` gateway of the interface's connected
+  route), so the **Interfaces** view of the flows names the indexes the
+  records carry (`WAN (igb0)`) instead of numbers.
+
+The firewall's **Flow export** section shows whether flows arrive. The
+firewall's own NetFlow settings are not read: that needs the
+"Diagnostics: Netflow configuration" privilege, which the API user does
+not need otherwise.
+
+The recorded addresses are as fresh as the last collection, and a
+discovery sync or configuration collection of the same host replaces them
+with what it read, so flows from an interface it did not see can show as
+an unknown exporter until the next collection.
+
+## Syslog
+
+OPNsense can forward its logs to the Plexus syslog receiver, so a change of
+gateway, CARP or VPN state, or a configuration save, is collected within
+seconds instead of at the next scheduled collection.
+
+1. In Plexus, turn on the syslog receiver (Settings > Syslog & Traps). It
+   listens on UDP 1514; Docker publishes host port 514 to it as well.
+2. On the firewall, **System > Settings > Logging > Remote**, add a
+   destination: transport **UDP(4)** (or UDP(6)), the Plexus address as
+   hostname, port **514** (or 1514), RFC 5424 on or off (Plexus reads
+   both). Under **Applications** pick at least the ones below (leaving the
+   list empty sends everything); **Levels** at least `info` (`notice` is
+   enough for gateways and configuration saves, CARP transitions are
+   `info`).
+3. Send from an address Plexus knows: the address the source's API URL
+   names, an interface address of the firewall (from its last
+   collection), or an address of its inventory host.
+
+| Application | What Plexus does with it |
+|---|---|
+| Gateways (dpinger) | A gateway alarm or recovery collects the source |
+| System / kernel | A CARP transition or demotion collects the source |
+| IPsec (charon) | An IKE SA established or deleted, a child SA closed, collects the source |
+| OpenVPN | A site-to-site client instance (or a server instance) up, restarting or stopping collects the source |
+| Configuration / audit | A configuration save collects the source (config.xml backup and drift right away); failed web GUI and SSH logins count for the **Repeated login failures** rule |
+
+The collection is the normal one (availability tracking, config backup,
+software refresh); the gateway, tunnel and CARP alerts stay the
+availability tracker's, so a message never raises a second alert for the
+same condition. At most one collection per firewall a minute and 6 an
+hour, 5 seconds after the first message; the switch is **Re-collect OPNsense on a state
+change** in the receiver settings. Details:
+[Syslog Rules](syslog-rules.md#opnsense-re-collect-trigger).
+
+Limits:
+
+- A collection reads every enabled part of the firewall (about 15 to 25
+  API calls, more with many IPsec connections), and the firmware audit
+  waits up to 90 seconds for `pkg audit`: a triggered collection takes as
+  long as a scheduled one. Turn the audit option off on a source whose
+  collections should be quick.
+- WireGuard logs no handshake or peer state to syslog, and IPsec child SA
+  (phase 2) establishment is left out because every rekey logs it: those
+  changes wait for the next collection (or come along with a phase 1
+  event).
+- The firewall's own filter log (`filterlog`) is not a trigger; its lines
+  are kept as per-rule evidence instead (see
+  [Firewall log evidence](#firewall-log-evidence)).
+- Syslog over UDP is not authenticated: restrict the receiver port to your
+  device networks ([deploy/FIREWALL.md](../deploy/FIREWALL.md)). The rate
+  limit bounds what a forged message can start.
 
 ## Firmware and security audit
 
@@ -552,21 +1058,29 @@ firewalls when you edit the advisory.
 | IPsec connections | `GET ipsec/sessions/search_phase1` (`searchPhase1`) | VPN tunnels |
 | IPsec installed child SAs, per connection with an SA | `POST ipsec/sessions/search_phase2` (`searchPhase2`), body `{"id": "<connection>"}` | VPN tunnels |
 | IPsec configured child SAs, per connection of the Connections model | `GET ipsec/connections/search_child?connection=<uuid>` (`searchChild`) | VPN tunnels |
-| WireGuard peers | `GET wireguard/service/show` | VPN tunnels |
-| OpenVPN instances and clients | `GET openvpn/service/search_sessions` (`searchSessions`) | VPN tunnels |
+| WireGuard peers, with their transfer counters | `GET wireguard/service/show` | VPN tunnels |
+| OpenVPN instances and clients, with their byte counters | `GET openvpn/service/search_sessions` (`searchSessions`) | VPN tunnels |
 | Routing table | `GET diagnostics/interface/get_routes` (`getRoutes`) | Routing table |
 | CARP virtual IPs, demotion, maintenance mode | `GET diagnostics/interface/get_vip_status` (`getVipStatus`) | High availability |
 | Security audit | `GET core/firmware/running`, `POST core/firmware/audit`, `GET core/firmware/upgradestatus` | Firmware security audit |
 | config.xml | `GET core/backup/download/this` | Config backup |
 | Filter rule counters (evaluations, packets, bytes, states per rule uuid) | `GET firewall/filter_util/rule_stats` (`ruleStats`) | Rule counters |
+| Memory (total, used, ZFS ARC) | `GET diagnostics/system/system_resources` (`systemResources`) | Health and services |
+| File systems | `GET diagnostics/system/system_disk` (`systemDisk`) | Health and services |
+| Temperature sensors | `GET diagnostics/system/system_temperature` (`systemTemperature`) | Health and services |
+| Uptime, load averages | `GET diagnostics/system/system_time` (`systemTime`) | Health and services |
+| CPU use (the `CPU:` header line of `top`; the process list is dropped) | `GET diagnostics/activity/get_activity` (`getActivity`) | Health and services |
+| State table: entries and limit | `GET diagnostics/firewall/pf_states` (`pfStates`) | Health and services |
+| Services the configuration enables, running or not | `GET core/service/search` | Health and services |
+| The pf tables of the aliases `config.xml` cannot resolve (see [Alias tables](#alias-tables)) | `GET firewall/alias_util/aliases`, then `GET firewall/alias_util/list/<alias>` per table | Alias tables (with Config backup) |
 | ARP table | `GET diagnostics/interface/search_arp` (`searchArp`; `get_arp` / `getArp` on older releases) | ARP, NDP and DHCP leases |
 | NDP table | `GET diagnostics/interface/search_ndp` (`searchNdp`; `get_ndp` / `getNdp`) | ARP, NDP and DHCP leases |
 | DHCP leases | `GET dhcpv4/leases/search_lease`, `GET dhcpv6/leases/search_lease` (`searchLease`), `GET kea/leases4/search`, `GET kea/leases6/search`, `GET dnsmasq/leases/search` | ARP, NDP and DHCP leases |
 
 The options are `verify_tls`, `include_gateways`, `include_vpn`,
 `include_ha`, `include_routes`, `include_firmware_audit`,
-`include_clients`, `include_rule_stats`, `config_backup` and
-`inventory_enrich`, all on by default.
+`include_clients`, `include_rule_stats`, `include_health`, `include_alias_tables`,
+`config_backup` and `inventory_enrich`, all on by default.
 
 Calls are sent one at a time and spaced out. A rate-limit or server error
 answer is retried after a pause (honouring `Retry-After`); a refused call is
@@ -588,12 +1102,40 @@ Not read:
 
 - the parts of `config.xml` listed under
   [What the trace does not read](#what-the-trace-does-not-read)
-- the CARP peer as a node: each firewall of a pair is a source of its own;
-  the pair is not drawn as one HA cluster
+- the CARP peer of a firewall that is the only source of its pair: it is
+  not drawn (add the peer as a source of its own for the HA cluster)
+- the pair's status as an alert: the HA link between two sources is
+  display only (their collections are not simultaneous); alerts come from
+  each firewall's own CARP groups and failovers
+- CARP clusters of more than two sources: they are not drawn as one box
+- a check that two sources really are peers: a pair is recognised by its
+  VHID and virtual address alone, so two unrelated firewalls that reuse
+  the same VHID and the same private virtual address (two sites with
+  overlapping addressing, each with only one firewall added) are drawn as
+  one pair. The pfsync and configuration sync peers are not compared
 - child SA counts of legacy IPsec tunnels (only connections of the
   "Connections" model have a configured count)
-- any change to the firewall: Plexus never applies updates, reboots or
-  edits anything
+- tunnel traffic finer than the time between two readings (the
+  monitoring poll of a firewall that is an inventory host, else its
+  collections), and the traffic of an IPsec child SA or OpenVPN session
+  that ended between two readings (that interval has no rate; see
+  [Tunnel traffic](#tunnel-traffic)). A WireGuard counter that restarted
+  and grew past its previous value between two readings cannot be told
+  from traffic
+- traffic per IPsec child SA or OpenVPN user as a time series: only the
+  totals of the connection or server are stored
+- alias tables past the limits of [Alias tables](#alias-tables) (9,999
+  entries per table, 30,000 and 30 tables per collection) and the bogon
+  tables; the shapes of the `alias_util` answers were checked against the
+  OPNsense source, not against a firewall
+- the health more often than the monitoring poll (or the collections, for
+  a firewall that is no inventory host), swap, mbufs, per-core CPU and
+  per-process use; the streaming CPU call of the dashboard is never used
+- a service the configuration does not enable: `core/service/search`
+  lists only enabled ones, so a service turned off on purpose is removed,
+  not alerted
+- any change to the firewall: Plexus never applies updates, reboots,
+  starts or stops a service or edits anything
 
 ## API reference
 
@@ -609,5 +1151,5 @@ An OPNsense firewall uses the source endpoints listed in
 | `POST` | `/api/sources/{id}/build` | Start a collection; returns `job_id` |
 | `POST` | `/api/sources/sample?provider=opnsense` | Add or refresh the demo firewall |
 | `GET` | `/api/topology` | OPNsense nodes carry a `meraki` reference whose `provider` is `opnsense` |
-| `GET` | `/api/opnsense/hosts/{host_id}/rules` | The rule view of the firewall's newest config backup (Config Backups feature); see [api-reference.md](api-reference.md#opnsense-firewall-rules) |
+| `GET` | `/api/opnsense/hosts/{host_id}/rules` | The rule view of the firewall's newest config backup (Config Backups feature), with each rule's firewall log evidence (`log_evidence`) and the sizes of the collected alias tables (`alias_tables`); see [api-reference.md](api-reference.md#opnsense-firewall-rules) |
 | `GET` | `/api/opnsense/hosts/{host_id}/rules/diff` | Rule, alias and NAT changes between two backups (`?from_backup=&to_backup=`, default: the newest two) |

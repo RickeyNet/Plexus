@@ -213,7 +213,9 @@ from netcontrol.object_scope import (
 from netcontrol.routes import background_jobs, state
 from netcontrol.routes.cloud_collectors import skipped_note
 from netcontrol.routes.cloud_visibility import discovery_progress
+from netcontrol.routes.opnsense_filterlog import attach_trace_evidence
 from netcontrol.routes.shared import _audit, _corr_id, _session_user, supervise_task
+from netcontrol.routes.topology_traffic import record_collection_traffic
 from netcontrol.telemetry import configure_logging, redact_value
 
 router = APIRouter()
@@ -823,6 +825,21 @@ def _start_build_job(org: dict) -> str:
     return str(job["job_id"])
 
 
+async def collect_source_now(org: dict, user: str) -> str | None:
+    """Collect one source now, through the path the schedule and "Collect
+    now" use (snapshot stored, the provider's after-collection steps,
+    availability tracking, software refresh), and wait for it. Returns the
+    job's final status (``completed``, ``partial``, ``failed``), or ``None``
+    without starting anything when a collection of the source is already
+    running."""
+    # Check-then-set with no await in between: atomic under asyncio.
+    if org["id"] in _running_builds:
+        return None
+    job_id = _start_build_job(org)
+    await _run_build(job_id, org, user)
+    return str((background_jobs.get_job(job_id) or {}).get("status") or "")
+
+
 async def run_scheduled_collections(now: datetime | None = None) -> dict[str, int]:
     """One scheduler pass: collect every source that is due, one after the
     other, so a pass never puts the API load of several sources on at once.
@@ -1367,6 +1384,8 @@ async def _store_snapshot(org: dict, snapshot: dict, *, user: str, started: floa
     # earlier collections saw are carried forward (``remote_users``).
     previous = await latest_snapshot_of(org["id"])
     apply_user_directory(snapshot, previous[1] if previous else None, now=datetime.now(UTC))
+    # Tunnel traffic rates since the last reading of each tunnel's counters.
+    await record_collection_traffic(_provider_of(org), org["id"], snapshot)
     snapshot_id = await db.create_meraki_snapshot(org["id"], snapshot, built_by=user, duration_seconds=duration)
     await db.prune_meraki_snapshots(org["id"], _SNAPSHOTS_KEPT_PER_ORG)
     warnings = len((snapshot.get("collection") or {}).get("errors") or [])
@@ -2105,10 +2124,11 @@ async def gcp_reachability_api(
 
 # ── Path trace ───────────────────────────────────────────────────────────────
 
-# (host id, route snapshot id, config backup id, inventory group) ->
-# {"block": forwarding block, "subnets": its subnet index rows} of an
-# inventory host. A new route capture or backup gets a new id, so an entry
-# never goes stale; the dict is cleared when it grows past the limit.
+# (host id, route snapshot id, config backup id, inventory group, alias
+# tables read at) -> {"block": forwarding block, "subnets": its subnet index
+# rows} of an inventory host. A new route capture or backup gets a new id
+# and new OPNsense alias tables a new read time, so an entry never goes
+# stale; the dict is cleared when it grows past the limit.
 _HOST_FORWARDING: dict[tuple, dict[str, Any]] = {}
 _HOST_FORWARDING_LIMIT = 5000
 
@@ -2116,13 +2136,15 @@ _HOST_FORWARDING_LIMIT = 5000
 async def _inventory_forwarding(nodes: list[dict]) -> dict[int, dict[str, Any]]:
     """``host id -> {"block", "subnets"}`` for every inventory host on the
     graph: its forwarding block, from its interfaces, addresses, latest SSH
-    route capture and latest successful configuration backup (bulk
-    queries), and the subnet index rows of its networks."""
+    route capture, latest successful configuration backup and, for an
+    OPNsense firewall, its collected alias tables (bulk queries), and the
+    subnet index rows of its networks."""
     hosts = {n["id"]: n for n in nodes if isinstance(n.get("id"), int) and n.get("in_inventory", True)}
     if not hosts:
         return {}
     captures = await db.get_latest_route_snapshots_for_hosts(list(hosts))
     backups = await db.get_latest_config_texts_for_hosts(list(hosts))
+    table_versions = await db.get_opnsense_alias_table_versions(list(hosts))
     keys = {
         host_id: (
             host_id,
@@ -2130,6 +2152,7 @@ async def _inventory_forwarding(nodes: list[dict]) -> dict[int, dict[str, Any]]:
             (backups.get(host_id) or {}).get("id"),
             node.get("group_id"),
             str(node.get("group_name") or ""),
+            table_versions.get(host_id, ""),
         )
         for host_id, node in hosts.items()
     }
@@ -2139,6 +2162,8 @@ async def _inventory_forwarding(nodes: list[dict]) -> dict[int, dict[str, Any]]:
         for row in await db.get_ip_aliases_for_hosts(missing):
             aliases.setdefault(int(row["host_id"]), []).append(str(row.get("ip_address") or ""))
         interfaces = await db.get_interface_inventory_for_hosts(missing)
+        # The OPNsense alias tables, only of the hosts that have them.
+        tables = await db.get_opnsense_alias_tables([h for h in missing if h in table_versions])
         if len(_HOST_FORWARDING) + len(missing) > _HOST_FORWARDING_LIMIT:
             _HOST_FORWARDING.clear()
         for host_id in missing:
@@ -2150,6 +2175,7 @@ async def _inventory_forwarding(nodes: list[dict]) -> dict[int, dict[str, Any]]:
                 captures.get(host_id),
                 interfaces.get(host_id, []),
                 config_backup=backups.get(host_id),
+                alias_tables=(tables.get(host_id) or {}).get("tables"),
             )
             _HOST_FORWARDING[keys[host_id]] = {"block": block, "subnets": subnets_for_host(node, block)}
     return {host_id: _HOST_FORWARDING[key] for host_id, key in keys.items() if key in _HOST_FORWARDING}
@@ -2305,7 +2331,7 @@ async def topology_path_api(
             source_net = net(source)
             if target.domain and source_net is not None:
                 address = await _app_address(target.domain, source_net.version)
-        return await asyncio.to_thread(
+        result = await asyncio.to_thread(
             tracer.trace,
             source,
             address,
@@ -2317,6 +2343,9 @@ async def topology_path_api(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    # The live pass / block evidence of the OPNsense firewalls it passes
+    # (server-side only: never part of an offline export).
+    return await attach_trace_evidence(result, source, address, protocol, port)
 
 
 @router.get("/api/topology/path/apps")

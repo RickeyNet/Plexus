@@ -3,6 +3,7 @@ import { useId, useMemo, useState } from 'react';
 import { useHostConfigBackups } from '@/api/host-details';
 import {
   type OpnsenseAnalyzedRule,
+  type OpnsenseLogEvidence,
   type OpnsenseRuleFlag,
   type OpnsenseRulesView,
   useOpnsenseRules,
@@ -15,9 +16,11 @@ import { Modal } from '@/components/Modal';
 import { SegmentedControl } from '@/components/SegmentedControl';
 import { formatBackendDateTime } from '@/lib/datetime';
 
+import { evidenceStatus, evidenceText, evidenceTone, flowText, passBlockText } from './filterlogEvidence';
 import { DETAIL_CELL_STYLE, SCROLL_X_STYLE } from './helpers';
 import {
   actionTone,
+  aliasTableLines,
   changeText,
   countersText,
   endpointText,
@@ -47,6 +50,8 @@ export function OpnsenseRulesTab({ hostId }: { hostId: number }) {
   const view = q.data;
   if (!view.available) return <EmptyState compact message="No rules to show" description={view.message} />;
   const flagged = view.rules.filter((r) => r.flags.some((f) => f !== 'disabled'));
+  const logged = view.rules.filter((r) => r.log_evidence).length;
+  const logStatus = evidenceStatus(view.log_evidence);
 
   return (
     <div className="stack stack-sm" style={{ fontSize: '0.78rem' }}>
@@ -56,6 +61,14 @@ export function OpnsenseRulesTab({ hostId }: { hostId: number }) {
           ? ` · counters ${formatBackendDateTime(view.stats_collected_at, '-')}`
           : ' · no rule counters collected'}
       </div>
+      {logStatus && (
+        <div className="text-muted" style={{ fontSize: '0.72rem' }}>
+          {logStatus}
+          {view.log_evidence?.received_at
+            ? ` ${logged} rules and ${view.log_evidence.unmatched.length} automatic or unknown rules logged in ${view.log_evidence.window_hours} h.`
+            : ''}
+        </div>
+      )}
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.3rem' }}>
         {FLAGS.map((flag) => (
           <Badge key={flag} size="sm" tone={view.summary[flag] ? FLAG_TONES[flag] : 'neutral'}>
@@ -199,6 +212,9 @@ function RulesTable({ view }: { view: OpnsenseRulesView }) {
       <div className="text-muted" style={{ fontSize: '0.78rem' }}>
         Rules are listed in the order the firewall evaluates them; # is the number a path trace names.
         {view.stats_available ? '' : ' No rule counters were collected, so no rule is flagged unused.'}
+        {view.alias_tables?.read_at
+          ? ` Aliases marked "pf table" are resolved by path traces from their table as read at ${formatBackendDateTime(view.alias_tables.read_at, '-')}.`
+          : ''}
       </div>
       {groups.length === 0 ? (
         <EmptyState compact message="No rule matches the filters" />
@@ -218,6 +234,7 @@ function RulesTable({ view }: { view: OpnsenseRulesView }) {
                     <th>Destination</th>
                     <th>Description</th>
                     <th>Counters</th>
+                    <th>Log ({view.log_evidence?.window_hours ?? 24} h)</th>
                     <th>Flags</th>
                   </tr>
                 </thead>
@@ -235,14 +252,23 @@ function RulesTable({ view }: { view: OpnsenseRulesView }) {
                       <td>
                         {rule.protocol} <span className="text-muted">{rule.family}</span>
                       </td>
-                      <td title={rule.source.cidrs.join(', ')}>{endpointText(rule.source)}</td>
-                      <td title={rule.destination.cidrs.join(', ')}>{endpointText(rule.destination)}</td>
+                      <td title={rule.source.cidrs.join(', ')}>
+                        {endpointText(rule.source)}
+                        <AliasTables lines={aliasTableLines(rule.source, view.alias_tables)} />
+                      </td>
+                      <td title={rule.destination.cidrs.join(', ')}>
+                        {endpointText(rule.destination)}
+                        <AliasTables lines={aliasTableLines(rule.destination, view.alias_tables)} />
+                      </td>
                       <td>
                         {rule.description}
                         {rule.gateway && <div className="text-muted">gateway {rule.gateway}</div>}
                         {rule.tier !== 'interface' && <div className="text-muted">{rule.tier} rule</div>}
                       </td>
                       <td>{countersText(rule) || <span className="text-muted">-</span>}</td>
+                      <td>
+                        <LogEvidenceCell evidence={rule.log_evidence ?? null} view={view} logs={rule.log} />
+                      </td>
                       <td>
                         <FlagBadges rule={rule} />
                       </td>
@@ -254,11 +280,97 @@ function RulesTable({ view }: { view: OpnsenseRulesView }) {
           </div>
         ))
       )}
+      <UnmatchedEvidence view={view} />
       {view.notes.length > 0 && (
         <div className="text-muted" style={{ fontSize: '0.78rem' }}>
           Not read from the configuration: {view.notes.join('; ')}.
         </div>
       )}
+    </div>
+  );
+}
+
+/** The aliases of a rule side the path trace resolves from the collected pf tables. */
+function AliasTables({ lines }: { lines: string[] }) {
+  if (!lines.length) return null;
+  return (
+    <>
+      {lines.map((line) => (
+        <div key={line} className="text-muted" style={{ fontSize: '0.72rem' }}>
+          {line}
+        </div>
+      ))}
+    </>
+  );
+}
+
+/** A rule's firewall log evidence in the rules table: its counts, the details and flows on hover. */
+function LogEvidenceCell({
+  evidence,
+  view,
+  logs,
+}: {
+  evidence: OpnsenseLogEvidence | null;
+  view: OpnsenseRulesView;
+  logs: boolean;
+}) {
+  if (!evidence || !view.log_evidence) {
+    return <span className="text-muted">{logs ? '-' : 'not logged'}</span>;
+  }
+  const title = [evidenceText(evidence, view.log_evidence), ...evidence.flows.map(flowText)].join('\n');
+  return (
+    <span title={title}>
+      <Badge size="sm" tone={evidenceTone(evidence)}>
+        {passBlockText(evidence.passes, evidence.blocks) || 'none'}
+      </Badge>
+    </span>
+  );
+}
+
+/** The log evidence of labels no rule of the backup has: automatic rules (default deny, bogons...) or rules removed since. */
+function UnmatchedEvidence({ view }: { view: OpnsenseRulesView }) {
+  const info = view.log_evidence;
+  if (!info || info.unmatched.length === 0) return null;
+  return (
+    <div>
+      <h4 style={{ margin: 'var(--space-3) 0 var(--space-2)', fontSize: 'var(--text-base)' }}>
+        Logged by automatic or unknown rules ({info.window_hours} h)
+      </h4>
+      <div style={SCROLL_X_STYLE}>
+        <table className="data-table">
+          <thead>
+            <tr>
+              <th>Rule</th>
+              <th>Label</th>
+              <th>Log</th>
+              <th>Recent flows</th>
+            </tr>
+          </thead>
+          <tbody>
+            {info.unmatched.map((entry) => (
+              <tr key={entry.rule_key}>
+                <td>{entry.name}</td>
+                <td>
+                  <code style={{ fontSize: '0.72rem' }}>{entry.rule_key}</code>
+                </td>
+                <td title={evidenceText(entry, info)}>
+                  <Badge size="sm" tone={evidenceTone(entry)}>
+                    {passBlockText(entry.passes, entry.blocks) || 'none'}
+                  </Badge>
+                  {entry.seen_on.length > 0 && <div className="text-muted">{entry.seen_on.join(', ')}</div>}
+                </td>
+                <td>
+                  {entry.flows.length ? (
+                    entry.flows.map((flow) => <div key={flowText(flow)}>{flowText(flow)}</div>)
+                  ) : (
+                    <span className="text-muted">-</span>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }

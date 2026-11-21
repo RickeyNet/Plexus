@@ -555,6 +555,7 @@ Each entity is `up`, `degraded`, `down` or `unknown`:
 | Cloud connection `active` | up |
 | Cloud connection `failed` | down |
 | Cloud managed service: see [Cloud managed services](#cloud-managed-services) | up, degraded, down or unknown |
+| OPNsense CARP group: see [OPNsense availability tracking](opnsense-topology.md#availability-tracking) | up, degraded, down or unknown |
 | No status, or anything else | unknown |
 
 What is tracked, per source:
@@ -566,7 +567,7 @@ What is tracked, per source:
 | Cisco FMC | FTDs | outside uplinks, site-to-site tunnels, HA and cluster links |
 | Palo Alto Panorama | firewalls | uplinks, site-to-site tunnels, HA links |
 | Appgate SDP | Controllers, Gateways and other appliances | sites, appliance peer links |
-| OPNsense | the firewall, OpenVPN server instances | gateways (as uplinks), IPsec connections, WireGuard peers and OpenVPN client instances (as tunnels) |
+| OPNsense | the firewall, OpenVPN server instances | gateways (as uplinks), IPsec connections, WireGuard peers and OpenVPN client instances (as tunnels), CARP groups (as links, one per interface and VHID) |
 | AWS | instances drawn on the map, transit, VPN, NAT and Direct Connect gateways, Direct Connect connections | site-to-site VPN connections, Direct Connect (circuits), VPC peerings, transit gateway and VPN gateway attachments (links), managed services (RDS / Aurora, load balancers, VPC endpoints, EFS, ElastiCache, OpenSearch, MSK, Redshift) |
 | Azure | virtual machines drawn on the map, virtual network gateways, firewalls, NAT gateways, ExpressRoute circuits | gateway connections (VPN), ExpressRoute connections (circuits), VNet peerings, gateway attachments (links), managed services (load balancers, application gateways, private endpoints) |
 | GCP | instances drawn on the map, Cloud Routers, HA VPN gateways, Cloud NAT, Interconnects and Interconnect attachments | HA VPN tunnels, Interconnect attachments and Interconnects (circuits), VPC peerings, managed services (load balancers, Private Service Connect endpoints and service attachments) |
@@ -636,6 +637,14 @@ How it behaves:
   monitoring alert on that host (listed under **Alerts**, deduplicated while
   unacknowledged); any other entity is handed straight to the notification
   channels.
+- A member of a redundancy group whose role changes between `MASTER` and
+  `BACKUP` from one collection to the next (an OPNsense CARP group) raises a
+  failover warning the same way (metric `topology failover`, dedup key
+  `topo:<provider>:<org_ref>:link:<entity_id>:failover:<new role>`), even
+  though both roles are up. A repeat of the same failover is counted on the
+  open alert until it is acknowledged; a group seen for the first time, or
+  coming back from `INIT`, `DISABLED` or a missing collection, raises none.
+  Mutes apply to it like to any other alert.
 - Transitions older than the monitoring retention (`retention_days`) are
   deleted, and so are entities no collection has reported for that long.
 - Collections are what drive it: AWS, Azure and GCP follow the cloud
@@ -711,7 +720,7 @@ everything:
 | Meraki devices | was stored at all (a collection that cannot list the networks and devices fails and stores nothing) |
 | Meraki uplinks and tunnels | had no failed organization-wide call |
 | Cato, FMC, Panorama, Appgate | finished with no collection warnings and no site marked not collected |
-| OPNsense | finished with no collection warnings other than informational ones (a pending firmware update, audit findings, config.xml not stored) |
+| OPNsense | finished with no collection warnings other than informational ones (a pending firmware update, audit findings, config.xml not stored, a CARP VIP in `INIT` or a CARP demotion) |
 | AWS, Azure, GCP | finished with no warnings and drew no *not collected* network (a peered VPC or VNet outside the collected accounts and regions). A cloud that always has such a peering never removes on its own: its gone entities stay `unknown` until the retention cleanup |
 
 In any other case the entity turns `unknown` (*not in last collection*) as

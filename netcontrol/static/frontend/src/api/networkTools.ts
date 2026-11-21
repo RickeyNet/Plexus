@@ -306,6 +306,24 @@ export interface FlowConversation {
   flow_count: number;
 }
 
+/**
+ * One interface of an exporter ranked by flow traffic. `if_index` is the
+ * number the flow records carry; `if_name` / `if_device` name it when the
+ * host's interfaces are known (SNMP polling, an OPNsense collection), else
+ * null.
+ */
+export interface FlowInterface {
+  host_id: number | null;
+  exporter_ip: string;
+  if_index: number;
+  if_name: string | null;
+  if_device: string | null;
+  in_bytes: number;
+  out_bytes: number;
+  total_bytes: number;
+  flow_count: number;
+}
+
 export interface FlowTimelinePoint {
   bucket: string | null;
   total_bytes: number;
@@ -395,6 +413,21 @@ export function useFlowTopConversations(args: {
     queryFn: () =>
       apiRequest<FlowConversation[]>(
         withHost(`/flows/top-conversations?hours=${hours}&limit=${limit}`, hostId),
+      ),
+  });
+}
+
+export function useFlowTopInterfaces(args: {
+  hours: number;
+  hostId?: number | null;
+  limit?: number;
+}) {
+  const { hours, hostId, limit = 15 } = args;
+  return useQuery({
+    queryKey: ['flows', 'top-interfaces', hours, limit, hostId ?? null],
+    queryFn: () =>
+      apiRequest<FlowInterface[]>(
+        withHost(`/flows/top-interfaces?hours=${hours}&limit=${limit}`, hostId),
       ),
   });
 }

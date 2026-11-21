@@ -17,7 +17,11 @@ entity turns ``degraded`` or ``down``:
     (``notification_channels.on_alert_created``), like software alerts.
 
 No alert is raised again while the entity stays down (or degraded); one
-that recovers to ``up`` can alert again. The latency, jitter and loss a
+that recovers to ``up`` can alert again. A member of a redundancy group
+(``meta["role"]``: an OPNsense CARP group) whose role changes between
+MASTER and BACKUP from one collection to the next raises a failover
+warning the same way (``failovers``), although both roles are healthy; it
+honours the same mutes. The latency, jitter and loss a
 vendor reports for an entity (``EntityState.metrics``) are stored as a time
 series with daily rollups (``record_topology_entity_metrics``) for the SLA
 targets of topology entities (``netcontrol.routes.topology_sla``). An entity seen for the first time
@@ -32,7 +36,7 @@ from typing import Any
 
 import routes.database as db
 
-from netcontrol.integrations.availability import clean_entity_types, extract_entity_states
+from netcontrol.integrations.availability import FAILOVER_ROLES, clean_entity_types, extract_entity_states
 from netcontrol.routes import notification_channels
 from netcontrol.telemetry import configure_logging
 
@@ -67,14 +71,59 @@ def dedup_key(t: dict) -> str:
     return f"topo:{t['provider']}:{t['org_ref']}:{t['entity_type']}:{t['entity_id']}"
 
 
-def _message(t: dict) -> str:
+def failover_dedup_key(t: dict, role: str) -> str:
+    """The dedup key of a failover alert of entity ``t`` into ``role``: one
+    per direction, so a failover is raised again once the last one into the
+    same role was acknowledged, and repeated (a bump) while it is open."""
+    return f"{dedup_key(t)}:failover:{role}"
+
+
+def alert_keys(row: dict) -> list[str]:
+    """Every dedup key an entity's open alerts may have: its state alert's
+    and, for a role-tracked entity, its failover alerts'."""
+    keys = [dedup_key(row)]
+    if "role" in (row.get("meta") or {}):
+        keys += [failover_dedup_key(row, role) for role in FAILOVER_ROLES]
+    return keys
+
+
+def failovers(entities: list[dict], stored: list[dict]) -> list[dict]:
+    """The role-tracked entities (``meta["role"]``, see
+    ``availability.ha_entity_states``) whose role changed between MASTER and
+    BACKUP since the stored state (``raw_status`` of the state rows read
+    before this collection was applied), with ``old_role`` and ``new_role``.
+    A first sight, or a role coming from anything else (``init``,
+    ``disabled``, missing: the stored ``raw_status`` is then empty), is no
+    failover: the state transition alert covers it. Pure."""
+    before = {(str(r["entity_type"]), str(r["entity_id"])): str(r.get("raw_status") or "").lower() for r in stored}
+    found = []
+    for entity in entities:
+        role = str((entity.get("meta") or {}).get("role") or "").lower()
+        if role not in FAILOVER_ROLES:
+            continue
+        old = before.get((str(entity["entity_type"]), str(entity["entity_id"])), "")
+        if old in FAILOVER_ROLES and old != role:
+            found.append({**entity, "old_role": old, "new_role": role})
+    return found
+
+
+def _subject(t: dict) -> str:
+    """``<name> at <site> (<provider> <source>)`` of an alert message."""
     where = PROVIDER_LABELS.get(t["provider"], t["provider"])
     if t.get("org_name"):
         where = f"{where} {t['org_name']}"
     site = f" at {t['site']}" if t.get("site") and t["site"] != t.get("name") else ""
+    return f"{t['name'] or t['entity_id']}{site} ({where})"
+
+
+def _failover_message(t: dict) -> str:
+    return f"{_subject(t)} failed over: {t['old_role'].upper()} to {t['new_role'].upper()}"
+
+
+def _message(t: dict) -> str:
     return (
-        f"{TYPE_LABELS.get(t['entity_type'], t['entity_type'])} {t['name'] or t['entity_id']}{site} "
-        f"({where}) is {t['new_state']} (was {t['old_state']})"
+        f"{TYPE_LABELS.get(t['entity_type'], t['entity_type'])} {_subject(t)} "
+        f"is {t['new_state']} (was {t['old_state']})"
     )
 
 
@@ -159,6 +208,33 @@ async def _raise_alert(t: dict) -> str:
     )
 
 
+async def _raise_failover(t: dict) -> str:
+    """Raise the alert of one failover (``failovers``): a warning, through
+    the same path as a state alert. Returns how (see ``deliver_alert``)."""
+    return await deliver_alert(
+        host_id=t.get("host_id"),
+        name=t["name"],
+        alert_type=ALERT_TYPE,
+        metric="topology failover",
+        message=_failover_message(t),
+        severity="warning",
+        dedup_key=failover_dedup_key(t, t["new_role"]),
+    )
+
+
+async def _stored_roles(provider: str, org_ref: int, entities: list[dict]) -> list[dict]:
+    """The stored state rows ``failovers`` compares with: only read when
+    the collection reports a role-tracked entity. Never raises (``[]``:
+    no failover is detected this time)."""
+    if not any("role" in (e.get("meta") or {}) for e in entities):
+        return []
+    try:
+        return await db.list_topology_entity_states(provider, org_ref)
+    except Exception as exc:  # noqa: BLE001 - best effort
+        LOGGER.warning("topology availability: stored roles not read: %s", type(exc).__name__)
+        return []
+
+
 async def _mute_index(provider: str | None = None, org_ref: int | None = None) -> db.TopologyMuteIndex | None:
     """The mutes, or ``None`` when they cannot be read (then nothing is
     treated as muted: an alert too many beats a silenced outage)."""
@@ -170,8 +246,10 @@ async def _mute_index(provider: str | None = None, org_ref: int | None = None) -
 
 
 async def _record_metrics(provider: str, org_ref: int, entities: list[dict], now: str | None) -> int:
-    """Store the latency / jitter / loss the snapshot reported for its
-    entities (``EntityState.metrics``). Never raises."""
+    """Store the latency / jitter / loss and traffic rates the snapshot
+    reported for its entities (``EntityState.metrics``; a rate was put on
+    the snapshot when it was stored, ``integrations.traffic``). Never
+    raises."""
     samples = [e for e in entities if e.get("metrics")]
     if not samples:
         return 0
@@ -199,6 +277,8 @@ async def record_snapshot_states(
     try:
         snapshot = snapshot or {}
         entities = [e.as_dict() for e in extract_entity_states(provider, org_ref, snapshot)]
+        # The roles as they were, before this collection overwrites them.
+        roles_before = await _stored_roles(provider, org_ref, entities)
         result = await db.apply_topology_entity_states(
             provider,
             org_ref,
@@ -218,13 +298,15 @@ async def record_snapshot_states(
             "alerted": 0,
             "muted_alerts": 0,
             "removed": 0,
+            "failovers": [],
         }
     await _record_metrics(provider, org_ref, entities, now)
     removed = await finish_removal(result["removed"])
     if "device" in clean:
         await _drop_site_mutes_of_gone_sites(provider, org_ref, snapshot)
     alerted = muted = 0
-    index = await _mute_index(provider, org_ref) if result["alerts"] else None
+    changes = failovers(entities, roles_before)
+    index = await _mute_index(provider, org_ref) if result["alerts"] or changes else None
     metas = {(e["entity_type"], e["entity_id"]): e.get("meta") or {} for e in entities} if index else {}
     for t in result["alerts"]:
         if index and index.match({**t, "meta": metas.get((t["entity_type"], t["entity_id"]), {})}):
@@ -236,6 +318,24 @@ async def record_snapshot_states(
             alerted += 1
         except Exception as exc:  # noqa: BLE001 - delivery must never break the collection
             LOGGER.warning("topology availability: alert for %s failed: %s", dedup_key(t), type(exc).__name__)
+    org_name = str((snapshot.get("org") or {}).get("name") or "")
+    for change in changes:
+        LOGGER.info(
+            "topology availability: %s failed over (%s -> %s)",
+            dedup_key(change),
+            change["old_role"],
+            change["new_role"],
+        )
+        if index and index.match(change):
+            muted += 1
+            continue
+        try:
+            await _raise_failover({**change, "org_name": org_name})
+            alerted += 1
+        except Exception as exc:  # noqa: BLE001 - delivery must never break the collection
+            LOGGER.warning(
+                "topology availability: failover alert for %s failed: %s", dedup_key(change), type(exc).__name__
+            )
     for t in result["recoveries"]:
         LOGGER.info("topology availability: %s recovered (%s -> up)", dedup_key(t), t["old_state"])
     if result["transitions"]:
@@ -247,7 +347,7 @@ async def record_snapshot_states(
             sum(1 for t in result["transitions"] if not t["baseline"]),
             alerted,
         )
-    return {**result, "alerted": alerted, "muted_alerts": muted, "removed": removed}
+    return {**result, "alerted": alerted, "muted_alerts": muted, "removed": removed, "failovers": changes}
 
 
 # ── Mutes ────────────────────────────────────────────────────────────────────
@@ -265,7 +365,8 @@ async def mute_entities(mute: dict) -> int:
     acknowledged = 0
     for row in await db.list_topology_entity_states(provider, org_ref):
         if index.match(row):
-            acknowledged += await db.resolve_monitoring_alerts(dedup_key(row), MUTED_BY)
+            for key in alert_keys(row):
+                acknowledged += await db.resolve_monitoring_alerts(key, MUTED_BY)
     if provider == "meraki":
         # Imported here: meraki_alerts imports this package's routes.
         from netcontrol.routes import meraki_alerts
@@ -288,10 +389,12 @@ async def finish_removal(rows: list[dict]) -> int:
     acknowledge their open alerts as ``auto-resolved``. Sends no
     notification. Returns the number of entities removed."""
     for row in rows:
-        if not row.get("alert_state"):
-            continue
+        # The state alert is open only with an alert_state; a failover
+        # alert may be open whatever the state.
+        keys = alert_keys(row)[0 if row.get("alert_state") else 1 :]
         try:
-            await db.resolve_monitoring_alerts(dedup_key(row), "auto-resolved")
+            for key in keys:
+                await db.resolve_monitoring_alerts(key, "auto-resolved")
         except Exception as exc:  # noqa: BLE001 - best effort
             LOGGER.warning("topology availability: clearing %s failed: %s", dedup_key(row), type(exc).__name__)
     if rows:

@@ -26,8 +26,9 @@ import routes.database as db
 
 import netcontrol.routes.state as state
 from netcontrol.integrations.meraki.normalize import InventoryIndex, _add, table_section, text_section
+from netcontrol.integrations.pathtrace.opnsense_routes import HEADER as OPNSENSE_CAPTURE_HEADER
 from netcontrol.mcp.redact import redact_config_text
-from netcontrol.routes.shared import service_credential
+from netcontrol.routes.shared import _run_show_commands, service_credential
 from netcontrol.telemetry import configure_logging, redact_value
 
 LOGGER = configure_logging("plexus.meraki")
@@ -129,10 +130,12 @@ async def collected_sections(host_id: int) -> list[dict]:
     )
     route_snapshot = await db.get_latest_route_snapshot(host_id)
     if route_snapshot and route_snapshot.get("routes_text"):
+        # An OPNsense firewall's capture comes from its collection, not SSH.
+        via = "OPNsense API" if str(route_snapshot["routes_text"]).startswith(OPNSENSE_CAPTURE_HEADER) else "Plexus SSH"
         _add(
             sections,
             text_section(
-                f"Route table (Plexus SSH, {route_snapshot.get('route_count') or 0} routes, "
+                f"Route table ({via}, {route_snapshot.get('route_count') or 0} routes, "
                 f"captured {route_snapshot.get('captured_at') or 'unknown'})",
                 _truncate(str(route_snapshot["routes_text"]), _MAX_ROUTE_TEXT_CHARS),
             ),
@@ -153,26 +156,6 @@ async def config_sections(host_ids: list[int]) -> dict[int, dict]:
         if section:
             sections[host_id] = section
     return sections
-
-
-def _run_show_commands(host: dict, credential: dict, commands: tuple[str, ...]) -> dict[str, str]:
-    """Blocking: one SSH session, every command, best-effort per command."""
-    from netcontrol.routes.shared import _open_netmiko_session
-
-    conn, _resolved = _open_netmiko_session(host, credential)
-    outputs: dict[str, str] = {}
-    try:
-        for command in commands:
-            try:
-                outputs[command] = str(conn.send_command(command, read_timeout=30))
-            except Exception as exc:  # noqa: BLE001 - one bad command must not lose the rest
-                outputs[command] = f"(command failed: {type(exc).__name__})"
-    finally:
-        try:
-            conn.disconnect()
-        except Exception:  # noqa: BLE001 - best-effort teardown
-            pass
-    return outputs
 
 
 async def _live_ssh_sections(host: dict, credential: dict) -> tuple[list[dict], str | None]:

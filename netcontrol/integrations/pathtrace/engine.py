@@ -436,11 +436,24 @@ def _family(action: str) -> str:
     return "deny" if action == "deny" else action
 
 
+# How many of a rule's addresses its text lists (a table read from a
+# firewall can hold thousands).
+_LISTED = 8
+
+
+def _addresses_text(cidrs: list[str] | None) -> str:
+    """A rule's addresses as text, the first ``_LISTED`` and how many more."""
+    found = list(cidrs or ["any"])
+    if len(found) <= _LISTED:
+        return ", ".join(found)
+    return f"{', '.join(found[:_LISTED])} and {len(found) - _LISTED} more"
+
+
 def _describe(rule: dict) -> str:
     """``deny tcp 10.1.30.0/24 → 10.0.0.0/8 443``."""
     parts = [str(rule.get("action") or ""), str(rule.get("protocol") or "any")]
-    src = ", ".join(rule.get("src") or ["any"])
-    dst = ", ".join(rule.get("dst") or ["any"])
+    src = _addresses_text(rule.get("src"))
+    dst = _addresses_text(rule.get("dst"))
     if rule.get("src_ports") not in (None, "", "any"):
         src += f" port {rule['src_ports']}"
     parts.append(f"{src} → {dst}")

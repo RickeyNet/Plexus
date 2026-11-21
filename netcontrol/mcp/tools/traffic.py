@@ -87,6 +87,10 @@ async def get_top_talkers(_ctx: McpContext, args: dict[str, Any]) -> dict[str, A
         rows = await db.get_flow_top_applications(host_id=host_id, hours=hours, limit=limit)
     elif kind == "conversations":
         rows = await db.get_flow_top_conversations(host_id=host_id, hours=hours, limit=limit)
+    elif kind == "interfaces":
+        rows = await db.with_interface_names(
+            await db.get_flow_top_interfaces(host_id=host_id, hours=hours, limit=limit)
+        )
     else:
         direction = "dst" if str(args.get("direction") or "source") == "destination" else "src"
         rows = await db.get_flow_top_talkers(host_id=host_id, hours=hours, direction=direction, limit=limit)
@@ -120,13 +124,15 @@ register(
             "Ranks traffic from stored flow records (NetFlow, sFlow, IPFIX) by bytes over the last "
             "'hours' (default 24): kind 'talkers' ranks addresses (direction source or destination), "
             "'applications' ranks destination port and protocol, 'conversations' ranks source and "
-            "destination pairs. 'exporter' limits it to flows exported by one device."
+            "destination pairs, 'interfaces' ranks the exporters' interfaces (the index the records "
+            "carry, its name when known, bytes in and out). 'exporter' limits it to flows exported by "
+            "one device."
         ),
         category="traffic",
         features=("traffic-analysis",),
         input_schema=schema(
             {
-                "kind": {"type": "string", "enum": ["talkers", "applications", "conversations"]},
+                "kind": {"type": "string", "enum": ["talkers", "applications", "conversations", "interfaces"]},
                 "exporter": HOST_ARG,
                 "direction": {"type": "string", "enum": ["source", "destination"]},
                 "hours": {"type": "integer", "minimum": 1, "maximum": 168},

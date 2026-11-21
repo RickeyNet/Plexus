@@ -63,6 +63,153 @@ curl-8.15.0 is vulnerable:
 ***DONE***
 """
 
+# A config.xml whose rules name aliases only the firewall's pf tables
+# resolve (GeoIP, URL tables, a host alias with a host name), and the
+# answers of ``firewall/alias_util`` for them (``alias_table_answers``).
+# ``UnreadFeed`` has no pf table; ``BigFeed``'s table is larger than what
+# one read returns. Every address is a documentation range.
+SAMPLE_ALIAS_CONFIG_XML = """<?xml version="1.0"?>
+<opnsense>
+  <version>25.7</version>
+  <system><hostname>fw-alias-1</hostname><domain>example.com</domain></system>
+  <interfaces>
+    <wan><if>igb0</if><ipaddr>203.0.113.2</ipaddr><subnet>29</subnet><gateway>WAN_GW</gateway></wan>
+    <lan><if>igb1</if><ipaddr>192.0.2.1</ipaddr><subnet>25</subnet></lan>
+  </interfaces>
+  <gateways>
+    <gateway_item>
+      <name>WAN_GW</name><interface>wan</interface><gateway>203.0.113.1</gateway>
+      <ipprotocol>inet</ipprotocol><defaultgw>1</defaultgw>
+    </gateway_item>
+  </gateways>
+  <OPNsense>
+    <Firewall>
+      <Alias>
+        <aliases>
+          <alias uuid="e0000000-0000-4000-8000-000000000001">
+            <enabled>1</enabled><name>BlockedCountries</name><type>geoip</type>
+            <content>AQ</content><description>Sample GeoIP alias</description>
+          </alias>
+          <alias uuid="e0000000-0000-4000-8000-000000000002">
+            <enabled>1</enabled><name>PartnerFeed</name><type>urltable</type>
+            <content>https://lists.example.com/partners.txt</content><description>Sample URL table</description>
+          </alias>
+          <alias uuid="e0000000-0000-4000-8000-000000000003">
+            <enabled>1</enabled><name>UpdateHosts</name><type>host</type>
+            <content>192.0.2.10
+updates.example.com</content><description>Literal address and host name</description>
+          </alias>
+          <alias uuid="e0000000-0000-4000-8000-000000000004">
+            <enabled>1</enabled><name>WebServers</name><type>host</type>
+            <content>192.0.2.20
+192.0.2.21</content><description>Resolved from the configuration</description>
+          </alias>
+          <alias uuid="e0000000-0000-4000-8000-000000000005">
+            <enabled>1</enabled><name>Trusted</name><type>networkgroup</type>
+            <content>PartnerFeed
+WebServers</content><description>Nested aliases</description>
+          </alias>
+          <alias uuid="e0000000-0000-4000-8000-000000000006">
+            <enabled>1</enabled><name>BigFeed</name><type>urltable</type>
+            <content>https://lists.example.com/big.txt</content><description>Larger than one read</description>
+          </alias>
+          <alias uuid="e0000000-0000-4000-8000-000000000007">
+            <enabled>1</enabled><name>UnreadFeed</name><type>urltable</type>
+            <content>https://lists.example.com/unread.txt</content><description>No pf table</description>
+          </alias>
+        </aliases>
+      </Alias>
+    </Firewall>
+  </OPNsense>
+  <filter>
+    <rule uuid="f0000000-0000-4000-8000-000000000001">
+      <type>block</type><interface>wan</interface><ipprotocol>inet</ipprotocol>
+      <source><address>BlockedCountries</address></source><destination><any/></destination>
+      <descr>Block countries</descr>
+    </rule>
+    <rule uuid="f0000000-0000-4000-8000-000000000002">
+      <type>pass</type><interface>wan</interface><ipprotocol>inet</ipprotocol><protocol>tcp</protocol>
+      <source><address>PartnerFeed</address></source>
+      <destination><address>WebServers</address><port>443</port></destination>
+      <descr>Partners to web</descr>
+    </rule>
+    <rule uuid="f0000000-0000-4000-8000-000000000003">
+      <type>pass</type><interface>lan</interface><ipprotocol>inet</ipprotocol><protocol>tcp</protocol>
+      <source><network>lan</network></source>
+      <destination><address>UpdateHosts</address><port>443</port></destination>
+      <descr>Updates</descr>
+    </rule>
+    <rule uuid="f0000000-0000-4000-8000-000000000004">
+      <type>pass</type><interface>wan</interface><ipprotocol>inet</ipprotocol><protocol>tcp</protocol>
+      <source><address>BigFeed</address></source>
+      <destination><address>192.0.2.30</address><port>22</port></destination>
+      <descr>Big feed to bastion</descr>
+    </rule>
+    <rule uuid="f0000000-0000-4000-8000-000000000005">
+      <type>pass</type><interface>wan</interface><ipprotocol>inet</ipprotocol><protocol>tcp</protocol>
+      <source><address>UnreadFeed</address></source>
+      <destination><address>192.0.2.31</address><port>22</port></destination>
+      <descr>Unread feed</descr>
+    </rule>
+    <rule uuid="f0000000-0000-4000-8000-000000000006">
+      <type>pass</type><interface>wan</interface><ipprotocol>inet</ipprotocol><protocol>tcp</protocol>
+      <source><address>Trusted</address><not>1</not></source>
+      <destination><address>192.0.2.32</address><port>80</port></destination>
+      <descr>Everyone but trusted</descr>
+    </rule>
+    <rule uuid="f0000000-0000-4000-8000-000000000007">
+      <type>pass</type><interface>wan</interface><ipprotocol>inet</ipprotocol><protocol>tcp</protocol>
+      <source><address>Trusted</address></source>
+      <destination><address>192.0.2.33</address><port>8443</port></destination>
+      <descr>Trusted to admin</descr>
+    </rule>
+  </filter>
+</opnsense>
+"""
+
+# How many entries the sample ``BigFeed`` table holds (more than one read returns).
+SAMPLE_BIG_FEED_TOTAL = 50000
+
+
+def _table_rows(entries: list[str], total: int | None = None) -> dict[str, Any]:
+    """A ``firewall/alias_util/list/{alias}`` answer (``searchRecordsetBase``
+    over ``list_table.py``'s items: ``{"ip": ...}``, with packet counters
+    only for entries that matched)."""
+    rows: list[dict[str, Any]] = [{"ip": entry} for entry in entries]
+    if rows:
+        rows[0].update({"in_pass_p": 12, "in_pass_b": 7340})
+    return {"total": total if total is not None else len(rows), "rowCount": len(rows), "current": 1, "rows": rows}
+
+
+def alias_table_answers() -> dict[str, Any]:
+    """What ``firewall/alias_util`` answers for ``SAMPLE_ALIAS_CONFIG_XML``:
+    the loaded tables (``aliases``, ``pfctl -sT``: no ``UnreadFeed``) and the
+    entries of each (``list/{alias}``)."""
+    big = [f"198.51.100.{n}" for n in range(128, 160)]
+    return {
+        "firewall/alias_util/aliases": [
+            "BigFeed",
+            "BlockedCountries",
+            "PartnerFeed",
+            "Trusted",
+            "UpdateHosts",
+            "WebServers",
+            "bogons",
+            "bogonsv6",
+            "sshlockout",
+            "virusprot",
+        ],
+        "firewall/alias_util/list/BlockedCountries": _table_rows(["198.51.100.64/26", "2001:db8:aa::/48"]),
+        # A negated entry is carved out of the network that holds it.
+        "firewall/alias_util/list/PartnerFeed": _table_rows(["198.51.100.0/26", "!198.51.100.7"]),
+        # pf resolved the host name: the table holds both addresses.
+        "firewall/alias_util/list/UpdateHosts": _table_rows(["192.0.2.10", "198.51.100.200"]),
+        "firewall/alias_util/list/Trusted": _table_rows(
+            ["198.51.100.0/26", "!198.51.100.7", "192.0.2.20", "192.0.2.21"]
+        ),
+        "firewall/alias_util/list/BigFeed": _table_rows(big, SAMPLE_BIG_FEED_TOTAL),
+    }
+
 
 def _interface(
     identifier: str,
@@ -301,6 +448,143 @@ def _client_answers() -> dict[str, Any]:
     }
 
 
+def _health_answers() -> dict[str, Any]:
+    """The health calls: the dashboard widgets' answers, ``top``'s header
+    lines (its process list is dropped by the collector) and the services
+    the configuration enables, all running."""
+    service_rows = [
+        ("configd", "configd", "System Configuration Daemon", 1),
+        ("dhcpd", "dhcpd", "DHCPv4 Server", 0),
+        ("dpinger", "dpinger", "Gateway Monitoring Daemon", 0),
+        ("kea-dhcp/v6", "kea-dhcp", "KEA DHCPv6 server", 0),
+        ("ntpd", "ntpd", "Network Time Daemon", 0),
+        ("openvpn/1", "openvpn", "OpenVPN server Road warrior", 0),
+        ("suricata", "suricata", "Intrusion Detection", 0),
+        ("unbound", "unbound", "Unbound", 0),
+    ]
+    return {
+        "diagnostics/system/system_resources": {
+            "memory": {
+                "total": "4294967296",
+                "total_frmt": "4096",
+                "used": 1932735283,
+                "used_frmt": "1843",
+                "arc": "536870912",
+                "arc_frmt": "512",
+                "arc_txt": "ARC size 512 MB",
+            }
+        },
+        "diagnostics/system/system_disk": {
+            "devices": [
+                {
+                    "device": "zroot/ROOT/default",
+                    "type": "zfs",
+                    "blocks": "18.5G",
+                    "total": "18.5G",
+                    "total_bytes": 19864223744,
+                    "used": "4.20G",
+                    "used_bytes": 4509715660,
+                    "available": "14.3G",
+                    "available_bytes": 15354508084,
+                    "used_pct": 23,
+                    "mountpoint": "/",
+                },
+                {
+                    "device": "zroot/var/log",
+                    "type": "zfs",
+                    "blocks": "24.3G",
+                    "total": "24.3G",
+                    "total_bytes": 26091302912,
+                    "used": "10.0G",
+                    "used_bytes": 10737418240,
+                    "available": "14.3G",
+                    "available_bytes": 15354508084,
+                    "used_pct": 41,
+                    "mountpoint": "/var/log",
+                },
+                {
+                    "device": "/dev/gpt/efiboot0",
+                    "type": "msdosfs",
+                    "blocks": "260M",
+                    "total": "260M",
+                    "total_bytes": 272629760,
+                    "used": "1.3M",
+                    "used_bytes": 1363148,
+                    "available": "259M",
+                    "available_bytes": 271266612,
+                    "used_pct": 1,
+                    "mountpoint": "/boot/efi",
+                },
+            ]
+        },
+        "diagnostics/system/system_temperature": [
+            {
+                "device": "dev.cpu.0.temperature",
+                "device_seq": 0,
+                "temperature": "47.0",
+                "type_translated": "CPU",
+                "type": "cpu",
+            },
+            {
+                "device": "dev.cpu.1.temperature",
+                "device_seq": 1,
+                "temperature": "49.0",
+                "type_translated": "CPU",
+                "type": "cpu",
+            },
+            {
+                "device": "hw.acpi.thermal.tz0.temperature",
+                "device_seq": 0,
+                "temperature": "27.9",
+                "type_translated": "Zone",
+                "type": "zone",
+            },
+        ],
+        "diagnostics/system/system_time": {
+            "uptime": "12 days, 03:04:05",
+            "datetime": "Sat Nov 14 9:00:00 UTC 2026",
+            "boottime": "Mon Nov 2 5:55:55 UTC 2026",
+            "config": "Fri Nov 13 16:20:00 UTC 2026",
+            "loadavg": "0.31, 0.24, 0.20",
+        },
+        "diagnostics/activity/get_activity": {
+            "headers": [
+                "last pid: 81234;  load averages:  0.31,  0.24,  0.20  up 12+03:04:05    09:00:00",
+                "213 threads:   3 running, 191 sleeping, 19 waiting",
+                "CPU:  4.1% user,  0.0% nice,  2.3% system,  0.6% interrupt, 93.0% idle",
+                "Mem: 160M Active, 1250M Inact, 1100M Wired, 1980M Free",
+                "ARC: 512M Total, 120M MFU, 330M MRU, 1236K Anon, 6200K Header, 54M Other",
+                "Swap: 8192M Total, 8192M Free",
+            ],
+            "details": [
+                {
+                    "PID": "5555",
+                    "USERNAME": "root",
+                    "PRI": "20",
+                    "NICE": "0",
+                    "SIZE": "40M",
+                    "RES": "28M",
+                    "STATE": "select",
+                    "C": "1",
+                    "TIME": "2:10",
+                    "WCPU": "0.10%",
+                    "COMMAND": "/usr/local/bin/example-daemon --token=not-a-real-secret",
+                }
+            ],
+        },
+        "diagnostics/firewall/pf_states": {"current": "1830", "limit": "404000"},
+        "core/service/search": {
+            "total": len(service_rows),
+            "rowCount": len(service_rows),
+            "current": 1,
+            "rows": [
+                {"id": ident, "locked": locked, "running": 1, "description": description, "name": name}
+                for ident, name, description, locked in service_rows
+            ],
+        },
+    }
+
+
 def sample_api_answers() -> dict[str, Any]:
     """API path (as the collector names it, newest form) -> the answer."""
     interfaces = [
@@ -455,7 +739,11 @@ def sample_api_answers() -> dict[str, Any]:
                 _phase1(IPSEC_BRANCH_1, "Branch office 1", "198.51.100.20", "198.51.100.20", connected=True),
                 _phase1(IPSEC_PARTNER, "Partner VPN", "203.0.113.200", "partner.example.com", connected=False),
                 # Phase 1 up, its one child SA not installed: degraded.
-                _phase1(IPSEC_BRANCH_4, "Branch office 4", "198.51.100.30", "198.51.100.30", connected=True),
+                # No child SA: the phase 1 byte totals (sums over its child SAs) are 0.
+                {
+                    **_phase1(IPSEC_BRANCH_4, "Branch office 4", "198.51.100.30", "198.51.100.30", connected=True),
+                    **dict.fromkeys(("bytes-in", "bytes-out", "packets-in", "packets-out"), 0),
+                },
             ]
         ),
         # Per connection (POST {"id": <phase 1 name>}): the installed child SAs.
@@ -580,6 +868,9 @@ def sample_api_answers() -> dict[str, Any]:
                     "real_address": "203.0.113.150",
                     "virtual_address": "192.0.2.250",
                     "connected_since": "2026-11-13 22:10:00",
+                    # ``status 3`` of a client instance: TCP/UDP read / write bytes.
+                    "bytes_received": "73400320",
+                    "bytes_sent": "36700160",
                     "is_client": None,
                 },
                 {
@@ -632,6 +923,7 @@ def sample_api_answers() -> dict[str, Any]:
             "carp": {"demotion": "0", "allow": "1", "maintenancemode": False, "status_msg": ""},
         },
         **_client_answers(),
+        **_health_answers(),
         # The filter rule counters by rule uuid (``filter rule stats``).
         "firewall/filter_util/rule_stats": {
             "status": "ok",
@@ -667,7 +959,9 @@ def build_sample_raw() -> dict[str, Any]:
     from netcontrol.integrations.opnsense.collector import (
         _UUID,
         DEFAULT_OPTIONS,
+        HEALTH_PARTS,
         LEASE_BACKENDS,
+        _health_part,
         _rows,
         parse_audit_log,
         scrub_firmware,
@@ -701,8 +995,10 @@ def build_sample_raw() -> dict[str, Any]:
             },
         },
         "rule_stats": answers["firewall/filter_util/rule_stats"],
+        "health": {key: _health_part(key, answers[paths[0]]) for key, paths, _privilege in HEALTH_PARTS},
         "audit": {"ran_at": "2026-11-14T09:00:05+00:00", **parse_audit_log(AUDIT_LOG)},
         "config_xml": None,
+        "alias_tables": None,
         "errors": [],
         "stats": {"requests": 12, "retries": 0, "rate_limited": 0},
         "options": dict(DEFAULT_OPTIONS),

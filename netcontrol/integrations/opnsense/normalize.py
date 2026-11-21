@@ -28,7 +28,12 @@ How a firewall maps onto the map:
     phase 1 is up while none of its configured child SAs is installed, a
     WireGuard handshake older than 5 minutes, an OpenVPN client that is
     (re)connecting) or ``unreachable`` (down). An IPsec tunnel lists its
-    child SAs (phase 2) in its details.
+    child SAs (phase 2) in its details. Each tunnel, and each OpenVPN
+    server below (the sum of its connected clients), carries a ``traffic``
+    block with its byte counters (``vpn_traffic_blocks``, which the
+    monitoring poll of the firewall uses too), from which the stored
+    collection gets a rate and a "Traffic" section
+    (``netcontrol.integrations.traffic``, ``netcontrol.routes.topology_traffic``).
   - every OpenVPN server instance is a ``vpn_server`` node next to the
     firewall (``ovpn:server:<id>``): ``online`` when it runs, ``offline``
     when it is enabled but not running. The clients connected to it are
@@ -39,8 +44,20 @@ audit are shown in the firewall's details and added to the collection
 report as informational warnings (``info``: they do not mean the collection
 was incomplete); so is an audit that did not verifiably complete ("Audit
 incomplete"). The CARP virtual IPs are the firewall's "High availability"
-section; a VIP in ``INIT`` or a non-zero CARP demotion is a (non ``info``)
-warning.
+section and the snapshot's ``ha`` block (``ha_block``: one record per CARP
+group with its role and status), which availability tracking reads as
+entities and the Topology map uses to draw two firewalls of a CARP pair as
+one HA cluster (``netcontrol.integrations.opnsense.ha``). A VIP in ``INIT``
+or a non-zero CARP demotion is an informational warning: the state itself
+is carried by the tracked entity.
+
+The health (CPU, load, memory, file systems, temperature, state table,
+uptime) is the firewall's "Health" section and the snapshot's ``health``
+block (``health_summary``); the services the configuration enables are the
+"Services" section and the snapshot's ``services`` (one record each,
+``online`` while it runs, ``offline`` when not), which availability tracking
+reads as ``service`` entities of the firewall. A nearly full file system or
+a state table near its limit is an informational warning.
 """
 
 from __future__ import annotations
@@ -49,6 +66,7 @@ import ipaddress
 import re
 from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import urlsplit
 
 from netcontrol.integrations.meraki.clients import normalize_mac
 from netcontrol.integrations.meraki.forwarding import canonical
@@ -66,6 +84,7 @@ from netcontrol.integrations.meraki.normalize import (
 from netcontrol.integrations.opnsense.collector import LEASE_BACKENDS, info_warning
 from netcontrol.integrations.remote_users import DIRECTORY_KEY, directory_entry
 from netcontrol.integrations.software.versions import canonical_version
+from netcontrol.integrations.traffic import counter_pair, traffic_block
 
 PROVIDER = "opnsense"
 SOURCE = "OPNsense API"
@@ -95,6 +114,8 @@ SECTION_HA = "High availability"
 SECTION_ARP = "ARP table"
 SECTION_NDP = "NDP table"
 SECTION_LEASES = "DHCP leases"
+SECTION_HEALTH = "Health"
+SECTION_SERVICES = "Services"
 # Section titles of the gateway, tunnel peer and OpenVPN server nodes.
 SECTION_GATEWAY = "Gateway"
 SECTION_IPSEC_PEER = "IPsec peer"
@@ -246,6 +267,180 @@ def gateway_metrics(item: dict) -> dict[str, float]:
     return {k: v for k, v in found.items() if v is not None}
 
 
+# ── Tunnel traffic (``netcontrol.integrations.traffic``) ────────────────────
+#
+# "in" is what the firewall received through the tunnel, "out" what it sent.
+
+
+def ipsec_traffic(key: str, row: dict, children: list[dict] | None) -> dict | None:
+    """The ``traffic`` block of an IPsec connection. The phase 1 row's
+    ``bytes-in`` / ``bytes-out`` are OPNsense's sums over the child SAs of
+    every IKE SA of the connection (``SessionsController::searchPhase1``),
+    so they are the totals; the rate is computed per child SA (``children``:
+    the ``search_phase2`` rows, ``None`` when not read), keyed by strongSwan's
+    ``uniqueid``, since a rekey replaces a child SA and its counters. A
+    connection that is not connected has no child SA."""
+    counters: dict[str, list[int]] | None = {}
+    if row.get("connected"):
+        if children is None:
+            counters = None
+        for child in children or []:
+            ident = _text(child.get("uniqueid")) or _text(child.get("spi-in")) or _text(child.get("name"))
+            pair = counter_pair(child.get("bytes-in"), child.get("bytes-out"))
+            if counters is None or pair is None or f"sa:{ident}" in counters:
+                counters = None
+                break
+            counters[f"sa:{ident}"] = pair
+    return traffic_block(key, counter_pair(row.get("bytes-in"), row.get("bytes-out")), counters)
+
+
+def wireguard_traffic(key: str, peer: dict) -> dict | None:
+    """The ``traffic`` block of a WireGuard peer: ``transfer-rx`` /
+    ``transfer-tx`` of ``wg show`` (bytes since the interface came up)."""
+    pair = counter_pair(peer.get("transfer-rx"), peer.get("transfer-tx"))
+    return traffic_block(key, pair, {"peer": pair} if pair is not None else None)
+
+
+def _openvpn_session(row: dict) -> str:
+    """A session's counter id: a reconnect gets a new address (port) and start time."""
+    return "|".join(_text(row.get(k)) for k in ("common_name", "real_address", "connected_since"))
+
+
+def openvpn_traffic(key: str, sessions: list[dict]) -> dict | None:
+    """The ``traffic`` block of an OpenVPN instance from its session rows:
+    the client instance's own row, or the connected clients of a server
+    (``bytes_received`` / ``bytes_sent``: from the management ``status``,
+    per session; a server's traffic is the sum of its clients')."""
+    counters: dict[str, list[int]] = {}
+    for row in sessions:
+        pair = counter_pair(row.get("bytes_received"), row.get("bytes_sent"))
+        if pair is None or _openvpn_session(row) in counters:
+            return None
+        counters[_openvpn_session(row)] = pair
+    return traffic_block(key, None, counters)
+
+
+def ipsec_traffic_key(row: dict) -> str:
+    return f"ipsec:{_text(row.get('ikeid')) or _text(row.get('name'))}"
+
+
+def wireguard_traffic_key(peer: dict) -> str:
+    return f"wg:{_text(peer.get('if'))}:{_text(peer.get('public-key'))}"
+
+
+def openvpn_ident(row: dict) -> str:
+    """The instance id of an ``openvpn/service/search_sessions`` row."""
+    return _text(row.get("service_id")).removeprefix("openvpn/") or _text(row.get("id")).split("_", 1)[0]
+
+
+def openvpn_traffic_key(role: str, ident: str) -> str:
+    return f"ovpn:{role}:{ident}"
+
+
+def vpn_traffic_blocks(raw: dict) -> dict[str, dict]:
+    """The ``traffic`` blocks of a firewall's tunnels and OpenVPN servers by
+    key, from the raw VPN payloads (``collector.collect_vpn``: a collection
+    or a monitoring poll). The snapshot puts each on its tunnel edge or
+    server node (``_Builder``); the poll computes rates from them
+    (``netcontrol.routes.opnsense_health``)."""
+    blocks: dict[str, dict | None] = {}
+    phase2 = raw.get("ipsec_phase2") if isinstance(raw.get("ipsec_phase2"), dict) else None
+    for row in _dicts(raw.get("ipsec")):
+        name = _text(row.get("name"))
+        children = _dicts(phase2.get(name)) if phase2 is not None and name in phase2 else None
+        blocks[ipsec_traffic_key(row)] = ipsec_traffic(ipsec_traffic_key(row), row, children)
+    for row in _dicts(raw.get("wireguard")):
+        if _text(row.get("type")) == "peer":
+            blocks[wireguard_traffic_key(row)] = wireguard_traffic(wireguard_traffic_key(row), row)
+    servers: dict[str, list[dict]] = {}
+    for row in _dicts(raw.get("openvpn")):
+        role = _text(row.get("type"))
+        if role == "server":
+            servers.setdefault(openvpn_ident(row), []).append(row)
+        elif role == "client":
+            key = openvpn_traffic_key("client", openvpn_ident(row))
+            blocks[key] = openvpn_traffic(key, [row])
+    for ident, rows in servers.items():
+        key = openvpn_traffic_key("server", ident)
+        blocks[key] = openvpn_traffic(key, [r for r in rows if r.get("is_client")])
+    return {key: block for key, block in blocks.items() if block is not None}
+
+
+# CARP role of a VIP on this firewall -> availability status of its group
+# (the shared node vocabulary). A standby (``BACKUP``) is as healthy as the
+# master; ``INIT``: its interface is down or CARP cannot run on it;
+# ``DISABLED``: CARP is off on this node, which gives no redundancy.
+_CARP_STATUS = {"MASTER": "online", "BACKUP": "online", "INIT": "offline", "DISABLED": "alerting"}
+
+
+def _flag(value: Any) -> bool:
+    """An OPNsense boolean (``True``, ``1``, ``"1"``, ``"true"``)."""
+    return value in (True, 1, "1", "true")
+
+
+def carp_groups(carp: dict | None) -> list[dict]:
+    """The CARP groups of the firewall, one per interface and VHID (several
+    addresses on one VHID are one group): ``id`` (``carp:<interface>:<vhid>``,
+    stable across collections), ``interface``, ``vhid``, ``addresses``,
+    ``role`` (``MASTER`` / ``BACKUP`` / ``INIT`` / ``DISABLED``, upper
+    case), ``advbase``, ``advskew`` and ``status``: ``online`` for a master
+    or a backup, ``alerting`` for one while the firewall's CARP demotion is
+    not 0 or it is in maintenance mode, and for ``DISABLED``, ``offline``
+    for ``INIT``, ``unknown`` for anything else. Empty when CARP was not
+    read."""
+    if not carp:
+        return []
+    state = _dict(carp.get("carp"))
+    demoted = bool(_number(state.get("demotion"))) or _flag(state.get("maintenancemode"))
+    groups: dict[tuple[str, str], dict] = {}
+    for row in _dicts(carp.get("rows")):
+        vhid = _text(row.get("vhid"))
+        if not vhid:
+            continue
+        interface = _text(row.get("interface"))
+        group = groups.setdefault(
+            (interface, vhid),
+            {
+                "id": f"carp:{interface}:{vhid}",
+                "interface": interface,
+                "vhid": vhid,
+                "addresses": [],
+                "role": "",
+                "advbase": _text(row.get("advbase")),
+                "advskew": _text(row.get("advskew")),
+            },
+        )
+        address = _text(row.get("subnet"))
+        if address and address not in group["addresses"]:
+            group["addresses"].append(address)
+        role = _text(row.get("status")).upper()
+        # The CARP address's role wins over an IP alias stacked on its VHID.
+        if role and (not group["role"] or _text(row.get("mode")).lower() == "carp"):
+            group["role"] = role
+    for group in groups.values():
+        status = _CARP_STATUS.get(group["role"], "unknown")
+        group["status"] = "alerting" if status == "online" and demoted else status
+    return list(groups.values())
+
+
+def ha_block(carp: dict | None, device_id: str) -> dict | None:
+    """The snapshot's ``ha`` block: the firewall's CARP groups
+    (``carp_groups``) with its demotion and maintenance mode, for
+    availability tracking and the HA pair on the map. ``None`` when CARP
+    was not read."""
+    if carp is None:
+        return None
+    state = _dict(carp.get("carp"))
+    maintenance = state.get("maintenancemode")
+    return {
+        "protocol": "CARP",
+        "device": device_id,
+        "demotion": _number(state.get("demotion")),
+        "maintenance": None if maintenance is None else _flag(maintenance),
+        "vips": carp_groups(carp),
+    }
+
+
 def carp_problems(carp: dict | None) -> list[str]:
     """What is wrong with the firewall's CARP state: a VIP in ``INIT``
     (its interface is down or CARP cannot run on it), a non-zero demotion
@@ -315,6 +510,57 @@ def interface_addresses(row: dict) -> list[str]:
         address = _text(row.get(key))
         if address and address not in found:
             found.append(address)
+    return found
+
+
+def _plain_address(text: str) -> str:
+    """The canonical address of ``192.0.2.1/24``, ``2001:db8::1%vtnet0`` or
+    ``198.51.100.7``, or ``""`` for something else or an address no single
+    firewall owns (link-local, loopback, unspecified)."""
+    text = text.strip().split("/", 1)[0].split("%", 1)[0]
+    try:
+        address = ipaddress.ip_address(text)
+    except ValueError:
+        return ""
+    if address.is_link_local or address.is_loopback or address.is_unspecified:
+        return ""
+    return str(address)
+
+
+def snapshot_addresses(snapshot: dict) -> list[str]:
+    """Every address the firewall of an OPNsense snapshot owns: the
+    firewall node's address, the host of its API URL when that is an
+    address, the IPv4 / IPv6 columns of its "Interfaces" section and its
+    CARP virtual IPs (``ha``). Plain canonical addresses, each once.
+
+    A firewall sends syslog from whichever interface faces the receiver, so
+    the syslog receiver maps a message's source address to its topology
+    source through all of them (``netcontrol.source_recollect``)."""
+    found: list[str] = []
+
+    def add(text: Any) -> None:
+        for part in _text(text).split(","):
+            address = _plain_address(part)
+            if address and address not in found:
+                found.append(address)
+
+    add(urlsplit(_text(_dict(snapshot.get("org")).get("url"))).hostname or "")
+    for node in _dicts(snapshot.get("nodes")):
+        if node.get("kind") != "appliance" or not _text(node.get("id")).startswith(DEVICE_NODE_PREFIX):
+            continue
+        add(node.get("ip"))
+        for section in _dicts(node.get("sections")):
+            if section.get("title") != SECTION_INTERFACES or section.get("kind") != "table":
+                continue
+            columns = [c for c in section.get("columns") or [] if c in ("IPv4", "IPv6")]
+            indexes = [section["columns"].index(c) for c in columns]
+            for row in section.get("rows") or []:
+                for index in indexes:
+                    if index < len(row):
+                        add(row[index])
+    for vip in _dicts(_dict(snapshot.get("ha")).get("vips")):
+        for address in vip.get("addresses") or []:
+            add(address)
     return found
 
 
@@ -543,6 +789,151 @@ def client_counts(clients: Any) -> dict[str, Any]:
     }
 
 
+# ── Health and services ─────────────────────────────────────────────────────
+
+# A file system at or above this use (%) is "full", a state table at or above
+# this share of its limit "near its limit": a collection warning, and the
+# monitoring poll's built-in alerts (``opnsense.health``); the second value
+# is the critical level.
+DISK_FULL_PCT = (90.0, 95.0)
+STATE_TABLE_FULL_PCT = (80.0, 95.0)
+# Read-only media are always 100 % used: never "full".
+_READ_ONLY_FS = frozenset({"cd9660"})
+_MIB = 1024 * 1024
+# ``top``'s CPU line: ``CPU:  2.0% user,  0.0% nice,  1.2% system,  0.4% interrupt, 96.4% idle``.
+_CPU_IDLE = re.compile(r"([\d.]+)%\s+idle")
+# ``last pid: 12345;  load averages:  0.10,  0.20,  0.15 ...``
+_TOP_LOAD = re.compile(r"load averages?:\s*([\d.]+),?\s+([\d.]+),?\s+([\d.]+)")
+# ``system_time``'s uptime: ``3 days, 01:02:03`` (the word is translated) or ``01:02:03``.
+_UPTIME = re.compile(r"^\s*(?:(\d+)\D*,\s*)?(\d+):(\d{2}):(\d{2})\s*$")
+
+
+def _cpu_percent(activity: Any) -> float | None:
+    """CPU use (100 - idle) from the ``CPU:`` header line of ``top``."""
+    for line in _dict(activity).get("headers") or []:
+        if isinstance(line, str) and line.lstrip().startswith("CPU:"):
+            match = _CPU_IDLE.search(line)
+            if match:
+                return round(max(0.0, min(100.0, 100.0 - float(match.group(1)))), 1)
+    return None
+
+
+def _load_averages(time_info: dict, activity: Any) -> list[float]:
+    """The 1, 5 and 15 minute load averages: ``system_time``'s ``loadavg``
+    (``0.10, 0.20, 0.15``; 25.1+), else ``top``'s first header line."""
+    found = [n for part in _text(time_info.get("loadavg")).split(",") if (n := _number(part)) is not None]
+    if len(found) == 3:
+        return found
+    for line in _dict(activity).get("headers") or []:
+        match = _TOP_LOAD.search(line) if isinstance(line, str) else None
+        if match:
+            return [float(match.group(i)) for i in (1, 2, 3)]
+    return []
+
+
+def uptime_seconds(text: Any) -> int | None:
+    """Seconds of a ``system_time`` uptime (``3 days, 01:02:03``)."""
+    match = _UPTIME.match(_text(text))
+    if not match:
+        return None
+    days, hours, minutes, seconds = (int(g or 0) for g in match.groups())
+    return ((days * 24 + hours) * 60 + minutes) * 60 + seconds
+
+
+def _memory(resources: dict) -> dict[str, float | None]:
+    """Memory from ``system_resources``: total, used without the ZFS ARC
+    (the cache gives itself back; OPNsense's own widget shows it apart) and
+    the ARC, in MiB, and the use in %."""
+    memory = _dict(resources.get("memory"))
+    total, used, arc = _number(memory.get("total")), _number(memory.get("used")), _number(memory.get("arc"))
+    if not total or used is None:
+        return {"memory_percent": None, "memory_used_mb": None, "memory_total_mb": None, "arc_mb": None}
+    used = max(0.0, used - (arc or 0.0))
+    return {
+        "memory_percent": round(used / total * 100, 1),
+        "memory_used_mb": round(used / _MIB, 1),
+        "memory_total_mb": round(total / _MIB, 1),
+        "arc_mb": round(arc / _MIB, 1) if arc else None,
+    }
+
+
+def _disks(disk: dict) -> list[dict[str, Any]]:
+    """The file systems of ``system_disk``: mount point, device, type, use
+    in % and the size and use as OPNsense prints them."""
+    found = []
+    for row in _dicts(disk.get("devices")):
+        found.append(
+            {
+                "mountpoint": _text(row.get("mountpoint")),
+                "device": _text(row.get("device")),
+                "type": _text(row.get("type")),
+                "used_pct": _number(row.get("used_pct")),
+                "size": _text(row.get("total")) or _text(row.get("blocks")),
+                "used": _text(row.get("used")),
+                "available": _text(row.get("available")),
+            }
+        )
+    return found
+
+
+def health_summary(health: Any) -> dict[str, Any]:
+    """The numbers of a collection's ``health`` part (``collector.collect_health``):
+    ``cpu_percent``, ``load_avg``, ``memory_*``, ``disk_percent`` (the
+    fullest file system, read-only media left out) with ``disks``,
+    ``temperature_c`` (the hottest sensor) with ``temperatures``,
+    ``pf_states`` / ``pf_states_limit`` / ``pf_states_percent`` and
+    ``uptime_seconds``. ``None`` for what was not read."""
+    found = _dict(health)
+    time_info = _dict(found.get("time"))
+    disks = _disks(_dict(found.get("disk")))
+    used = [d["used_pct"] for d in disks if d["used_pct"] is not None and d["type"] not in _READ_ONLY_FS]
+    readings = [(t, c) for t in _dicts(found.get("temperature")) if (c := _number(t.get("temperature"))) is not None]
+    temperatures = [
+        {"sensor": _text(t.get("device")), "type": _text(t.get("type_translated")) or _text(t.get("type")), "c": c}
+        for t, c in readings
+    ]
+    states = _dict(found.get("pf_states"))
+    current, limit = _number(states.get("current")), _number(states.get("limit"))
+    return {
+        "cpu_percent": _cpu_percent(found.get("activity")),
+        "load_avg": _load_averages(time_info, found.get("activity")),
+        **_memory(_dict(found.get("resources"))),
+        "disk_percent": max(used) if used else None,
+        "disks": disks,
+        "temperature_c": max(c for _t, c in readings) if readings else None,
+        "temperatures": temperatures,
+        "pf_states": current,
+        "pf_states_limit": limit,
+        "pf_states_percent": round(current / limit * 100, 1) if current is not None and limit else None,
+        "uptime_seconds": uptime_seconds(time_info.get("uptime")),
+        "uptime": _text(time_info.get("uptime")),
+    }
+
+
+def service_records(health: Any) -> list[dict[str, Any]] | None:
+    """The services of a collection's ``health`` part: every service the
+    configuration enables (``core/service/search`` lists no other), with
+    ``running`` and ``locked`` as booleans. ``None`` when not read."""
+    rows = _dict(health).get("services")
+    if not isinstance(rows, list):
+        return None
+    return [
+        {
+            "id": _text(row.get("id")) or _text(row.get("name")),
+            "name": _text(row.get("name")),
+            "description": _text(row.get("description")) or _text(row.get("name")),
+            "running": _flag(row.get("running")),
+            "locked": _flag(row.get("locked")),
+        }
+        for row in _dicts(rows)
+        if _text(row.get("id")) or _text(row.get("name"))
+    ]
+
+
+def _pct_text(value: float | None) -> str:
+    return f"{value:g} %" if value is not None else ""
+
+
 class _Builder:
     def __init__(self, raw: dict, inventory: InventoryIndex) -> None:
         self.raw = raw
@@ -562,10 +953,14 @@ class _Builder:
         self.carp = raw.get("carp") if isinstance(raw.get("carp"), dict) else None
         self.wireguard = _dicts(raw.get("wireguard"))
         self.openvpn = _dicts(raw.get("openvpn"))
+        # Each tunnel's and OpenVPN server's ``traffic`` block, by key.
+        self.traffic = vpn_traffic_blocks(raw)
         # The remote user directory: set once an OpenVPN server is found.
         self.user_directory: dict[str, Any] | None = None
         self.audit = raw.get("audit") if isinstance(raw.get("audit"), dict) else None
         self.clients = raw.get("clients") if isinstance(raw.get("clients"), dict) else None
+        self.health = raw.get("health") if isinstance(raw.get("health"), dict) else None
+        self.services = service_records(self.health)
         self.nodes: dict[str, dict] = {}
         self.edges: list[dict] = []
         self.warnings: list[dict] = []
@@ -699,6 +1094,8 @@ class _Builder:
         _add(sections, self._wireguard_table())
         _add(sections, self._openvpn_table())
         _add(sections, self._ha_table())
+        _add(sections, self._health_section())
+        _add(sections, self._services_table())
         for table in self._client_tables():
             _add(sections, table)
         self._firmware_sections(sections, version)
@@ -923,7 +1320,7 @@ class _Builder:
                 r.get("status_txt") or r.get("status"),
                 r.get("advbase"),
                 r.get("advskew"),
-                "" if maintenance is None else ("Yes" if maintenance in (True, 1, "1", "true") else "No"),
+                "" if maintenance is None else ("Yes" if _flag(maintenance) else "No"),
                 demotion,
             ]
             for r in _dicts(self.carp.get("rows"))
@@ -1042,11 +1439,110 @@ class _Builder:
         without the flag, from before it existed, is not trusted)."""
         return bool(self.audit and self.audit.get("completed"))
 
-    def ha_warnings(self) -> None:
-        for problem in carp_problems(self.carp):
-            self.warnings.append(
-                {"scope": "ha", "path": "/diagnostics/interface/get_vip_status", "status": None, "message": problem}
+    def _health_section(self) -> dict | None:
+        if self.health is None:
+            return None
+        summary = health_summary(self.health)
+        disks = [f"{d['mountpoint']} {_pct_text(d['used_pct'])} of {d['size']}".strip() for d in summary["disks"]]
+        temperatures = [f"{t['sensor']} {t['c']:g} °C" for t in summary["temperatures"]]
+        memory = ""
+        if summary["memory_percent"] is not None:
+            memory = (
+                f"{summary['memory_percent']:g} % ({summary['memory_used_mb']:.0f} of "
+                f"{summary['memory_total_mb']:.0f} MiB"
+                + (f", ARC {summary['arc_mb']:.0f} MiB not counted" if summary["arc_mb"] else "")
+                + ")"
             )
+        states = ""
+        if summary["pf_states"] is not None:
+            states = f"{summary['pf_states']:.0f}" + (
+                f" of {summary['pf_states_limit']:.0f} ({summary['pf_states_percent']:g} %)"
+                if summary["pf_states_limit"]
+                else ""
+            )
+        stopped = [s["description"] for s in self.services or [] if not s["running"]]
+        return kv_section(
+            SECTION_HEALTH,
+            [
+                ("CPU", _pct_text(summary["cpu_percent"])),
+                ("Load average", ", ".join(f"{n:g}" for n in summary["load_avg"])),
+                ("Memory", memory),
+                ("Disk (fullest)", _pct_text(summary["disk_percent"])),
+                ("File systems", disks),
+                ("Temperature (hottest)", f"{summary['temperature_c']:g} °C" if summary["temperature_c"] else ""),
+                ("Sensors", temperatures),
+                ("State table", states),
+                ("Uptime", summary["uptime"]),
+                (
+                    "Services",
+                    f"{len(self.services) - len(stopped)} of {len(self.services)} running"
+                    if self.services is not None
+                    else "",
+                ),
+                ("Stopped", stopped),
+                ("Source", SOURCE),
+            ],
+        )
+
+    def _services_table(self) -> dict | None:
+        rows = [
+            [s["description"], s["id"], "running" if s["running"] else "stopped", "Yes" if s["locked"] else ""]
+            for s in self.services or []
+        ]
+        return table_section(SECTION_SERVICES, ["Service", "Name", "Status", "Locked"], rows)
+
+    def service_states(self) -> list[dict[str, Any]] | None:
+        """The snapshot's ``services``: one record per service the
+        firewall's configuration enables, ``online`` while it runs and
+        ``offline`` when it does not (availability tracking turns them into
+        ``service`` entities of the firewall). ``None`` when not read."""
+        if self.services is None:
+            return None
+        label = self.nodes[self.firewall_id]["label"]
+        return [
+            {
+                "id": f"svc:{s['id']}",
+                "name": f"{label} {s['description']}",
+                "type": s["name"],
+                "kind": "OPNsense service",
+                "site": self.site_id,
+                "status": "online" if s["running"] else "offline",
+                "raw_status": "running" if s["running"] else "stopped",
+                "device": self.firewall_id,
+            }
+            for s in self.services
+        ]
+
+    def health_warnings(self) -> None:
+        # Informational: they report what the firewall said, not a failed call.
+        if self.health is None:
+            return
+        summary = health_summary(self.health)
+        full = [
+            f"{d['mountpoint']} ({d['used_pct']:g} %)"
+            for d in summary["disks"]
+            if d["used_pct"] is not None and d["used_pct"] >= DISK_FULL_PCT[0] and d["type"] not in _READ_ONLY_FS
+        ]
+        if full:
+            self.warnings.append(
+                info_warning("health", "/diagnostics/system/system_disk", f"File system nearly full: {', '.join(full)}")
+            )
+        percent = summary["pf_states_percent"]
+        if percent is not None and percent >= STATE_TABLE_FULL_PCT[0]:
+            self.warnings.append(
+                info_warning(
+                    "health",
+                    "/diagnostics/firewall/pf_states",
+                    f"State table near its limit: {summary['pf_states']:.0f} of {summary['pf_states_limit']:.0f} "
+                    f"states ({percent:g} %)",
+                )
+            )
+
+    def ha_warnings(self) -> None:
+        # Informational: the CARP state is tracked as entities of its own
+        # (``ha_block``), so it must not stop the removal of gone entities.
+        for problem in carp_problems(self.carp):
+            self.warnings.append(info_warning("ha", "/diagnostics/interface/get_vip_status", problem))
 
     def firmware_warnings(self, version: str) -> None:
         if self.firmware and self.update_pending():
@@ -1146,7 +1642,14 @@ class _Builder:
         return node
 
     def _tunnel(
-        self, peer: dict, status: str, label: str, detail: str, a_port: str = "", b_port: str = ""
+        self,
+        peer: dict,
+        status: str,
+        label: str,
+        detail: str,
+        a_port: str = "",
+        b_port: str = "",
+        traffic: dict | None = None,
     ) -> dict | None:
         edge = self._edge(
             self.firewall_id,
@@ -1157,6 +1660,7 @@ class _Builder:
             detail=detail,
             a_port=a_port,
             b_port=b_port,
+            **({"traffic": traffic} if traffic is not None else {}),
         )
         if edge:
             self.tunnel_count += 1
@@ -1189,6 +1693,7 @@ class _Builder:
                 "IPsec",
                 name,
                 a_port=_text(row.get("local-addrs")),
+                traffic=self.traffic.get(ipsec_traffic_key(row)),
             )
             if edge is not None:
                 edge["_children"] = (children, counts)
@@ -1215,13 +1720,18 @@ class _Builder:
                 ],
             )
             self._tunnel(
-                peer, wireguard_status(row, self.now), "WireGuard", f"{instance} {name}".strip(), a_port=instance
+                peer,
+                wireguard_status(row, self.now),
+                "WireGuard",
+                f"{instance} {name}".strip(),
+                a_port=instance,
+                traffic=self.traffic.get(wireguard_traffic_key(row)),
             )
 
     def build_openvpn(self) -> None:
         servers: dict[str, list[dict]] = {}
         for row in self.openvpn:
-            ident = _text(row.get("service_id")).removeprefix("openvpn/") or _text(row.get("id")).split("_", 1)[0]
+            ident = openvpn_ident(row)
             if _text(row.get("type")) == "server":
                 servers.setdefault(ident, []).append(row)
                 continue
@@ -1242,7 +1752,13 @@ class _Builder:
                     ("Connected since", row.get("connected_since")),
                 ],
             )
-            self._tunnel(peer, openvpn_client_status(row), "OpenVPN", description)
+            self._tunnel(
+                peer,
+                openvpn_client_status(row),
+                "OpenVPN",
+                description,
+                traffic=self.traffic.get(openvpn_traffic_key("client", ident)),
+            )
         for ident, rows in servers.items():
             description = next((_text(r.get("description")) for r in rows if _text(r.get("description"))), "")
             clients = [r for r in rows if r.get("is_client")]
@@ -1254,6 +1770,7 @@ class _Builder:
                 self.site_id,
                 "online" if running else "offline",
                 model="OpenVPN server",
+                **({"traffic": t} if (t := self.traffic.get(openvpn_traffic_key("server", ident))) else {}),
             )
             _add(
                 node["sections"],
@@ -1374,6 +1891,7 @@ def build_snapshot(raw: dict, inventory: InventoryIndex | None = None) -> dict[s
     version = builder.version()
     builder.firmware_warnings(version)
     builder.ha_warnings()
+    builder.health_warnings()
     builder.build_edge_sections()
 
     site_members = [n for n in builder.nodes.values() if n["site"] == builder.site_id]
@@ -1417,6 +1935,8 @@ def build_snapshot(raw: dict, inventory: InventoryIndex | None = None) -> dict[s
         "schema": SCHEMA_VERSION,
         "provider": PROVIDER,
         "generated_at": datetime.now(UTC).isoformat(timespec="seconds"),
+        # When the VPN counters were read (``netcontrol.integrations.traffic``).
+        **({"traffic_read_at": raw["vpn_read_at"]} if raw.get("vpn_read_at") else {}),
         "org": {
             "id": _s(builder.hostname or builder.address),
             "name": builder.name,
@@ -1446,6 +1966,10 @@ def build_snapshot(raw: dict, inventory: InventoryIndex | None = None) -> dict[s
             "arp_entries": counts["arp"],
             "ndp_entries": counts["ndp"],
             "dhcp_leases": counts["dhcp_leases"],
+            "services": len(builder.services) if builder.services is not None else None,
+            "services_stopped": sum(1 for s in builder.services if not s["running"])
+            if builder.services is not None
+            else None,
         },
         "collection": {
             "sources": [SOURCE],
@@ -1456,5 +1980,8 @@ def build_snapshot(raw: dict, inventory: InventoryIndex | None = None) -> dict[s
         "sites": sites,
         "nodes": nodes,
         "edges": builder.edges,
+        **({"ha": ha} if (ha := ha_block(builder.carp, builder.firewall_id)) is not None else {}),
+        **({"health": health_summary(builder.health)} if builder.health is not None else {}),
+        **({"services": services} if (services := builder.service_states()) is not None else {}),
         **({DIRECTORY_KEY: builder.user_directory} if builder.user_directory is not None else {}),
     }

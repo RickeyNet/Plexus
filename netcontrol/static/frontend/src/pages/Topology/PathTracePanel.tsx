@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { usePathTrace, type PathDirection, type PathTrace as PathTraceResult, type PathTraceQuery } from '@/api/meraki';
+import type { PathLogEvidence } from '@/api/opnsenseRules';
 
+import { hopEvidenceLines } from './filterlogEvidence';
 import {
   destinationAppText,
   hopTitle,
@@ -83,11 +85,37 @@ function Direction({
                     </div>
                   );
                 })}
+                {hop.log_evidence && <HopLogEvidence evidence={hop.log_evidence} />}
               </li>
             );
           })}
         </ol>
       )}
+    </div>
+  );
+}
+
+const TONE_COLOR: Partial<Record<string, string>> = { danger: 'var(--danger)', warning: WARNING };
+
+/**
+ * The firewall log evidence of a hop through an OPNsense firewall: what its
+ * log shows of the rules the trace names and of the traced flow itself, and
+ * plainly when the log contradicts the trace.
+ */
+function HopLogEvidence({ evidence }: { evidence: PathLogEvidence }) {
+  const lines = hopEvidenceLines(evidence);
+  if (!lines.length) return null;
+  return (
+    <div style={{ marginLeft: '1.4rem' }}>
+      {lines.map((line) => (
+        <div key={line.text} style={{ display: 'flex', gap: '0.4rem', color: TONE_COLOR[line.tone] ?? MUTED }}>
+          <span style={{ minWidth: '1em', textAlign: 'center' }}>{line.tone === 'danger' ? '⚠' : '≡'}</span>
+          <span>
+            <span className="text-muted">Firewall log · </span>
+            {line.text}
+          </span>
+        </div>
+      ))}
     </div>
   );
 }
