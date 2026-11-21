@@ -60,6 +60,15 @@ class AzureKeyVaultProvider(SecretsProvider):
         Setting("timeout", "int", default=10, minimum=1, maximum=60),
     )
     SECRETS: ClassVar[tuple[str, ...]] = ("client_secret",)
+    # authority_host and tenant_id make the token URL the client secret is
+    # posted to; the access token goes to vault_url.
+    DESTINATION_SETTINGS: ClassVar[tuple[str, ...]] = (
+        "vault_url",
+        "authority_host",
+        "tenant_id",
+        "verify_tls",
+        "ca_pem",
+    )
 
     @classmethod
     def validate(cls, config: dict, secrets: dict) -> dict:

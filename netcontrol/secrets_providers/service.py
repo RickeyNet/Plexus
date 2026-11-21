@@ -30,6 +30,7 @@ from typing import Any
 import routes.database as db
 from routes.crypto import decrypt, encrypt, unavailable
 
+from netcontrol.secret_fields import refuse_secret_reuse
 from netcontrol.secrets_providers.aws import AwsSecretsManagerProvider
 from netcontrol.secrets_providers.azure import AzureKeyVaultProvider
 from netcontrol.secrets_providers.base import (
@@ -43,6 +44,7 @@ from netcontrol.secrets_providers.base import (
     TTLCache,
     check_reference,
     invalidate,
+    normalize_settings,
 )
 from netcontrol.secrets_providers.vault import VaultProvider
 
@@ -85,18 +87,29 @@ def decode_secrets(secret_enc: str) -> dict[str, str]:
     return {str(k): str(v) for k, v in data.items()} if isinstance(data, dict) else {}
 
 
-def prepare_provider(provider_type: str, config: Any, secrets: Any, stored_secret_enc: str = "") -> tuple[dict, str]:
+def prepare_provider(
+    provider_type: str,
+    config: Any,
+    secrets: Any,
+    stored_secret_enc: str = "",
+    stored_config: dict | None = None,
+) -> tuple[dict, str]:
     """Validate a create or update: ``(config, secret_enc)`` to store.
 
     A secret left out or blank keeps the stored one; secrets the settings
-    do not use (a Vault token after a switch to AppRole) are dropped.
-    Raises ``ValueError`` with the reason."""
+    do not use (a Vault token after a switch to AppRole) are dropped. On an
+    update (``stored_config``), a change to a setting that decides where the
+    secrets are sent (``DESTINATION_SETTINGS``: address, TLS verification,
+    CA bundle) refuses to keep a stored secret the request does not send
+    again. Raises ``ValueError`` with the reason."""
     cls = provider_class(provider_type)
     if secrets is None:
         secrets = {}
     if not isinstance(secrets, dict):
         raise ValueError("secrets must be an object")
     merged = {k: v for k, v in decode_secrets(stored_secret_enc).items() if k in cls.SECRETS}
+    stored_names = set(merged)
+    resent: set[str] = set()
     for name, value in secrets.items():
         if name not in cls.SECRETS:
             raise ValueError(f"Unknown secret '{name}' for {cls.label}")
@@ -105,8 +118,23 @@ def prepare_provider(provider_type: str, config: Any, secrets: Any, stored_secre
         if not isinstance(value, str) or len(value) > 65536:
             raise ValueError(f"{name} must be text of at most 65536 characters")
         merged[name] = value
+        resent.add(name)
     normalized = cls.validate(config if isinstance(config, dict) else {}, merged)
-    kept = {k: v for k, v in merged.items() if k in cls.used_secrets(normalized)}
+    used = cls.used_secrets(normalized)
+    if stored_config is not None:
+        try:
+            # Defaults of settings added since it was saved are not a change.
+            old = normalize_settings(cls.SETTINGS, stored_config)
+        except ValueError:
+            old = stored_config
+        refuse_secret_reuse(
+            old,
+            normalized,
+            cls.DESTINATION_SETTINGS,
+            stored=[k for k in stored_names if k in used],
+            resent=resent,
+        )
+    kept = {k: v for k, v in merged.items() if k in used}
     return normalized, encrypt(json.dumps(kept, sort_keys=True)) if kept else ""
 
 

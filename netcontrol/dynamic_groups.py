@@ -361,13 +361,16 @@ def _in_prefixes(ip_text: object, networks: list[ipaddress.IPv4Network | ipaddre
     return any(address.version == n.version and address in n for n in networks)
 
 
-async def resolve_hosts(filter_def: dict[str, Any], scope: ObjectScope) -> list[dict]:
+async def resolve_hosts(
+    filter_def: dict[str, Any], scope: ObjectScope, *, hosts: list[dict] | None = None
+) -> list[dict]:
     """The host rows the (validated) ``filter_def`` matches now, among the
     hosts ``scope`` may read, ordered by hostname and IP. A definition with
-    no criteria matches nothing."""
+    no criteria matches nothing. ``hosts``: the host rows to match (every
+    host is read when None), for a caller resolving many definitions."""
     if not any(key in filter_def for key in CRITERIA):
         return []
-    hosts = scope.filter_hosts(await db.get_all_hosts())
+    hosts = scope.filter_hosts(hosts if hosts is not None else await db.get_all_hosts())
 
     groups = filter_def.get("groups") or []
     if groups and hosts:

@@ -40,6 +40,8 @@ import time
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from pydantic import BaseModel, ConfigDict, Field
 
+from netcontrol.body_limit import BodyLimitMiddleware
+from netcontrol.bounded_map import prune_expired
 from netcontrol.integrations.cisco_fdm.collector import fdm_poll_loop
 from netcontrol.mcp.server import build_mcp_app
 from netcontrol.object_scope import request_scope
@@ -106,7 +108,7 @@ from netcontrol.routes.bulk_import import (
 )
 from netcontrol.routes.cato_egress_check import router as cato_egress_check_router
 from netcontrol.routes.cato_shared_host_check import router as cato_shared_host_check_router
-from netcontrol.routes.cdef_engine import router as cdef_router
+from netcontrol.routes.cdef_engine import read_router as cdef_read_router, router as cdef_router
 from netcontrol.routes.chatops import (
     WEBHOOK_PATHS as CHATOPS_WEBHOOK_PATHS,
     admin_router as chatops_admin_router,
@@ -217,6 +219,7 @@ from netcontrol.routes.help_docs import router as help_docs_router
 from netcontrol.routes.intended_config import (
     admin_router as intended_config_admin_router,
     intended_config_loop,
+    read_router as intended_config_read_router,
     router as intended_config_router,
 )
 from netcontrol.routes.interface_errors import (
@@ -247,6 +250,7 @@ from netcontrol.routes.jobs import (
     _MAX_CONCURRENT_JOBS as _jobs_MAX_CONCURRENT_JOBS,
     _job_semaphore as _jobs_job_semaphore,
     _process_job_queue,
+    approvals_router as jobs_approvals_router,
     drain_running_jobs,
     init_jobs,
     reap_and_resume_jobs,
@@ -317,6 +321,7 @@ from netcontrol.routes.playbooks import (
     PlaybookUpdate,
     _sanitize_ansible_filename,
     _sanitize_playbook_filename,
+    admin_router as playbooks_admin_router,
     router as playbooks_router,
     sync_playbooks_from_registry,
     write_playbook_file,
@@ -522,28 +527,48 @@ def _migrate_legacy_session_key() -> None:
 _migrate_legacy_session_key()
 
 
+# Generated keys are 64 hex characters; anything much shorter is not a key.
+_MIN_SECRET_KEY_LENGTH = 32
+
+
 def _load_or_create_secret_key() -> str:
     key_dir = os.path.dirname(SECRET_KEY_FILE)
     if key_dir:
         os.makedirs(key_dir, exist_ok=True)
 
+    target = SECRET_KEY_FILE
     if os.path.isfile(SECRET_KEY_FILE):
         with open(SECRET_KEY_FILE) as f:
-            return f.read().strip()
+            stored = f.read().strip()
+        if len(stored) >= _MIN_SECRET_KEY_LENGTH:
+            return stored
+        # An empty or truncated file (a write cut short, a file emptied by
+        # hand) would sign every session and CSRF token with a key anyone can
+        # guess. Replace it; the new key is written beside it and moved over.
+        LOGGER.warning(
+            "session key file %s holds fewer than %d characters; generating a new key (existing sessions end)",
+            SECRET_KEY_FILE,
+            _MIN_SECRET_KEY_LENGTH,
+        )
+        target = SECRET_KEY_FILE + ".new"
+        if os.path.exists(target):
+            os.remove(target)
     key = secrets.token_hex(32)
     try:
         # Create file with restrictive permissions atomically (no race window)
-        fd = os.open(SECRET_KEY_FILE, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         with os.fdopen(fd, "w") as f:
             f.write(key)
     except OSError:
         # Fallback for Windows (O_EXCL mode bits may not apply)
-        with open(SECRET_KEY_FILE, "w") as f:
+        with open(target, "w") as f:
             f.write(key)
         try:
-            os.chmod(SECRET_KEY_FILE, 0o600)
+            os.chmod(target, 0o600)
         except OSError as exc:
-            LOGGER.debug("could not set permissions on %s: %s", SECRET_KEY_FILE, exc)
+            LOGGER.debug("could not set permissions on %s: %s", target, exc)
+    if target != SECRET_KEY_FILE:
+        os.replace(target, SECRET_KEY_FILE)
     return key
 
 
@@ -1865,34 +1890,22 @@ async def lifespan(app: FastAPI):
 async def _rate_limit_cleanup_loop() -> None:
     """Periodically prune stale entries from the API rate-limit tracker and
     the login attempt/lockout maps (all keyed by client IP; without pruning,
-    every IP that ever failed a login stays in memory for the process life)."""
+    every IP that ever failed a login stays in memory for the process life).
+    The maps are also size-capped (``state.TRACKER_MAX_ENTRIES``); the expiry
+    rules live beside them in ``netcontrol/routes/state.py``."""
     while True:
         await asyncio.sleep(300)  # every 5 minutes
         try:
-            window = max(1, int(state.API_RATE_LIMIT.get("window", 60)))
             now = time.time()
             lock = state.API_RATE_LIMIT_LOCK
             if lock:
                 async with lock:
-                    tracker = state.API_RATE_LIMIT_TRACKER
-                    stale_keys = [ip for ip, ts in tracker.items() if not ts or (now - ts[-1]) > window]
-                    for key in stale_keys:
-                        tracker.pop(key, None)
+                    prune_expired(state.API_RATE_LIMIT_TRACKER, state.rate_limit_entry_expired, now)
 
-            # Login state: drop lockouts that have expired and attempt lists
-            # whose newest entry is older than any window that still matters.
-            for ip, unlock_at in list(state.LOCKED_OUT.items()):
-                if now >= unlock_at:
-                    state.LOCKED_OUT.pop(ip, None)
-            attempt_ttl = max(
-                int(state.LOGIN_RULES.get("lockout_time", 900)),
-                int(state.LOGIN_RULES.get("rate_limit_window", 60)),
-            )
-            for ip, attempts in list(state.LOGIN_ATTEMPTS.items()):
-                if ip in state.LOCKED_OUT:
-                    continue  # still relevant to the active lockout
-                if not attempts or (now - max(attempts)) > attempt_ttl:
-                    state.LOGIN_ATTEMPTS.pop(ip, None)
+            # Login state: drop lockouts that have expired, then attempt
+            # lists whose newest entry is older than any window that matters.
+            prune_expired(state.LOCKED_OUT, state.lockout_expired, now)
+            prune_expired(state.LOGIN_ATTEMPTS, state.login_attempts_expired, now)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -1968,13 +1981,16 @@ app.include_router(
     admin_router,
     dependencies=[Depends(require_admin)],
 )
+# Feature routers below are read with the feature key and changed with
+# ``<key>.write`` (require_feature_method). POST routes that only read are
+# kept on a separate router mounted with plain require_feature.
 app.include_router(
     templates_router,
-    dependencies=[Depends(require_auth), Depends(require_feature("templates"))],
+    dependencies=[Depends(require_auth), Depends(require_feature_method("templates"))],
 )
 app.include_router(
     credentials_router,
-    dependencies=[Depends(require_auth), Depends(require_feature("credentials"))],
+    dependencies=[Depends(require_auth), Depends(require_feature_method("credentials"))],
 )
 # Secret Variables - encrypted key-value store for template substitution
 # List/names endpoints need auth only (template editor autocomplete);
@@ -1983,10 +1999,14 @@ app.include_router(
     secret_variables_router,
     dependencies=[Depends(require_auth)],
 )
+# Playbooks: read and edit names, descriptions, tags and inputs with
+# playbooks / playbooks.write; creating, deleting and changing a playbook's
+# code are admin only (a Python playbook runs inside the server).
 app.include_router(
     playbooks_router,
-    dependencies=[Depends(require_auth), Depends(require_feature("playbooks"))],
+    dependencies=[Depends(require_auth), Depends(require_feature_method("playbooks"))],
 )
+app.include_router(playbooks_admin_router, dependencies=[Depends(require_admin)])
 
 app.add_middleware(
     CORSMiddleware,
@@ -2218,6 +2238,15 @@ async def https_redirect_middleware(request: Request, call_next):
     return await call_next(request)
 
 
+# ── Request body limit ────────────────────────────────────────────────────────
+# Registered last so it is the outermost user middleware: an oversized body
+# gets 413 before CSRF, rate limiting, auth or form parsing touch it. Default
+# APP_MAX_REQUEST_BODY_MB (10 MB); the upload routes in
+# netcontrol/body_limit.py:default_path_limits get larger limits, mirrored by
+# the location blocks in deploy/nginx.conf.
+app.add_middleware(BodyLimitMiddleware)
+
+
 def _api_error_response(status_code: int, code: str, message: str, detail: dict | None = None) -> JSONResponse:
     content: dict = {
         "ok": False,
@@ -2409,13 +2438,18 @@ init_upgrades(verify_session_token, _get_user_features)
 # Jobs
 app.include_router(
     jobs_router,
+    dependencies=[Depends(require_auth), Depends(require_feature_method("jobs"))],
+)
+# Approve / deny need jobs.approve (checked in the handler), not jobs.write.
+app.include_router(
+    jobs_approvals_router,
     dependencies=[Depends(require_auth), Depends(require_feature("jobs"))],
 )
 app.include_router(jobs_ws_router)  # WebSocket - handles its own auth
 # Inventory + admin
 app.include_router(
     inventory_router,
-    dependencies=[Depends(require_auth), Depends(require_feature("inventory"))],
+    dependencies=[Depends(require_auth), Depends(require_feature_method("inventory"))],
 )
 app.include_router(
     inventory_admin_router,
@@ -2428,7 +2462,7 @@ app.include_router(custom_fields_router, dependencies=[Depends(require_auth)])
 app.include_router(custom_fields_admin_router, dependencies=[Depends(require_admin)])
 app.include_router(
     custom_fields_inventory_router,
-    dependencies=[Depends(require_auth), Depends(require_feature("inventory"))],
+    dependencies=[Depends(require_auth), Depends(require_feature_method("inventory"))],
 )
 app.include_router(
     custom_fields_ipam_router,
@@ -2443,7 +2477,7 @@ app.include_router(device_model_router, dependencies=[Depends(require_auth)])
 app.include_router(device_model_admin_router, dependencies=[Depends(require_admin)])
 app.include_router(
     device_model_inventory_router,
-    dependencies=[Depends(require_auth), Depends(require_feature("inventory"))],
+    dependencies=[Depends(require_auth), Depends(require_feature_method("inventory"))],
 )
 # Circuits, providers, provider networks and circuit types: read with the
 # circuits feature, changed with circuits.write (docs/circuits.md).
@@ -2542,7 +2576,7 @@ app.include_router(
 # Ansible dynamic inventory provider
 app.include_router(
     ansible_inventory_router,
-    dependencies=[Depends(require_auth), Depends(require_feature("inventory"))],
+    dependencies=[Depends(require_auth), Depends(require_feature_method("inventory"))],
 )
 # Topology + admin
 app.include_router(
@@ -2585,7 +2619,7 @@ app.include_router(
 # Config Drift + admin
 app.include_router(
     config_drift_router,
-    dependencies=[Depends(require_auth), Depends(require_feature("config-drift"))],
+    dependencies=[Depends(require_auth), Depends(require_feature_method("config-drift"))],
 )
 app.include_router(
     config_drift_admin_router,
@@ -2596,6 +2630,11 @@ app.include_router(config_drift_ws_router)  # WebSocket - handles its own auth
 # templates, contexts and previews are managed by admins.
 app.include_router(
     intended_config_router,
+    dependencies=[Depends(require_auth), Depends(require_feature_method("config-drift"))],
+)
+# The bulk remediation preview is a POST that only reads.
+app.include_router(
+    intended_config_read_router,
     dependencies=[Depends(require_auth), Depends(require_feature("config-drift"))],
 )
 app.include_router(intended_config_admin_router, dependencies=[Depends(require_admin)])
@@ -2610,17 +2649,17 @@ app.include_router(export_templates_admin_router, dependencies=[Depends(require_
 # Config Backups + admin
 app.include_router(
     config_backups_router,
-    dependencies=[Depends(require_auth), Depends(require_feature("config-backups"))],
+    dependencies=[Depends(require_auth), Depends(require_feature_method("config-backups"))],
 )
 # The rule views of OPNsense firewalls, read from their config backups.
 app.include_router(
     opnsense_rules_router,
-    dependencies=[Depends(require_auth), Depends(require_feature("config-backups"))],
+    dependencies=[Depends(require_auth), Depends(require_feature_method("config-backups"))],
 )
 # Compliance + admin
 app.include_router(
     compliance_router,
-    dependencies=[Depends(require_auth), Depends(require_feature("compliance"))],
+    dependencies=[Depends(require_auth), Depends(require_feature_method("compliance"))],
 )
 app.include_router(
     compliance_admin_router,
@@ -2629,17 +2668,17 @@ app.include_router(
 # Meraki organizations scanned against profiles with "meraki" rules
 app.include_router(
     meraki_compliance_router,
-    dependencies=[Depends(require_auth), Depends(require_feature("compliance"))],
+    dependencies=[Depends(require_auth), Depends(require_feature_method("compliance"))],
 )
 # Risk Analysis
 app.include_router(
     risk_analysis_router,
-    dependencies=[Depends(require_auth), Depends(require_feature("risk-analysis"))],
+    dependencies=[Depends(require_auth), Depends(require_feature_method("risk-analysis"))],
 )
 # Deployments
 app.include_router(
     deployments_router,
-    dependencies=[Depends(require_auth), Depends(require_feature("deployments"))],
+    dependencies=[Depends(require_auth), Depends(require_feature_method("deployments"))],
 )
 app.include_router(deployments_ws_router)  # WebSocket - handles its own auth
 # Maintenance windows (gating layer for deployments) -- shares the
@@ -2715,7 +2754,7 @@ app.include_router(
 # Metrics Engine (Prometheus-style)
 app.include_router(
     metrics_engine_router,
-    dependencies=[Depends(require_auth), Depends(require_feature("monitoring"))],
+    dependencies=[Depends(require_auth), Depends(require_feature_method("monitoring"))],
 )
 app.include_router(
     metrics_engine_admin_router,
@@ -2729,7 +2768,7 @@ app.include_router(
 # Graph Templates (Cacti-parity)
 app.include_router(
     graph_templates_router,
-    dependencies=[Depends(require_auth), Depends(require_feature("graph-templates"))],
+    dependencies=[Depends(require_auth), Depends(require_feature_method("graph-templates"))],
 )
 
 app.include_router(
@@ -2739,7 +2778,7 @@ app.include_router(
 # Custom OID profiles (SNMP poller configuration) - monitoring, not reports
 app.include_router(
     oid_profiles_router,
-    dependencies=[Depends(require_auth), Depends(require_feature("monitoring"))],
+    dependencies=[Depends(require_auth), Depends(require_feature_method("monitoring"))],
 )
 # Audit Report Engine
 app.include_router(
@@ -2749,6 +2788,11 @@ app.include_router(
 # CDEF Engine (calculated data sources)
 app.include_router(
     cdef_router,
+    dependencies=[Depends(require_auth), Depends(require_feature_method("graph-templates"))],
+)
+# Evaluating a CDEF expression against sample data is a POST that only reads.
+app.include_router(
+    cdef_read_router,
     dependencies=[Depends(require_auth), Depends(require_feature("graph-templates"))],
 )
 # MAC/ARP Tracking
@@ -2768,7 +2812,7 @@ app.include_router(
 # Baseline Deviation Alerting
 app.include_router(
     baseline_alerting_router,
-    dependencies=[Depends(require_auth), Depends(require_feature("monitoring"))],
+    dependencies=[Depends(require_auth), Depends(require_feature_method("monitoring"))],
 )
 # Graph Export (PNG/SVG/embed URLs)
 app.include_router(
@@ -2778,7 +2822,7 @@ app.include_router(
 # Interface Error/Discard Trending
 app.include_router(
     interface_errors_router,
-    dependencies=[Depends(require_auth), Depends(require_feature("monitoring"))],
+    dependencies=[Depends(require_auth), Depends(require_feature_method("monitoring"))],
 )
 # Bandwidth Billing & 95th Percentile
 app.include_router(
@@ -2808,7 +2852,7 @@ app.include_router(
 # Geolocation and Floor Plan Mapping
 app.include_router(
     geolocation_router,
-    dependencies=[Depends(require_auth), Depends(require_feature("floor-plan"))],
+    dependencies=[Depends(require_auth), Depends(require_feature_method("floor-plan"))],
 )
 # Multi-Instance Federation
 app.include_router(
@@ -2818,25 +2862,25 @@ app.include_router(
 # IOS-XE Upgrade Tool
 app.include_router(
     upgrades_router,
-    dependencies=[Depends(require_auth), Depends(require_feature("upgrades"))],
+    dependencies=[Depends(require_auth), Depends(require_feature_method("upgrades"))],
 )
 app.include_router(upgrades_ws_router)  # WebSocket - handles its own auth
 # Digital Twin / Lab Mode
 app.include_router(
     lab_router,
-    dependencies=[Depends(require_auth), Depends(require_feature("lab"))],
+    dependencies=[Depends(require_auth), Depends(require_feature_method("lab"))],
 )
 app.include_router(
     lab_runtime_router,
-    dependencies=[Depends(require_auth), Depends(require_feature("lab"))],
+    dependencies=[Depends(require_auth), Depends(require_feature_method("lab"))],
 )
 app.include_router(
     lab_topology_router,
-    dependencies=[Depends(require_auth), Depends(require_feature("lab"))],
+    dependencies=[Depends(require_auth), Depends(require_feature_method("lab"))],
 )
 app.include_router(
     lab_drift_router,
-    dependencies=[Depends(require_auth), Depends(require_feature("lab"))],
+    dependencies=[Depends(require_auth), Depends(require_feature_method("lab"))],
 )
 
 # Plugins (docs/plugin-development.md): only the ones named in PLEXUS_PLUGINS

@@ -61,19 +61,30 @@ All API endpoints and their required authentication/authorization levels.
 
 ### Feature-gated (auth + feature flag)
 
+Every feature router of a writable feature (one with a Modify column in the
+access-group editor) is mounted with `require_feature_method`: reads need the
+feature key, and `POST`/`PUT`/`PATCH`/`DELETE` need `<feature>.write` too
+(`403` "Read-only access"). The exceptions are routers mounted with plain
+`require_feature` for POST routes that only read, or that a separate key
+gates: `POST /api/intended-config/remediation` (`config-drift`),
+`POST /api/cdefs/evaluate` (`graph-templates`), `POST /api/jobs/{id}/approve`
+and `/deny` (`jobs` plus `jobs.approve`), and the topology history routes
+below. Admins and the API token pass every feature check.
+
 | Feature | Paths | Router |
 |---------|-------|--------|
 | `inventory` | `/api/inventory/*` | inventory |
 | `topology` | `/api/topology/*` | topology |
 | `topology` | `GET/POST/DELETE /api/topology/history/{kind}`, `DELETE /api/topology/history/{kind}/{entry_id}` (the caller's own last 30 Path Mode traces, reachability sweeps or summaries; the writes need only `topology`, not `topology.write`, since each user changes only their own history) | tool_history |
 | `topology` | `/api/sources/*`, `/api/topology/search/deep`, `/api/topology/export.html` (collections/deletes need `topology.write`; source and credential management `POST/PUT/DELETE /api/sources*` is admin-only in the handlers) | meraki_topology |
-| `jobs` | `/api/jobs/*` (launch, retry and rerun also check the task's run permission and, for a live run, its commit permission: `403` when refused; admins and API token callers always pass. See `docs/jobs.md#run-and-commit-permissions`. `GET /api/jobs/approvals`, `POST /api/jobs/{id}/approve` and `POST /api/jobs/{id}/deny` also need `jobs.approve` (admins and the API token always have it) and every job target writable; the job's own requester is refused with `403`, admins included (four-eyes, like deployment approval). Changing a task's `approval_required` needs admin in the handler. See `docs/jobs.md#approvals`) | jobs |
+| `jobs` | `/api/jobs/*` (writes need `jobs.write`, except approve and deny. Launch, retry and rerun of an Ansible task need admin, and the queue fails a queued Ansible job whose launcher is not an admin. Launch, retry and rerun also check the task's run permission and, for a live run, its commit permission: `403` when refused; admins and API token callers always pass. See `docs/jobs.md#run-and-commit-permissions`. `GET /api/jobs/approvals`, `POST /api/jobs/{id}/approve` and `POST /api/jobs/{id}/deny` also need `jobs.approve` (admins and the API token always have it) and every job target writable; the job's own requester is refused with `403`, admins included (four-eyes, like deployment approval). Changing a task's `approval_required` needs admin in the handler. See `docs/jobs.md#approvals`) | jobs |
 | `templates` | `/api/templates/*` | templates |
 | `credentials` | `/api/credentials/*` | credentials |
-| `playbooks` | `/api/playbooks/*` (`PUT /api/playbooks/{id}/permissions`, and `permissions` in a playbook create or update, need admin in the handler; `GET/PUT /api/playbooks/{id}/input-schema` need only the feature) | playbooks |
+| `playbooks` | `GET /api/playbooks`, `GET /api/playbooks/{id}`, `GET /api/playbooks/{id}/input-schema`; `PUT /api/playbooks/{id}` and `PUT /api/playbooks/{id}/input-schema` need `playbooks.write`. Changing a playbook's code (`content`, `type` or `filename` different from the stored value) needs admin in the handler (`403`), as do `PUT /api/playbooks/{id}/permissions` and `permissions` / `approval_required` in an update. A module write never replaces a built-in playbook's module or another playbook's (`409`) | playbooks (router) |
+| admin | `POST /api/playbooks`, `DELETE /api/playbooks/{id}` (a Python playbook is imported into the server process, an Ansible playbook runs on the controller) | playbooks (admin_router) |
 | `config-drift` | `/api/config-drift/*` | config_drift |
-| `config-drift` | `GET /api/intended-config/templates`, `GET /api/intended-config/templates/{id}`, `GET /api/intended-config/contexts`, `GET /api/intended-config/contexts/{id}`, `GET /api/intended-config/hosts`, `GET /api/intended-config/hosts/{host_id}`, `GET /api/intended-config/hosts/{host_id}/variables`, `POST /api/intended-config/generate` (renders and compares stored data only, no device session; audited as `config` / `intended_generate`) | intended_config (router) |
-| `config-drift` | `GET /api/intended-config/hosts/{host_id}/remediation`, `POST /api/intended-config/remediation` (remediation commands from stored data, read scope on every host; stores and pushes nothing) | intended_config (router) |
+| `config-drift` | `GET /api/intended-config/templates`, `GET /api/intended-config/templates/{id}`, `GET /api/intended-config/contexts`, `GET /api/intended-config/contexts/{id}`, `GET /api/intended-config/hosts`, `GET /api/intended-config/hosts/{host_id}`, `GET /api/intended-config/hosts/{host_id}/variables`, `POST /api/intended-config/generate` (renders and compares stored data only, no device session; needs `config-drift.write`; audited as `config` / `intended_generate`) | intended_config (router) |
+| `config-drift` | `GET /api/intended-config/hosts/{host_id}/remediation` (router), `POST /api/intended-config/remediation` (read_router: no `config-drift.write` needed) (remediation commands from stored data, read scope on every host; stores and pushes nothing) | intended_config |
 | `deployments` + `config-drift` | `POST /api/deployments/intended-remediation` (plans one deployment per host from its remediation; `config-drift` checked in the handler, write scope on every host, credential ownership as for `POST /api/deployments`; audited as `deployments` / `deployment.intended_remediation`) | deployments |
 | `config-backups` | `/api/config-backups/*` | config_backups |
 | `compliance` | `/api/compliance/*` | compliance |

@@ -45,13 +45,17 @@ services:
       # the code default (<app>/floor_plans) is on the ephemeral layer and
       # is lost on every container recreate.
       GEO_FLOOR_PLAN_DIR: /app/state/floor_plans
-      # Login lockout and API rate limiting key on the client IP. Without
-      # this, uvicorn only trusts X-Forwarded-For from 127.0.0.1, so every
-      # browser arrives as the nginx container's IP and one user's failed
-      # logins lock out everyone. The app port is published on loopback only
-      # and otherwise reachable just from nginx on the compose network, so
-      # trusting the header from any peer is safe here.
-      FORWARDED_ALLOW_IPS: "*"
+      # Login lockout and API rate limiting key on the client IP. uvicorn
+      # takes it from X-Forwarded-For only when the TCP peer is listed here,
+      # so trust exactly the nginx container (its fixed address on the
+      # plexus network below). nginx overwrites the header with the address
+      # it sees ($remote_addr, deploy/nginx.conf), so the client cannot pick
+      # it. Never set "*": uvicorn then takes the left-most entry, which the
+      # client chooses. Requests to the loopback port below come from the
+      # Docker gateway, which is not trusted, so they keep their own address.
+      FORWARDED_ALLOW_IPS: ${PLEXUS_NGINX_IP:-172.30.80.10}
+    networks:
+      - plexus
     ports:
       # Bind the app port to loopback only - nginx reaches it over the
       # internal Docker network (http://plexus:8080), so publishing it on all
@@ -103,6 +107,8 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-plexus}
       POSTGRES_USER: ${POSTGRES_USER:-plexus}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env (run deploy/setup.sh to generate one)}
+    networks:
+      - plexus
     volumes:
       - plexus-postgres:/var/lib/postgresql/data
     deploy:
@@ -123,6 +129,11 @@ services:
     container_name: plexus-nginx
     restart: unless-stopped
     logging: *default-logging
+    networks:
+      plexus:
+        # Fixed so the app can trust X-Forwarded-For from this address only
+        # (FORWARDED_ALLOW_IPS above). Must sit inside PLEXUS_NETWORK_SUBNET.
+        ipv4_address: ${PLEXUS_NGINX_IP:-172.30.80.10}
     ports:
       - "443:443"
       - "80:80"
@@ -136,6 +147,16 @@ services:
     depends_on:
       plexus:
         condition: service_healthy
+
+# Internal network with a pinned subnet, so nginx gets a fixed address the
+# app can trust for X-Forwarded-For. If the subnet clashes with a network the
+# host already uses ("Pool overlaps"), set PLEXUS_NETWORK_SUBNET and
+# PLEXUS_NGINX_IP (an address inside it, not .1) in .env.
+networks:
+  plexus:
+    ipam:
+      config:
+        - subnet: ${PLEXUS_NETWORK_SUBNET:-172.30.80.0/24}
 
 volumes:
   plexus-db:

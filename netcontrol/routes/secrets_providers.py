@@ -11,7 +11,9 @@ them but never change or test them (403).
 A provider's own auth secrets (Vault token or AppRole secret id, AWS secret
 access key and session token, Azure client secret) are write-only: they are
 stored encrypted with ``routes.crypto``, a blank or missing one on update
-keeps the stored value, and reads list only which are set
+keeps the stored value (unless the update changes where secrets are sent:
+the address or TLS settings, ``DESTINATION_SETTINGS``; then the secrets
+must be entered again, else 400), and reads list only which are set
 (``secrets_set``). The test endpoint resolves one reference and answers
 success or failure (with the error code and a message naming the provider,
 path and key), never the value.
@@ -90,9 +92,11 @@ def _description(value: str) -> str:
     return text
 
 
-def _prepared(provider_type: str, config: Any, secrets: Any, stored: str = "") -> tuple[dict, str]:
+def _prepared(
+    provider_type: str, config: Any, secrets: Any, stored: str = "", stored_config: dict | None = None
+) -> tuple[dict, str]:
     try:
-        return prepare_provider(provider_type, config, secrets, stored)
+        return prepare_provider(provider_type, config, secrets, stored, stored_config)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
 
@@ -188,6 +192,7 @@ async def update_provider(provider_id: int, body: ProviderUpdate, request: Reque
             body.config if body.config is not None else stored_config,
             body.secrets,
             str(row.get("secret_enc") or ""),
+            stored_config,
         )
         fields["config_json"] = json.dumps(config, sort_keys=True)
         fields["secret_enc"] = secret_enc

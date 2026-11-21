@@ -767,3 +767,76 @@ def test_unavailable_stand_in_and_materialize_passthrough():
     plain = {"id": 1, "password": "x"}
     assert asyncio.run(service.materialize_credential(plain)) is plain
     assert asyncio.run(service.materialize_credential(None)) is None
+
+
+# ── Re-targeting a provider needs its secrets again (SECURITY_AUDIT finding 8) ──
+
+
+def test_destination_change_refuses_the_stored_secret():
+    config, enc = service.prepare_provider("vault", {"url": VAULT_URL}, {"token": FAKE_TOKEN})
+    for change in (
+        {"url": "https://vault.other.example.com"},
+        {"verify_tls": False},
+        {"ca_pem": "-----BEGIN CERTIFICATE-----"},
+    ):
+        with pytest.raises(ValueError, match="enter token again") as err:
+            service.prepare_provider("vault", {**config, **change}, {}, enc, config)
+        assert FAKE_TOKEN not in str(err.value)
+    # Re-sent in the same request: accepted, and the new token is stored.
+    _, moved = service.prepare_provider(
+        "vault", {**config, "url": "https://vault.other.example.com"}, {"token": "new-token"}, enc, config
+    )
+    assert service.decode_secrets(moved) == {"token": "new-token"}
+    # Settings that do not move the secret keep it.
+    _, same = service.prepare_provider("vault", {**config, "namespace": "team-b", "mount": "kv"}, {}, enc, config)
+    assert service.decode_secrets(same) == {"token": FAKE_TOKEN}
+
+    azure = {
+        "vault_url": "https://kv-test.vault.azure.net",
+        "tenant_id": "tenant.example.com",
+        "client_id": "client-1",
+    }
+    az_config, az_enc = service.prepare_provider("azure", azure, {"client_secret": "invented-client-secret"})
+    for change in ({"authority_host": "https://login.example.com"}, {"tenant_id": "other.example.com"}):
+        with pytest.raises(ValueError, match="client_secret"):
+            service.prepare_provider("azure", {**az_config, **change}, {}, az_enc, az_config)
+
+    aws = {"region": "us-east-1", "access_key_id": "test-key-id"}
+    aws_config, aws_enc = service.prepare_provider("aws", aws, {"secret_access_key": "x", "session_token": "y"})
+    with pytest.raises(ValueError, match="secret_access_key, session_token"):
+        service.prepare_provider(
+            "aws", {**aws_config, "endpoint_url": "https://aws.example.com"}, {}, aws_enc, aws_config
+        )
+
+
+def test_provider_urls_need_https_except_loopback():
+    with pytest.raises(ValueError, match="https"):
+        VaultProvider.validate({"url": "http://vault.example.com:8200"}, {"token": "t"})
+    with pytest.raises(ValueError, match="https"):
+        AzureKeyVaultProvider.validate({"vault_url": "http://kv-test.vault.azure.net", "auth_method": "default"}, {})
+    assert VaultProvider.validate({"url": "http://127.0.0.1:8200"}, {"token": "t"})["url"] == "http://127.0.0.1:8200"
+    assert VaultProvider.validate({"url": "http://localhost:8200"}, {"token": "t"})
+
+
+def test_writer_cannot_send_the_stored_token_to_a_new_host(monkeypatch, request):
+    admin = admin_client(monkeypatch, request)
+    pid = _create_vault(admin)
+    writer = user_client(admin, "sp-writer", features=["secrets-providers", "secrets-providers.write"])
+    recorder = _mock(monkeypatch, _vault_routes())
+
+    moved = writer.put(f"{API}/{pid}", json={"config": {"url": "https://203.0.113.5"}})
+    assert moved.status_code == 400, moved.text
+    assert "token" in moved.text and FAKE_TOKEN not in moved.text
+    assert admin.get(f"{API}/{pid}").json()["config"]["url"] == VAULT_URL
+
+    # The test route resolves the stored provider only: same host as before.
+    writer.post(f"{API}/{pid}/test", json={"path": "network/core", "key": "password"})
+    assert recorder.requests, "the test route should still reach the stored address"
+    for sent in recorder.requests:
+        assert sent.url.host == "vault.example.com"
+
+    # Re-entering the token with the new address is accepted.
+    resent = writer.put(
+        f"{API}/{pid}", json={"config": {"url": "https://vault2.example.com"}, "secrets": {"token": "t2"}}
+    )
+    assert resent.status_code == 200, resent.text

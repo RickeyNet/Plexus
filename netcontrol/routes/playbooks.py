@@ -4,6 +4,16 @@ playbooks.py -- Playbook CRUD routes and file management.
 Object scope: playbooks are a shared catalogue (no host or group): accounts
 limited to selected inventory groups read them and run them through jobs
 (which check the targets); only unrestricted callers change them.
+
+Two routers:
+
+- ``router`` (the ``playbooks`` feature; changes need ``playbooks.write``):
+  read the catalogue, edit a playbook's name, description, tags and inputs.
+  Changing its code (``content``, ``type`` or ``filename``) is refused
+  unless the caller is an admin.
+- ``admin_router`` (admin): create and delete playbooks. A Python playbook
+  is imported into the Plexus server process and an Ansible playbook runs
+  on the controller, so writing playbook code is an admin action.
 """
 
 from __future__ import annotations
@@ -24,6 +34,7 @@ from netcontrol.routes.shared import _audit, _corr_id, _get_session, require_own
 from netcontrol.telemetry import configure_logging
 
 router = APIRouter()
+admin_router = APIRouter()
 LOGGER = configure_logging("plexus.playbooks")
 
 # Ensure project root is on path for imports
@@ -107,27 +118,87 @@ def _sanitize_ansible_filename(filename: str) -> str:
     return name + ".yml"
 
 
-def write_playbook_file(filename: str, content: str) -> str:
-    """Write playbook content to a file and reload the module."""
+# The playbook modules that ship with Plexus (templates/playbooks). The API
+# never writes over one, so an edit cannot plant code in a module admins
+# run as a built-in; save a changed copy under a new filename instead.
+BUILTIN_PLAYBOOK_FILES = frozenset(
+    {
+        "netflow_enable.py",
+        "ntp_audit.py",
+        "snmpv3_configurator.py",
+        "template_configurator.py",
+        "vlan1_destroyer.py",
+    }
+)
+
+
+def write_playbook_file(filename: str, content: str, *, overwrite: bool = False) -> str:
+    """Write a Python playbook's module and import it so its class registers.
+
+    The file is created exclusively (``FileExistsError`` if it is there)
+    unless ``overwrite`` is set, which the caller does only for the module
+    of the playbook row being edited. A built-in module is never written.
+
+    Only the written module is imported (its ``@register_playbook`` makes it
+    runnable without a restart); the rest of the package is not reloaded.
+    Callers are admin-only routes.
+    """
     playbooks_dir = os.path.join(project_root, "templates", "playbooks")
     os.makedirs(playbooks_dir, exist_ok=True)
     safe_filename = _sanitize_playbook_filename(filename)
+    if safe_filename in BUILTIN_PLAYBOOK_FILES:
+        raise FileExistsError(f"'{safe_filename}' is a built-in playbook module")
     file_path = os.path.normpath(os.path.join(playbooks_dir, safe_filename))
     if not file_path.startswith(os.path.normpath(playbooks_dir)):
         raise ValueError("Invalid playbook filename: resulting path escapes the playbooks directory")
-    with open(file_path, "w", encoding="utf-8") as f:
+    with open(file_path, "w" if overwrite else "x", encoding="utf-8") as f:
         f.write(content)
     module_name = f"templates.playbooks.{safe_filename[:-3]}"
     try:
-        if module_name in sys.modules:
-            del sys.modules[module_name]
-        if "templates.playbooks" in sys.modules:
-            importlib.reload(sys.modules["templates.playbooks"])
-        else:
-            importlib.import_module("templates.playbooks")
+        sys.modules.pop(module_name, None)
+        importlib.import_module(module_name)
     except Exception as e:
-        LOGGER.warning("Failed to reload playbook module %s: %s", module_name, e)
+        LOGGER.warning("Failed to import playbook module %s: %s", module_name, e)
     return file_path
+
+
+async def _require_playbook_file_free(safe_filename: str, playbook_id: int | None) -> None:
+    """Refuse (409) a module filename that is a built-in's or another
+    playbook row's: writing it would replace that playbook's code."""
+    if safe_filename in BUILTIN_PLAYBOOK_FILES:
+        raise HTTPException(409, f"'{safe_filename}' is a built-in playbook; save your copy under another filename")
+    for other in await db.get_all_playbooks():
+        if other.get("filename") == safe_filename and other.get("id") != playbook_id:
+            raise HTTPException(409, f"'{safe_filename}' belongs to another playbook ('{other.get('name')}')")
+
+
+def _write_playbook_module(safe_filename: str, content: str, *, overwrite: bool) -> None:
+    """``write_playbook_file`` with its refusals as HTTP errors."""
+    try:
+        write_playbook_file(safe_filename, content, overwrite=overwrite)
+    except FileExistsError:
+        raise HTTPException(409, f"A playbook file named '{safe_filename}' already exists; choose another filename")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+async def _require_admin_for_code(request: Request | None) -> None:
+    """Changing a playbook's code (content, type or filename) needs an admin:
+    a Python playbook runs inside the Plexus server and an Ansible playbook
+    on the controller."""
+    if request is None:
+        return
+    try:
+        await require_owner_or_admin(request, None)
+    except HTTPException as exc:
+        raise HTTPException(
+            status_code=403, detail="Only an admin can change a playbook's code, type or filename"
+        ) from exc
+
+
+def _same_text(a: str | None, b: str | None) -> bool:
+    """Equal ignoring line-ending style (the editor normalises to ``\\n``)."""
+    return (a or "").replace("\r\n", "\n") == (b or "").replace("\r\n", "\n")
 
 
 async def sync_playbooks_from_registry():
@@ -392,7 +463,7 @@ async def put_playbook_permissions(playbook_id: int, body: PermissionsBody, requ
     return {"ok": True, "permissions": permissions}
 
 
-@router.post("/api/playbooks", status_code=201)
+@admin_router.post("/api/playbooks", status_code=201)
 @scoped("catalog")
 async def create_playbook(body: PlaybookCreate, request: Request = None):
     await require_model_write(request)
@@ -407,8 +478,9 @@ async def create_playbook(body: PlaybookCreate, request: Request = None):
     input_schema = _clean_schema(body.input_schema)
     permissions = await _clean_permissions(body.permissions, request)
     approval_required = await _clean_approval_required(body.approval_required, False, request)
+    await _require_playbook_file_free(filename, None)
     if pb_type == "python" and body.content:
-        write_playbook_file(filename, body.content)
+        _write_playbook_module(filename, body.content, overwrite=False)
     pid = await db.create_playbook(
         body.name,
         filename,
@@ -441,7 +513,8 @@ async def update_playbook(playbook_id: int, body: PlaybookUpdate, request: Reque
     if any(v is not None for v in (body.name, body.filename, body.description, body.tags, body.content, body.type)):
         # A Git source's playbook changes in its repository; inputs and permissions stay editable.
         reject_git_owned(playbook, "playbook")
-    pb_type = body.type if body.type in ("python", "ansible") else playbook.get("type", "python")
+    current_type = playbook.get("type", "python")
+    pb_type = body.type if body.type in ("python", "ansible") else current_type
     update_filename = None
     if body.filename is not None:
         try:
@@ -451,22 +524,37 @@ async def update_playbook(playbook_id: int, body: PlaybookUpdate, request: Reque
                 update_filename = _sanitize_playbook_filename(body.filename)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
+    # The editor sends every field on save; only a value that differs from
+    # the stored one is a change. Code changes are admin only.
+    content_changed = body.content is not None and not _same_text(body.content, playbook.get("content"))
+    type_changed = pb_type != current_type
+    filename_changed = update_filename is not None and update_filename != playbook.get("filename")
+    code_changed = content_changed or type_changed or filename_changed
+    if code_changed:
+        await _require_admin_for_code(request)
     input_schema = _clean_schema(body.input_schema)
     permissions = await _clean_permissions(body.permissions, request)
     approval_required = await _clean_approval_required(
         body.approval_required, bool(playbook.get("approval_required")), request
     )
-    if pb_type == "python" and body.content is not None:
-        target_filename = update_filename or playbook["filename"]
-        write_playbook_file(target_filename, body.content)
+    target_filename = update_filename or playbook["filename"]
+    if filename_changed:
+        await _require_playbook_file_free(target_filename, playbook_id)
+    if pb_type == "python" and code_changed and body.content is not None:
+        # Overwrite only the module this (python) row already owns; a new
+        # filename, or a row switching from Ansible, creates its file.
+        own_module = not filename_changed and current_type == "python"
+        if own_module:
+            await _require_playbook_file_free(target_filename, playbook_id)
+        _write_playbook_module(target_filename, body.content, overwrite=own_module)
     await db.update_playbook(
         playbook_id,
         name=body.name,
-        filename=update_filename,
+        filename=update_filename if filename_changed else None,
         description=body.description,
         tags=body.tags,
-        content=body.content,
-        type=body.type,
+        content=body.content if content_changed else None,
+        type=pb_type if type_changed else None,
         input_schema=input_schema,
         permissions=permissions,
         approval_required=approval_required,
@@ -477,13 +565,14 @@ async def update_playbook(playbook_id: int, body: PlaybookUpdate, request: Reque
         "playbook.update",
         user=session["user"] if session else "",
         detail=f"updated playbook {playbook_id}"
+        + (" code_changed=1" if code_changed else "")
         + (f" approval_required={int(approval_required)}" if approval_required is not None else ""),
         correlation_id=_corr_id(request),
     )
     return {"ok": True}
 
 
-@router.delete("/api/playbooks/{playbook_id}")
+@admin_router.delete("/api/playbooks/{playbook_id}")
 @scoped("catalog")
 async def delete_playbook(playbook_id: int, request: Request = None):
     playbook = await db.get_playbook(playbook_id)

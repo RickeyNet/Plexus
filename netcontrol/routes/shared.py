@@ -130,8 +130,9 @@ def init_shared(verify_session_token_fn):
 
 
 def _get_session(request) -> dict | None:
-    """Extract session data from the request cookie without raising."""
-    token = request.cookies.get("session")
+    """Extract session data from the request cookie without raising (None for
+    an object with no cookies, e.g. a route function called directly)."""
+    token = (getattr(request, "cookies", None) or {}).get("session")
     if not token:
         return None
     if _verify_session_token_fn is None:
@@ -241,15 +242,22 @@ async def require_owner_or_admin(request, owner_username: str | None) -> dict | 
     reading or controlling objects created by other users.
     """
     session = _get_session(request)
-    if session is None:
-        # No cookie => authenticated via API token upstream. Allow.
-        return None
-    if owner_username and session.get("user") == owner_username:
+    if session is not None and owner_username and session.get("user") == owner_username:
         return session
-    user = await db.get_user_by_id(session["user_id"])
-    if user and user.get("role") == "admin":
+    if await caller_is_admin(request):
         return session
     raise HTTPException(status_code=403, detail="You do not have access to this resource")
+
+
+async def caller_is_admin(request) -> bool:
+    """Whether the caller of an authenticated request is an admin: an admin
+    session, or no session cookie (the server API token, admin-equivalent,
+    as in ``require_owner_or_admin``)."""
+    session = _get_session(request)
+    if session is None:
+        return True
+    user = await db.get_user_by_id(session["user_id"])
+    return bool(user and user.get("role") == "admin")
 
 
 # ── Credential ownership enforcement ─────────────────────────────────────────
@@ -649,6 +657,36 @@ async def _run_show_command(
             conn.disconnect()
 
     return await asyncio.to_thread(_do_run)
+
+
+def _run_show_commands(
+    host: dict,
+    credentials: dict,
+    commands: tuple[str, ...],
+    *,
+    read_timeout: float = 30,
+    **session_options,
+) -> dict[str, str]:
+    """Blocking: one SSH session, every show command, best-effort per
+    command. Returns ``{command: output}``; a command that fails gives
+    ``(command failed: <error type>)`` as its output, so one bad command
+    does not lose the rest. A failed login raises. ``session_options``
+    (``autodetect``, ``enable_optional``, ``conn_timeout`` ...) go to
+    :func:`_open_netmiko_session`. Run it with ``asyncio.to_thread``."""
+    conn, _resolved = _open_netmiko_session(host, credentials, **session_options)
+    outputs: dict[str, str] = {}
+    try:
+        for command in commands:
+            try:
+                outputs[command] = str(conn.send_command(command, read_timeout=read_timeout))
+            except Exception as exc:  # noqa: BLE001 - one bad command must not lose the rest
+                outputs[command] = f"(command failed: {type(exc).__name__})"
+    finally:
+        try:
+            conn.disconnect()
+        except Exception:  # noqa: BLE001 - best-effort teardown
+            LOGGER.debug("disconnect after show commands failed for %s", host.get("ip_address"))
+    return outputs
 
 
 async def _collect_mac_table_via_cli(host: dict, credentials: dict) -> list[dict]:

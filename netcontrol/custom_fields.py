@@ -68,8 +68,8 @@ class ObjectTypeSpec:
 
 # The table and column names are fixed here; never user input.
 _SPECS: tuple[ObjectTypeSpec, ...] = (
-    ObjectTypeSpec("host", "Host", "hosts", "inventory", "inventory", "host"),
-    ObjectTypeSpec("group", "Inventory group", "inventory_groups", "inventory", "inventory", "inventory_group"),
+    ObjectTypeSpec("host", "Host", "hosts", "inventory", "inventory.write", "host"),
+    ObjectTypeSpec("group", "Inventory group", "inventory_groups", "inventory", "inventory.write", "inventory_group"),
     ObjectTypeSpec("prefix", "Prefix", "ipam_prefixes", "ipam", None, "ipam_prefix", generic=False),
     ObjectTypeSpec("vrf", "VRF", "vrfs", "ipam", None, "vrf"),
     ObjectTypeSpec("vlan", "VLAN", "vlans", "ipam", None, "vlan"),

@@ -275,18 +275,31 @@ async def upsert_external_user(
     return await db.get_user_by_id(user_id)
 
 
+async def _assign_default_groups(user: dict, group_ids: list[int], provider: str) -> dict | None:
+    """Give a newly created shadow user the provider's default access groups."""
+    if not group_ids:
+        return user
+    try:
+        await db.set_user_groups(int(user["id"]), group_ids)
+    except ValueError:
+        LOGGER.warning("%s: default access group assignment failed for user '%s'", provider, user.get("username"))
+        return user
+    return await db.get_user_by_id(int(user["id"]))
+
+
 async def upsert_radius_user(username: str) -> dict | None:
-    """Ensure a local shadow user exists for RADIUS-authenticated identities."""
+    """Ensure a local shadow user exists for RADIUS-authenticated identities.
+
+    Always goes through upsert_external_user, existing account or not, so
+    its admin name-collision guard applies: a RADIUS identity named like a
+    local admin is refused instead of signing in as that admin.
+    """
     existing = await db.get_user_by_username(username)
-    user = existing or await upsert_external_user(username, provider="radius")
+    user = await upsert_external_user(username, provider="radius")
     if user and not existing:
-        group_ids = state.AUTH_CONFIG.get("radius", {}).get("default_group_ids", [])
-        if group_ids:
-            try:
-                await db.set_user_groups(int(user["id"]), group_ids)
-                user = await db.get_user_by_id(int(user["id"]))
-            except ValueError:
-                LOGGER.warning("radius: default access group assignment failed for user '%s'", username)
+        user = await _assign_default_groups(
+            user, state.AUTH_CONFIG.get("radius", {}).get("default_group_ids", []), "radius"
+        )
     return user
 
 
@@ -489,13 +502,7 @@ async def upsert_tacacs_user(username: str, tacacs_attrs: dict) -> dict | None:
     existing = await db.get_user_by_username(username)
     user = await upsert_external_user(username, role=role, provider="tacacs", sync_role=authorize)
     if user and not existing:
-        group_ids = tacacs_cfg.get("default_group_ids", [])
-        if group_ids:
-            try:
-                await db.set_user_groups(int(user["id"]), group_ids)
-                user = await db.get_user_by_id(int(user["id"]))
-            except ValueError:
-                LOGGER.warning("tacacs: default access group assignment failed for user '%s'", username)
+        user = await _assign_default_groups(user, tacacs_cfg.get("default_group_ids", []), "tacacs")
     return user
 
 
@@ -783,13 +790,7 @@ async def upsert_ldap_user(username: str, ldap_attrs: dict) -> dict | None:
     existing = await db.get_user_by_username(username)
     user = await upsert_external_user(username, display_name=display_name, role=role, provider="ldap", sync_role=True)
     if user and not existing:
-        group_ids = ldap_cfg.get("default_group_ids", [])
-        if group_ids:
-            try:
-                await db.set_user_groups(int(user["id"]), group_ids)
-                user = await db.get_user_by_id(int(user["id"]))
-            except ValueError:
-                LOGGER.warning("ldap: default access group assignment failed for user '%s'", username)
+        user = await _assign_default_groups(user, ldap_cfg.get("default_group_ids", []), "ldap")
     return user
 
 
@@ -1152,7 +1153,10 @@ async def _note_login_success(ip: str) -> None:
 
 
 def _session_cookie_secure() -> bool:
-    return bool(getattr(_app_module(), "APP_HTTPS_ENABLED", _APP_HTTPS_ENABLED))
+    """Whether cookies carry Secure: APP_COOKIE_SECURE (set when TLS ends at
+    a reverse proxy and APP_HTTPS is false) or APP_HTTPS itself."""
+    _app = _app_module()
+    return bool(getattr(_app, "APP_COOKIE_SECURE", _APP_HTTPS_ENABLED) or getattr(_app, "APP_HTTPS_ENABLED", False))
 
 
 def _set_session_cookie(response: Response, user: dict) -> None:
@@ -1422,7 +1426,7 @@ async def change_password(body: ChangePasswordRequest, request: Request):
         httponly=True,
         samesite="strict",
         max_age=_SESSION_MAX_AGE,
-        secure=_APP_HTTPS_ENABLED,
+        secure=_session_cookie_secure(),
     )
     return response
 

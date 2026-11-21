@@ -121,6 +121,11 @@ export interface SnmpProfileV3 {
   priv_password?: string;
 }
 
+/**
+ * A named SNMP profile from GET /admin/snmp-profiles. Admins get the stored
+ * profile (the editor needs it); other users get only id, name, enabled,
+ * version, port and the has_* flags, never the community or v3 keys.
+ */
 export interface SnmpProfile {
   id: string;
   name: string;
@@ -132,6 +137,10 @@ export interface SnmpProfile {
   retries?: number;
   enable_inferred_topology?: boolean;
   v3?: SnmpProfileV3;
+  /** Public view only: whether the secret is set. */
+  has_community?: boolean;
+  has_v3_auth_password?: boolean;
+  has_v3_priv_password?: boolean;
 }
 
 export interface SnmpProfileAssignment {
@@ -767,23 +776,16 @@ export function useScanInventoryGroup() {
   });
 }
 
-export function useSyncInventoryGroup() {
-  const qc = useQueryClient();
-  return useMutation<
-    DiscoverySyncResult,
-    Error,
-    { groupId: number; cidrs: string[]; opts: DiscoveryOptions }
-  >({
-    mutationFn: ({ groupId, cidrs, opts }) =>
-      apiRequest(`/inventory/${groupId}/discovery/sync`, {
-        method: 'POST',
-        body: {
-          ...discoveryBody(cidrs, opts),
-          remove_absent: !!opts.removeAbsent,
-        },
-      }),
-    onSuccess: () => invalidateInventory(qc),
-  });
+/**
+ * What changes when the server stored what a device reports (a discovery
+ * sync or onboard, a verified upgrade): the hosts (model, software
+ * version, serial) and groups, the inventory nodes on the map, and the
+ * software tracker, which the server refreshes when the hosts are stored.
+ */
+export function invalidateHostFacts(qc: ReturnType<typeof useQueryClient>) {
+  invalidateInventory(qc);
+  qc.invalidateQueries({ queryKey: ['topology'] });
+  qc.invalidateQueries({ queryKey: ['software-overview'] });
 }
 
 export function useOnboardDiscoveredHosts() {
@@ -800,7 +802,7 @@ export function useOnboardDiscoveredHosts() {
         method: 'POST',
         body: { discovered_hosts: hosts },
       }),
-    onSuccess: () => invalidateInventory(qc),
+    onSuccess: () => invalidateHostFacts(qc),
   });
 }
 
@@ -908,23 +910,30 @@ export function streamScanInventoryGroup(
 /**
  * Streams sync events from POST `/api/inventory/{id}/discovery/sync/stream`:
  * per-host probe `progress`, a `syncing` event while reconciling with the
- * DB, then a `done` event carrying the add/update/remove counts.
+ * DB, then a `done` event carrying the add/update/remove counts. However
+ * the stream ends, the queries a sync changes are refetched through `qc`
+ * (a stream that fails or is aborted may have stored part of the sync).
  */
-export function streamSyncInventoryGroup(
+export async function streamSyncInventoryGroup(
+  qc: ReturnType<typeof useQueryClient>,
   groupId: number,
   cidrs: string[],
   opts: DiscoveryOptions,
   onEvent: (event: ScanStreamEvent) => void,
   signal?: AbortSignal,
 ): Promise<void> {
-  return streamDiscovery(
-    `/api/inventory/${groupId}/discovery/sync/stream`,
-    cidrs,
-    opts,
-    onEvent,
-    signal,
-    true,
-  );
+  try {
+    await streamDiscovery(
+      `/api/inventory/${groupId}/discovery/sync/stream`,
+      cidrs,
+      opts,
+      onEvent,
+      signal,
+      true,
+    );
+  } finally {
+    invalidateHostFacts(qc);
+  }
 }
 
 // ── Serial number fetching ─────────────────────────────────────────────────

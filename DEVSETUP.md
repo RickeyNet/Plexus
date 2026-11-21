@@ -7,7 +7,7 @@ Windows (Docker Desktop) or in WSL2.
 ## Why this exists
 
 The deployed stack (`docker-compose.yml`) is PostgreSQL 16 + nginx (TLS, HSTS,
-Secure cookies, `FORWARDED_ALLOW_IPS=*`) + the hashed `requirements-lock.txt` +
+Secure cookies, `FORWARDED_ALLOW_IPS` trusting nginx only) + the hashed `requirements-lock.txt` +
 the cloud SDKs (`INSTALL_CLOUD_SDKS=true`). A bare `python templates/run.py`
 without that setup differs from it in ways that hide real bugs:
 
@@ -220,7 +220,8 @@ the `sed` line, edit `.env` by hand and set
    docker compose logs -f plexus
    ```
 2. Open `https://localhost`, accept the certificate warning, log in as
-   `admin` / `netcontrol` and change the password (forced).
+   `admin` with the one-time password `setup.sh` printed (also
+   `PLEXUS_INITIAL_ADMIN_PASSWORD` in `.env`) and change it (forced).
 3. Rebuild after code changes, or reset everything including the database:
    ```bash
    docker compose up --build -d plexus

@@ -178,7 +178,7 @@ def test_scope_hides_out_of_scope_hosts_and_groups(admin, world):
     scoped = _scoped_user(admin, "east-ops", world["a"], ["graphql", "inventory", "config-backups", "ipam"])
     query = """query($a: Int!, $b: Int!) {
         hosts { id hostname group { name parent { name } } latestConfigBackup { status } }
-        groups { id name hosts { hostname } }
+        groups { id name hosts(limit: 20) { hostname } }
         visible: host(id: $a) { hostname }
         hidden: host(id: $b) { hostname }
         groupB: group(id: $b2) { name }
@@ -219,15 +219,15 @@ def test_nested_query_across_inventory_and_ipam(admin, world):
         tags { name color }
         customFields { key value }
       }
-      groups(name: "site") { name children { name hosts { hostname } } }
+      groups(name: "site") { name children { name hosts(limit: 20) { hostname } } }
       prefixes(within: "192.0.2.0/24") {
         prefix vrfName vrf { name } vlan { vid name }
         parent { prefix }
-        children { prefix }
-        ipAddresses { address dnsName source vrf { name } }
+        children(limit: 20) { prefix }
+        ipAddresses(limit: 20) { address dnsName source vrf { name } }
       }
-      vlans(vid: 10) { name prefixes { prefix } }
-      vrfs(name: "BLUE") { name prefixes { prefix } }
+      vlans(vid: 10) { name prefixes(limit: 20) { prefix } }
+      vrfs(name: "BLUE") { name prefixes(limit: 20) { prefix } }
       ipAddresses(address: "192.0.2.5") { address prefixSubnet sourceName }
     }"""
     body = _gql(admin, query, {"id": world["ha"]})
@@ -405,7 +405,7 @@ def test_secrets_never_reach_a_response(admin, world):
       hosts { hostname ipAddress model serialNumber interfaces { name description }
               interfaceAddresses { interface address } latestConfigBackup { id errorMessage configLength }
               customFields { key value } }
-      prefixes { prefix description sourceName ipAddresses { address description } }
+      prefixes { prefix description sourceName ipAddresses(limit: 20) { address description } }
       ipAddresses { address dnsName description }
     }"""
     resp = admin.post(URL, json={"query": query})

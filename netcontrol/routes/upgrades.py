@@ -56,6 +56,7 @@ from netcontrol.routes.shared import (
     _corr_id,
     _get_session,
     _read_device_configs,
+    caller_is_admin,
     require_credential_access,
     require_owner_or_admin,
     resolve_state_root,
@@ -88,9 +89,10 @@ async def _resolve_campaign_credential(
     the campaign's creator (with a live-session fallback for legacy campaigns,
     and ``allow_service`` since scheduled upgrades are unattended work). When
     no credential was set, fall back to the configured service/default
-    credential — the system account used for unattended work, same as
-    monitoring and MAC collection — with no per-user check, because it isn't a
-    user-selected credential.
+    credential, but only for a campaign an admin created (or the API token,
+    which records the creator as ``unknown``). Anyone else's campaign must
+    pass the same per-user check as an explicit credential, so a non-admin
+    cannot point the service credential at addresses of their choosing.
 
     Raises HTTPException(400/403/404) on any failure.
     """
@@ -109,22 +111,46 @@ async def _resolve_campaign_credential(
         )
 
     cred = await service_credential()
-    if cred:
-        return cred
-    # Legacy deployments that never set a service credential fall back to the
-    # job-launch default. AUTH_CONFIG is a heterogeneous dict; the loader
-    # coerces these ids to int.
-    fallback_id = state.AUTH_CONFIG.get("default_credential_id")
-    if not isinstance(fallback_id, int) or not fallback_id:
-        raise HTTPException(
-            400,
-            "No credential set on the campaign and no service credential "
-            "configured. Select a credential on the campaign, or choose the "
-            "Service Credential in Settings > Authentication.",
-        )
-    cred = await db.get_credential_raw(fallback_id)
     if not cred:
-        raise HTTPException(400, f"Configured default credential {fallback_id} no longer exists")
+        # Legacy deployments that never set a service credential fall back to the
+        # job-launch default. AUTH_CONFIG is a heterogeneous dict; the loader
+        # coerces these ids to int.
+        fallback_id = state.AUTH_CONFIG.get("default_credential_id")
+        if not isinstance(fallback_id, int) or not fallback_id:
+            raise HTTPException(
+                400,
+                "No credential set on the campaign and no service credential "
+                "configured. Select a credential on the campaign, or choose the "
+                "Service Credential in Settings > Authentication.",
+            )
+        cred = await db.get_credential_raw(fallback_id)
+        if not cred:
+            raise HTTPException(400, f"Configured default credential {fallback_id} no longer exists")
+
+    # The fallback is the system's credential, so it follows the creator's
+    # rights: an admin's (or the API token's) campaign uses it directly;
+    # anyone else's goes through the per-user check, which refuses a service
+    # credential and any credential the creator does not own.
+    creator = (created_by or "").strip()
+    creator_user = await db.get_user_by_username(creator) if creator else None
+    if creator_user and creator_user.get("role") == "admin":
+        return cred
+    try:
+        if creator_user or (creator and creator.lower() != "unknown"):
+            return await require_credential_access(cred["id"], submitter_username=creator, allow_service=True)
+        if session is not None:
+            return await require_credential_access(cred["id"], session=session, allow_service=True)
+    except HTTPException as exc:
+        if exc.status_code != 403:
+            raise
+        raise HTTPException(
+            403,
+            "This campaign has no credential set, and only a campaign an admin "
+            "created may run with the Plexus service credential. Edit the "
+            "campaign and select one of your own credentials.",
+        ) from exc
+    # Created by the API token (admin-equivalent) and run with no request,
+    # e.g. a scheduled activate rehydrated after a restart.
     return cred
 
 
@@ -510,7 +536,8 @@ class CampaignCreate(BaseModel):
     host_ids: list[int] = Field(default_factory=list, max_length=100000)
     ad_hoc_ips: list[Annotated[str, Field(max_length=64)]] = Field(default_factory=list, max_length=100000)
     # Optional: when omitted the campaign runs with the configured service
-    # credential (the system account used for unattended work).
+    # credential (the system account used for unattended work), which only
+    # an admin's campaign may do (_resolve_campaign_credential).
     credential_id: int | None = None
 
 
@@ -742,6 +769,59 @@ async def _mark_device_on_target_version(campaign_id: int, device_id: int, runni
         completed_at=datetime.now(UTC).isoformat(),
     )
     await _emit_device_status(campaign_id, device_id, **statuses, error_message="")
+    await _share_running_version(campaign_id, device_id, running_version)
+
+
+async def _share_running_version(campaign_id: int, device_id: int, running_version: str) -> None:
+    """A device passed its upgrade: hand the version it runs to the rest of
+    Plexus, so nothing waits for the next discovery sync.
+
+    The campaign row keeps its own copy, but the record the Inventory page,
+    the software tracker and its alerts read is the inventory host, so the
+    host is written through the tracker's own write path. An APC UPS is
+    polled instead: its host carries the card's firmware, and the UPS
+    firmware this tool installs is read by the monitoring poll. A device
+    added by address has no host. Viewers of the campaign get an
+    ``inventory_updated`` event once the shared record changed. Best
+    effort: the upgrade is already recorded and must not fail here.
+    """
+    try:
+        dev = await db.get_upgrade_device(device_id) or {}
+        host_id = dev.get("host_id")
+        if not host_id:
+            return
+        if await apc_upgrade.is_ups_device(dev):
+            from netcontrol.routes.monitoring import poll_host_now
+            from netcontrol.routes.software import refresh_after_collection
+
+            changed = bool((await poll_host_now(int(host_id))).get("hosts_polled"))
+            if changed:
+                await refresh_after_collection()
+        else:
+            from netcontrol.routes.software import record_host_version
+
+            changed = await record_host_version(int(host_id), running_version)
+    except Exception as exc:
+        LOGGER.warning(
+            "upgrade: device %s is verified but sharing its version failed: %s",
+            device_id,
+            type(exc).__name__,
+            exc_info=True,
+        )
+        return
+    if not changed:
+        return
+    await _emit(
+        campaign_id,
+        device_id,
+        "info",
+        f"Inventory and software alerts updated: running {running_version}",
+        host=dev.get("ip_address") or "",
+    )
+    await _broadcast_upgrade_event(
+        campaign_id,
+        {"type": "inventory_updated", "campaign_id": campaign_id, "device_id": device_id, "host_id": host_id},
+    )
 
 
 def _derive_stale_phase_status(phase: str, devices: list[dict]) -> str:
@@ -812,9 +892,18 @@ async def _campaign_visible(scope: ObjectScope, campaign_id: int, *, write: bool
     return {int(h) for h in host_ids if h is not None} <= (reach.write_hosts if write else reach.read_hosts)
 
 
+def _campaign_owner(campaign: dict) -> str | None:
+    """The campaign creator's username, or None for one the API token created
+    (recorded as ``unknown``), which only an admin may then act on."""
+    created_by = (campaign.get("created_by") or "").strip()
+    return created_by if created_by and created_by.lower() != "unknown" else None
+
+
 async def _require_campaign(request: Request, campaign_id: int, *, write: bool = False) -> dict:
     """The campaign; 404 when unknown or (scoped caller) not visible, 403 on
-    ``write`` when a device is not writable."""
+    ``write`` when a device is not writable, and 403 unless the caller created
+    it or is an admin: a campaign runs with its creator's credential, and its
+    events carry device output."""
     campaign = await db.get_upgrade_campaign(campaign_id)
     if not campaign:
         raise HTTPException(404, _CAMPAIGN_NOT_FOUND)
@@ -824,6 +913,7 @@ async def _require_campaign(request: Request, campaign_id: int, *, write: bool =
             raise HTTPException(404, _CAMPAIGN_NOT_FOUND)
         if write and not await _campaign_visible(scope, campaign_id, write=True):
             raise HTTPException(403, READ_ONLY_DETAIL)
+    await require_owner_or_admin(request, _campaign_owner(campaign))
     return campaign
 
 
@@ -1061,7 +1151,8 @@ async def create_campaign(body: CampaignCreate, request: Request):
 
     # Bind-time IDOR gate: if a credential is specified, the creator must own
     # it (or be an admin for a service credential). When omitted, the campaign
-    # runs with the configured service credential at execution time.
+    # runs with the configured service credential at execution time, if its
+    # creator is an admin (_resolve_campaign_credential).
     if body.credential_id is not None:
         await require_credential_access(body.credential_id, session=session, allow_service=True)
 
@@ -1154,11 +1245,10 @@ async def list_campaigns(request: Request):
 @router.get("/api/upgrades/campaigns/{campaign_id}")
 @scoped("campaign")
 async def get_campaign(campaign_id: int, request: Request):
+    # Object-level authz (in _require_campaign): a campaign's events/operations
+    # carry device output and config captures, so only its creator (or an
+    # admin) may read it - holding the `upgrades` feature is not enough.
     campaign = await _require_campaign(request, campaign_id)
-    # Object-level authz: a campaign's events/operations carry device output
-    # and config captures, so only its creator (or an admin) may read it -
-    # holding the `upgrades` feature is not enough (matches the jobs WS).
-    await require_owner_or_admin(request, campaign.get("created_by"))
     campaign = await _repair_stale_running_campaign(campaign)
     campaign["is_actively_running"] = campaign_id in _running_campaigns
     campaign["devices"] = await db.get_upgrade_devices(campaign_id)
@@ -1183,7 +1273,7 @@ async def update_campaign(campaign_id: int, body: CampaignUpdate, request: Reque
         raise HTTPException(400, mix_error)
 
     # Bind-time IDOR gate (see create_campaign). Omitting the credential keeps
-    # the campaign on the configured service-credential default.
+    # the campaign on the configured service-credential default (admins only).
     if body.credential_id is not None:
         await require_credential_access(body.credential_id, session=session, allow_service=True)
 
@@ -1275,15 +1365,33 @@ async def get_campaign_events(
     device_id: int | None = None,
     limit: int = Query(default=1000, ge=1, le=10000),
 ):
-    campaign = await _require_campaign(request, campaign_id)
-    # Same object-level authz as get_campaign - the events are device output.
-    await require_owner_or_admin(request, campaign.get("created_by"))
+    # Owner-or-admin, as get_campaign - the events are device output.
+    await _require_campaign(request, campaign_id)
     return await db.get_upgrade_events(campaign_id, device_id=device_id, limit=limit)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
 # BACKUP MANAGEMENT API
 # ═════════════════════════════════════════════════════════════════════════════
+
+
+_BACKUP_CAMPAIGN_RE = re.compile(r"_\d{8}_\d{6}_campaign(\d+)\.txt$")
+
+
+def _backup_campaign_id(filename: str) -> int | None:
+    """The campaign whose prestage wrote a backup file
+    (``backup_<host>_<YYYYmmdd>_<HHMMSS>_campaign<id>.txt``), or None for a
+    file written before the id was part of the name."""
+    match = _BACKUP_CAMPAIGN_RE.search(filename)
+    return int(match.group(1)) if match else None
+
+
+async def _require_backup_owner(request: Request, filename: str) -> None:
+    """403 unless the caller created the backup's campaign or is an admin.
+    A file with no campaign id, or of a deleted campaign, is admin-only."""
+    campaign_id = _backup_campaign_id(filename)
+    campaign = await db.get_upgrade_campaign(campaign_id) if campaign_id is not None else None
+    await require_owner_or_admin(request, _campaign_owner(campaign) if campaign else None)
 
 
 @router.get("/api/upgrades/backups")
@@ -1295,11 +1403,25 @@ async def list_backups(request: Request):
     if not os.path.isdir(BACKUPS_DIR) or (await request_scope(request)).restricted:
         return []
 
+    # An admin (or the API token) sees every file; anyone else only those of
+    # campaigns they created, as with the campaign's events.
+    allowed: dict[int | None, bool] | None = None if await caller_is_admin(request) else {None: False}
+
     backups = []
     for fname in sorted(os.listdir(BACKUPS_DIR), reverse=True):
         fpath = os.path.join(BACKUPS_DIR, fname)
         if not os.path.isfile(fpath):
             continue
+        if allowed is not None:
+            campaign_id = _backup_campaign_id(fname)
+            if campaign_id not in allowed:
+                try:
+                    await _require_backup_owner(request, fname)
+                    allowed[campaign_id] = True
+                except HTTPException:
+                    allowed[campaign_id] = False
+            if not allowed[campaign_id]:
+                continue
         stat = os.stat(fpath)
         backups.append(
             {
@@ -1323,6 +1445,7 @@ async def download_backup(filename: str, request: Request):
 
     if not os.path.isfile(fpath) or (await request_scope(request)).restricted:
         raise HTTPException(404, "Backup file not found")
+    await _require_backup_owner(request, safe)
 
     return FileResponse(fpath, filename=safe, media_type="text/plain")
 
@@ -1342,6 +1465,7 @@ async def delete_backup(filename: str, request: Request):
 
     if not os.path.isfile(fpath):
         raise HTTPException(404, "Backup file not found")
+    await _require_backup_owner(request, safe)
 
     os.remove(fpath)
     await _audit("upgrades", "backup_delete", user=user, detail=f"Deleted backup {safe}")
@@ -1542,8 +1666,7 @@ async def execute_phase(campaign_id: int, body: CampaignPhaseRequest, request: R
 @scoped("campaign")
 async def cancel_campaign(campaign_id: int, request: Request):
     """Cancel a running campaign phase."""
-    if (await request_scope(request)).restricted:
-        await _require_campaign(request, campaign_id, write=True)
+    await _require_campaign(request, campaign_id, write=True)
     task = _running_campaigns.get(campaign_id)
     if not task:
         raise HTTPException(404, "No running phase for this campaign")
@@ -2978,7 +3101,8 @@ async def _device_prestage(campaign_id, dev, credentials, image_map, options):
                 hostname = dev.get("hostname") or ip
                 clean = re.sub(r"[^\w\-.]", "_", hostname)
                 ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-                backup_file = os.path.join(BACKUPS_DIR, f"backup_{clean}_{ts}.txt")
+                # The campaign id names the owner (see _backup_campaign_id).
+                backup_file = os.path.join(BACKUPS_DIR, f"backup_{clean}_{ts}_campaign{campaign_id}.txt")
                 with open(backup_file, "w") as f:
                     f.write(config)
                 await _emit(campaign_id, dev_id, "success", f"Config backed up to {backup_file}", host=ip)
@@ -3902,6 +4026,7 @@ async def _device_activate(campaign_id, dev, credentials, image_map, options):
                             error_message="",
                         )
                         await _emit_device_status(campaign_id, dev_id, verify_status="completed", error_message="")
+                        await _share_running_version(campaign_id, dev_id, running_version)
                     else:
                         # Say why: the install state and the last install
                         # operation, read from the switch (IOS-XE).

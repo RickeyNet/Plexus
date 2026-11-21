@@ -219,13 +219,16 @@ log "Stack status:"
 sudo -u "${TARGET_USER}" docker compose ps
 
 IP=$(hostname -I | awk '{print $1}')
+# setup.sh generated a random first-login password into .env (no default).
+ADMIN_PW="$(grep -m1 '^PLEXUS_INITIAL_ADMIN_PASSWORD=' .env 2>/dev/null | cut -d= -f2- || true)"
+ADMIN_PW="${ADMIN_PW:-<random, see: docker compose logs plexus | grep -A3 'default admin'>}"
 cat <<EOF
 
 ═══════════════════════════════════════════════════
   Plexus is up.
 
   Browse to:  https://${IP}
-  Login:      admin / netcontrol
+  Login:      admin / ${ADMIN_PW}
               You will be forced to change it at first login.
               (Initial password comes from PLEXUS_INITIAL_ADMIN_PASSWORD in .env;
               if that line was removed, the random one is in the app log:

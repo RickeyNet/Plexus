@@ -33,6 +33,7 @@ from netcontrol.integrations.software.versions import classify_host
 from netcontrol.object_scope import (
     READ_ONLY_DETAIL,
     ObjectScope,
+    readable_host_ids,
     request_scope,
     require_group,
     require_host,
@@ -65,7 +66,9 @@ from netcontrol.routes.shared import (
     _corr_id,
     _get_session,
     _run_show_command,
+    _run_show_commands,
     _session_user_id,
+    caller_is_admin,
     require_credential_access,
     service_credential,
     supervise_task,
@@ -79,6 +82,7 @@ from netcontrol.routes.snmp import (
     _snmp_get,
     _snmp_walk,  # noqa: F401
 )
+from netcontrol.secret_fields import mask_secret_fields, merge_secret_fields
 from netcontrol.telemetry import configure_logging, increment_metric, redact_value
 
 LOGGER = configure_logging("plexus.inventory")
@@ -447,6 +451,8 @@ async def _probe_discovery_target(
 # recorded as an SSH failure on that host, never a failed scan.
 DISCOVERY_SSH_TIMEOUT_SECONDS = 45.0
 _DISCOVERY_SSH_CONNECT_OPTIONS = {"conn_timeout": 10, "auth_timeout": 15, "banner_timeout": 15}
+# Per command on an APC card (``upsabout``, ``about``): Netmiko's default.
+_APC_CARD_READ_TIMEOUT_SECONDS = 10
 
 # Netmiko platforms discovery may open a session with; any other guess
 # (``unknown``, a free-text type) opens the generic Cisco handler, whose
@@ -706,18 +712,22 @@ async def _enrich_with_show_version(host: dict, credential: dict) -> None:
 
 
 async def _read_apc_card_facts(target: dict, credential: dict) -> ShowVersionFacts:
-    """``upsabout`` from an APC Network Management Card, as the facts a
-    ``show version`` would give: a card with a UPS behind it (a UPS ID or
-    model) is an ``apc_ups``; anything else (a PDU or transfer switch card,
-    a failed read) gives no facts. The card's own firmware, the host's
-    software version for this type, comes from the SNMP poll later."""
+    """``upsabout`` and ``about`` from an APC Network Management Card, read
+    in one session, as the facts a ``show version`` would give: a card with
+    a UPS behind it (a UPS ID or model) is an ``apc_ups``; anything else (a
+    PDU or transfer switch card, a failed read) gives no facts. The host's
+    software version for this type is the card's firmware (``about``), the
+    one SNMP discovery takes from the sysDescr; when ``about`` is not
+    answered the UPS is still identified, without a version."""
     try:
         async with state.device_op_semaphore():
-            output = await asyncio.wait_for(
-                _run_show_command(
+            outputs = await asyncio.wait_for(
+                asyncio.to_thread(
+                    _run_show_commands,
                     target,
                     credential,
-                    "upsabout",
+                    (nmc_cli.UPSABOUT, nmc_cli.ABOUT),
+                    read_timeout=_APC_CARD_READ_TIMEOUT_SECONDS,
                     autodetect=False,
                     enable_optional=True,
                     **_DISCOVERY_SSH_CONNECT_OPTIONS,
@@ -727,12 +737,16 @@ async def _read_apc_card_facts(target: dict, credential: dict) -> ShowVersionFac
     except Exception as exc:
         LOGGER.debug("discovery: upsabout failed on %s: %s", target.get("ip_address"), type(exc).__name__)
         return ShowVersionFacts()
-    about = nmc_cli.parse_upsabout(output if isinstance(output, str) else "")
-    if nmc_cli.command_error(output) or not (about.ups_id or about.model):
+    ups_output = outputs.get(nmc_cli.UPSABOUT, "")
+    about = nmc_cli.parse_upsabout(ups_output)
+    if nmc_cli.command_error(ups_output) or not (about.ups_id or about.model):
         return ShowVersionFacts()
+    card_output = outputs.get(nmc_cli.ABOUT, "")
+    card_firmware = "" if nmc_cli.command_error(card_output) else nmc_cli.parse_about(card_output).firmware
     return ShowVersionFacts(
         os_device_type=APC_UPS_DEVICE_TYPE,
         model=about.model or None,
+        software_version=card_firmware or None,
         serial_number=about.serial or None,
     )
 
@@ -1145,6 +1159,16 @@ async def _sync_group_hosts(
     }
 
 
+async def _software_changed() -> None:
+    """Hosts were reconciled with what their devices report: bring the
+    software version tracker and its alerts up to date, so a version a sync
+    read (an upgraded switch) does not wait for the tracker's own interval.
+    Best-effort; the hosts are already stored."""
+    from netcontrol.routes.software import refresh_after_collection
+
+    await refresh_after_collection()
+
+
 # ── Background loops ─────────────────────────────────────────────────────────
 
 
@@ -1197,6 +1221,9 @@ async def _run_discovery_sync_once() -> dict:
             errors += 1
             LOGGER.warning("discovery sync failed for group_id=%s: %s", group_id, redact_value(str(exc)))
             increment_metric("inventory.discovery.sync.failed")
+
+    if synced_groups:
+        await _software_changed()
 
     return {
         "enabled": True,
@@ -1266,14 +1293,38 @@ async def admin_get_snmp_discovery_profiles():
 
 
 # ── Named SNMP Profiles CRUD ─────────────────────────────────────────────────
-# NOTE: GET /api/admin/snmp-profiles uses require_auth (not admin) in the original.
-# It is placed on the main `router` so app.py can register it with inventory deps.
+# NOTE: GET /api/admin/snmp-profiles is on the main `router` (inventory
+# feature), because every inventory user's profile picker needs the list.
+# Only admins get the stored profiles; others get the public view.
+
+# The SNMP secrets of a profile (named or a group's discovery profile).
+SNMP_SECRET_FIELDS = ("community", "v3.auth_password", "v3.priv_password")
+
+
+def public_snmp_profile(profile: dict) -> dict:
+    """A named SNMP profile without its secrets: what a picker needs, and
+    which secrets are set."""
+    v3 = profile.get("v3") or {}
+    return {
+        "id": profile.get("id", ""),
+        "name": profile.get("name", ""),
+        "enabled": bool(profile.get("enabled")),
+        "version": profile.get("version", "2c"),
+        "port": profile.get("port", 161),
+        "has_community": bool(profile.get("community")),
+        "has_v3_auth_password": bool(v3.get("auth_password")),
+        "has_v3_priv_password": bool(v3.get("priv_password")),
+    }
 
 
 @router.get("/api/admin/snmp-profiles")
 @scope_exempt("SNMP profile definitions: no host or inventory group data")
-async def admin_list_snmp_profiles():
-    return list(state.SNMP_PROFILES.values())
+async def admin_list_snmp_profiles(request: Request):
+    """Admins (the profile editor) get the stored profiles; other inventory
+    users the public view, never a community string or v3 key."""
+    if await caller_is_admin(request):
+        return list(state.SNMP_PROFILES.values())
+    return [public_snmp_profile(p) for p in state.SNMP_PROFILES.values()]
 
 
 async def _validate_snmp_profile_secrets(profile: dict):
@@ -2323,30 +2374,50 @@ async def discovery_scan_stream(group_id: int, body: DiscoveryScanRequest, reque
 @scoped("group")
 async def get_group_snmp_discovery_profile(group_id: int, request: Request):
     await require_group(request, group_id)
-    profile = state.SNMP_DISCOVERY_PROFILES.get(group_id)
-    if profile:
-        return profile
-    return state._sanitize_snmp_discovery_profile(group_id, {})
+    profile = state.SNMP_DISCOVERY_PROFILES.get(group_id) or state._sanitize_snmp_discovery_profile(group_id, {})
+    # Secrets are write-only: masked here, kept on a write that sends the mask.
+    return mask_secret_fields(profile, SNMP_SECRET_FIELDS)
 
 
 @router.put("/api/inventory/{group_id}/snmp-discovery-profile")
 @scoped("group")
 async def update_group_snmp_discovery_profile(group_id: int, body: dict, request: Request):
     await require_group(request, group_id, write=True)
+    # A secret sent as the mask, or left out, keeps the stored one.
+    body = merge_secret_fields(body, state.SNMP_DISCOVERY_PROFILES.get(group_id), SNMP_SECRET_FIELDS)
     profile = state._sanitize_snmp_discovery_profile(group_id, body)
     state.SNMP_DISCOVERY_PROFILES[group_id] = profile
     await db.set_auth_setting("snmp_discovery_profiles", state.SNMP_DISCOVERY_PROFILES)
-    return profile
+    return mask_secret_fields(profile, SNMP_SECRET_FIELDS)
+
+
+def _same_address(a: str, b: str) -> bool:
+    try:
+        return ipaddress.ip_address(a) == ipaddress.ip_address(b)
+    except ValueError:
+        return a.strip().lower() == b.strip().lower()
 
 
 @router.post("/api/inventory/{group_id}/snmp-discovery-profile/test")
 @scoped("group")
 async def test_group_snmp_profile(group_id: int, body: dict, request: Request):
-    # Uses the group's SNMP credentials against any address: a write.
+    # Uses the group's SNMP credentials against an address: a write.
     await require_group(request, group_id, write=True)
     target_ip = str(body.get("target_ip", "")).strip()
     if not target_ip:
         raise HTTPException(400, "target_ip is required")
+    # The group's community or v3 keys go to target_ip, so a non-admin may
+    # only test a host of this group they may change; any address is admin-only.
+    if not await caller_is_admin(request):
+        writable = await readable_host_ids(request, write=True)
+        if not any(
+            _same_address(str(h.get("ip_address") or ""), target_ip) and (writable is None or int(h["id"]) in writable)
+            for h in await db.get_hosts_for_group(group_id)
+        ):
+            raise HTTPException(
+                403,
+                "The SNMP test can only target a host of this group; an admin can test any address",
+            )
     snmp_config = state._resolve_snmp_discovery_config(group_id)
     if not snmp_config.get("enabled"):
         raise HTTPException(400, "SNMP is not enabled for this group")
@@ -2408,6 +2479,7 @@ async def discovery_sync(group_id: int, body: DiscoverySyncRequest, request: Req
     credential, ssh_base = await _resolve_discovery_ssh(body, session, group=group, correlation_id=_corr_id(request))
     scanned_count, discovered = await _discover_hosts(body, group_id=group_id, credential=credential)
     sync_result = await _sync_group_hosts(group_id, discovered, remove_absent=body.remove_absent)
+    await _software_changed()
     audit_user = session["user"] if session else "api-token"
 
     await _audit(
@@ -2482,6 +2554,7 @@ async def discovery_sync_stream(group_id: int, body: DiscoverySyncRequest, reque
         # Persisting phase: probing is done, now reconcile with the DB.
         yield f"data: {json.dumps({'type': 'syncing', 'discovered_count': len(discovered)})}\n\n"
         sync_result = await _sync_group_hosts(group_id, discovered, remove_absent=body.remove_absent)
+        await _software_changed()
 
         await _audit(
             "inventory",
@@ -2514,6 +2587,7 @@ async def discovery_onboard(group_id: int, body: DiscoveryOnboardRequest, reques
         raise HTTPException(400, "No discovered hosts provided")
 
     sync_result = await _sync_group_hosts(group_id, body.discovered_hosts, remove_absent=False)
+    await _software_changed()
     session = _get_session(request)
     audit_user = session["user"] if session else "api-token"
     await _audit(

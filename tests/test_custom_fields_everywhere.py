@@ -457,7 +457,7 @@ def _scoped_user(
     admin: CsrfClient,
     name: str,
     group_id: int | None,
-    features=("inventory", "ipam", "circuits"),
+    features=("inventory", "inventory.write", "ipam", "circuits"),
     rules: list[dict] | None = None,
 ) -> CsrfClient:
     import netcontrol.app as app_module

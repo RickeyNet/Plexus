@@ -30,7 +30,8 @@ from netcontrol.object_scope import (
 )
 from netcontrol.telemetry import configure_logging
 
-router = APIRouter()
+router = APIRouter()  # graph-templates; changes need graph-templates.write
+read_router = APIRouter()  # graph-templates: POST routes that only read (evaluate)
 LOGGER = configure_logging("plexus.cdef_engine")
 
 
@@ -279,7 +280,7 @@ async def delete_cdef(cdef_id: int, request: Request):
     return {"deleted": True}
 
 
-@router.post("/api/cdefs/evaluate")
+@read_router.post("/api/cdefs/evaluate")
 @scope_exempt("evaluates an expression over sample data in the body")
 async def evaluate_cdef(body: CdefEvaluateRequest):
     """Test a CDEF expression against sample data."""

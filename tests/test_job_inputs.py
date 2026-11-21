@@ -426,8 +426,12 @@ def env(monkeypatch, request):
     async def _seed():
         op = await db_module.get_user_by_username("operator")
         admin = await db_module.get_user_by_username("admin")
-        ops_group = await db_module.create_access_group("ops", "", ["jobs", "playbooks"])
-        other_group = await db_module.create_access_group("netadmins", "", ["jobs", "playbooks"])
+        ops_group = await db_module.create_access_group(
+            "ops", "", ["jobs", "jobs.write", "playbooks", "playbooks.write"]
+        )
+        other_group = await db_module.create_access_group(
+            "netadmins", "", ["jobs", "jobs.write", "playbooks", "playbooks.write"]
+        )
         await db_module.set_user_groups(op["id"], [ops_group])
         op_cred = await db_module.create_credential("op-cred", "dev", encrypt("pw"), owner_id=op["id"])
         admin_cred = await db_module.create_credential("admin-cred", "dev", encrypt("pw"), owner_id=admin["id"])

@@ -75,6 +75,7 @@ async def graphql_query(request: Request) -> JSONResponse:
         # A scoped caller keeps only the features whose resolvers filter by scope.
         features=graphql_features(await caller_features(request), scope),
         max_limit=int(config["max_limit"]),
+        max_objects=limits.max_objects(config),
     )
     result = await schema.execute(
         query,

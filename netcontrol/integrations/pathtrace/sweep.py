@@ -29,6 +29,7 @@ from typing import Any
 
 from routes.user_regex import UserRegex, compile_user_regex
 
+from netcontrol.csv_cells import csv_text_cell
 from netcontrol.integrations.pathtrace.engine import PROTOCOLS, Tracer
 from netcontrol.integrations.pathtrace.model import (
     ALLOWED,
@@ -642,4 +643,6 @@ def csv_row(row: dict[str, Any], columns: tuple[str, ...] = CSV_COLUMNS) -> list
         str(ports.get("text") or ""),
         str(row.get("summary") or ""),
     ]
+    # Names and summaries come from vendor dashboards: no cell may open as a formula.
+    cells = [csv_text_cell(cell) for cell in cells]
     return cells if columns is CSV_COLUMNS else [cells[CSV_COLUMNS.index(column)] for column in columns]

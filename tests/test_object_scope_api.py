@@ -67,7 +67,7 @@ def tree(admin) -> dict[str, int]:
     return t
 
 
-def _access_group(admin: CsrfClient, name: str, grants: list[dict] | None, features=("inventory",)) -> dict:
+def _access_group(admin: CsrfClient, name: str, grants: list[dict] | None, features=("inventory", "inventory.write")) -> dict:
     body: dict = {"name": name, "feature_keys": list(features)}
     if grants is not None:
         body.update(object_scope="groups", inventory_scopes=grants)
@@ -85,7 +85,7 @@ def _login(username: str) -> tuple[CsrfClient, dict]:
     return CsrfClient(client, resp.json()["csrf_token"]), resp.json()
 
 
-def _scoped(admin: CsrfClient, name: str, grants: list[dict], features=("inventory",)) -> CsrfClient:
+def _scoped(admin: CsrfClient, name: str, grants: list[dict], features=("inventory", "inventory.write")) -> CsrfClient:
     group = _access_group(admin, f"{name} access", grants, features)
     resp = admin.post("/api/admin/users", json={"username": name, "password": "password123", "group_ids": [group["id"]]})
     assert resp.status_code == 201, resp.text
@@ -251,7 +251,7 @@ def test_no_grants_sees_nothing(admin, tree):
 
 
 def test_unrestricted_user_sees_everything(admin, tree):
-    everyone = user_client(admin, "all-devices", features=["inventory"])
+    everyone = user_client(admin, "all-devices", features=["inventory", "inventory.write"])
     assert {tree["a"], tree["a1"], tree["a11"], tree["b"]} <= _ids(everyone.get("/api/inventory").json())
     assert "edge-b" in everyone.get("/api/inventory/export/csv").text
     assert everyone.put(f"/api/inventory/{tree['b']}", json={"name": "site-b"}).status_code == 200

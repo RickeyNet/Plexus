@@ -101,11 +101,14 @@ The installer:
 ## Step 4 - First login
 
 Browse to `https://<vm-ip-or-hostname>`, click through the self-signed
-certificate warning, and log in as **`admin` / `netcontrol`**. You'll be
-forced to change the password immediately.
+certificate warning, and log in as **`admin`** with the one-time password
+that `install.sh` printed at the end. You'll be forced to change the password
+immediately.
 
-The initial password comes from `PLEXUS_INITIAL_ADMIN_PASSWORD` in
-`/opt/plexus/.env`, which `setup.sh` writes. It is consumed once on the very
+There is no default password. `setup.sh` generates a random one and stores it
+as `PLEXUS_INITIAL_ADMIN_PASSWORD` in `/opt/plexus/.env` (readable by its owner
+only); read it back with
+`sudo grep '^PLEXUS_INITIAL_ADMIN_PASSWORD=' /opt/plexus/.env`. It is consumed once on the very
 first boot; `PLEXUS_INITIAL_ADMIN_USERNAME` overrides the `admin` username.
 If you remove that line before the first start, Plexus generates a random
 one-time password instead and prints it once to the app log:

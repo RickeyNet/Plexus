@@ -187,6 +187,11 @@ DEFAULT_RULES = {
     "netcontrol/monitoring_repoll.py": 88.0,
     # Syslog rule activity analysis; measured by tests/test_syslog_activity.py.
     "netcontrol/syslog_activity.py": 92.0,
+    # Request body limit and the size-capped per-IP tracker maps. Measured
+    # by tests/test_body_limit.py and tests/test_bounded_map.py; do not
+    # lower them to land a change.
+    "netcontrol/body_limit.py": 90.0,
+    "netcontrol/bounded_map.py": 95.0,
 }
 
 

@@ -89,7 +89,7 @@ export function SnmpProfilesModal({ onClose }: Props) {
                 <span style={{ marginLeft: '0.5rem', opacity: 0.7 }}>
                   SNMPv{p.version}
                   {p.version === '2c'
-                    ? ` / ${p.community || 'public'}`
+                    ? ` / ${p.community || (p.has_community ? 'community set' : 'public')}`
                     : ` / ${p.v3?.username || ''}`}
                 </span>
                 <span style={{ marginLeft: '0.5rem', opacity: 0.6 }}>

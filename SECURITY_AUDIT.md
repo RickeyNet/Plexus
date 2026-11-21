@@ -9,7 +9,8 @@
 - **Method:** static code review in six slices (authentication, authorization,
   injection, SSRF and secrets, inbound surfaces, deploy/dependencies/frontend).
   Nothing was exploited against a running instance and the test suite was not run.
-- **Status of every finding:** open. No code was changed by the audit.
+- **Status:** no code was changed by the audit itself. Findings 1 to 14, 26, 40 and 41
+  have since been fixed in the working tree (see "Fix status"); the rest are open.
 
 The "Checked" column says whether the finding was re-read in the code a second time
 after the slice reviewer reported it: **yes** (confirmed), **partial** (the mechanism
@@ -35,6 +36,31 @@ collectors.
 3. Findings 4, 6, 7, 8: each is a small, local change.
 4. Findings 10, 11, 12: denial-of-service limits.
 5. The Medium table, top to bottom.
+
+## Fix status
+
+Updated 2026-11-20. Fixed means changed in the working tree with tests; nothing was
+re-tested against a running deployment. Findings not listed are open.
+
+| # | Status | What changed, and what is left |
+|---|---|---|
+| 1 | Fixed | Creating, deleting and changing a playbook's code, type or filename is admin only; built-in modules and other playbooks' files are never overwritten. |
+| 2 | Fixed | nginx overwrites `X-Forwarded-For`; compose trusts it from the nginx container only; tracker maps are size-capped. |
+| 3 | Fixed | `deploy/setup.sh` generates the first-login admin password; no script or doc carries a fixed one. An existing `.env` keeps its old value until the operator replaces it. |
+| 4 | Fixed | RADIUS shadow users go through `upsert_external_user`. |
+| 5 | Fixed | Retry and rerun apply the Ansible admin rule; the queue re-checks the launcher's role. |
+| 6 | Fixed | Campaign reads and writes need the creator or an admin; a non-admin's campaign uses a credential its creator may use. |
+| 7 | Fixed | SNMP secrets are masked for non-admins; the group SNMP test reaches the group's hosts only. |
+| 8 | Fixed | A changed provider destination refuses the stored secret; provider URLs must be https. Provider writes are still open to non-admin `secrets-providers.write` users. |
+| 9 | Fixed | The 14 routers are mounted with `require_feature_method`. |
+| 10 | Fixed | 10 MB default in nginx and in the app (`netcontrol/body_limit.py`). The two upload routes still authenticate after the body is read. |
+| 11 | Fixed | Template and per-packet caps in the NetFlow v9 decoder; bounded template and sFlow maps. Parsing still runs on the event loop. |
+| 12 | Fixed | Lists are priced at what they can return; a hard cap on resolved objects backs the estimate. |
+| 13 | Fixed | Admin-managed image allowlist for non-admin lab users (API only, no settings page yet). |
+| 14 | Fixed | Cookies follow `APP_COOKIE_SECURE` or `APP_HTTPS`. |
+| 26 | Fixed | A key under 32 characters is replaced at start. |
+| 40 | Fixed | `netcontrol/csv_cells.py` guards report, billing and sweep exports. |
+| 41 | Fixed | Git names that start with `-` are refused. |
 
 ## Critical and High
 

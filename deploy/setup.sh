@@ -22,6 +22,11 @@ if [ ! -f .env ]; then
     # Generate a random DB password
     DB_PASSWORD=$(python3 -c "import secrets; print(secrets.token_urlsafe(24))" 2>/dev/null || openssl rand -base64 18)
 
+    # Generate a random first-login password for the bootstrap admin account.
+    # There is no shared default: anyone reaching the UI before the operator
+    # could otherwise sign in as admin with a well-known password.
+    ADMIN_PASSWORD=$(python3 -c "import secrets; print(secrets.token_urlsafe(16))" 2>/dev/null || openssl rand -base64 12 | tr -d '/+=')
+
     cat > .env << EOF
 # ── Plexus Configuration ──────────────────────────────────────────────
 APP_HOST=0.0.0.0
@@ -51,13 +56,15 @@ APP_API_TOKEN=${API_TOKEN}
 APP_ALLOW_SELF_REGISTER=false
 
 # ── First login ───────────────────────────────────────────────────────
-# Initial password for the bootstrap 'admin' account. Read once on the
-# very first boot (when no admin exists yet) and the account is flagged
-# must-change, so you are forced to pick a real password at first login.
-# Has no effect after that - use PLEXUS_FORCE_ADMIN_PASSWORD_RESET=true
-# (one restart, then remove it) to recover a lost admin password.
+# Initial password for the bootstrap 'admin' account, generated at random
+# by deploy/setup.sh. Read once on the very first boot (when no admin
+# exists yet) and the account is flagged must-change, so you are forced to
+# pick a real password at first login. Has no effect after that - use
+# PLEXUS_FORCE_ADMIN_PASSWORD_RESET=true (one restart, then remove it) to
+# recover a lost admin password. If you clear this line, first boot makes
+# a random password and prints it once to the app log instead.
 PLEXUS_INITIAL_ADMIN_USERNAME=admin
-PLEXUS_INITIAL_ADMIN_PASSWORD=netcontrol
+PLEXUS_INITIAL_ADMIN_PASSWORD=${ADMIN_PASSWORD}
 
 # ── Database ──────────────────────────────────────────────────────────
 APP_DB_ENGINE=postgres
@@ -67,7 +74,9 @@ POSTGRES_USER=plexus
 POSTGRES_PASSWORD=${DB_PASSWORD}
 EOF
 
-    echo "  Created .env with random API token and DB password."
+    # Holds the DB and first-login admin passwords: owner-only.
+    chmod 600 .env
+    echo "  Created .env with random API token, DB password and admin password."
     echo "  Edit .env to set APP_CORS_ORIGINS to your actual hostname."
 else
     echo "[1/3] .env already exists - skipping."
@@ -129,8 +138,19 @@ echo ""
 echo "  1. Review and edit .env (set APP_CORS_ORIGINS)"
 echo "  2. Run:  docker compose up -d"
 echo "  3. Open: https://$(hostname -f 2>/dev/null || echo 'your-vm-ip')"
-echo "  4. Login as admin / netcontrol (set via PLEXUS_INITIAL_ADMIN_PASSWORD"
-echo "     in .env). You will be forced to change it at first login."
+if [ -n "${ADMIN_PASSWORD:-}" ]; then
+    echo "  4. Login as admin with this one-time password (also stored as"
+    echo "     PLEXUS_INITIAL_ADMIN_PASSWORD in .env):"
+    echo ""
+    echo "         ${ADMIN_PASSWORD}"
+    echo ""
+    echo "     You will be forced to change it at first login."
+else
+    echo "  4. Login as admin with PLEXUS_INITIAL_ADMIN_PASSWORD from .env. If"
+    echo "     that line is empty, first boot prints a random password to the"
+    echo "     app log: docker compose logs plexus | grep -A3 'default admin'"
+    echo "     You will be forced to change it at first login."
+fi
 echo ""
 echo "  To view logs:     docker compose logs -f plexus"
 echo "  To stop:          docker compose down"

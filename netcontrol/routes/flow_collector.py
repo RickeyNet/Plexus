@@ -25,6 +25,7 @@ import routes.database as db
 from fastapi import APIRouter, HTTPException, Query, Request
 
 import netcontrol.routes.state as state
+from netcontrol.bounded_map import BoundedDict
 from netcontrol.object_scope import group_filter, readable_host_ids, require_host, scope_exempt, scoped
 from netcontrol.telemetry import configure_logging
 
@@ -55,9 +56,11 @@ _sflow_transport = None
 _sflow_protocol = None
 _flow_aggregation_task: asyncio.Task | None = None
 
-# Resolves exporter source IP -> hosts.id without per-packet DB lookups.
-# Populated at collector start and refreshed via refresh_exporter_cache()
-# whenever inventory hosts are added/updated/deleted.
+# Resolves exporter source IP -> hosts.id without per-packet DB lookups:
+# each host's primary address and its recorded interface addresses
+# (host_ip_aliases; the primary wins on a collision). Populated at collector
+# start and refreshed via refresh_exporter_cache() whenever inventory hosts
+# are added/updated/deleted or an integration recorded interface addresses.
 _exporter_cache: dict[str, int] = {}
 _exporter_cache_lock = asyncio.Lock()
 
@@ -194,8 +197,51 @@ def parse_netflow_v5(data: bytes, addr: tuple) -> list[dict]:
 # NetFlow v9 / IPFIX Parser (template-based)
 # ═════════════════════════════════════════════════════════════════════════════
 
-# Template cache: {(exporter_ip, template_id): [(field_type, field_length), ...]}
-_nf9_templates: dict[tuple[str, int], list[tuple[int, int]]] = {}
+# Hard limits on what one datagram (from any source: UDP sources can be
+# spoofed and nothing here is authenticated) can make the collector keep or
+# do. Real exporters send templates of tens of fields, a handful of
+# templates each, and MTU-sized packets of a few dozen records, so every cap
+# leaves wide headroom. With no zero-length field, a record walks at most
+# record_len fields, so decoding a datagram costs at most its byte count in
+# field steps, and NF9_MAX_RECORDS_PER_PACKET caps the rows it produces.
+NF9_MAX_TEMPLATE_FIELDS = 128
+NF9_MIN_RECORD_LEN = 4  # below this, flowset padding would decode as records
+NF9_MAX_TEMPLATES_PER_EXPORTER = 32
+NF9_MAX_EXPORTERS = 1024
+NF9_MAX_RECORDS_PER_PACKET = 1024
+
+# Template cache, bounded at both levels (the entry written longest ago is
+# evicted first; a data flowset rewrites the template it uses):
+# {exporter_ip: {template_id: raw field specs (4 bytes per field: type, length)}}
+_nf9_templates: BoundedDict = BoundedDict(NF9_MAX_EXPORTERS)
+
+
+def _nf9_store_template(exporter_ip: str, tpl_id: int, field_count: int, spec: bytes) -> bool:
+    """Validate one template record and cache it. Returns False (and keeps
+    nothing) for a template that is truncated, has a zero-length field, more
+    than NF9_MAX_TEMPLATE_FIELDS fields or a record shorter than
+    NF9_MIN_RECORD_LEN. A field count of 0 withdraws the template. The
+    IPFIX variable-length marker (65535) is accepted as a field length."""
+    templates = _nf9_templates.get(exporter_ip)
+    if field_count == 0:
+        if templates is not None:
+            templates.pop(tpl_id, None)
+        return False
+    if tpl_id < 256 or field_count > NF9_MAX_TEMPLATE_FIELDS or len(spec) != 4 * field_count:
+        return False
+    record_len = 0
+    for _f_type, f_len in struct.iter_unpack("!HH", spec):
+        if f_len == 0:
+            return False
+        record_len += f_len
+    if record_len < NF9_MIN_RECORD_LEN:
+        return False
+    if templates is None:
+        templates = BoundedDict(NF9_MAX_TEMPLATES_PER_EXPORTER)
+    templates[tpl_id] = spec
+    _nf9_templates[exporter_ip] = templates
+    return True
+
 
 # NetFlow v9 field type IDs (subset)
 NF9_FIELDS = {
@@ -228,7 +274,7 @@ def parse_netflow_v9(data: bytes, addr: tuple) -> list[dict]:
 
     exporter_ip = addr[0]
     count = struct.unpack("!H", data[2:4])[0]
-    records = []
+    records: list[dict] = []
     offset = 20 if version == 9 else 16  # v9 header=20, IPFIX header=16
 
     while offset < len(data) - 4:
@@ -246,27 +292,27 @@ def parse_netflow_v9(data: bytes, addr: tuple) -> list[dict]:
             while tpl_offset < len(flowset_data) - 4:
                 tpl_id, field_count = struct.unpack("!HH", flowset_data[tpl_offset : tpl_offset + 4])
                 tpl_offset += 4
-                fields = []
-                for _ in range(field_count):
-                    if tpl_offset + 4 > len(flowset_data):
-                        break
-                    f_type, f_len = struct.unpack("!HH", flowset_data[tpl_offset : tpl_offset + 4])
-                    tpl_offset += 4
-                    fields.append((f_type, f_len))
-                _nf9_templates[(exporter_ip, tpl_id)] = fields
+                spec = flowset_data[tpl_offset : tpl_offset + 4 * field_count]
+                tpl_offset += 4 * field_count
+                _nf9_store_template(exporter_ip, tpl_id, field_count, spec)
 
         elif flowset_id >= 256:
             # Data FlowSet
-            template = _nf9_templates.get((exporter_ip, flowset_id))
-            if not template:
+            templates = _nf9_templates.get(exporter_ip)
+            tpl_spec = templates.get(flowset_id) if templates else None
+            if not templates or not tpl_spec:
                 continue
+            # In use: keep it ahead of templates nobody sends data for.
+            templates[flowset_id] = tpl_spec
+            _nf9_templates[exporter_ip] = templates
+            template = list(struct.iter_unpack("!HH", tpl_spec))
 
             record_len = sum(f_len for _, f_len in template)
             if record_len <= 0:
                 continue
 
             rec_offset = 0
-            while rec_offset + record_len <= len(flowset_data):
+            while rec_offset + record_len <= len(flowset_data) and len(records) < NF9_MAX_RECORDS_PER_PACKET:
                 rec: dict[str, str | int] = {}
                 field_offset = rec_offset
                 for f_type, f_len in template:
@@ -313,7 +359,11 @@ def parse_netflow_v9(data: bytes, addr: tuple) -> list[dict]:
 
 # Last seen sampling_rate per (exporter_ip, source_id). Surfaced to the
 # flow_exporters table so the UI can show "this device is sampling 1:1024".
-_sflow_sampling_rates: dict[tuple[str, int], int] = {}
+# Keyed {exporter_ip: {source_id: rate}} and bounded at both levels (least
+# recently seen evicted first): the keys come from unauthenticated packets,
+# and _latest_sflow_sampling_rate scans one exporter's entries per datagram.
+SFLOW_MAX_SOURCES_PER_EXPORTER = 1024
+_sflow_sampling_rates: BoundedDict = BoundedDict(NF9_MAX_EXPORTERS)
 
 # sFlow sample formats (low 20 bits of sample_type; enterprise=0)
 _SF_FLOW_SAMPLE = 1
@@ -524,7 +574,11 @@ def _parse_sflow_flow_sample(sample: bytes, exporter_ip: str, expanded: bool) ->
         return []
 
     if sampling_rate > 0:
-        _sflow_sampling_rates[(exporter_ip, _src_index if expanded else (_source_id & 0x00FFFFFF))] = sampling_rate
+        sources = _sflow_sampling_rates.get(exporter_ip)
+        if sources is None:
+            sources = BoundedDict(SFLOW_MAX_SOURCES_PER_EXPORTER)
+        sources[_src_index if expanded else (_source_id & 0x00FFFFFF)] = sampling_rate
+        _sflow_sampling_rates[exporter_ip] = sources
 
     out: list[dict] = []
     rate = sampling_rate if sampling_rate > 0 else 1
@@ -594,11 +648,7 @@ def _parse_sflow_flow_sample(sample: bytes, exporter_ip: str, expanded: bool) ->
 
 def _latest_sflow_sampling_rate(exporter_ip: str) -> int:
     """Return the most recently observed sampling rate for an exporter, or 0."""
-    best = 0
-    for (ip, _src), rate in _sflow_sampling_rates.items():
-        if ip == exporter_ip and rate > best:
-            best = rate
-    return best
+    return max(_sflow_sampling_rates.get(exporter_ip, {}).values(), default=0)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -727,7 +777,8 @@ class _FlowCollectorProtocol(asyncio.DatagramProtocol):
 
 
 async def refresh_exporter_cache() -> int:
-    """Reload _exporter_cache from the hosts table.
+    """Reload _exporter_cache from the hosts table and the hosts' recorded
+    interface addresses (``db.get_exporter_host_map``).
 
     Called at collector startup and from host CRUD paths so the in-memory
     map stays consistent with inventory without per-packet DB lookups.
@@ -755,7 +806,7 @@ async def on_host_changed(
     to any existing flow_exporters rows for the affected IPs so the
     exporter table doesn't lag inventory edits.
     """
-    await refresh_exporter_cache()
+    await sync_exporter_hosts()
     try:
         if old_ip and old_ip != new_ip:
             await db.update_flow_exporter_host_id(old_ip, None)
@@ -763,6 +814,21 @@ async def on_host_changed(
             await db.update_flow_exporter_host_id(new_ip, host_id)
     except Exception as exc:
         LOGGER.warning("flow_collector: exporter host_id sync failed: %s", type(exc).__name__)
+
+
+async def sync_exporter_hosts() -> int:
+    """Refresh the exporter cache, then link every ``flow_exporters`` row to
+    the host its address now resolves to (an interface address recorded
+    after the exporter was first seen links it; an address no host has any
+    more unlinks it). Called after host edits and after an integration
+    recorded a host's interface addresses (the OPNsense collection). Returns
+    the number of exporter rows changed; never raises."""
+    await refresh_exporter_cache()
+    try:
+        return await db.relink_flow_exporters(dict(_exporter_cache))
+    except Exception as exc:
+        LOGGER.warning("flow_collector: exporter host_id relink failed: %s", type(exc).__name__)
+        return 0
 
 
 # Pending per-exporter packet counters, keyed by (exporter_ip, flow_type).
@@ -926,7 +992,10 @@ async def flow_aggregation_loop() -> None:
 
 
 async def flow_aggregation_cycle():
-    """Aggregate raw flow records into hourly summaries."""
+    """Aggregate raw flow records into hourly summaries. Also re-reads the
+    exporter cache, so interface addresses a discovery recorded without a
+    host edit resolve their exporters within the hour."""
+    await sync_exporter_hosts()
     now = datetime.now(UTC)
     period_end = now.replace(minute=0, second=0, microsecond=0)
     period_start = period_end - timedelta(hours=1)
@@ -1018,6 +1087,23 @@ async def api_top_conversations(
 ):
     scope_kwargs = await _flow_scope(request, host_id)
     return await db.get_flow_top_conversations(host_id, hours, limit, **scope_kwargs)
+
+
+@router.get("/api/flows/top-interfaces")
+@scoped("list")
+async def api_top_interfaces(
+    host_id: int | None = Query(None),
+    hours: int = Query(1, ge=1, le=168),
+    limit: int = Query(20, ge=1, le=100),
+    request: Request = None,  # type: ignore[assignment]
+):
+    """The exporters' interfaces ranked by traffic: the index the flow
+    records carry (``if_index``) with its name (``if_name``, ``if_device``;
+    ``None`` when the host has no name for it) and the bytes that entered
+    and left on it."""
+    scope_kwargs = await _flow_scope(request, host_id)
+    rows = await db.get_flow_top_interfaces(host_id, hours, limit, **scope_kwargs)
+    return await db.with_interface_names(rows)
 
 
 @router.get("/api/flows/timeline")
