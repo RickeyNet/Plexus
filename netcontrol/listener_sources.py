@@ -250,13 +250,22 @@ class SourceGuard:
         self._last_log = float("-inf")
         self._unlogged = 0
 
+    def allow_source(self, source_ip: str, now: float | None = None) -> bool:
+        """The allowlist alone, without taking a rate-limit token (a syslog
+        TCP / TLS connection at accept): a refused source is counted as a
+        ``source`` drop (and logged, rate limited)."""
+        now = _clock() if now is None else now
+        _maybe_refresh(now)
+        if source_allowed(source_ip):
+            return True
+        self.note_drop("source", source_ip, now)
+        return False
+
     def admit(self, source_ip: str) -> bool:
         """True when a datagram from ``source_ip`` may be processed; a
         refused one is counted (and logged, rate limited)."""
         now = _clock()
-        _maybe_refresh(now)
-        if not source_allowed(source_ip):
-            self.note_drop("source", source_ip, now)
+        if not self.allow_source(source_ip, now):
             return False
         limit = CONFIG.get(self._rate_key) or 0
         if limit and not self._take(_canonical(source_ip), float(limit), now):

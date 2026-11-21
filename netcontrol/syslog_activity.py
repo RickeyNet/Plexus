@@ -7,8 +7,9 @@ vendor documentation. ``analyze`` reads the stored syslog messages
 it raised and cleared; per trigger (configuration change, re-poll, OPNsense
 re-collection) how often it fired; the messages of inventory hosts no rule
 or trigger acted on, grouped by event tag (else program), each with a hint
-of the built-in rule it looks related to; and the source addresses that are
-no inventory host. Computed on demand, nothing stored, nothing on the
+of the built-in rule it looks related to; the source addresses that are no
+inventory host; and how the inventory hosts' messages arrived (UDP, TCP or
+TLS), so an admin can see who still sends UDP. Computed on demand, nothing stored, nothing on the
 receive path. ``docs/syslog-rules.md`` "Checking the rules against received
 traffic" describes it; the API is ``GET /api/monitoring/syslog-rules/activity``.
 """
@@ -55,14 +56,16 @@ _RELATED: tuple[tuple[str, re.Pattern[str]], ...] = tuple(
 _WORD = re.compile(r"[A-Za-z0-9]+")
 
 
-def related_rule(tag: str, program: str = "", sample: str = "") -> str:
+def related_rule(tag: str, program: str = "", sample: str = "", raw_tag: str = "") -> str:
     """A hint, not a match: the key of the built-in rule (or ``config_change``
     / ``repoll`` trigger) an unmatched message group looks like the subject
-    of, from keywords in its ``tag`` (an untagged group: its ``program`` and
+    of, from keywords in its ``tag`` and ``raw_tag`` (a numeric vendor tag
+    such as ``FGT-0100032002`` says nothing, its ``raw_tag``, the FortiOS
+    log description, does; an untagged group: its ``program`` and
     ``sample``), or "" when none fits. It points at a message form the
     rules may have missed; it says nothing about whether the rule should
     have acted on it."""
-    text = tag if tag else f"{program} {sample}"
+    text = f"{tag} {raw_tag}" if tag else f"{program} {sample}"
     words = " ".join(_WORD.findall(text.upper()))
     for key, pattern in _RELATED:
         if pattern.search(words):
@@ -107,6 +110,9 @@ class _Tally:
     triggers: dict[str, int] = field(default_factory=lambda: {"config_change": 0, "repoll": 0, "recollect": 0})
     groups: dict[tuple[str, str], _Group] = field(default_factory=dict)
     sources: dict[str, _Source] = field(default_factory=dict)
+    # Inventory host messages per transport, and the hosts that sent over UDP.
+    transports: dict[str, int] = field(default_factory=lambda: {"udp": 0, "tcp": 0, "tls": 0})
+    udp_hosts: set[int] = field(default_factory=set)
 
 
 def _later(a: str, b: str) -> str:
@@ -167,6 +173,10 @@ def _aggregate(tally: _Tally, rules: list[Rule], rows: Iterable[dict]) -> None:
             source.count += 1
             source.last_at = _later(source.last_at, at)
             continue
+        transport = str(row.get("transport") or "udp")
+        tally.transports[transport] = tally.transports.get(transport, 0) + 1
+        if transport == "udp":
+            tally.udp_hosts.add(int(row["host_id"]))
         _host_message(tally, rules, row, syslog_rules.parse_syslog_message(str(row["message"] or "")))
 
 
@@ -185,7 +195,7 @@ def _group_payload(group: _Group) -> dict:
         "device_types": sorted(group.device_types),
         "last_at": group.last_at,
         "sample": group.sample,
-        "related": owner or related_rule(group.tag, group.program, group.sample),
+        "related": owner or related_rule(group.tag, group.program, group.sample, group.raw_tag),
         "known_tag": bool(owner),
     }
 
@@ -202,6 +212,9 @@ def _result(tally: _Tally, rules: list[Rule], hours: int, limit: int, truncated:
         "matched": tally.matched,
         "unmatched": tally.unmatched,
         "unknown_source": tally.unknown_source,
+        "transports": dict(tally.transports),
+        "udp_hosts": len(tally.udp_hosts),
+        "udp_actions": syslog_rules.receiver_flag("syslog_udp_actions"),
         "rules": [
             {
                 "key": rule.key,

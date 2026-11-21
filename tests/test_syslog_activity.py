@@ -389,6 +389,12 @@ def test_related_hints(tag, program, sample, related):
     assert activity.related_rule(tag, program, sample) == related
 
 
+def test_a_numeric_vendor_tag_is_hinted_by_its_description():
+    assert activity.related_rule("FGT-0100032021", "", "") == ""
+    assert activity.related_rule("FGT-0100032021", "", "", "Admin login disabled") == "auth_failure"
+    assert activity.related_rule("AOSCX-404", "", "", "Event|404|LOG_INFO") == ""
+
+
 # ── API ──────────────────────────────────────────────────────────────────────
 
 

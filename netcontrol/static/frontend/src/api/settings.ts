@@ -291,23 +291,60 @@ export interface EventReceiverSettings {
   recollect_trigger: boolean;
   /** Sum OPNsense firewall log (filterlog) lines per rule; off drops them. */
   filterlog_evidence: boolean;
+  /** Syslog over TCP (RFC 6587). */
+  syslog_tcp_enabled: boolean;
+  syslog_tcp_port: number;
+  /** Syslog over TLS (RFC 5425); needs a stored server certificate. */
+  syslog_tls_enabled: boolean;
+  syslog_tls_port: number;
+  /** Mutual TLS: only devices with a certificate the stored client CA signed may connect. */
+  syslog_tls_require_client_cert: boolean;
+  /** Off: syslog over UDP is stored but raises no alert and starts no trigger. */
+  syslog_udp_actions: boolean;
 }
 
-/** The settings plus live listener state and counters since each receiver started. */
+/** The syslog stream listeners: TCP and TLS. */
+export type SyslogStreamKind = 'syslog_tcp' | 'syslog_tls';
+
+/**
+ * The settings plus live listener state and counters since each receiver
+ * started. The `syslog_*` keys describe the UDP listener only.
+ */
 export interface EventReceiverConfig extends EventReceiverSettings {
   syslog_running?: boolean;
   trap_running?: boolean;
+  syslog_tcp_running?: boolean;
+  syslog_tls_running?: boolean;
   syslog_listening_port?: number | null;
   trap_listening_port?: number | null;
+  syslog_tcp_listening_port?: number | null;
+  syslog_tls_listening_port?: number | null;
   syslog_received?: number;
   trap_received?: number;
+  syslog_tcp_received?: number;
+  syslog_tls_received?: number;
   syslog_errors?: number;
   trap_errors?: number;
+  /** Stream listeners: unreadable messages, framing errors and failed TLS handshakes. */
+  syslog_tcp_errors?: number;
+  syslog_tls_errors?: number;
   /** ISO timestamps; '' when none yet. */
   syslog_last_message_at?: string;
   trap_last_message_at?: string;
+  syslog_tcp_last_message_at?: string;
+  syslog_tls_last_message_at?: string;
   syslog_started_at?: string;
   trap_started_at?: string;
+  syslog_tcp_started_at?: string;
+  syslog_tls_started_at?: string;
+  /** Connections open now, and connections closed at once over a limit or by the source allowlist. */
+  syslog_tcp_connections?: number;
+  syslog_tls_connections?: number;
+  syslog_tcp_connections_refused?: number;
+  syslog_tls_connections_refused?: number;
+  /** Why an enabled stream listener is not running; '' when fine. */
+  syslog_tcp_error?: string;
+  syslog_tls_error?: string;
   /** Events dropped on buffer overflow since Plexus started (both receivers). */
   events_dropped?: number;
   events_pending?: number;
@@ -1005,6 +1042,89 @@ export function useUpdateEventReceiverConfig() {
       }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['admin', 'event-receivers', 'config'] }),
   });
+}
+
+/** The stored syslog TLS server certificate (parsed). */
+export interface SyslogTlsCertificate {
+  subject: string;
+  issuer: string;
+  /** ISO timestamps. */
+  not_before: string;
+  not_after: string;
+  /** Colon separated hex. */
+  sha256_fingerprint: string;
+  sans: string[];
+  self_signed: boolean;
+}
+
+/** The syslog TLS certificate and client CA. The private key is never returned. */
+export interface SyslogTlsState {
+  has_certificate: boolean;
+  certificate: SyslogTlsCertificate | null;
+  cert_pem: string;
+  has_client_ca: boolean;
+  client_ca: { subject: string; not_after: string }[];
+  client_ca_pem: string;
+}
+
+/**
+ * `cert_pem` and `key_pem` go together (both left out keeps the stored
+ * certificate); `client_ca_pem` is independent and '' removes the client CA.
+ */
+export interface SyslogTlsUpload {
+  cert_pem?: string;
+  key_pem?: string;
+  client_ca_pem?: string;
+}
+
+export interface SyslogTlsGenerate {
+  common_name: string;
+  /** DNS names or IP addresses, at most 32. */
+  sans: string[];
+  /** 1 to 3650. */
+  days: number;
+}
+
+const SYSLOG_TLS_PATH = '/admin/metrics/receivers/tls';
+const SYSLOG_TLS_KEY = ['admin', 'event-receivers', 'tls'];
+
+export function useSyslogTls() {
+  return useQuery<SyslogTlsState>({
+    queryKey: SYSLOG_TLS_KEY,
+    queryFn: () => apiRequest(SYSLOG_TLS_PATH),
+  });
+}
+
+/**
+ * A certificate change restarts a running TLS listener, so the receiver
+ * config (its running state and error) is refetched along with the TLS state.
+ */
+function useSyslogTlsMutation<V>(request: (vars: V) => Promise<SyslogTlsState>) {
+  const qc = useQueryClient();
+  return useMutation<SyslogTlsState, Error, V>({
+    mutationFn: request,
+    onSuccess: (saved) => {
+      qc.setQueryData(SYSLOG_TLS_KEY, saved);
+      void qc.invalidateQueries({ queryKey: ['admin', 'event-receivers', 'config'] });
+      return qc.invalidateQueries({ queryKey: SYSLOG_TLS_KEY });
+    },
+  });
+}
+
+export function useSaveSyslogTls() {
+  return useSyslogTlsMutation((data: SyslogTlsUpload) =>
+    apiRequest<SyslogTlsState>(SYSLOG_TLS_PATH, { method: 'PUT', body: data }),
+  );
+}
+
+export function useGenerateSyslogTls() {
+  return useSyslogTlsMutation((data: SyslogTlsGenerate) =>
+    apiRequest<SyslogTlsState>(`${SYSLOG_TLS_PATH}/generate`, { method: 'POST', body: data }),
+  );
+}
+
+export function useDeleteSyslogTls() {
+  return useSyslogTlsMutation<void>(() => apiRequest<SyslogTlsState>(SYSLOG_TLS_PATH, { method: 'DELETE' }));
 }
 
 // ── AI access (MCP endpoint and tokens) ────────────────────────────────────

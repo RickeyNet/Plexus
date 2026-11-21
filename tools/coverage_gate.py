@@ -193,6 +193,16 @@ DEFAULT_RULES = {
     "netcontrol/monitoring_repoll.py": 88.0,
     # Syslog rule activity analysis; measured by tests/test_syslog_activity.py.
     "netcontrol/syslog_activity.py": 92.0,
+    # Syslog over TCP / TLS (framing, limits, listeners), the TLS server
+    # certificate and the PEM loading helper. Measured by
+    # tests/test_syslog_stream.py (96%, 95%, 100%); do not lower them to
+    # land a change.
+    "netcontrol/syslog_stream.py": 93.0,
+    "netcontrol/syslog_tls.py": 92.0,
+    "netcontrol/tls_pem.py": 95.0,
+    # Vendor syslog formats (FortiOS, PAN-OS, AOS-CX, AOS-Switch tags);
+    # measured by tests/test_syslog_vendor_rules.py (100%).
+    "netcontrol/syslog_vendor_formats.py": 95.0,
     # Request body limit and the size-capped per-IP tracker maps. Measured
     # by tests/test_body_limit.py and tests/test_bounded_map.py; do not
     # lower them to land a change.

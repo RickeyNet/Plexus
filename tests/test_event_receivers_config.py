@@ -103,6 +103,13 @@ def test_sanitize_clamps_ports_and_coerces_bools():
         # Left out: on.
         "recollect_trigger": True,
         "filterlog_evidence": True,
+        # Left out: their defaults.
+        "syslog_tcp_enabled": False,
+        "syslog_tcp_port": 1514,
+        "syslog_tls_enabled": False,
+        "syslog_tls_port": 6514,
+        "syslog_tls_require_client_cert": False,
+        "syslog_udp_actions": True,
     }
 
 

@@ -18,6 +18,7 @@ from netcontrol.secret_fields import (
     NOTIFICATION_CHANNEL_SECRET_FIELDS,
     SIEM_SINK_SECRET_FIELDS,
     SNMP_SECRET_FIELDS,
+    SYSLOG_TLS_SECRET_FIELDS,
     has_plain_secret,
     open_secret_paths,
     seal_secret_paths,
@@ -601,6 +602,7 @@ AUTH_SETTING_SECRET_PATHS: dict[str, tuple[str, ...]] = {
     "snmp_profiles": tuple(f"*.{p}" for p in SNMP_SECRET_FIELDS),
     "siem_sinks": tuple(f"sinks.*.{p}" for p in SIEM_SINK_SECRET_FIELDS),
     "notification_channels": tuple(f"channels.*.{p}" for p in NOTIFICATION_CHANNEL_SECRET_FIELDS),
+    "syslog_tls": SYSLOG_TLS_SECRET_FIELDS,
 }
 
 

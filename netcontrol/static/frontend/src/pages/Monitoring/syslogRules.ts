@@ -11,7 +11,7 @@ import type {
   SyslogSeverity,
   SyslogUnmatchedGroup,
 } from '@/api/syslogRules';
-import { formatCount } from '@/lib/formatCount';
+import { countLabel, formatCount } from '@/lib/formatCount';
 
 export const SYSLOG_SEVERITY_OPTIONS: { value: SyslogSeverity; label: string }[] = [
   { value: 'info', label: 'Info' },
@@ -263,10 +263,7 @@ export function prefillFromGroup(group: Pick<SyslogUnmatchedGroup, 'tag' | 'prog
   return { form, sample: group.sample };
 }
 
-/** 1 -> "1 host", 1200 -> "1,200 hosts". */
-export function countLabel(n: number, one: string, many: string): string {
-  return `${formatCount(n)} ${n === 1 ? one : many}`;
-}
+export { countLabel };
 
 /**
  * The one-line summary of a scan. The trigger numbers count messages, not
@@ -281,4 +278,39 @@ export function activitySummary(a: Pick<SyslogActivity, 'scanned' | 'matched' | 
     `Trigger messages: ${formatCount(t.config_change)} configuration change, ` +
     `${formatCount(t.repoll)} re-poll, ${formatCount(t.recollect)} OPNsense re-collection.`
   );
+}
+
+/** "By transport: 1,200 UDP, 40 TCP, 310 TLS."; '' when no inventory-host message was scanned. */
+export function transportSummary(a: Pick<SyslogActivity, 'transports'>): string {
+  const { udp, tcp, tls } = a.transports;
+  if (udp + tcp + tls === 0) return '';
+  return `By transport: ${formatCount(udp)} UDP, ${formatCount(tcp)} TCP, ${formatCount(tls)} TLS.`;
+}
+
+/**
+ * What the scan says about syslog over UDP, or null for nothing:
+ * - `ignored`: Act on UDP messages is off and UDP messages arrived (stored, not acted on).
+ * - `remaining`: UDP is still acted on, some hosts already send over TCP or TLS,
+ *   and these hosts still send over UDP. A UDP-only deployment gets no note.
+ */
+export function udpTransportNote(
+  a: Pick<SyslogActivity, 'transports' | 'udp_hosts' | 'udp_actions'>,
+): { kind: 'ignored' | 'remaining'; text: string } | null {
+  const { udp, tcp, tls } = a.transports;
+  const hosts = countLabel(a.udp_hosts, 'host', 'hosts');
+  if (!a.udp_actions) {
+    if (udp === 0) return null;
+    const verb = udp === 1 ? 'was' : 'were';
+    return {
+      kind: 'ignored',
+      text:
+        `${countLabel(udp, 'message', 'messages')} from ${hosts} arrived over UDP and ${verb} stored but not acted on, `
+        + 'because Act on UDP messages is off.',
+    };
+  }
+  if (tcp + tls === 0 || a.udp_hosts === 0) return null;
+  return {
+    kind: 'remaining',
+    text: `${countLabel(a.udp_hosts, 'host still sends', 'hosts still send')} syslog over UDP.`,
+  };
 }

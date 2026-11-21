@@ -21,6 +21,8 @@ import {
   prefillFromGroup,
   relatedBadge,
   SYSLOG_ACTIVITY_WINDOWS,
+  transportSummary,
+  udpTransportNote,
   unmatchedGroupLabel,
   type SyslogRulePrefill,
 } from './syslogRules';
@@ -81,13 +83,18 @@ export function SyslogActivitySection({ hours, onHoursChange, activity, rules, o
           description={
             <>
               The syslog receiver is turned on under{' '}
-              <Link to="/settings/event-receivers">Settings &gt; Syslog &amp; Traps</Link>, and devices send to its UDP port.
+              <Link to="/settings/event-receivers">Settings &gt; Syslog &amp; Traps</Link>, and devices send to its UDP,
+              TCP or TLS port.
             </>
           }
         />
       ) : data ? (
         <>
-          <p style={{ fontSize: '0.9em' }} aria-live="polite">{activitySummary(data)}</p>
+          <p style={{ fontSize: '0.9em' }} aria-live="polite">
+            {activitySummary(data)}
+            {transportSummary(data) && <> {transportSummary(data)}</>}
+          </p>
+          <UdpNote activity={data} />
           {data.truncated && (
             <Callout tone="info">
               The last {windowLabel} held more than {formatCount(data.limit)} messages. The scan covers the newest{' '}
@@ -126,6 +133,22 @@ export function SyslogActivitySection({ hours, onHoursChange, activity, rules, o
       ) : null}
     </div>
   );
+}
+
+// Syslog over UDP while devices move to TCP or TLS: the messages UDP actions
+// being off left unacted, or the hosts still sending over UDP.
+function UdpNote({ activity }: { activity: SyslogActivity }) {
+  const note = udpTransportNote(activity);
+  if (!note) return null;
+  if (note.kind === 'ignored') {
+    return (
+      <Callout tone="info">
+        {note.text} Turn it back on, or move these hosts to TCP or TLS, under{' '}
+        <Link to="/settings/event-receivers">Settings &gt; Syslog &amp; Traps</Link>.
+      </Callout>
+    );
+  }
+  return <p className="text-muted" style={{ marginTop: 0, fontSize: '0.85em' }}>{note.text}</p>;
 }
 
 function UnmatchedTable({ groups, anyUnmatched, rules, onCreateRule }: {

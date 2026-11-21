@@ -882,6 +882,17 @@ EVENT_RECEIVER_DEFAULTS = {
     # OPNsense firewall log (filterlog) lines are summed per rule as live
     # pass / block evidence; off: they are dropped (never stored raw).
     "filterlog_evidence": True,
+    # Syslog over TCP (RFC 6587) and TLS (RFC 5425): netcontrol.syslog_stream.
+    # A TCP or TLS source address cannot be forged; the TLS listener needs a
+    # stored server certificate (netcontrol.syslog_tls).
+    "syslog_tcp_enabled": False,
+    "syslog_tcp_port": 1514,
+    "syslog_tls_enabled": False,
+    "syslog_tls_port": 6514,
+    # Mutual TLS: only devices with a certificate the stored client CA signed.
+    "syslog_tls_require_client_cert": False,
+    # Act on syslog that arrived over UDP; off: UDP syslog is stored only.
+    "syslog_udp_actions": True,
 }
 
 _EVENT_RECEIVER_BOOL_KEYS = (
@@ -892,8 +903,12 @@ _EVENT_RECEIVER_BOOL_KEYS = (
     "repoll_trigger",
     "recollect_trigger",
     "filterlog_evidence",
+    "syslog_tcp_enabled",
+    "syslog_tls_enabled",
+    "syslog_tls_require_client_cert",
+    "syslog_udp_actions",
 )
-_EVENT_RECEIVER_PORT_KEYS = ("syslog_port", "trap_port")
+_EVENT_RECEIVER_PORT_KEYS = ("syslog_port", "trap_port", "syslog_tcp_port", "syslog_tls_port")
 
 
 def _sanitize_event_receiver_config(data: dict | None) -> dict:

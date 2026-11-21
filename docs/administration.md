@@ -29,7 +29,7 @@ has its own guide, this page gives a short summary and the link.
 | **Discovery** | Topology discovery and STP polling schedules, STP root policies |
 | **Monitoring** | Polling switch, interval, retention, CPU and memory thresholds, alert escalation |
 | **NetFlow** | The NetFlow, IPFIX and sFlow collector |
-| **Syslog & Traps** | The UDP receivers for device syslog messages and SNMP traps, and what a received syslog message triggers |
+| **Syslog & Traps** | The receivers for device syslog messages (UDP, TCP and TLS) and SNMP traps, the syslog TLS certificate, and what a received syslog message triggers |
 | **Notifications** | Alert notification channels |
 | **Features** | Which features appear in the navigation |
 | **Custom Fields & Tags** | Extra fields and tags for hosts, groups and IPAM prefixes |
@@ -290,9 +290,34 @@ Three switches set what a received syslog message does:
 All three are on by default. Received events are listed in
 [Monitoring > Events](monitoring.md#events).
 
+Syslog can also arrive over TCP and TLS, whose source address cannot be
+forged ([syslog-rules.md](syslog-rules.md#transports)):
+
+- **Syslog over TCP**: **Enabled** (off by default) and a **TCP port**
+  (1514; the same number as the UDP port is fine).
+- **Syslog over TLS**: **Enabled** (off by default), a **TCP port** (6514)
+  and **Require client certificates** (mutual TLS, off by default). It
+  needs a server certificate, generated (self-signed) or uploaded with its
+  key in the same section, and **Require client certificates** needs a
+  stored client CA. The private key is encrypted at rest and never shown
+  again. A new certificate or client CA restarts the TLS listener (open
+  TLS connections drop).
+- **Act on UDP messages** (on by default): off, syslog that arrived over
+  UDP is stored but raises, resolves and triggers nothing. It can be
+  turned off only while the TCP or TLS listener is on.
+
+Each stream listener shows whether it runs and on which port, and since it
+last started: received messages, errors, the last message, connections
+open now and connections refused (over the limit of 1024, or 8 per source
+address), and why an enabled TLS listener could not start. Saving is
+refused (400) when the TCP and TLS listeners share a port, TLS is enabled
+without a certificate, client certificates are required without a client
+CA, or UDP actions are turned off without a TCP or TLS listener.
+
 In Docker, `docker-compose.yml` publishes host port 162 to the trap
 receiver's 10162 and 1514 to the syslog receiver's 1514, so devices send
-traps to 162 and syslog to 1514. For devices that can only send syslog to
+traps to 162 and syslog to 1514. It also publishes 1514/tcp and 6514/tcp
+for syslog over TCP and TLS. For devices that can only send syslog to
 UDP 514, add `"514:1514/udp"` to the `plexus` service's `ports`. A port
 changed here needs the matching container port in `docker-compose.yml`, and
 the firewall must let the devices reach the host port
@@ -452,14 +477,32 @@ POST   /api/admin/updates/check | apply | rollback
 GET|PUT /api/admin/metrics/receivers/config  {"syslog_enabled": true, "syslog_port": 1514}
 POST   /api/admin/metrics/receivers/start    {"trap_port": 10162, "syslog_port": 1514}  (optional body)
 POST   /api/admin/metrics/receivers/stop
+GET|PUT|DELETE /api/admin/metrics/receivers/tls  {"cert_pem": "...", "key_pem": "...", "client_ca_pem": "..."}
+POST   /api/admin/metrics/receivers/tls/generate {"common_name": "syslog.example.com", "sans": ["192.0.2.10"], "days": 825}
 ```
+
+The receiver `PUT` also takes `syslog_tcp_enabled`, `syslog_tcp_port`,
+`syslog_tls_enabled`, `syslog_tls_port`, `syslog_tls_require_client_cert`
+and `syslog_udp_actions`; the `GET` answer adds, for `syslog_tcp` and
+`syslog_tls`, `<listener>_running`, `_listening_port`, `_received`,
+`_errors`, `_last_message_at`, `_started_at`, `_connections`,
+`_connections_refused` and `_error`. The `tls` routes answer
+`has_certificate`, `certificate` (`subject`, `issuer`, `not_before`,
+`not_after`, `sha256_fingerprint`, `sans`, `self_signed`, or null),
+`cert_pem`, `has_client_ca`, `client_ca` (`subject`, `not_after` of each
+CA certificate) and `client_ca_pem`, never the private key. In the `PUT`,
+`cert_pem` and `key_pem` go together (both left out: the certificate is
+kept) and `client_ca_pem` on its own (`""` removes it). Changes are
+audited as `syslog_tls.updated`, `syslog_tls.generated` and
+`syslog_tls.deleted`.
 
 A field left out of the receiver `PUT` keeps its saved value. `filterlog_evidence` (default on)
 sums OPNsense firewall log lines per rule
 ([opnsense-topology.md](opnsense-topology.md#firewall-log-evidence)); the `GET` answer adds
 `filterlog_received`, `filterlog_dropped` and `filterlog_unknown_source` since Plexus started. `start` and
-`stop` turn both receivers on or off and save that, the same as the
-**Enabled** boxes; the ports in a `start` body are saved too.
+`stop` turn both UDP receivers on or off and save that, the same as the
+**Enabled** boxes; the ports in a `start` body are saved too. They leave
+the syslog TCP and TLS listeners as they are.
 
 ```json
 POST /api/admin/users

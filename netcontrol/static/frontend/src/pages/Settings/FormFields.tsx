@@ -96,6 +96,40 @@ export function TextField({
   );
 }
 
+/** A PEM textarea: monospace, no spellcheck. */
+export function PemField({
+  label,
+  value,
+  onChange,
+  placeholder,
+  help,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  placeholder?: string;
+  help?: ReactNode;
+}) {
+  const id = useId();
+  return (
+    <div className="form-group" style={{ flex: '1 1 320px' }}>
+      <label className="form-label" htmlFor={id}>{label}</label>
+      <textarea
+        id={id}
+        className="form-textarea"
+        rows={6}
+        spellCheck={false}
+        autoComplete="off"
+        value={value}
+        aria-describedby={help ? `${id}-help` : undefined}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+      />
+      {help && <div className="form-help" id={`${id}-help`}>{help}</div>}
+    </div>
+  );
+}
+
 export function NumberField({
   label,
   value,

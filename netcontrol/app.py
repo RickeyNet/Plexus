@@ -40,7 +40,7 @@ import time
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from pydantic import BaseModel, ConfigDict, Field
 
-from netcontrol import listener_sources
+from netcontrol import listener_sources, syslog_tls
 from netcontrol.body_limit import BodyLimitMiddleware
 from netcontrol.bounded_map import prune_expired
 from netcontrol.integrations.cisco_fdm.collector import fdm_poll_loop
@@ -1255,6 +1255,8 @@ async def _load_persisted_security_settings():
     # in place: the receivers and the syslog rule engine read this dict.
     event_receivers = await db.get_auth_setting("event_receivers")
     state.EVENT_RECEIVER_CONFIG.update(state._sanitize_event_receiver_config(event_receivers))
+    # Server certificate and client CA of the syslog TLS receiver.
+    syslog_tls.apply(await db.get_auth_setting(syslog_tls.SETTING_KEY))
     # Source allowlist and rate limits of the trap, syslog and flow listeners.
     listener_sources.apply_config(listener_sources.sanitize_config(await db.get_auth_setting("listener_sources")))
 
@@ -1824,8 +1826,9 @@ async def lifespan(app: FastAPI):
         LOGGER.warning("event receivers: startup failed: %s", type(exc).__name__)
     # Syslog rule counters and pending config-change runs, rebuilt from the
     # stored messages in the background. Only the process whose syslog
-    # receiver listens acts on syslog (one worker binds the UDP port), so
-    # only it restores, or every worker would start the same backups.
+    # receiver listens (on UDP, TCP or TLS) acts on syslog (one worker binds
+    # the ports), so only it restores, or every worker would start the same
+    # backups.
     from netcontrol import syslog_rules
     from netcontrol.monitoring_repoll import keep_task
     from netcontrol.routes.metrics_engine import receiver_running

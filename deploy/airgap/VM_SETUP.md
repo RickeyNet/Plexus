@@ -307,6 +307,8 @@ sudo ufw allow 2055/udp         # NetFlow
 sudo ufw allow 6343/udp         # sFlow
 sudo ufw allow 162/udp          # SNMP traps (published to the container's 10162)
 sudo ufw allow 1514/udp         # Syslog
+sudo ufw allow 1514/tcp         # Syslog over TCP (when turned on in Settings > Syslog & Traps)
+sudo ufw allow 6514/tcp         # Syslog over TLS (when turned on in Settings > Syslog & Traps)
 # sudo ufw allow 514/udp        # Syslog on 514: also publish "514:1514/udp" in docker-compose.yml
 
 sudo ufw enable
