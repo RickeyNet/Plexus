@@ -178,6 +178,18 @@ async def caller_features(request) -> frozenset[str] | None:
     return frozenset(features)
 
 
+async def require_any_feature(request, *feature_keys: str) -> None:
+    """403 unless the caller of an HTTP request holds at least one of
+    ``feature_keys`` (an admin and the server API token hold every one).
+    For a route that, past its own router's feature gate, also exposes the
+    data of another feature."""
+    features = await caller_features(request)
+    if features is None or any(key in features for key in feature_keys):
+        return
+    names = " or ".join(f"'{key}'" for key in feature_keys)
+    raise HTTPException(status_code=403, detail=f"Access denied: this needs the {names} feature")
+
+
 async def verify_ws_session(token: str) -> dict | None:
     """Validate a WebSocket session token the same way require_auth does.
 

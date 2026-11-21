@@ -168,3 +168,103 @@ def test_setup_generates_the_first_login_password():
     setup = _read(DEPLOY / "setup.sh")
     assert re.search(r"ADMIN_PASSWORD=\$\(python3 -c \"import secrets; print\(secrets\.token_urlsafe", setup)
     assert "PLEXUS_INITIAL_ADMIN_PASSWORD=${ADMIN_PASSWORD}" in setup
+
+
+# ── Server API token (opt-in) ────────────────────────────────────────────────
+
+
+def test_setup_leaves_the_api_token_empty_unless_asked():
+    setup = _read(DEPLOY / "setup.sh")
+    # The token is generated only inside the opt-in branch.
+    assert re.search(r'API_TOKEN=""\n\s+if \[ "\$\{WITH_API_TOKEN\}" = "true" \]; then\n\s+API_TOKEN=\$\(', setup)
+    assert re.search(r"^WITH_API_TOKEN=false$", setup, re.M)
+    assert "--with-api-token) WITH_API_TOKEN=true" in setup
+    assert "PLEXUS_ENABLE_API_TOKEN" in setup
+    assert "APP_API_TOKEN=${API_TOKEN}" in setup
+    assert re.search(r"^APP_API_TOKEN=$", _read(ROOT / ".env.example"), re.M)
+
+
+def test_installers_pass_the_api_token_opt_in_through():
+    bootstrap = _read(DEPLOY / "bootstrap.sh")
+    assert "SETUP_ARGS+=(--with-api-token)" in bootstrap
+    assert 'bash deploy/setup.sh ${SETUP_ARGS[@]+"${SETUP_ARGS[@]}"}' in bootstrap
+    assert "PLEXUS_ENABLE_API_TOKEN" in _read(DEPLOY / "airgap" / "install.sh")
+
+
+def test_docs_do_not_promise_an_auto_generated_api_token():
+    for path in _text_files(DEPLOY, ROOT / "README.md", ROOT / "DEVSETUP.md", ROOT / "docs"):
+        if path.suffix != ".md" or "superpowers" in path.parts:
+            continue
+        assert "(auto-generated) | Token for API" not in _read(path), path
+
+
+# ── Host updater (runs as root) ──────────────────────────────────────────────
+
+UPDATER = DEPLOY / "plexus-updater.sh"
+UPDATER_UNIT = DEPLOY / "systemd" / "plexus-updater.service"
+
+
+def test_updater_writes_only_into_the_status_dir():
+    script = _read(UPDATER)
+    assert 'STATUS_DIR="${INSTALL_DIR}/state/update-status"' in script
+    for name, file in [
+        ("INPROGRESS", "request.inprogress.json"),
+        ("RESULT", "result.json"),
+        ("LOG_FILE", "upgrade.log"),
+        ("ROLLBACK_JSON", "rollback.json"),
+        ("AGENT_MARKER", ".agent-installed"),
+    ]:
+        assert f'{name}="${{STATUS_DIR}}/{file}"' in script, name
+    # The request dir is used for request.json and legacy clean-up only.
+    uses = re.findall(r"\$\{UPDATES_DIR[:?]*\}/?([\w.${}\[\]]*)", script)
+    assert set(uses) <= {"request.json", "${name}", ""}, uses
+    assert 'mv -f "${REQUEST}"' not in script
+    # The status dir is root-owned and refused when it is a symlink.
+    assert "install -d -m 0755 -o root -g root" in script
+    assert '-L "${STATUS_DIR}"' in script
+
+
+def test_updater_claims_the_request_without_following_links():
+    script = _read(UPDATER)
+    claim = script[script.index("claim_request() {") :]
+    claim = claim[: claim.index("\nPY\n}")]
+    assert "O_NOFOLLOW" in claim
+    assert "follow_symlinks=False" in claim
+    assert "S_ISREG" in claim
+    assert "st_nlink != 1" in claim
+    assert "dir_fd=dfd" in claim
+    assert "os.path.realpath(updates) != expected" in claim
+    assert "O_NONBLOCK" in claim
+    # A rejected request is reported, not run.
+    assert re.search(r'if ! CLAIM_MSG="\$\(claim_request\)"; then\n(.*\n){0,4}\s+exit 0', script)
+    # A dangling symlink still counts as a request (and is rejected).
+    assert '[[ ! -e "${REQUEST}" && ! -L "${REQUEST}" ]]' in script
+
+
+def test_updater_unit_is_hardened_without_blocking_git_or_docker():
+    unit = _read(UPDATER_UNIT)
+    opts = dict(line.split("=", 1) for line in unit.splitlines() if "=" in line and not line.lstrip().startswith("#"))
+    assert opts["NoNewPrivileges"] == "yes"
+    assert opts["PrivateTmp"] == "yes"
+    assert opts["ProtectSystem"] in {"full", "strict"}
+    assert opts["ProtectHome"] == "read-only"
+    assert "@INSTALL_DIR@" in opts["ReadWritePaths"]
+    assert "@OWNER_HOME@" in opts["ReadWritePaths"]
+    # runuser needs setuid/setgid; the owner's home holds ~/.docker.
+    for forbidden in ("CapabilityBoundingSet", "PrivateUsers", "User", "DynamicUser"):
+        assert forbidden not in opts, forbidden
+    assert opts["ProtectHome"] not in {"yes", "tmpfs"}
+    bootstrap = _read(DEPLOY / "bootstrap.sh")
+    assert "s|@OWNER_HOME@|${OWNER_HOME}|g" in bootstrap
+    assert "install -d -m 0755 -o root -g root state/update-status" in bootstrap
+    assert "touch state/update-status/.agent-installed" in bootstrap
+
+
+def test_compose_mounts_the_update_status_read_only():
+    plexus = yaml.safe_load(_read(ROOT / "docker-compose.yml"))["services"]["plexus"]
+    volumes = plexus["volumes"]
+    assert "./state/update-status:/app/state/update-status:ro" in volumes
+    assert "./state/updates:/app/state/updates" in volumes
+    assert plexus["environment"]["PLEXUS_UPDATE_STATUS_DIR"] == "/app/state/update-status"
+    # The entrypoint must not chown (write) the read-only status mount.
+    assert "update-status" not in _read(DEPLOY / "docker-entrypoint.sh")

@@ -293,6 +293,23 @@ uv pip compile requirements.txt --universal --generate-hashes --python-version 3
 The Docker image and the SBOM are built from this lock, so a changed
 `requirements.txt` without a regenerated lock does not reach the deployment.
 
+The image built with the cloud SDKs (`INSTALL_CLOUD_SDKS=true`, the compose
+default and the published images) installs `requirements-cloud-lock.txt`
+instead: one hashed lock of `requirements.txt` plus `requirements-cloud.txt`,
+compiled with the base lock's pins as constraints so both images carry the
+same versions. Regenerate it after changing either file or the base lock
+(`python-dateutil` is left out of the constraints because botocore needs
+`<3`, while the base lock pins 4.x):
+
+```bash
+python tools/check_requirements_lock.py --constraints requirements-lock.txt --exclude python-dateutil > lock-constraints.txt
+uv pip compile requirements.txt requirements-cloud.txt --universal --generate-hashes --python-version 3.14 -c lock-constraints.txt -o requirements-cloud-lock.txt
+rm lock-constraints.txt
+```
+
+`python tools/check_requirements_lock.py` (a CI step) fails when either lock
+misses a requirement or the cloud lock pins a shared package differently.
+
 ## Tests and checks
 
 These mirror `.github/workflows/ci.yml`. On Windows, one script runs them all

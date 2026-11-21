@@ -203,6 +203,6 @@ Dockerfile                  # App image
 - **netcontrol.key** - Fernet encryption key for credentials. Back it up.
   Losing it means stored passwords are unrecoverable.
 - Credentials are encrypted at rest but decrypted in memory during job execution.
-- API token protection is supported via `APP_API_TOKEN`; set `APP_REQUIRE_API_TOKEN=true` to enforce token auth for API routes.
+- The static server API token `APP_API_TOKEN` is off (empty) on a new install; it is admin-equivalent and skips CSRF, the API rate limit and the session limits. Enable it with `deploy/setup.sh --with-api-token` (or `PLEXUS_ENABLE_API_TOKEN=true`) only for automation or federation peers ([deploy/DEPLOYMENT.md](deploy/DEPLOYMENT.md#server-api-token)); `APP_REQUIRE_API_TOKEN=true` enforces it for API routes.
 - Default seed credential uses `netadmin / cisco123` - change in production.
 - License: MIT (`LICENSE`).

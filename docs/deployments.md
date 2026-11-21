@@ -51,8 +51,14 @@ A deployment needs approval before it can run when:
 - the linked risk analysis has the level **high** or **critical**, or
 - someone clicks **Request approval gate** in the deployment details.
 
-Plexus also requires approval when the target inventory group is marked as
-a production environment, but no screen or API sets that mark today.
+Plexus also requires approval when the target inventory group, or the
+group of any listed target host, is marked as a production environment
+(no screen or API sets that mark today). Listing production hosts under a
+non-production group does not avoid the gate. **Execute** checks the hosts'
+groups again: if a host has moved into a production group since the
+deployment was planned, Execute is refused with `403` and the deployment
+waits for approval (`pending`). Deployments promoted from the
+[Lab](lab-mode.md) follow the same rule.
 
 To approve:
 
@@ -78,7 +84,8 @@ no gate yet, so after a rejection ask again with
 2. Confirm. A window streams the progress.
 
 Plexus first checks the approval gate, then the
-[maintenance windows](maintenance-windows.md) that cover the group. A
+[maintenance windows](maintenance-windows.md) that cover the group or the
+group of any target host. A
 window can block the deployment with a message such as `Blocked by
 maintenance window 'Weekend change' (next opens ...)`.
 

@@ -58,6 +58,13 @@ from typing import Any
 import httpx
 
 from netcontrol.routes.outbound_http import OutboundRequestError, guard_url, send_request, tls_verify
+from netcontrol.secret_fields import (
+    NOTIFICATION_CHANNEL_SECRET_FIELDS,
+    SECRET_MASK,
+    compared_tls_verify,
+    refuse_secret_reuse,
+    url_origin,
+)
 from netcontrol.telemetry import configure_logging
 
 LOGGER = configure_logging("plexus.notify")
@@ -72,7 +79,7 @@ CHAT_TYPES = ("slack", "webex")
 SUPPORTED_SEVERITIES = ("info", "warning", "critical")
 _SEVERITY_ORDER = {name: i for i, name in enumerate(SUPPORTED_SEVERITIES)}
 
-REDACTION_MASK = "••••••••"
+REDACTION_MASK = SECRET_MASK
 
 DEFAULT_QUEUE_SIZE = 1000
 DEFAULT_MAX_RETRIES = 4
@@ -294,7 +301,7 @@ def channel_config_to_dict(cfg: ChannelConfig, *, redact_secrets: bool = True) -
     }
 
 
-_SECRET_FIELDS = ("smtp_password", "routing_key", "webhook_auth_value")
+_SECRET_FIELDS = NOTIFICATION_CHANNEL_SECRET_FIELDS
 
 
 def merge_secrets(new: dict, existing: ChannelConfig | None) -> dict:
@@ -306,6 +313,37 @@ def merge_secrets(new: dict, existing: ChannelConfig | None) -> dict:
         if new.get(fname) == REDACTION_MASK:
             new[fname] = getattr(existing, fname)
     return new
+
+
+def reused_secrets(new: dict, existing: ChannelConfig | None) -> list[str]:
+    """The stored secrets a submitted channel keeps by sending the mask."""
+    if existing is None:
+        return []
+    return [f for f in _SECRET_FIELDS if new.get(f) == REDACTION_MASK and getattr(existing, f)]
+
+
+def _secret_destination(cfg: ChannelConfig) -> dict:
+    """Where a channel's secrets are sent: the SMTP server and whether the
+    session is encrypted, the webhook address and its certificate check."""
+    return {
+        "smtp_host": cfg.smtp_host.lower(),
+        "smtp_port": cfg.smtp_port,
+        "smtp_tls": cfg.smtp_use_tls or cfg.smtp_use_ssl,
+        "webhook_url": url_origin(cfg.webhook_url),
+        "verify_tls": cfg.verify_tls,
+    }
+
+
+def refuse_moved_secrets(existing: ChannelConfig, cfg: ChannelConfig, reused: list[str]) -> None:
+    """Raise ``ValueError`` when the update ``cfg`` sends the ``reused``
+    stored secrets somewhere else than ``existing`` did (another server or
+    address, encryption or certificate checks turned off): they must be
+    entered again (``secret_fields.refuse_secret_reuse``)."""
+    old = _secret_destination(existing)
+    new = _secret_destination(cfg)
+    for flag in ("smtp_tls", "verify_tls"):
+        new[flag] = compared_tls_verify(old[flag], new[flag])
+    refuse_secret_reuse(old, new, tuple(old), stored=reused, resent=[])
 
 
 def _parse_recipients(raw: str) -> list[str]:

@@ -208,6 +208,16 @@ with Plexus. The Docker stack publishes host port 162 to the trap receiver
 and 1514 to the syslog receiver; for devices that can only send syslog to
 UDP 514, publish `514:1514/udp` as well.
 
+By default only datagrams whose source is an inventory host address are
+received (the listener source allowlist, with a per-source rate limit:
+[administration.md](administration.md#listener-sources)), and an SNMPv1 /
+v2c trap from an inventory host is stored only when it carries the SNMP
+community stored for that host (its SNMP profile, else its group's
+settings), for every vendor alike. **Upgrading:** sources that are not
+inventory hosts, and traps whose community differs from the host's polling
+community, are dropped by default; they are counted in the receiver
+settings (`syslog_dropped_source`, `trap_dropped_community`, ...).
+
 Syslog from inventory hosts can also raise alerts, start a config backup
 and drift check, and trigger an immediate re-poll: see
 [Syslog Rules](syslog-rules.md).

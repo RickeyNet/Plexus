@@ -159,8 +159,10 @@ shadow user gets `Default Role`, and roles are then managed locally in
 Plexus and never touched by TACACS+.
 
 Plexus refuses to let an external identity claim a pre-existing **local**
-admin account of the same username (see `upsert_external_user`); rename one
-of them.
+account (admin or not), or an account another provider manages, with the
+same username (see `upsert_external_user`): the login fails with "Invalid
+username or password" and is audited as `auth` / `login.adopt_refused`.
+Rename one of them.
 
 ## 7. API-Based Configuration (Optional)
 

@@ -113,19 +113,28 @@ def test_backup_lists_summary_search_and_export_show_readable_hosts(admin, abc, 
     assert everything["total_backups"] >= 6 and everything["total_policies"] >= 3
 
     for mode in ("substring", "fulltext"):
-        found = scoped.get(f"/api/config-backups/search?q=public&mode={mode}").json()
+        found = scoped.get(f"/api/config-backups/search?q=hostname&mode={mode}").json()
         assert {r["host_id"] for r in found["results"]} == mine, mode
         assert found["count"] == 4
+        # A search for a secret (the SNMP community) finds it only on the
+        # host the user may change: A is read only, so its lines are masked
+        # and a hit that matched nothing but the secret is dropped.
+        secret = scoped.get(f"/api/config-backups/search?q=public&mode={mode}").json()
+        assert {r["host_id"] for r in secret["results"]} == {abc["hB"]}, mode
+        assert secret["count"] == 2
+        assert not any(r.get("secrets_masked") for r in secret["results"])
     assert {
         r["host_id"] for r in admin.get("/api/config-backups/search?q=public&mode=substring").json()["results"]
     } >= (mine | {abc["hC"]})
 
+    # The archive holds raw configs: only those of hosts the user may change.
     archive = scoped.get("/api/config-backups/download")
     assert archive.status_code == 200
     names = zipfile.ZipFile(io.BytesIO(archive.content)).namelist()
-    assert len(names) == 4
-    assert not any(n.startswith("edge-c") for n in names)
-    assert scoped.get(f"/api/config-backups/download?host_id={abc['hC']}").status_code == 404
+    assert len(names) == 2
+    assert all(n.startswith("edge-b") for n in names)
+    for hidden in ("hA", "hC"):
+        assert scoped.get(f"/api/config-backups/download?host_id={abc[hidden]}").status_code == 404
 
     policies = scoped.get("/api/config-backups/policies").json()
     assert {p["group_id"] for p in policies} == {abc["A"], abc["B"]}
@@ -139,7 +148,18 @@ def test_backup_records_by_id_and_writes(abc, scoped, backups):
         "/api/config-backups/{}/download",
     ):
         _not_found_alike(scoped, url, backups["C"])
-        assert scoped.get(url.format(backups["A"])).status_code == 200, url
+        assert scoped.get(url.format(backups["B"])).status_code == 200, url
+    # Read only on A: the view and diff come with the secrets masked, and
+    # the raw download is refused. Writable B is shown as captured.
+    for url in ("/api/config-backups/{}", "/api/config-backups/{}/diff"):
+        masked = scoped.get(url.format(backups["A"]))
+        assert masked.status_code == 200, url
+        assert masked.json()["secrets_masked"] is True, url
+        assert "public" not in masked.text, url
+    assert scoped.get(f"/api/config-backups/{backups['A']}/download").status_code == 403
+    raw = scoped.get(f"/api/config-backups/{backups['B']}").json()
+    assert "community public" in raw["config_text"] and not raw.get("secrets_masked")
+    assert "community public" in scoped.get(f"/api/config-backups/{backups['B']}/download").text
     _not_found_alike(scoped, "/api/config-backups/policies/{}", backups["pC"])
     assert scoped.get(f"/api/config-backups/policies/{backups['pA']}").status_code == 200
 

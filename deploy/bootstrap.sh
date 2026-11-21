@@ -8,6 +8,10 @@
 # Or after `git clone`:
 #   sudo bash deploy/bootstrap.sh
 #
+# A new install leaves the static APP_API_TOKEN empty. To generate one
+# (automation, federation peers), set PLEXUS_ENABLE_API_TOKEN=true:
+#   curl -fsSL .../deploy/bootstrap.sh | sudo PLEXUS_ENABLE_API_TOKEN=true bash
+#
 # Idempotent - safe to re-run. Skips steps already done.
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -118,7 +122,11 @@ cd "${INSTALL_DIR}"
 
 # ── 6. Run setup.sh (generates .env + self-signed cert) ───────────────
 log "Running setup.sh (generates .env and self-signed TLS cert)"
-sudo -u "${TARGET_USER}" bash deploy/setup.sh
+SETUP_ARGS=()
+case "${PLEXUS_ENABLE_API_TOKEN:-}" in
+    1|true|TRUE|True|yes|YES|on|ON) SETUP_ARGS+=(--with-api-token) ;;
+esac
+sudo -u "${TARGET_USER}" bash deploy/setup.sh ${SETUP_ARGS[@]+"${SETUP_ARGS[@]}"}
 
 # ── 6b. Install the host updater (in-app "Install update") ────────────
 # The app writes state/updates/request.json; a systemd path unit runs
@@ -133,6 +141,17 @@ if [[ -f state/.upgrade-previous ]]; then chown "${TARGET_USER}:${TARGET_USER}" 
 # uid 1000 is the in-container `plexus` user (Dockerfile); it writes
 # request.json here. The entrypoint re-applies this on every start.
 chown 1000:1000 state/updates
+# The updater (root) writes result.json, upgrade.log and rollback.json
+# only into this root-owned directory, which the container mounts
+# read-only. Never into state/updates, which the container can write.
+if [[ -L state/update-status ]]; then rm -f state/update-status; fi
+install -d -m 0755 -o root -g root state/update-status
+chown root:root state/update-status
+chmod 0755 state/update-status
+# Home of the install owner: the updater unit lets git and docker write
+# there (~/.docker) under ProtectHome=read-only.
+OWNER_HOME="$(getent passwd "${TARGET_USER}" | cut -d: -f6)"
+OWNER_HOME="${OWNER_HOME:-/root}"
 
 # Image repo the updater accepts for --image upgrades (same env_set idiom
 # as upgrade.sh: only add the key when it is missing).
@@ -142,14 +161,15 @@ fi
 
 if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
     for unit in plexus-updater.service plexus-updater.path; do
-        sed "s|@INSTALL_DIR@|${INSTALL_DIR}|g" "deploy/systemd/${unit}" > "/etc/systemd/system/${unit}.tmp"
+        sed -e "s|@INSTALL_DIR@|${INSTALL_DIR}|g" -e "s|@OWNER_HOME@|${OWNER_HOME}|g" \
+            "deploy/systemd/${unit}" > "/etc/systemd/system/${unit}.tmp"
         chmod 0644 "/etc/systemd/system/${unit}.tmp"
         mv -f "/etc/systemd/system/${unit}.tmp" "/etc/systemd/system/${unit}"
     done
     systemctl daemon-reload
     systemctl enable --now plexus-updater.path
     bash deploy/plexus-updater.sh --sync-rollback
-    touch state/updates/.agent-installed
+    touch state/update-status/.agent-installed
 else
     log "systemd not available - skipping plexus-updater (in-app Install stays disabled)"
 fi

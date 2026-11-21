@@ -40,6 +40,7 @@ import time
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from pydantic import BaseModel, ConfigDict, Field
 
+from netcontrol import listener_sources
 from netcontrol.body_limit import BodyLimitMiddleware
 from netcontrol.bounded_map import prune_expired
 from netcontrol.integrations.cisco_fdm.collector import fdm_poll_loop
@@ -770,15 +771,19 @@ async def _ensure_default_admin():
     )
 
 
+# An unknown username still costs one hash with the same function and cost,
+# so the response time does not tell which usernames exist.
+_DUMMY_PASSWORD_SALT = secrets.token_hex(16)
+
+
 async def verify_user(username: str, password: str) -> dict | None:
     """Verify credentials and return the user dict, or None."""
     user = await db.get_user_by_username(username)
-    if not user:
-        return None
+    salt = user["salt"] if user else _DUMMY_PASSWORD_SALT
     # PBKDF2 with 600k iterations is deliberately expensive (~200-500ms CPU);
     # run it off the event loop so a login burst can't stall every other request.
-    computed = await asyncio.to_thread(_hash_password, password, user["salt"])
-    if secrets.compare_digest(computed, user["password_hash"]):
+    computed = await asyncio.to_thread(_hash_password, password, salt)
+    if user and secrets.compare_digest(computed, user["password_hash"]):
         return user
     return None
 
@@ -1239,6 +1244,8 @@ async def _load_persisted_security_settings():
     # in place: the receivers and the syslog rule engine read this dict.
     event_receivers = await db.get_auth_setting("event_receivers")
     state.EVENT_RECEIVER_CONFIG.update(state._sanitize_event_receiver_config(event_receivers))
+    # Source allowlist and rate limits of the trap, syslog and flow listeners.
+    listener_sources.apply_config(listener_sources.sanitize_config(await db.get_auth_setting("listener_sources")))
 
 
 def require_feature(feature_key: str):
@@ -1637,6 +1644,9 @@ async def lifespan(app: FastAPI):
     await _ensure_default_admin()
     # Migrate users from auth.json if it exists
     await _migrate_auth_json_users()
+    # Settings rows saved before their secrets were encrypted (SNMP, SIEM,
+    # notification, RADIUS/TACACS+/LDAP) are re-saved encrypted, once.
+    await db.encrypt_legacy_auth_settings()
     await _load_persisted_security_settings()
     # Re-encrypt any cloud account credentials stored as plaintext before
     # at-rest encryption existed; without this they linger until next save.
@@ -1907,6 +1917,7 @@ async def _rate_limit_cleanup_loop() -> None:
             # lists whose newest entry is older than any window that matters.
             prune_expired(state.LOCKED_OUT, state.lockout_expired, now)
             prune_expired(state.LOGIN_ATTEMPTS, state.login_attempts_expired, now)
+            prune_expired(state.LOGIN_USERNAME_FAILURES, state.username_failures_expired, now)
         except asyncio.CancelledError:
             raise
         except Exception as exc:

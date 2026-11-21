@@ -8,8 +8,9 @@
 #
 #   pip install -r requirements-cloud.txt
 #
-# In Docker, add after the base requirements install:
-#   RUN pip install --no-cache-dir -r requirements-cloud.txt
+# The Docker image (INSTALL_CLOUD_SDKS=true) installs the hashed
+# requirements-cloud-lock.txt instead; regenerate it after changing this file
+# (DEVSETUP.md, "Updating dependencies").
 
 # ── AWS (topology + CloudWatch Logs Insights flow logs + CloudWatch metrics)
 boto3>=1.34,<2

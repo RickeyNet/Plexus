@@ -46,21 +46,23 @@ RUN sed -i 's|http://deb.debian.org|https://deb.debian.org|g' \
     libldap2-dev libsasl2-dev libssl-dev gcc gosu git openssh-client \
     && rm -rf /var/lib/apt/lists/*
 
-# Install from the hashed lock so the image contains exactly what the SBOM
-# (built from the same file in CI) declares. requirements.txt is copied only
-# so the lock's "-r requirements.txt" provenance comments resolve.
-COPY requirements.txt requirements-lock.txt requirements-cloud.txt ./
-RUN pip install --no-cache-dir --upgrade pip \
-    && pip install --no-cache-dir --require-hashes -r requirements-lock.txt
-
+# Install from a hashed lock so the image contains exactly what the SBOM
+# (built from the same files in CI) declares. requirements*.txt are copied
+# only so the locks' "-r requirements.txt" provenance comments resolve.
+#
 # Cloud Visibility provider SDKs (AWS/Azure/GCP). Off by default for bare
 # `docker build`; docker-compose.yml and the CI-published images (edge,
 # releases) pass INSTALL_CLOUD_SDKS=true so live cloud collection works.
+# With it the image installs requirements-cloud-lock.txt instead: one hashed
+# lock of requirements.txt plus requirements-cloud.txt, pinned to the same
+# versions as requirements-lock.txt (tools/check_requirements_lock.py).
 # Set it to false for a smaller image that never attaches cloud accounts.
 ARG INSTALL_CLOUD_SDKS=false
-RUN if [ "$INSTALL_CLOUD_SDKS" = "true" ]; then \
-        pip install --no-cache-dir -r requirements-cloud.txt; \
-    fi
+COPY requirements.txt requirements-lock.txt requirements-cloud.txt requirements-cloud-lock.txt ./
+RUN LOCK=requirements-lock.txt; \
+    if [ "$INSTALL_CLOUD_SDKS" = "true" ]; then LOCK=requirements-cloud-lock.txt; fi; \
+    pip install --no-cache-dir --upgrade pip \
+    && pip install --no-cache-dir --require-hashes -r "$LOCK"
 
 COPY . .
 

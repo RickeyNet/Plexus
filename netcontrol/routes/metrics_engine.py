@@ -31,9 +31,10 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 import netcontrol.routes.state as state
-from netcontrol import syslog_rules
+from netcontrol import listener_sources, syslog_rules
+from netcontrol.bounded_map import BoundedDict
 from netcontrol.integrations.apc.snmp import UPS_METRICS, ups_metric_samples
-from netcontrol.integrations.apc.traps import dispatch_apc_trap, parse_apc_trap
+from netcontrol.integrations.apc.traps import handle_apc_trap, parse_apc_trap
 from netcontrol.integrations.opnsense.health import FIREWALL_METRICS, firewall_metric_samples
 from netcontrol.object_scope import (
     HOST_NOT_FOUND,
@@ -45,7 +46,7 @@ from netcontrol.object_scope import (
 )
 from netcontrol.routes import opnsense_filterlog
 from netcontrol.routes.shared import _audit, _corr_id, _get_session
-from netcontrol.routes.snmp import decode_snmp_trap
+from netcontrol.routes.snmp import decode_snmp_trap, trap_community_matches
 from netcontrol.telemetry import configure_logging, redact_value
 
 router = APIRouter()
@@ -907,17 +908,23 @@ _RECEIVER_STATS: dict[str, _ReceiverStats] = {"trap": _ReceiverStats(), "syslog"
 
 class _TrapSyslogProtocol(asyncio.DatagramProtocol):
     """Async UDP listener for SNMP traps and syslog (ports from
-    state.EVENT_RECEIVER_CONFIG; 10162 and 1514 by default)."""
+    state.EVENT_RECEIVER_CONFIG; 10162 and 1514 by default). A datagram
+    whose source the listener allowlist refuses, or over its per-source
+    rate limit (``netcontrol.listener_sources``), is counted there and
+    dropped before it is parsed or counted as received."""
 
     def __init__(self, event_type: str):
         self.event_type = event_type
         self._stats = _RECEIVER_STATS[event_type]
+        self._guard = listener_sources.guard(event_type)
 
     def connection_made(self, transport):
         self.transport = transport
 
     def datagram_received(self, data: bytes, addr: tuple):
         source_ip = addr[0]
+        if not self._guard.admit(source_ip):
+            return
         stats = self._stats
         stats.received += 1
         stats.last_message_at = time.time()
@@ -936,14 +943,16 @@ class _TrapSyslogProtocol(asyncio.DatagramProtocol):
         # parts. Only the stored prefix is hexed (raw_data is capped at 2000
         # chars = 1000 bytes anyway).
         raw_hex = data[:1000].hex()
-        # An APC UPS trap (PowerNet-MIB, v1/v2c) is decoded: stored with its
-        # name and severity, and acted on when it comes from a UPS host.
-        apc_trap = parse_apc_trap(decode_snmp_trap(data))
+        # A v1 / v2c trap is decoded and queued with its decoded form: the
+        # batch writer checks its community against the source host's and,
+        # for an APC UPS trap (PowerNet-MIB, stored with its name and
+        # severity), acts on it there. Nothing runs outside the bounded queue.
+        trap = decode_snmp_trap(data)
+        apc_trap = parse_apc_trap(trap)
         if apc_trap is not None:
             _queue_trap_syslog_event(
-                source_ip, "trap", "", apc_trap.severity, apc_trap.trap_oid, apc_trap.message, raw_hex
+                source_ip, "trap", "", apc_trap.severity, apc_trap.trap_oid, apc_trap.message, raw_hex, trap
             )
-            dispatch_apc_trap(source_ip, apc_trap)
             return
         message = f"SNMP trap from {source_ip} ({len(data)} bytes)"
         oid = ""
@@ -953,7 +962,7 @@ class _TrapSyslogProtocol(asyncio.DatagramProtocol):
             if "." in candidate:
                 oid = candidate
 
-        _queue_trap_syslog_event(source_ip, "trap", "", "info", oid, message, raw_hex)
+        _queue_trap_syslog_event(source_ip, "trap", "", "info", oid, message, raw_hex, trap)
 
     def _handle_syslog(self, data: bytes, source_ip: str):
         try:
@@ -1006,22 +1015,36 @@ _TRAP_EVENT_FLUSH_SECONDS = 1.0
 _TRAP_EVENT_BUFFER_MAX = 10000
 _HOST_IP_CACHE_TTL_SECONDS = 300.0
 
-_trap_event_buffer: list[tuple] = []  # (source_ip, event_type, facility, severity, oid, message, raw_data)
+_HOST_IP_CACHE_MAX = 4096
+
+# (source_ip, event_type, facility, severity, oid, message, raw_data, trap):
+# ``trap`` is the decoded v1 / v2c trap (``decode_snmp_trap``), None for
+# syslog and for a trap that could not be decoded (SNMPv3, malformed).
+_trap_event_buffer: list[tuple] = []
 _trap_events_dropped = 0
 # Never reset (the writer resets _trap_events_dropped each flush): shown in
 # the receiver settings as events dropped since Plexus started.
 _trap_events_dropped_total = 0
 _trap_event_writer_task: asyncio.Task | None = None
-_host_ip_cache: dict[str, tuple[int | None, float]] = {}
 
 
-def _queue_trap_syslog_event(source_ip, event_type, facility, severity, oid, message, raw_data) -> None:
+def _host_ip_entry_expired(_ip: str, entry: tuple[int | None, float], now: float) -> bool:
+    return entry[1] <= now
+
+
+# source_ip -> (host_id or None, expiry). Bounded: forged sources cannot grow it.
+_host_ip_cache: BoundedDict = BoundedDict(_HOST_IP_CACHE_MAX, _host_ip_entry_expired, clock=time.monotonic)
+
+
+def _queue_trap_syslog_event(
+    source_ip, event_type, facility, severity, oid, message, raw_data, trap: dict | None = None
+) -> None:
     global _trap_events_dropped, _trap_events_dropped_total, _trap_event_writer_task
     if len(_trap_event_buffer) >= _TRAP_EVENT_BUFFER_MAX:
         _trap_events_dropped += 1
         _trap_events_dropped_total += 1
         return
-    _trap_event_buffer.append((source_ip, event_type, facility, severity, oid, message[:2000], raw_data[:2000]))
+    _trap_event_buffer.append((source_ip, event_type, facility, severity, oid, message[:2000], raw_data[:2000], trap))
     if _trap_event_writer_task is None or _trap_event_writer_task.done():
         _trap_event_writer_task = asyncio.ensure_future(_trap_event_writer_loop())
 
@@ -1040,40 +1063,86 @@ async def _resolve_host_id_cached(source_ip: str) -> int | None:
             host_id = host["id"]
     except Exception as exc:
         LOGGER.debug("metrics: host lookup failed for %s: %s", source_ip, exc)
+    # Bounded (BoundedDict): a scanner spraying forged sources cannot grow it.
     _host_ip_cache[source_ip] = (host_id, now + _HOST_IP_CACHE_TTL_SECONDS)
-    # Bound the cache: a scanner spraying spoofed sources shouldn't grow it forever.
-    if len(_host_ip_cache) > 4096:
-        for ip, (_, expires) in list(_host_ip_cache.items()):
-            if expires <= now:
-                _host_ip_cache.pop(ip, None)
     return host_id
 
 
-async def _trap_event_writer_loop() -> None:
+def _take_trap_event_batch() -> list[tuple]:
+    """Everything queued, the queue emptied (the overflow count logged)."""
     global _trap_events_dropped
+    batch = _trap_event_buffer[:]
+    _trap_event_buffer.clear()
+    if _trap_events_dropped:
+        LOGGER.warning("metrics: trap/syslog buffer overflow - dropped %d events", _trap_events_dropped)
+        _trap_events_dropped = 0
+    return batch
+
+
+async def _trap_event_writer_loop() -> None:
     while True:
         await asyncio.sleep(_TRAP_EVENT_FLUSH_SECONDS)
         if not _trap_event_buffer:
             continue
-        batch = _trap_event_buffer[:]
-        _trap_event_buffer.clear()
-        if _trap_events_dropped:
-            LOGGER.warning("metrics: trap/syslog buffer overflow - dropped %d events", _trap_events_dropped)
-            _trap_events_dropped = 0
-        rows: list[tuple] = []
+        await _flush_trap_syslog_batch(_take_trap_event_batch())
+
+
+async def _screen_traps(batch: list[tuple], host_ids: dict[str, int | None]) -> tuple[list[tuple], list[tuple]]:
+    """The batch without the decoded (v1 / v2c) traps whose source is an
+    inventory host but whose community is not that host's (each counted as
+    a ``community`` drop of the trap listener), and the APC traps to act on
+    (``(source_ip, ApcTrap)``, from inventory sources only). A trap from a
+    source admitted only by an extra network or the ``any`` policy has no
+    host whose community could be checked: it is stored, never acted on.
+    An undecodable trap (SNMPv3, malformed) is stored and never acted on."""
+    trap_host_ids = sorted(
+        {hid for row in batch if row[1] == "trap" and row[7] is not None and (hid := host_ids.get(row[0])) is not None}
+    )
+    hosts = {int(h["id"]): h for h in await db.get_hosts_by_ids(trap_host_ids)} if trap_host_ids else {}
+    guard = listener_sources.guard("trap")
+    kept: list[tuple] = []
+    apc: list[tuple] = []
+    for row in batch:
+        trap = row[7]
+        if row[1] == "trap" and trap is not None:
+            host_id = host_ids.get(row[0])
+            if host_id is not None:
+                host = hosts.get(int(host_id))
+                if host is None or not trap_community_matches(trap, host):
+                    guard.note_drop("community", row[0])
+                    continue
+                apc_trap = parse_apc_trap(trap)
+                if apc_trap is not None:
+                    apc.append((row[0], apc_trap))
+        kept.append(row)
+    return kept, apc
+
+
+async def _flush_trap_syslog_batch(batch: list[tuple]) -> None:
+    """Store a batch of queued events (``_trap_event_buffer`` rows), then
+    run the syslog rules on it and act on its APC traps, one after another:
+    the work a datagram causes stays inside the bounded queue."""
+    rows: list[tuple] = []
+    apc: list[tuple] = []
+    try:
+        host_ids = {ip: await _resolve_host_id_cached(ip) for ip in {row[0] for row in batch}}
+        batch, apc = await _screen_traps(batch, host_ids)
+        rows = [
+            (source_ip, host_ids.get(source_ip), event_type, facility, severity, oid, message, raw_data)
+            for (source_ip, event_type, facility, severity, oid, message, raw_data, _trap) in batch
+        ]
+        # OPNsense firewall log lines are summed per rule, never stored
+        # raw nor run through the syslog rules.
+        rows = opnsense_filterlog.divert(rows)
+        await db.create_trap_syslog_events_batch(rows)
+    except Exception as exc:
+        LOGGER.warning("metrics: trap/syslog batch write failed, dropping %d events: %s", len(batch), exc)
+    await _evaluate_syslog_rules(rows)
+    for source_ip, apc_trap in apc:
         try:
-            host_ids = {ip: await _resolve_host_id_cached(ip) for ip in {row[0] for row in batch}}
-            rows = [
-                (source_ip, host_ids.get(source_ip), event_type, facility, severity, oid, message, raw_data)
-                for (source_ip, event_type, facility, severity, oid, message, raw_data) in batch
-            ]
-            # OPNsense firewall log lines are summed per rule, never stored
-            # raw nor run through the syslog rules.
-            rows = opnsense_filterlog.divert(rows)
-            await db.create_trap_syslog_events_batch(rows)
-        except Exception as exc:
-            LOGGER.warning("metrics: trap/syslog batch write failed, dropping %d events: %s", len(batch), exc)
-        await _evaluate_syslog_rules(rows)
+            await handle_apc_trap(source_ip, apc_trap)
+        except Exception as exc:  # noqa: BLE001 - one trap must not stop the writer
+            LOGGER.warning("metrics: handling an APC trap from %s failed: %s", source_ip, exc)
 
 
 async def _evaluate_syslog_rules(rows: list[tuple]) -> None:
@@ -1143,6 +1212,8 @@ async def _start_receiver(kind: str, port: int) -> bool:
     _receiver_transports[kind] = transport
     _receiver_ports[kind] = port
     _RECEIVER_STATS[kind].reset(time.time())
+    # The source allowlist needs the inventory addresses from the first datagram.
+    await listener_sources.refresh_inventory()
     LOGGER.info("metrics: %s receiver started on UDP port %d", label, port)
     return True
 
@@ -1218,6 +1289,14 @@ def event_receiver_snapshot() -> dict:
         snapshot[f"{kind}_errors"] = stats.errors
         snapshot[f"{kind}_last_message_at"] = _epoch_iso(stats.last_message_at)
         snapshot[f"{kind}_started_at"] = _epoch_iso(stats.started_at)
+        # Refused by the listener allowlist / rate limit (and, for traps, a
+        # wrong community) since Plexus started.
+        drops = listener_sources.guard(kind).stats()
+        snapshot[f"{kind}_dropped_source"] = drops["dropped_source"]
+        snapshot[f"{kind}_dropped_rate"] = drops["dropped_rate"]
+        if kind == "trap":
+            snapshot["trap_dropped_community"] = drops["dropped_community"]
+    snapshot["source_policy"] = listener_sources.CONFIG.get("policy")
     snapshot["events_dropped"] = _trap_events_dropped_total
     snapshot["events_pending"] = len(_trap_event_buffer)
     # OPNsense firewall log lines, summed per rule since Plexus started.

@@ -28,6 +28,8 @@ class _FakeRequest:
 def env(monkeypatch, tmp_path):
     """Handoff dir in tmp_path, in-memory config, captured audit events."""
     monkeypatch.setenv("PLEXUS_UPDATES_DIR", str(tmp_path))
+    # No status dir: the pre-split layout, status files beside request.json.
+    monkeypatch.setenv("PLEXUS_UPDATE_STATUS_DIR", str(tmp_path / "no-status-dir"))
     store: dict[str, Any] = {}
     audits: list[tuple[str, str, str]] = []
 
@@ -332,6 +334,74 @@ def test_progress_log_tail_is_capped(env):
     # Lines longer than the byte cap: the partial first line is dropped.
     (env.dir / "upgrade.log").write_text("a" * (au._LOG_TAIL_BYTES * 2) + "\nlast\n", encoding="utf-8")
     assert asyncio.run(au.get_progress())["log_tail"] == "last"
+
+
+# ── split layout: requests dir (app writes) + status dir (host writes) ──
+
+
+@pytest.fixture
+def split(env, monkeypatch, tmp_path):
+    """The current layout: status files live only in a separate directory."""
+    status = tmp_path / "status"
+    status.mkdir()
+    monkeypatch.setenv("PLEXUS_UPDATE_STATUS_DIR", str(status))
+    env.status = status
+    return env
+
+
+def test_split_reads_status_from_the_status_dir(split):
+    (split.status / ".agent-installed").write_text("", encoding="utf-8")
+    (split.status / "result.json").write_text(json.dumps({"id": "x", "status": "success"}), encoding="utf-8")
+    (split.status / "upgrade.log").write_text("done\n", encoding="utf-8")
+    (split.status / "rollback.json").write_text(json.dumps({"available": True, "target": "abc"}), encoding="utf-8")
+    # A stale copy in the container-writable dir must not win.
+    (split.dir / "result.json").write_text(json.dumps({"status": "running"}), encoding="utf-8")
+    snap = asyncio.run(au.get_progress())
+    assert snap["agent_installed"] is True
+    assert snap["result"]["status"] == "success"
+    assert snap["log_tail"] == "done"
+    assert snap["rollback_available"] is True
+
+
+def test_split_apply_writes_request_only_to_the_updates_dir(split):
+    _configure(split, channel="release")
+    (split.status / ".agent-installed").write_text("", encoding="utf-8")
+    _seed_check("release", "v9.9.9")
+    asyncio.run(au.apply_update({"target": "v9.9.9"}, _FakeRequest()))
+    assert (split.dir / "request.json").is_file()
+    assert sorted(p.name for p in split.status.iterdir()) == [".agent-installed"]
+
+
+def test_split_busy_while_status_dir_shows_a_run(split):
+    _configure(split, channel="release")
+    (split.status / ".agent-installed").write_text("", encoding="utf-8")
+    _seed_check("release", "v9.9.9")
+    (split.status / "request.inprogress.json").write_text("{}", encoding="utf-8")
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(au.apply_update({"target": "v9.9.9"}, _FakeRequest()))
+    assert _status(exc) == 409
+
+
+def test_split_rollback_reads_target_from_the_status_dir(split):
+    _configure(split, channel="release")
+    (split.status / ".agent-installed").write_text("", encoding="utf-8")
+    (split.status / "rollback.json").write_text(
+        json.dumps({"available": True, "mode": "image", "target": "ghcr.io/rickeynet/plexus:v1.0.0"}),
+        encoding="utf-8",
+    )
+    req = asyncio.run(au.rollback_update(_FakeRequest()))
+    assert req["mode"] == "image"
+    assert (split.dir / "request.json").is_file()
+
+
+def test_split_falls_back_to_pre_split_files(split):
+    # Upgraded app, host updater not yet run: its files are still in the
+    # updates dir and the Install button must stay available.
+    _install_agent(split)
+    (split.dir / "result.json").write_text(json.dumps({"status": "success"}), encoding="utf-8")
+    snap = asyncio.run(au.get_progress())
+    assert snap["agent_installed"] is True
+    assert snap["result"]["status"] == "success"
 
 
 # ── edge channel ─────────────────────────────────────────────────────────

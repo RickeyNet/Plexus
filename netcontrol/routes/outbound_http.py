@@ -1,32 +1,39 @@
 """
 outbound_http.py -- The one HTTP sender for admin-configured outbound targets.
 
-Notification webhooks, Teams cards, SIEM HTTPS sinks and event webhooks all
-POST to a URL an admin typed in. Each of them needs the same three things:
-the SSRF pre-check from ``net_guard``, the TLS trust choice (system CAs, a
-pinned PEM bundle, or verification off), and an ``httpx`` request that never
-follows a redirect (a redirect would skip the SSRF check on its target).
-They live here once and every sender imports them.
+Notification webhooks, Teams cards, SIEM HTTPS sinks, event webhooks,
+federation peers, secrets providers and the ChatOps adapters all send to a
+URL an admin typed in. Each of them needs the same things: the SSRF
+pre-check from ``net_guard``, the TLS trust choice (system CAs, a pinned PEM
+bundle, or verification off), an ``httpx`` request that never follows a
+redirect (a redirect would skip the SSRF check on its target), and a
+connection to the address the check approved (``PinnedTransport``), so a
+second DNS answer cannot send the request somewhere else. They live here
+once and every sender imports them.
 """
 
 from __future__ import annotations
 
 import asyncio
 import ssl
+import urllib.request
+from collections.abc import Sequence
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 
-from netcontrol.routes.net_guard import OutboundRequestError, validate_outbound_url
+from netcontrol.routes.net_guard import IPAddress, OutboundRequestError, validate_outbound_url
 
-__all__ = ["OutboundRequestError", "guard_url", "send_request", "tls_verify"]
+__all__ = ["OutboundRequestError", "PinnedTransport", "guard_url", "send_request", "tls_verify"]
 
 
-async def guard_url(url: str) -> None:
-    """SSRF pre-check. Raises ``OutboundRequestError`` for a disallowed target.
+async def guard_url(url: str) -> list[IPAddress]:
+    """SSRF pre-check. Returns the approved addresses of the URL's host;
+    raises ``OutboundRequestError`` for a disallowed target.
 
     Runs in a thread because the check resolves the host name."""
-    await asyncio.to_thread(validate_outbound_url, url)
+    return await asyncio.to_thread(validate_outbound_url, url)
 
 
 def tls_verify(verify: bool = True, ca_pem: str = "") -> Any:
@@ -41,6 +48,72 @@ def tls_verify(verify: bool = True, ca_pem: str = "") -> Any:
     return True
 
 
+# How many approved addresses of one name a request tries before giving up
+# (each attempt may take the whole connect timeout).
+MAX_PINNED_ADDRESSES = 3
+
+
+class PinnedTransport(httpx.AsyncBaseTransport):
+    """Sends each request for ``host`` to one of its approved addresses
+    ``ips``: the first that accepts the connection (at most
+    ``MAX_PINNED_ADDRESSES`` are tried, in order, so a name with an
+    unreachable IPv6 answer still works over IPv4). Only a failed connect
+    moves on to the next address; nothing was sent then.
+
+    The request URL keeps its name for everything but the TCP connection:
+    the ``Host`` header is the name, and for https the TLS server name (SNI)
+    and the certificate check use the name too (httpcore's ``sni_hostname``
+    extension). A request for any other host is refused: the sender never
+    follows redirects, so one would only come from a bug."""
+
+    def __init__(self, host: str, ips: Sequence[IPAddress], inner: httpx.AsyncBaseTransport) -> None:
+        if not ips:
+            raise ValueError("PinnedTransport needs at least one approved address")
+        self._host = host.lower().rstrip(".")
+        self._ips = [str(ip) for ip in ips][:MAX_PINNED_ADDRESSES]
+        self._inner = inner
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        if request.url.host.lower().rstrip(".") != self._host:
+            raise OutboundRequestError(f"request to '{request.url.host}' does not match the checked host")
+        extensions = dict(request.extensions)
+        if request.url.scheme == "https":
+            extensions.setdefault("sni_hostname", request.url.raw_host.decode("ascii"))
+        for index, ip in enumerate(self._ips):
+            pinned = httpx.Request(
+                request.method,
+                request.url.copy_with(host=ip),
+                headers=request.headers,  # carries Host: <name>
+                stream=request.stream,
+                extensions=extensions,
+            )
+            try:
+                return await self._inner.handle_async_request(pinned)
+            except httpx.ConnectError, httpx.ConnectTimeout:
+                if index == len(self._ips) - 1:
+                    raise
+        raise AssertionError("unreachable")  # pragma: no cover - the loop returns or raises
+
+    async def aclose(self) -> None:
+        await self._inner.aclose()
+
+
+def _env_proxy_applies(url: str) -> bool:
+    """Whether ``httpx`` would send ``url`` through a proxy from the
+    environment (``HTTPS_PROXY`` and the like, minus ``NO_PROXY``). Such a
+    request is not pinned: the proxy resolves and connects."""
+    parts = urlsplit(url)
+    proxies = urllib.request.getproxies()
+    if not (proxies.get(parts.scheme.lower()) or proxies.get("all")):
+        return False
+    host = (parts.hostname or "").lower()
+    for entry in str(proxies.get("no") or "").split(","):
+        entry = entry.strip().lower().lstrip(".")
+        if entry == "*" or (entry and (host == entry or host.endswith("." + entry))):
+            return False
+    return True
+
+
 async def send_request(
     method: str,
     url: str,
@@ -52,13 +125,18 @@ async def send_request(
     timeout_s: float = 10.0,
     transport: httpx.AsyncBaseTransport | None = None,
 ) -> httpx.Response:
-    """Guard ``url`` and send one request; redirects are never followed.
+    """Guard ``url``, then send one request to an address the guard
+    approved (``PinnedTransport``); redirects are never followed.
 
     Raises ``OutboundRequestError`` when the target is rejected and the
     ``httpx`` error on a transport failure. The caller judges the status.
     ``transport`` replaces the network layer (tests pass an
-    ``httpx.MockTransport``)."""
-    await guard_url(url)
+    ``httpx.MockTransport``); nothing is pinned then, as nothing connects.
+    A request sent through an environment proxy is not pinned either."""
+    ips = await guard_url(url)
+    if transport is None and ips and not _env_proxy_applies(url):
+        host = httpx.URL(url).host
+        transport = PinnedTransport(host, ips, httpx.AsyncHTTPTransport(verify=verify))
     async with httpx.AsyncClient(
         timeout=timeout_s, verify=verify, follow_redirects=False, transport=transport
     ) as client:

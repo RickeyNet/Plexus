@@ -27,8 +27,11 @@ The rules are set up under **Monitoring > Configure > Syslog Rules**.
 1. **Source**: the message's source address is looked up among the
    inventory hosts' addresses and their recorded interface addresses (a
    device often sends syslog from an interface other than its primary
-   address). A message from an address that is not in the inventory is
-   stored and nothing more.
+   address). By default a message from an address that is not in the
+   inventory is dropped by the receiver's source allowlist; one admitted
+   through its extra networks or the `any` policy
+   ([administration.md](administration.md#listener-sources)) is stored and
+   nothing more.
 2. **Tag**: Plexus reads the message's event tag: the Cisco-style
    `%FACILITY-SEVERITY-MNEMONIC` (IOS, IOS XE, IOS XR, NX-OS, ASA, Arista
    EOS), compared without its severity digit (`%LINK-3-UPDOWN` is
@@ -51,7 +54,10 @@ The rules are set up under **Monitoring > Configure > Syslog Rules**.
    suppression for the host, its group or the metric (Monitoring >
    Configure > Suppressions lists the built-in metrics) applies.
 6. **Resolve**: a message that matches the rule's clear pattern resolves
-   the alert of the same host and instance. A rule with an auto-resolve
+   the alert of the same host and instance. A UDP source address can be
+   forged, so a syslog message resolves only an alert that syslog raised
+   (type `syslog`) for the host it came from: an alert raised by polling
+   stays until polling clears it. A rule with an auto-resolve
    time also resolves its alerts once no new match has arrived for that
    long (checked every minute).
 
@@ -176,9 +182,13 @@ These messages start a backup and drift check of the host:
 | Juniper Junos | `UI_COMMIT_COMPLETED` |
 
 - **Debounce**: one configuration session logs several messages, so the
-  run starts 60 seconds after the host's last configuration message.
-- **Cooldown**: at most one run per host every 5 minutes. Messages during
-  the cooldown keep one pending run, which starts when the cooldown ends.
+  run starts 60 seconds after the host's last configuration message, but
+  no later than 10 minutes after the first message of the pending run: a
+  steady stream of (possibly forged) messages cannot postpone the backup
+  for ever.
+- **Cooldown**: at most one run (one backup session to the device) per
+  host every 5 minutes, however many messages arrive. Messages during the
+  cooldown keep one pending run, which starts when the cooldown ends.
 - **Backup**: the host is backed up through the first enabled backup
   policy of its inventory group (Configuration > Backups) with that
   policy's credential. The backup row's method is `syslog`. An unchanged
@@ -231,7 +241,10 @@ default). These messages start that collection within seconds instead:
   resolves to (the host the newest collection matched the firewall to),
   and through the firewall's API address, interface addresses and CARP
   virtual IPs from its newest collection, so a firewall that is no
-  inventory host triggers too. The map is rebuilt at most once a minute.
+  inventory host triggers too, once its sending address is admitted by
+  the receiver's source allowlist (add it to the extra networks:
+  [administration.md](administration.md#listener-sources)). The map is
+  rebuilt at most once a minute.
 - **The run**: the full collection the schedule and **Collect now** run
   (snapshot, availability tracking, config.xml backup and drift, software
   refresh, recorded as built by `syslog`), 5 seconds after the first

@@ -18,11 +18,18 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 import netcontrol.routes.state as state
-from netcontrol import lab_images, oidc, saml
+from netcontrol import lab_images, listener_sources, oidc, saml
 from netcontrol.object_scope import scope_for_user
 from netcontrol.routes.auth import _oidc_redirect_uri, saml_acs_url, saml_sp_entity_id
 from netcontrol.routes.shared import _audit, _corr_id, _get_session, _session_user
 from netcontrol.routes.state import _env_flag
+from netcontrol.secret_fields import (
+    SECRET_MASK,
+    SIEM_SINK_SECRET_FIELDS,
+    compared_tls_verify,
+    refuse_secret_reuse,
+    url_origin,
+)
 from netcontrol.telemetry import configure_logging, configure_syslog_logging, syslog_logging_enabled
 
 LOGGER = configure_logging("plexus.admin")
@@ -76,6 +83,25 @@ class AdminUserUpdateRequest(BaseModel):
     display_name: str | None = None
     role: str | None = None
     session_never_expires: bool | None = None
+    # Which sign-in provider the account belongs to (ACCOUNT_PROVIDERS).
+    auth_provider: str | None = None
+
+
+# The values of ``users.auth_provider`` an admin may set: "local" (stored as
+# an empty string) or the external provider whose sign-ins may use the
+# account (``auth.upsert_external_user`` refuses every other one).
+ACCOUNT_PROVIDERS = ("local", "ldap", "radius", "tacacs", "oidc", "saml")
+
+
+def _requested_account_provider(value: str | None) -> str | None:
+    """The stored form of a requested ``auth_provider`` ("" for local), None
+    when the request does not set one; 400 for an unknown provider."""
+    if value is None:
+        return None
+    provider = value.strip().lower()
+    if provider not in ACCOUNT_PROVIDERS:
+        raise HTTPException(status_code=400, detail=f"auth_provider must be one of: {', '.join(ACCOUNT_PROVIDERS)}")
+    return "" if provider == "local" else provider
 
 
 class AdminUserPasswordResetRequest(BaseModel):
@@ -360,6 +386,8 @@ async def _admin_user_payload(user: dict) -> dict:
         "feature_access": features,
         "session_never_expires": bool(user.get("session_never_expires")),
         "object_scope_restricted": (await scope_for_user(user)).restricted,
+        # The provider whose sign-ins use this account ("local": its own password).
+        "auth_provider": user.get("auth_provider") or "local",
     }
 
 
@@ -500,6 +528,49 @@ async def admin_update_lab_image_allowlist(body: AdminLabImageAllowlistRequest, 
     return {"entries": entries}
 
 
+class AdminListenerSourcesRequest(BaseModel):
+    """PUT body of the listener source settings: a field left out keeps its
+    saved value (``netcontrol.listener_sources``)."""
+
+    policy: str | None = None
+    extra_cidrs: list[str] | None = Field(default=None, max_length=listener_sources.MAX_EXTRA_CIDRS)
+    trap_rate_limit: int | None = None
+    syslog_rate_limit: int | None = None
+    flow_rate_limit: int | None = None
+
+
+@router.get("/api/admin/listener-sources")
+async def admin_get_listener_sources():
+    """Who may send to the SNMP trap, syslog and flow listeners (inventory
+    hosts only, plus ``extra_cidrs``, or ``any`` source), the per-source
+    rate limits, and each listener's drop counters."""
+    return listener_sources.snapshot()
+
+
+@router.put("/api/admin/listener-sources")
+async def admin_update_listener_sources(body: AdminListenerSourcesRequest, request: Request):
+    merged = {**listener_sources.CONFIG, **body.model_dump(exclude_none=True)}
+    try:
+        cfg = listener_sources.sanitize_config(merged, strict=True)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    await db.set_auth_setting("listener_sources", cfg)
+    listener_sources.apply_config(cfg)
+    session = _get_session(request)
+    await _audit(
+        "system",
+        "listener_sources.updated",
+        user=session["user"] if session else "",
+        detail=(
+            f"policy={cfg['policy']} extra_cidrs={','.join(cfg['extra_cidrs']) or '-'} "
+            f"rate_limits=trap:{cfg['trap_rate_limit']} syslog:{cfg['syslog_rate_limit']} "
+            f"flow:{cfg['flow_rate_limit']}"
+        ),
+        correlation_id=_corr_id(request),
+    )
+    return listener_sources.snapshot()
+
+
 @router.get("/api/admin/security-check")
 async def admin_security_check():
     """Return active security-relevant runtime settings for quick verification."""
@@ -565,6 +636,7 @@ async def admin_update_user(user_id: int, body: AdminUserUpdateRequest, request:
     if body.role is not None and body.role not in {"admin", "user"}:
         raise HTTPException(status_code=400, detail="role must be 'admin' or 'user'")
     role = body.role if body.role in {"admin", "user"} else None
+    provider = _requested_account_provider(body.auth_provider)
     session = _get_session(request)
     if role == "user" and session and int(session["user_id"]) == user_id:
         raise HTTPException(status_code=400, detail="You cannot remove your own admin role")
@@ -583,6 +655,26 @@ async def admin_update_user(user_id: int, body: AdminUserUpdateRequest, request:
     # sessions so a demotion/promotion takes effect immediately.
     if role is not None and role != (target.get("role") or ""):
         await db.bump_user_session_epoch(user_id)
+    # Handing the account to another sign-in provider (or back to local):
+    # the explicit, audited way to let an external sign-in use an existing
+    # account, which it never does on its own (auth.upsert_external_user).
+    # The SSO subject bound under the old provider is forgotten (the next
+    # OIDC / SAML sign-in binds its own) and open sessions end.
+    old_provider = target.get("auth_provider") or ""
+    provider_changed = provider is not None and provider != old_provider
+    if provider_changed:
+        await db.set_user_auth_provider(user_id, provider or "", clear_external_id=True)
+        await db.bump_user_session_epoch(user_id)
+        await _audit(
+            "auth",
+            "user.provider_change",
+            user=session["user"] if session else "",
+            detail=(
+                f"user id={user_id} ('{target.get('username', '')}') "
+                f"provider {old_provider or 'local'} -> {provider or 'local'}"
+            ),
+            correlation_id=_corr_id(request),
+        )
     await _audit(
         "auth",
         "user.update",
@@ -792,7 +884,35 @@ async def admin_update_login_rules(body: AdminLoginRulesRequest):
     return state.LOGIN_RULES
 
 
-_SECRET_MASK = "••••••••"
+_SECRET_MASK = SECRET_MASK
+
+# Each directory block's stored secret and the settings that decide where
+# it is sent: an update that changes one of them must send the secret again.
+_AUTH_SECRET_DESTINATIONS: tuple[tuple[str, str, str, tuple[str, ...]], ...] = (
+    ("radius", "RADIUS", "secret", ("server", "port")),
+    ("tacacs", "TACACS+", "secret", ("server", "port")),
+    (
+        "ldap",
+        "LDAP",
+        "bind_password",
+        ("server", "port", "use_ssl", "use_starttls", "tls_verify", "ca_cert_file"),
+    ),
+)
+
+
+def _refuse_moved_auth_secrets(old: dict, new: dict, reused: list[str]) -> None:
+    """400 when a block in ``reused`` (its stored secret kept by the mask)
+    now sends that secret to another server or over other TLS settings
+    (``secret_fields.refuse_secret_reuse``)."""
+    for block, label, field, where in _AUTH_SECRET_DESTINATIONS:
+        if block not in reused:
+            continue
+        try:
+            refuse_secret_reuse(
+                old.get(block) or {}, new.get(block) or {}, where, stored=[field.replace("_", " ")], resent=[]
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=f"{label}: {exc}") from exc
 
 
 def _redact_auth_config(cfg: dict) -> dict:
@@ -843,6 +963,18 @@ def _oidc_config_to_store(submitted: dict) -> dict:
     out = dict(submitted)
     secret = str(out.pop("client_secret", "") or "")
     if secret == _SECRET_MASK:
+        if current.get("client_secret_enc"):
+            # The secret goes to the token endpoint the issuer names.
+            try:
+                refuse_secret_reuse(
+                    {"issuer": url_origin(current.get("issuer")), "ca_cert_file": current.get("ca_cert_file") or ""},
+                    {"issuer": url_origin(issuer), "ca_cert_file": str(submitted.get("ca_cert_file") or "").strip()},
+                    ("issuer", "ca_cert_file"),
+                    stored=["client secret"],
+                    resent=[],
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=f"OIDC: {exc}") from exc
         out["client_secret_enc"] = current.get("client_secret_enc", "")
     elif secret:
         from routes.crypto import encrypt
@@ -895,12 +1027,13 @@ async def admin_get_auth_config():
 async def admin_update_auth_config(body: AuthConfigRequest):
     data = body.model_dump()
     # Preserve existing secrets when client sends back the redaction mask
-    if data.get("radius", {}).get("secret") == _SECRET_MASK:
-        data["radius"]["secret"] = state.AUTH_CONFIG.get("radius", {}).get("secret", "")
-    if data.get("tacacs", {}).get("secret") == _SECRET_MASK:
-        data["tacacs"]["secret"] = state.AUTH_CONFIG.get("tacacs", {}).get("secret", "")
-    if data.get("ldap", {}).get("bind_password") == _SECRET_MASK:
-        data["ldap"]["bind_password"] = state.AUTH_CONFIG.get("ldap", {}).get("bind_password", "")
+    reused: list[str] = []
+    for block, _label, field, _where in _AUTH_SECRET_DESTINATIONS:
+        if (data.get(block) or {}).get(field) == _SECRET_MASK:
+            stored = (state.AUTH_CONFIG.get(block) or {}).get(field, "")
+            data[block][field] = stored
+            if stored:
+                reused.append(block)
     if data.get("change_log_retention_days") is None:
         data["change_log_retention_days"] = state._effective_change_log_retention_days()
     submitted_oidc = data.pop("oidc", None)
@@ -913,7 +1046,9 @@ async def admin_update_auth_config(body: AuthConfigRequest):
         data["saml"] = dict(state.AUTH_CONFIG.get("saml") or {})
     else:
         data["saml"] = _saml_config_to_store(submitted_saml)
-    state.AUTH_CONFIG = state._sanitize_auth_config(data)
+    new_config = state._sanitize_auth_config(data)
+    _refuse_moved_auth_secrets(state.AUTH_CONFIG, new_config, reused)
+    state.AUTH_CONFIG = new_config
     await db.set_auth_setting("auth_config", state.AUTH_CONFIG)
     return _redact_auth_config(state.AUTH_CONFIG)
 
@@ -1093,17 +1228,41 @@ def _sink_index(sink_id: str) -> int:
     return -1
 
 
+_SINK_SECRETS = SIEM_SINK_SECRET_FIELDS
+
+
 def _merge_secrets(new: dict, existing) -> dict:
     """If the client posts the redaction sentinel for a secret field, keep
     the previously stored value instead of overwriting."""
-    mask = "••••••••"
     if existing is None:
         return new
-    if new.get("bearer_token") == mask:
-        new["bearer_token"] = existing.bearer_token
-    if new.get("tls_client_key_pem") == mask:
-        new["tls_client_key_pem"] = existing.tls_client_key_pem
+    for field in _SINK_SECRETS:
+        if new.get(field) == SECRET_MASK:
+            new[field] = getattr(existing, field)
     return new
+
+
+def _sink_destination(sc) -> dict:
+    """Where a sink's secrets go: protocol, address and TLS trust."""
+    return {
+        "protocol": sc.protocol,
+        "host": sc.host.lower(),
+        "port": sc.port,
+        "url": url_origin(sc.url),
+        "tls_verify": sc.tls_verify,
+        "tls_ca_pem": sc.tls_ca_pem.strip(),
+    }
+
+
+def _refuse_moved_sink_secrets(existing, sc, reused: list[str]) -> None:
+    """400 when the update ``sc`` sends the stored secrets in ``reused`` to
+    another destination (``secret_fields.refuse_secret_reuse``)."""
+    old, new = _sink_destination(existing), _sink_destination(sc)
+    new["tls_verify"] = compared_tls_verify(old["tls_verify"], new["tls_verify"])
+    try:
+        refuse_secret_reuse(old, new, tuple(old), stored=reused, resent=[])
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/api/admin/siem-sinks")
@@ -1147,10 +1306,13 @@ async def admin_update_siem_sink(sink_id: str, body: SiemSinkRequest, request: R
             raise HTTPException(status_code=404, detail="Sink not found")
         data = body.model_dump()
         data["id"] = sink_id
-        data = _merge_secrets(data, state.SIEM_SINKS[idx])
+        existing = state.SIEM_SINKS[idx]
+        reused = [f for f in _SINK_SECRETS if data.get(f) == SECRET_MASK and getattr(existing, f)]
+        data = _merge_secrets(data, existing)
         sc = siem_forwarder.sanitize_sink(data)
         if sc is None:
             raise HTTPException(status_code=400, detail="Invalid sink configuration")
+        _refuse_moved_sink_secrets(existing, sc, reused)
         state.SIEM_SINKS[idx] = sc
         redacted = await _persist_and_apply_sinks()
     session = _get_session(request)
@@ -1283,10 +1445,16 @@ async def admin_update_notification_channel(
             raise HTTPException(status_code=404, detail="Channel not found")
         data = body.model_dump()
         data["id"] = channel_id
-        data = notification_channels.merge_secrets(data, state.NOTIFICATION_CHANNELS[idx])
+        existing = state.NOTIFICATION_CHANNELS[idx]
+        reused = notification_channels.reused_secrets(data, existing)
+        data = notification_channels.merge_secrets(data, existing)
         cfg = notification_channels.sanitize_channel(data)
         if cfg is None:
             raise HTTPException(status_code=400, detail="Invalid channel configuration")
+        try:
+            notification_channels.refuse_moved_secrets(existing, cfg, reused)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         state.NOTIFICATION_CHANNELS[idx] = cfg
         redacted = await _persist_and_apply_channels()
     session = _get_session(request)

@@ -77,13 +77,13 @@ certificates or a non-https URL.
 The same rules as OIDC ([sso-oidc.md](sso-oidc.md#3-accounts-roles-and-groups)),
 with the account managed by `saml`:
 
-- The first SAML sign-in of a username creates a local shadow account or
-  adopts an unmanaged one; the `NameID` is stored on the account
-  (`users.external_id`) and a later sign-in for that account with another
-  NameID is refused. With a transient NameID the account is bound to the
-  username instead.
-- An existing local admin is never adopted unless the assertion maps the
-  person to admin.
+- The first SAML sign-in of a username creates a local shadow account;
+  the `NameID` is stored on the account (`users.external_id`) and a later
+  sign-in for that account with another NameID is refused. With a
+  transient NameID the account is bound to the username instead.
+- An existing account is used only when it is managed by `saml`. A local
+  account (admin or not) or one another provider manages is never
+  adopted: the sign-in fails and is audited as `auth` / `login.adopt_refused`.
 - Role is re-synced on every sign-in; access groups once, or on every
   sign-in with group sync.
 

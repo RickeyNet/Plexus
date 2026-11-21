@@ -36,6 +36,11 @@ or via the admin API:
 
 Secrets (SMTP password, PagerDuty routing key, webhook auth value) are masked
 as `••••••••` in API responses; submit the mask to keep the stored value.
+The mask keeps a secret only while it goes to the same place: a save that
+changes the SMTP server or port, turns SMTP encryption off, changes the
+webhook URL's scheme, host or port, or turns certificate checks off is
+refused with `400` until the secret is typed again. The secrets are stored
+encrypted in the database.
 Slack and Webex channels take `chat_channel` (the channel or room id); their
 token is the ChatOps bot's, stored with the bot.
 

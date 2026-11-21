@@ -637,6 +637,26 @@ LOCKED_OUT: dict = BoundedDict(TRACKER_MAX_ENTRIES, lockout_expired)
 API_RATE_LIMIT_TRACKER: dict[str, list[float]] = BoundedDict(TRACKER_MAX_ENTRIES, rate_limit_entry_expired)
 API_RATE_LIMIT_LOCK: asyncio.Lock | None = None  # initialised at startup
 
+# Per-username password sign-in failures (on top of the per-IP limit above).
+# Not a lock: after USERNAME_FAILURE_FREE_ATTEMPTS failures each further
+# attempt for that username waits 1 s, 2 s, 4 s ... up to
+# USERNAME_FAILURE_MAX_DELAY, then runs as usual, so an attacker cannot lock
+# the real user out. A success, or USERNAME_FAILURE_RESET_SECONDS without a
+# failure, clears it. Keyed by the lower-cased username (unknown usernames
+# too); value ``[failures, last_failure_at, next_slot_at]``.
+USERNAME_FAILURE_FREE_ATTEMPTS = 3
+USERNAME_FAILURE_BASE_DELAY = 1.0
+USERNAME_FAILURE_MAX_DELAY = 30.0
+USERNAME_FAILURE_RESET_SECONDS = 900
+
+
+def username_failures_expired(_key: str, entry: list[float], now: float) -> bool:
+    """A ``LOGIN_USERNAME_FAILURES`` entry past its reset window."""
+    return now - entry[1] > USERNAME_FAILURE_RESET_SECONDS and now >= entry[2]
+
+
+LOGIN_USERNAME_FAILURES: dict = BoundedDict(TRACKER_MAX_ENTRIES, username_failures_expired)
+
 LOGIN_RULES = dict(DEFAULT_LOGIN_RULES)
 AUTH_CONFIG = dict(AUTH_CONFIG_DEFAULTS)
 DISCOVERY_SYNC_CONFIG = dict(DISCOVERY_SYNC_DEFAULTS)

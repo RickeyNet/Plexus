@@ -65,12 +65,17 @@ ID is refused (HTTP 400), as is a non-https redirect URI override.
 ## 3. Accounts, roles and groups
 
 - The first SSO login of a username creates a local shadow account (random
-  unusable password) managed by `oidc`, or adopts an existing unmanaged
-  account. The provider's `sub` is stored on the account; a later login
-  for that account with a different `sub` is refused, so someone who takes
-  over the username at the provider cannot take over the Plexus account.
-- An existing local **admin** account is never adopted unless the token
-  maps the person to admin (the same name-collision guard as LDAP).
+  unusable password) managed by `oidc`. The provider's `sub` is stored on
+  the account; a later login for that account with a different `sub` is
+  refused, so someone who takes over the username at the provider cannot
+  take over the Plexus account. An `oidc` account from before Plexus
+  stored the `sub` binds it at its next login.
+- An existing account is used only when it is managed by `oidc`. A local
+  account (admin or not) or one managed by SAML, LDAP, RADIUS or TACACS+
+  with the same username is never adopted, whatever the token maps: the
+  login fails with the `account` error and the audit log records `auth` /
+  `login.adopt_refused` (the same rule applies to every provider, see
+  [administration.md](administration.md#authentication)).
 - Role is re-synced on every login: promotion and demotion at the provider
   both reach Plexus.
 - Without group sync, access groups are set once, at account creation.

@@ -94,6 +94,27 @@ newest backup, so no new backup was written.
 
 Files are named `hostname_ip_YYYYMMDD_HHMMSS.txt` (time in UTC).
 
+**Device secrets.** A backup is the device's whole configuration: enable
+and user passwords, SNMP communities, RADIUS and TACACS+ keys, pre-shared
+keys. Who sees them:
+
+- With `config-backups.write` (or as an admin), and write access to the
+  device's group when your account is limited to groups, **Config**,
+  **Diff vs previous** and **Config Search** show the text as captured, and
+  **Download** and **Download All** are available.
+- With `config-backups` only, the same views show every secret masked as
+  `********` (the masking the AI access tools use, see
+  [ai-access.md](ai-access.md)) and say so above the text. A change of a
+  secret value alone does not show in the masked diff, since both sides
+  read `********`. A search hit that matched only a secret value is left
+  out, so a search cannot confirm a guessed value.
+  **Download** and **Download All** are disabled (the API answers `403`).
+- **Restore** always pushes the stored text as captured; it runs on the
+  server and needs `config-backups.write` anyway.
+
+Masking is pattern based: it covers the common vendor forms but cannot
+promise to catch a secret in every syntax.
+
 ### Search all configurations
 
 Open **Configuration > Config Search**, type the text and choose a
@@ -254,8 +275,9 @@ full list of masked elements is in
 
 | Action | Needs |
 |---|---|
-| See backups, policies and search results | `config-backups` |
-| Create, change, run or delete a policy; delete or restore a backup | `config-backups`, and a credential you may use |
+| See backups, policies and search results (device secrets masked) | `config-backups` |
+| See backups unmasked; download one backup or a ZIP of backups | `config-backups.write` (or admin), and write access to the device's group |
+| Create, change, run or delete a policy; delete or restore a backup | `config-backups.write`, and a credential you may use |
 | See baselines, snapshots and drift events | `config-drift` |
 | Set baselines, capture snapshots, accept, resolve or revert drift | `config-drift`, and a credential you may use for captures and reverts |
 | Change the drift check schedule or run it now | Admin |

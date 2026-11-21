@@ -1,5 +1,14 @@
 """
 config_backups.py -- Config backup routes: policies, backup records, restore, admin schedule.
+
+Device secrets: a backup is the device's full configuration, passwords,
+SNMP communities and keys included. A caller with ``config-backups.write``
+(or an admin, or the API token) whose object scope may change the device
+sees it as captured, and may download it. Any other reader (read-only
+``config-backups``) gets the view, diff and search with the secrets masked by
+``netcontrol.mcp.redact.redact_config_text`` (``secrets_masked: true``) and
+no raw download. A restore runs on the server and always uses the stored
+text. OPNsense config.xml is masked for everyone, as before.
 """
 
 from __future__ import annotations
@@ -16,9 +25,11 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import Response
 from pydantic import BaseModel
 from routes.db.topology import _compile_config_backup_regex
+from starlette.requests import HTTPConnection
 
 import netcontrol.routes.state as state
 from netcontrol.drivers import get_driver
+from netcontrol.mcp.redact import redact_config_text
 from netcontrol.object_scope import (
     group_filter,
     request_scope,
@@ -33,6 +44,7 @@ from netcontrol.routes.shared import (
     _compute_config_diff,
     _corr_id,
     _get_session,
+    caller_features,
     require_credential_access,
 )
 from netcontrol.telemetry import configure_logging, increment_metric, redact_value
@@ -77,6 +89,33 @@ class ConfigBackupRestoreRequest(BaseModel):
 
 _POLICY_NOT_FOUND = "Policy not found"
 _BACKUP_NOT_FOUND = "Backup not found"
+_RAW_FEATURE = "config-backups.write"
+_RAW_DOWNLOAD_DENIED = (
+    "Downloading a config backup needs config-backups.write: it holds the device's secrets. "
+    "The view shows it with the secrets masked."
+)
+
+
+async def _has_raw_feature(request: Request | None) -> bool:
+    """Whether the caller may see device secrets in backups at all: an
+    admin, the API token, or a user holding ``config-backups.write``. A
+    route called directly (no HTTP request) is a server-side caller."""
+    if not isinstance(request, HTTPConnection):
+        return True
+    features = await caller_features(request)
+    return features is None or _RAW_FEATURE in features
+
+
+async def _sees_raw(request: Request | None, host_id: int | None) -> bool:
+    """``_has_raw_feature`` and, for a caller limited to inventory groups,
+    write access to the device's group (the right a restore needs)."""
+    if not await _has_raw_feature(request):
+        return False
+    try:
+        await require_object_host(request, host_id, write=True, not_found=_BACKUP_NOT_FOUND)
+    except HTTPException:
+        return False
+    return True
 
 
 async def _require_policy(request: Request | None, policy_id: int, *, write: bool = False) -> dict:
@@ -250,7 +289,8 @@ async def search_config_backup_records(
             context_lines=context_lines,
             **await group_filter(request),
         )
-        return _mask_search_results(found, q, mode)
+        masked_ids = await _search_rows_to_mask(request, found)
+        return _mask_search_results(found, q, mode, masked_ids)
     except ValueError as exc:
         code = (exc.args[0] if exc.args else "").strip().lower()
         if code == "invalid_regex":
@@ -286,27 +326,45 @@ def _still_matches(line: str, query: str, mode: str) -> bool:
     return all(term in lowered for term in terms)
 
 
-def _mask_search_results(found: dict, query: str, mode: str) -> dict:
+async def _search_rows_to_mask(request: Request | None, found: dict) -> frozenset:
+    """The ``backup_id`` of each search hit the caller may not see raw."""
+    results = found.get("results") or []
+    if not await _has_raw_feature(request):
+        return frozenset(row.get("backup_id") for row in results)
+    if (await request_scope(request)).unrestricted:
+        return frozenset()
+    # One answer per host; a list, not a generator: ``await`` in a generator
+    # expression makes it asynchronous, which frozenset() cannot read.
+    raw_hosts = {host_id: await _sees_raw(request, host_id) for host_id in {row.get("host_id") for row in results}}
+    return frozenset([row.get("backup_id") for row in results if not raw_hosts[row.get("host_id")]])
+
+
+def _mask_search_results(found: dict, query: str, mode: str, masked_ids: frozenset = frozenset()) -> dict:
     """Mask the matched lines of OPNsense backups (config.xml holds password
-    hashes, keys and pre-shared keys) and drop a hit that only matched a
-    secret. Other backups are returned as they are."""
+    hashes, keys and pre-shared keys) and of the backups in ``masked_ids``
+    (the caller may not see their secrets), and drop a hit that only matched
+    a secret. Other backups are returned as they are."""
     results = found.get("results") or []
     kept = []
     for row in results:
-        if not opnsense_masking.is_opnsense_text(
+        if row.get("backup_id") in masked_ids:
+            mask = redact_config_text
+        elif opnsense_masking.is_opnsense_text(
             row.get("match_line"), device_type=row.get("device_type"), capture_method=row.get("capture_method")
         ):
+            mask = opnsense_masking.mask_text
+        else:
             kept.append(row)
             continue
-        masked_line = opnsense_masking.mask_text(str(row.get("match_line") or ""))
+        masked_line = mask(str(row.get("match_line") or ""))
         if masked_line != row.get("match_line") and not _still_matches(masked_line, query, mode):
             continue
         for field in _SEARCH_LINE_FIELDS:
             if isinstance(row.get(field), str):
-                row[field] = opnsense_masking.mask_text(row[field])
+                row[field] = mask(row[field])
         for field in _SEARCH_LIST_FIELDS:
             if isinstance(row.get(field), list):
-                row[field] = [opnsense_masking.mask_text(str(line)) for line in row[field]]
+                row[field] = [mask(str(line)) for line in row[field]]
         row["secrets_masked"] = True
         kept.append(row)
     if len(kept) != len(results):
@@ -341,6 +399,11 @@ async def get_config_backup_diff(backup_id: int, request: Request = None):
         }
         previous_text = opnsense_masking.drift_form(previous_text)
         current_text = opnsense_masking.drift_form(current_text)
+    elif not await _sees_raw(request, current.get("host_id")):
+        # A changed secret shows as a changed (masked) line, never its value.
+        extra = {"secrets_masked": True}
+        previous_text = redact_config_text(previous_text, keep_lines=True)
+        current_text = redact_config_text(current_text, keep_lines=True)
     diff_text, added, removed = _compute_config_diff(
         previous_text,
         current_text,
@@ -408,8 +471,16 @@ async def download_config_backups_bulk(
 
     Declared *before* ``/api/config-backups/{backup_id}`` so the literal
     ``download`` path segment doesn't get parsed as an integer ID.
+
+    The files are the raw captures (device secrets included): the caller
+    needs ``config-backups.write`` (or admin), and a caller limited to
+    inventory groups gets the devices of the groups it may change.
     """
-    rows = await db.get_config_backups(host_id=host_id, policy_id=policy_id, limit=limit, **await group_filter(request))
+    if not await _has_raw_feature(request):
+        raise HTTPException(status_code=403, detail=_RAW_DOWNLOAD_DENIED)
+    rows = await db.get_config_backups(
+        host_id=host_id, policy_id=policy_id, limit=limit, **await group_filter(request, write=True)
+    )
     # Only successful captures have config_text worth exporting.
     successful = [r for r in rows if r.get("status") == "success"]
     if not successful:
@@ -456,8 +527,12 @@ async def download_config_backups_bulk(
 @router.get("/api/config-backups/{backup_id}/download")
 @scoped("backup")
 async def download_config_backup(backup_id: int, request: Request):
-    """Return a single backup as a plain ``.txt`` attachment."""
+    """Return a single backup as a plain ``.txt`` attachment: the raw
+    capture, device secrets included, so the caller needs
+    ``config-backups.write`` (or admin) and write access to the device."""
     backup = await _require_backup(request, backup_id)
+    if not await _sees_raw(request, backup.get("host_id")):
+        raise HTTPException(status_code=403, detail=_RAW_DOWNLOAD_DENIED)
     if backup.get("status") != "success" or not backup.get("config_text"):
         raise HTTPException(status_code=400, detail="Backup does not contain a successful config capture")
 
@@ -481,13 +556,19 @@ async def download_config_backup(backup_id: int, request: Request):
 @scoped("backup")
 async def get_config_backup_detail(backup_id: int, request: Request):
     """A backup with its text; an OPNsense config.xml with its secrets
-    masked (``secrets_masked``) and its ``<revision>`` given apart. The
-    stored backup and its download stay unmasked: a restore needs them."""
+    masked (``secrets_masked``) and its ``<revision>`` given apart. For a
+    caller without ``config-backups.write`` every backup's secrets are
+    masked. The stored backup stays unmasked: a restore needs it."""
     backup = await _require_backup(request, backup_id)
     raw = str(backup.get("config_text") or "")
     masked = opnsense_masking.mask_record(backup, "config_text", "config_text_full")
     if masked and masked.get("secrets_masked"):
         masked["revision"] = opnsense_masking.revision_of(raw)
+    elif masked and not await _sees_raw(request, backup.get("host_id")):
+        for field in ("config_text", "config_text_full"):
+            if isinstance(masked.get(field), str):
+                masked[field] = redact_config_text(masked[field])
+        masked["secrets_masked"] = True
     return masked
 
 

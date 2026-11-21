@@ -64,6 +64,7 @@ from routes.user_regex import UserRegex, compile_user_regex
 
 import netcontrol.routes.state as state
 from netcontrol import source_recollect
+from netcontrol.bounded_map import BoundedDict
 from netcontrol.monitoring_repoll import keep_task, schedule_repoll
 
 LOGGER = logging.getLogger("plexus.syslog_rules")
@@ -103,6 +104,10 @@ REPOLL_MIN_INTERVAL_SECONDS = 60.0
 CONFIG_DEBOUNCE_SECONDS = 60.0
 CONFIG_COOLDOWN_SECONDS = 300.0
 CONFIG_REUSE_SECONDS = 300
+# The debounce never holds a pending run back longer than this after its
+# first message: a stream of (possibly forged) configuration messages cannot
+# postpone the backup for ever. The cooldown still applies.
+CONFIG_MAX_DEFER_SECONDS = 600.0
 
 _MESSAGE_SNIPPET = 300
 _TAG_SEARCH_CHARS = 512
@@ -1051,7 +1056,9 @@ async def _apply(actions: list[tuple[bool, Rule, int, str, ParsedSyslog]], outco
     for raise_it, rule, host_id, instance, parsed in actions:
         key = dedup_key(rule.key, host_id, instance)
         if not raise_it:
-            outcome["resolved"] += await db.resolve_monitoring_alerts(key)
+            # A syslog source can be forged: a clear message resolves only
+            # an alert syslog raised for this host, never one polling owns.
+            outcome["resolved"] += await db.resolve_monitoring_alerts(key, alert_type=ALERT_TYPE, host_id=host_id)
             continue
         host = hosts.get(host_id)
         if host is None:
@@ -1139,21 +1146,31 @@ _evaluate = evaluate_rule
 
 # ── Configuration change: backup and drift check ─────────────────────────────
 
+# Keyed by inventory host id, bounded all the same (BoundedDict).
 # host_id -> monotonic time its pending run is due.
-_config_due: dict[int, float] = {}
+_config_due: BoundedDict = BoundedDict(COUNTERS_MAX)
+# host_id -> monotonic time the first message of its pending run arrived.
+_config_first_noted: BoundedDict = BoundedDict(COUNTERS_MAX)
 # host_id -> monotonic time its last run started.
-_config_last_run: dict[int, float] = {}
+_config_last_run: BoundedDict = BoundedDict(COUNTERS_MAX)
 _config_tasks: dict[int, asyncio.Task] = {}
 
 
 def note_config_change(host_id: int) -> None:
     """A configuration change message from ``host_id``: (re)schedule its
-    run ``CONFIG_DEBOUNCE_SECONDS`` after this message, but not sooner than
-    ``CONFIG_COOLDOWN_SECONDS`` after its last run. One pending run per
-    host: later messages move it, never queue a second one."""
+    run ``CONFIG_DEBOUNCE_SECONDS`` after this message, but no later than
+    ``CONFIG_MAX_DEFER_SECONDS`` after the first message of the pending run
+    and not sooner than ``CONFIG_COOLDOWN_SECONDS`` after its last run (the
+    per-host cooldown: at most one backup session per host per cooldown).
+    One pending run per host: later messages move it, never queue a second
+    one."""
     now = _clock()
     last = _config_last_run.get(host_id)
-    due = now + CONFIG_DEBOUNCE_SECONDS
+    first = _config_first_noted.get(host_id)
+    if first is None or host_id not in _config_due:
+        first = now
+        _config_first_noted[host_id] = first
+    due = min(now + CONFIG_DEBOUNCE_SECONDS, first + CONFIG_MAX_DEFER_SECONDS)
     if last is not None:
         due = max(due, last + CONFIG_COOLDOWN_SECONDS)
     _config_due[host_id] = due
@@ -1170,6 +1187,7 @@ async def _config_waiter(host_id: int) -> None:
                 await asyncio.sleep(wait)
                 continue
             del _config_due[host_id]
+            _config_first_noted.pop(host_id, None)
             _config_last_run[host_id] = _clock()
             try:
                 await run_config_change(host_id)
@@ -1216,6 +1234,7 @@ def reset_state() -> None:
     """Forget counters, pending runs and the rule cache (tests)."""
     _counters.clear()
     _config_due.clear()
+    _config_first_noted.clear()
     _config_last_run.clear()
     invalidate_rules_cache()
 

@@ -14,6 +14,15 @@ import os
 import re
 from datetime import UTC, datetime, timedelta
 
+from netcontrol.secret_fields import (
+    NOTIFICATION_CHANNEL_SECRET_FIELDS,
+    SIEM_SINK_SECRET_FIELDS,
+    SNMP_SECRET_FIELDS,
+    has_plain_secret,
+    open_secret_paths,
+    seal_secret_paths,
+)
+
 import routes.database as _dbcore
 from routes.database import (
     _LOGGER,
@@ -50,6 +59,8 @@ __all__ = [
     "get_user_effective_features",
     "set_auth_setting",
     "get_auth_setting",
+    "AUTH_SETTING_SECRET_PATHS",
+    "encrypt_legacy_auth_settings",
 ]
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -71,7 +82,7 @@ async def get_user_by_id(user_id: int) -> dict | None:
     db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
-            "SELECT id, username, display_name, role, must_change_password, session_never_expires, session_epoch, created_at FROM users WHERE id = ?",
+            "SELECT id, username, display_name, role, must_change_password, session_never_expires, session_epoch, created_at, auth_provider FROM users WHERE id = ?",
             (user_id,),
         )
         return row_to_dict(await cursor.fetchone())
@@ -139,14 +150,20 @@ async def bump_user_session_epoch(user_id: int) -> int:
         await db.close()
 
 
-async def set_user_auth_provider(user_id: int, provider: str):
-    """Mark an account as managed by an external auth provider ('ldap'/'radius').
+async def set_user_auth_provider(user_id: int, provider: str, *, clear_external_id: bool = False):
+    """Mark an account as managed by an external auth provider ('ldap',
+    'radius', 'tacacs', 'oidc', 'saml'; '' = a local account).
 
     Managed accounts have their role/display_name re-synced from the provider
-    on every successful login (see auth.upsert_external_user)."""
+    on every successful login (see auth.upsert_external_user).
+    ``clear_external_id`` also forgets the SSO subject bound to the account
+    (an admin moving it to another provider), in the same transaction."""
     db = await _dbcore.get_db()
     try:
-        await db.execute("UPDATE users SET auth_provider = ? WHERE id = ?", (provider, user_id))
+        if clear_external_id:
+            await db.execute("UPDATE users SET auth_provider = ?, external_id = '' WHERE id = ?", (provider, user_id))
+        else:
+            await db.execute("UPDATE users SET auth_provider = ? WHERE id = ?", (provider, user_id))
         await db.commit()
     finally:
         await db.close()
@@ -213,7 +230,7 @@ async def get_all_users() -> list[dict]:
     db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
-            "SELECT id, username, display_name, role, must_change_password, created_at FROM users ORDER BY username"
+            "SELECT id, username, display_name, role, must_change_password, created_at, auth_provider FROM users ORDER BY username"
         )
         return rows_to_list(await cursor.fetchall())
     finally:
@@ -570,10 +587,45 @@ async def get_user_effective_features(user_id: int) -> list[str] | None:
         await db.close()
 
 
+# Secrets inside ``auth_settings`` rows, by key, as dotted paths (``*`` =
+# every list item / dict value). They are encrypted with routes.crypto before
+# the row is written and decrypted when it is read, as the OIDC client secret
+# (``auth_config.oidc.client_secret_enc``, encrypted by the admin route) and
+# the Meraki alert webhook secret (``meraki_alerts.webhook_secret_enc``)
+# already are. Callers see plain values; the API masks them as before.
+# The field names are the API modules' own (``netcontrol.secret_fields``).
+AUTH_SETTING_SECRET_PATHS: dict[str, tuple[str, ...]] = {
+    "auth_config": ("radius.secret", "tacacs.secret", "ldap.bind_password"),
+    "snmp_discovery": SNMP_SECRET_FIELDS,
+    "snmp_discovery_profiles": tuple(f"*.{p}" for p in SNMP_SECRET_FIELDS),
+    "snmp_profiles": tuple(f"*.{p}" for p in SNMP_SECRET_FIELDS),
+    "siem_sinks": tuple(f"sinks.*.{p}" for p in SIEM_SINK_SECRET_FIELDS),
+    "notification_channels": tuple(f"channels.*.{p}" for p in NOTIFICATION_CHANNEL_SECRET_FIELDS),
+}
+
+
+def _seal_setting(key: str, value):
+    paths = AUTH_SETTING_SECRET_PATHS.get(key)
+    if not paths:
+        return value
+    from routes.crypto import encrypt
+
+    return seal_secret_paths(value, paths, encrypt)
+
+
+def _open_setting(key: str, value):
+    paths = AUTH_SETTING_SECRET_PATHS.get(key)
+    if not paths:
+        return value
+    from routes.crypto import decrypt
+
+    return open_secret_paths(value, paths, decrypt)
+
+
 async def set_auth_setting(key: str, value: dict):
     db = await _dbcore.get_db()
     try:
-        payload = json.dumps(value)
+        payload = json.dumps(_seal_setting(key, value))
         await db.execute(
             """
             INSERT INTO auth_settings (key, value, updated_at)
@@ -596,6 +648,36 @@ async def get_auth_setting(key: str) -> dict | None:
         row = await cursor.fetchone()
         if not row:
             return None
-        return json.loads(row[0])
+        return _open_setting(key, json.loads(row[0]))
     finally:
         await db.close()
+
+
+async def encrypt_legacy_auth_settings() -> list[str]:
+    """Re-save each ``auth_settings`` row that still holds a secret in plain
+    text (written before the secrets were encrypted), so it is stored
+    encrypted. Runs at startup; a row already encrypted is left alone, so
+    it does nothing after the first run. Returns the keys re-saved."""
+    db = await _dbcore.get_db(read_only=True)
+    try:
+        keys = list(AUTH_SETTING_SECRET_PATHS)
+        placeholders = ", ".join("?" for _ in keys)
+        cursor = await db.execute(
+            f"SELECT key, value FROM auth_settings WHERE key IN ({placeholders})",  # noqa: S608  # nosec B608 - fixed SQL
+            tuple(keys),
+        )
+        rows = [(r[0], r[1]) for r in await cursor.fetchall()]
+    finally:
+        await db.close()
+    resaved = []
+    for key, raw in rows:
+        try:
+            stored = json.loads(raw)
+        except TypeError, ValueError:
+            continue
+        if has_plain_secret(stored, AUTH_SETTING_SECRET_PATHS[key]):
+            await set_auth_setting(key, _open_setting(key, stored))
+            resaved.append(key)
+    if resaved:
+        _LOGGER.info("auth_settings: encrypted the stored secrets of %s", ", ".join(sorted(resaved)))
+    return resaved

@@ -248,6 +248,8 @@ def _pg_fresh_database(_pg_session_template):
     from netcontrol.routes import state as _state
 
     _state.API_RATE_LIMIT_TRACKER.clear()
+    # Failed sign-ins of one test must not delay the next test's logins.
+    _state.LOGIN_USERNAME_FAILURES.clear()
     yield
 
 
@@ -331,3 +333,31 @@ def _reset_db_singleton():
     # next acquire (e.g. app-lifespan audit writes) would then wait on a
     # release that never comes — an order-dependent hang, not a failure.
     _db_audit._audit_chain_lock = asyncio.Lock()
+
+
+# ── Outbound name resolution ─────────────────────────────────────────────────
+#
+# The outbound SSRF guard (netcontrol/routes/net_guard.py) resolves every
+# host name it checks and refuses a name that does not resolve. Tests name
+# invented hosts (``*.example.com``), so the suite answers every name with a
+# documentation address instead of asking a real DNS server: no lookup leaves
+# the machine and the result does not depend on the network. ``localhost``
+# keeps its loopback answer. A test that needs another answer (a failed
+# lookup, a metadata address) patches ``net_guard._getaddrinfo`` itself.
+FAKE_RESOLVED_ADDRESS = "198.51.100.80"
+
+
+def _fake_getaddrinfo(host, port=None, *args, **kwargs):
+    import socket as _socket
+
+    name = str(host or "").strip().lower().rstrip(".")
+    if name in ("localhost", "localhost.localdomain"):
+        return [(_socket.AF_INET, _socket.SOCK_STREAM, 6, "", ("127.0.0.1", port or 0))]
+    return [(_socket.AF_INET, _socket.SOCK_STREAM, 6, "", (FAKE_RESOLVED_ADDRESS, port or 0))]
+
+
+@pytest.fixture(autouse=True)
+def _fake_outbound_dns(monkeypatch):
+    from netcontrol.routes import net_guard
+
+    monkeypatch.setattr(net_guard, "_getaddrinfo", _fake_getaddrinfo)

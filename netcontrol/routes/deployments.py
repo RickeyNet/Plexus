@@ -938,8 +938,10 @@ async def plan_deployment(
     risk_analysis_id: int | None = None,
 ) -> dict:
     """Store a deployment plan (status ``planning``), flag it for approval
-    when its group is a production group or its risk analysis is high or
-    critical, and audit it. The caller has checked the credential."""
+    when its group or the group of any target host is a production group, or
+    its risk analysis is high or critical, and audit it. The caller has
+    checked the credential. Every route that creates a deployment (the
+    deployments API, intended-config remediation, lab promote) goes here."""
     deployment_id = await db.create_deployment(
         name=name,
         description=description,
@@ -958,8 +960,9 @@ async def plan_deployment(
     # to 'pending' so the UI surfaces the gate immediately.
     require = False
     reason_bits: list[str] = []
-    group = await db.get_group(group_id)
-    if group and (group.get("environment") or "").lower() == "production":
+    # The groups of the hosts actually targeted count, not only the named
+    # group: hosts may be listed from another group.
+    if await _production_groups(await _target_group_ids(group_id, host_ids)):
         require = True
         reason_bits.append("production group")
     if risk_analysis_id:
@@ -991,6 +994,35 @@ async def plan_deployment(
         "requires_approval": require,
         "approval_status": "pending" if require else "not_required",
     }
+
+
+async def _target_group_ids(group_id: int | None, host_ids: list[int] | None) -> list[int]:
+    """The inventory groups a deployment touches: its named group and the
+    group of every target host."""
+    ids: list[int] = [int(group_id)] if group_id is not None else []
+    for host in await db.get_hosts_by_ids([int(h) for h in host_ids]) if host_ids else []:
+        if host.get("group_id") is not None:
+            ids.append(int(host["group_id"]))
+    return list(dict.fromkeys(ids))
+
+
+async def _production_groups(group_ids: list[int]) -> list[int]:
+    """The ids among ``group_ids`` of groups marked production."""
+    production: list[int] = []
+    for gid in group_ids:
+        group = await db.get_group(gid)
+        if group and (group.get("environment") or "").lower() == "production":
+            production.append(gid)
+    return production
+
+
+def _stored_host_ids(dep: dict) -> list[int]:
+    """A deployment row's ``host_ids`` JSON as a list (empty: the group)."""
+    try:
+        value = json.loads(dep.get("host_ids") or "[]")
+    except TypeError, ValueError:
+        return []
+    return [int(h) for h in value] if isinstance(value, list) else []
 
 
 async def _require_feature_too(request: Request, feature_key: str) -> None:
@@ -1165,6 +1197,23 @@ async def execute_deployment(deployment_id: int, request: Request):
     session = _get_session(request)
     user = session["user"] if session else ""
 
+    # The groups of the hosts this run touches (see plan_deployment). A host
+    # moved into a production group after planning still needs approval.
+    target_groups = await _target_group_ids(dep["group_id"], _stored_host_ids(dep))
+    if not dep.get("requires_approval") and await _production_groups(target_groups):
+        await db.set_deployment_approval(deployment_id, requires_approval=True, approval_status="pending", request=True)
+        await _audit(
+            "deployments",
+            "deployment.execute_blocked",
+            user=user,
+            detail=f"id={deployment_id} reason=production_target approval_requested=1",
+            correlation_id=_corr_id(request),
+        )
+        raise HTTPException(
+            status_code=403,
+            detail="Deployment targets a production group and requires approval before execute (status=pending)",
+        )
+
     # ── Approval gate ────────────────────────────────────────────────────────
     if dep.get("requires_approval"):
         status = dep.get("approval_status") or "pending"
@@ -1182,7 +1231,7 @@ async def execute_deployment(deployment_id: int, request: Request):
             )
 
     # ── Maintenance window gate ──────────────────────────────────────────────
-    verdict = await evaluate_change_gate([dep["group_id"]])
+    verdict = await evaluate_change_gate(target_groups)
     if not verdict["allowed"]:
         await _audit(
             "deployments",

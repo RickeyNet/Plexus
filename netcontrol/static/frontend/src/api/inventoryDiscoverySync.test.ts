@@ -53,4 +53,13 @@ describe('streamSyncInventoryGroup', () => {
 
     expect(invalidatedKeys(qc)).toContain('inventory-groups-full');
   });
+
+  it('shows the message of a refused stream, not its JSON body', async () => {
+    const message = 'Discovery signs in with the Plexus service credential only to inventory hosts you can change';
+    stubFetch([JSON.stringify({ ok: false, error: { code: 'forbidden', message } })], 403);
+
+    await expect(streamSyncInventoryGroup(spiedClient(), 7, ['203.0.113.9/32'], {}, () => undefined)).rejects.toThrow(
+      new Error(message),
+    );
+  });
 });

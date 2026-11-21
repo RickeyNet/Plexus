@@ -42,6 +42,9 @@ clone from inventory host ID** and choose **Clone from inventory host ID**.
 The twin gets the host's name, address, platform and the latest
 configuration snapshot Plexus holds for it. If there is no snapshot, the twin
 starts with an empty configuration. A cloned twin remembers its source host.
+Because the twin holds the host's full running configuration, cloning also
+needs the `config-drift` or `config-backups` feature (admins always pass);
+without it the clone is refused with `403`.
 
 **Blank device:** enter **Hostname** (required), **IP address**, **Device
 type** (default `cisco_ios`) and optionally **Initial running config**, then
@@ -218,7 +221,8 @@ trust a simulation.
 | Use the Lab | `lab` feature |
 | See and change an environment | Its owner, any user when it is shared, or an admin |
 | Run a live simulation | Access to the environment and ownership of the twin's credential |
-| Promote a run to a deployment (API) | Access to the environment and ownership of the credential |
+| Clone an inventory host | Access to the environment, read access to the host, and `config-drift` or `config-backups` |
+| Promote a run to a deployment (API) | Access to the environment, ownership of the credential, and `deployments` with Modify (`deployments.write`) |
 
 Lab actions are written to the audit log under `lab`. See
 [Audit log](audit-log.md).
@@ -272,5 +276,9 @@ POST /api/lab/runs/88/promote
 { "name": "Uplink B description", "credential_id": 5, "target_group_id": 4, "target_host_ids": [42] }
 ```
 
-The answer is `{"ok": true, "deployment_id": <id>}`. Without
-`target_group_id`, the source host's group and host are used.
+The answer is `{"ok": true, "deployment_id": <id>, "requires_approval":
+<bool>, "approval_status": "pending" | "not_required"}`. Without
+`target_group_id`, the source host's group and host are used. The
+deployment is planned like `POST /api/deployments`: it needs approval when
+the target group or the group of any target host is a production group
+(see [Deployments](deployments.md#the-approval-gate)).

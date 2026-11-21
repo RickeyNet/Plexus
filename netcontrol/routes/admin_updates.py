@@ -29,16 +29,25 @@ Apply never shells out from the app. The app (unprivileged, no Docker
 socket) only writes a JSON request into the handoff directory
 (PLEXUS_UPDATES_DIR, bind-mounted from <install>/state/updates on the
 host). A systemd path unit on the host (deploy/systemd/plexus-updater.*)
-picks it up and runs deploy/plexus-updater.sh, which validates the request
-and runs deploy/upgrade.sh (DB snapshot, health gate, rollback record).
-Files in the handoff directory:
+picks it up and runs deploy/plexus-updater.sh (as root), which validates
+the request and runs deploy/upgrade.sh (DB snapshot, health gate, rollback
+record). The updater writes its status only into a second, root-owned
+directory that the container mounts read-only (PLEXUS_UPDATE_STATUS_DIR,
+from <install>/state/update-status), so the app can never point a root
+write at a file of its choosing.
 
-  request.json             - written by the app, consumed by the updater
-  request.inprogress.json  - the request while the updater runs it
-  result.json              - last run's status (running/success/failed)
-  upgrade.log              - upgrade.sh output of the last run
-  rollback.json            - rollback target mirrored from state/.upgrade-previous
-  .agent-installed         - created by deploy/bootstrap.sh with the units
+  updates dir (app writes):
+    request.json             - written by the app, consumed by the updater
+  status dir (app reads only):
+    request.inprogress.json  - the request while the updater runs it
+    result.json              - last run's status (running/success/failed)
+    upgrade.log              - upgrade.sh output of the last run
+    rollback.json            - rollback target mirrored from state/.upgrade-previous
+    .agent-installed         - created by deploy/bootstrap.sh / the updater unit
+
+Before the split, the updater wrote the status files into the updates dir.
+A status file missing from the status dir is still read from there, so an
+install whose host updater has not run since the upgrade keeps working.
 """
 
 from __future__ import annotations
@@ -420,6 +429,18 @@ def _updates_dir() -> Path:
     return Path(os.environ.get("PLEXUS_UPDATES_DIR", "/app/state/updates"))
 
 
+def _status_dir() -> Path:
+    return Path(os.environ.get("PLEXUS_UPDATE_STATUS_DIR", "/app/state/update-status"))
+
+
+def _status_file(d: Path, name: str) -> Path:
+    """A status file in the status dir, or its pre-split copy in ``d``."""
+    path = _status_dir() / name
+    if path.exists():
+        return path
+    return d / name
+
+
 def _read_json(path: Path) -> dict[str, Any] | None:
     """Read a JSON object; None when missing, unreadable, or not an object."""
     try:
@@ -458,13 +479,13 @@ def _empty_progress() -> dict[str, Any]:
 
 
 def _read_progress(d: Path) -> dict[str, Any]:
-    rollback = _read_json(d / _ROLLBACK_FILE)
+    rollback = _read_json(_status_file(d, _ROLLBACK_FILE))
     return {
-        "agent_installed": (d / _AGENT_MARKER).is_file(),
+        "agent_installed": _status_file(d, _AGENT_MARKER).is_file(),
         "pending": _read_json(d / _REQUEST_FILE),
-        "in_progress": _read_json(d / _INPROGRESS_FILE),
-        "result": _read_json(d / _RESULT_FILE),
-        "log_tail": _read_log_tail(d / _LOG_FILE),
+        "in_progress": _read_json(_status_file(d, _INPROGRESS_FILE)),
+        "result": _read_json(_status_file(d, _RESULT_FILE)),
+        "log_tail": _read_log_tail(_status_file(d, _LOG_FILE)),
         "rollback_available": bool(rollback and rollback.get("available") is True),
         "rollback": rollback,
     }
@@ -473,9 +494,9 @@ def _read_progress(d: Path) -> dict[str, Any]:
 def _busy_reason(d: Path) -> str | None:
     if (d / _REQUEST_FILE).exists():
         return "An update request is already queued"
-    if (d / _INPROGRESS_FILE).exists():
+    if _status_file(d, _INPROGRESS_FILE).exists():
         return "An update is already in progress"
-    result = _read_json(d / _RESULT_FILE)
+    result = _read_json(_status_file(d, _RESULT_FILE))
     if result and result.get("status") == "running":
         return "An update is already in progress"
     return None
@@ -508,7 +529,7 @@ async def _preflight(cfg: dict[str, Any]) -> Path:
             detail="Updates are disabled for this instance; choose a channel first",
         )
     d = _updates_dir()
-    installed = await asyncio.to_thread((d / _AGENT_MARKER).is_file)
+    installed = await asyncio.to_thread(lambda: _status_file(d, _AGENT_MARKER).is_file())
     if not installed:
         raise HTTPException(
             status_code=409,
@@ -581,7 +602,7 @@ async def apply_update(body: dict[str, Any], request: Request) -> dict[str, Any]
 async def rollback_update(request: Request) -> dict[str, Any]:
     cfg = await _load_config()
     d = await _preflight(cfg)
-    rollback = await asyncio.to_thread(_read_json, d / _ROLLBACK_FILE)
+    rollback = await asyncio.to_thread(lambda: _read_json(_status_file(d, _ROLLBACK_FILE)))
     if not rollback or rollback.get("available") is not True:
         raise HTTPException(status_code=409, detail="No rollback target recorded on the host")
 

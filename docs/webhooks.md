@@ -161,18 +161,60 @@ it and within 30 seconds in any other Plexus worker process.
 - **Admin only.** Every webhook route requires the admin role (see
   [Authorization matrix](../AUTHORIZATION_MATRIX.md)).
 - **SSRF guard.** The URL must be `http` or `https` and is checked by the
-  same outbound guard as notification channels and SIEM sinks when it is
-  saved and before every request: link-local addresses (cloud metadata
-  endpoints), multicast and reserved ranges are refused, as are private and
-  loopback ranges when `APP_SSRF_BLOCK_PRIVATE=true`.
+  same outbound guard as notification channels, SIEM sinks, federation
+  peers and identity providers when it is saved and before every request
+  (see [Outbound address check](#outbound-address-check)).
 - **Encrypted settings.** The signing secret and the custom header values are
   stored encrypted and come back from the API masked as `••••••••`. Saving
-  with the mask keeps the stored value.
+  with the mask keeps the stored value, unless the save changes where they
+  are sent: a new scheme, host or port in the URL, certificate checks turned
+  off, or another CA bundle. Then the save is refused with `400` naming the
+  stored values to enter again (`signing secret`, `header <name>`), so an
+  admin cannot point the webhook at another server and have Plexus send it
+  the stored secrets. A path change on the same host keeps them.
 - **TLS.** Certificates are verified against the system trust store, or
   against the **CA bundle** (PEM) when one is set. Turning verification off
   is meant for lab receivers only.
 - **Audited.** Creating, editing, deleting, testing and redelivering a
   webhook writes an audit event (`webhook.create`, `webhook.update`, ...).
+
+### Outbound address check
+
+Every request Plexus sends to an address an admin typed in (event webhooks,
+notification channels, SIEM sinks, federation peers, secrets providers,
+identity providers, sync connections, Git data sources) first passes one
+guard (`netcontrol/routes/net_guard.py`):
+
+1. **Cloud metadata addresses are always refused**: `169.254.169.254`,
+   the AWS IPv6 endpoint `fd00:ec2::254`, the ECS and EKS credential
+   endpoints (`169.254.170.2`, `169.254.170.23`, `fd00:ec2::23`),
+   `100.100.100.200`, `168.63.129.16` and `192.0.0.192`. No
+   `APP_SSRF_ALLOW` entry opens them, and a host name that resolves to one
+   is refused even when it is allow-listed.
+2. **`APP_SSRF_ALLOW`** (comma-separated host names or IP addresses) lists
+   targets an admin trusts. They skip the rules below.
+3. **A host name that does not resolve is refused** (`does not resolve`).
+   The guard cannot judge an address it does not know. A target whose name
+   only resolves on the receiving side (behind a proxy, or a split-horizon
+   name) must be listed in `APP_SSRF_ALLOW`.
+4. Link-local, multicast, reserved and unspecified addresses are refused;
+   private and loopback ranges too when `APP_SSRF_BLOCK_PRIVATE=true`.
+   A name with several addresses is refused when any of them is.
+
+**The connection goes to the checked address.** HTTP requests sent through
+the shared sender (event webhooks, notification webhooks and Teams cards,
+SIEM HTTPS sinks, federation peers, secrets providers, the ChatOps bots)
+connect only to the addresses the check approved: the first that accepts
+the connection, trying at most three in order (so a name with an
+unreachable IPv6 address still works over IPv4). The request keeps the
+host name for the `Host` header, the TLS server name (SNI) and the
+certificate check, so a second DNS answer (DNS rebinding) cannot send it
+anywhere else. SIEM TCP and TLS sinks connect to the checked addresses
+the same way; a UDP sink sends to the first one. A request that goes through an HTTP proxy from the
+environment (`HTTPS_PROXY`, minus `NO_PROXY`) is not pinned: the proxy
+resolves the name. The OIDC and SAML clients, sync connections and Git
+data sources run the check before each request but open their own
+connections, so they are not pinned.
   Webhook settings are not themselves an object type that fires webhooks,
   and deliveries write no audit events, so a webhook can never trigger
   itself.
