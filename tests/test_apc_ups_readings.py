@@ -122,13 +122,16 @@ def test_unknown_transfer_cause_code_has_no_label():
 
 async def test_the_probe_table_is_walked():
     base = apc_snmp.PROBE_TEMPERATURE_OID
-    rows = {oid: {oid + ".0": _values()[key]} for key, oid in apc_snmp.UPS_OIDS.items()}
-    rows[base] = {f"{base}.1.1": 24}
+    answers = {oid + ".0": _values()[key] for key, oid in apc_snmp.UPS_OIDS.items()}
+    rows = {base: {f"{base}.1.1": 24}}
+
+    async def get(oids: tuple[str, ...]) -> dict:
+        return {oid: answers.get(oid, NO_SUCH_OBJECT) for oid in oids}
 
     async def walk(oid: str) -> dict:
         return rows.get(oid, {})
 
-    status = await apc_snmp.read_ups_status(walk)
+    status = await apc_snmp.read_ups_status(get, walk)
     assert (status["probe_temperature_c"], status["input_voltage_v"]) == (24.0, 231.2)
 
 

@@ -16,6 +16,7 @@ import json
 import random
 import re
 import time
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from typing import Literal
 
@@ -61,7 +62,13 @@ from netcontrol.routes.route_capture import (  # re-exported: tests and callers 
     store_route_snapshot,
 )
 from netcontrol.routes.shared import _audit, _corr_id, _get_session, _session_user
-from netcontrol.routes.snmp import PYSMNP_AVAILABLE, _snmp_walk
+from netcontrol.routes.snmp import (
+    PYSMNP_AVAILABLE,
+    SNMP_TIMEOUT_ERROR,
+    SnmpEngine,
+    _snmp_get_values,
+    _snmp_walk,
+)
 from netcontrol.telemetry import configure_logging, increment_metric, redact_value
 
 router = APIRouter()
@@ -231,15 +238,47 @@ async def _poll_host_monitoring(host: dict, cred: dict, snmp_cfg: dict) -> dict:
     # as ping-only, so issuing v3 walks against them would just produce a
     # cycle of timeouts and noisy log lines.
     is_icmp_only_host = host.get("device_type") == "icmp_only"
+    # The one SNMP engine of a UPS poll (below), closed when the poll ends.
+    snmp_engine = None
     if PYSMNP_AVAILABLE and snmp_cfg.get("enabled") and not is_icmp_only_host:
         try:
             from netcontrol.routes.metrics_engine import resolve_oids_for_device
 
-            def _walk(oid):
-                return _snmp_walk(host["ip_address"], 5.0, snmp_cfg, oid)
+            device_type = host.get("device_type", "cisco_ios")
+            # An APC card's SNMP agent is small: it answers SNMPv3 slowly and
+            # holds few requests. The walks below, sent together and each an
+            # SNMP session of its own (an engine discovery apiece), lose
+            # requests on it, and the UPS state with them. A UPS is polled in
+            # one session, a request at a time.
+            if device_type == apc_snmp.STATUS_KIND:
+                snmp_engine = SnmpEngine()
+            snmp_turn = asyncio.Lock()
+            snmp_errors: list[str] = []
+
+            async def _in_turn(request: Callable[[], Awaitable[tuple[dict, str | None]]]) -> dict:
+                """One request to a UPS card at a time, and none after one it
+                did not answer: each would wait out one more timeout."""
+                async with snmp_turn:
+                    if SNMP_TIMEOUT_ERROR in snmp_errors:
+                        return {}
+                    values, error = await request()
+                    if error:
+                        snmp_errors.append(error)
+                    return values
+
+            async def _walk(oid: str) -> dict:
+                if snmp_engine is None:
+                    return await _snmp_walk(host["ip_address"], 5.0, snmp_cfg, oid)
+                return await _in_turn(
+                    lambda: _snmp_walk(host["ip_address"], 5.0, snmp_cfg, oid, return_errors=True, engine=snmp_engine)
+                )
+
+            async def _get(oids: tuple[str, ...]) -> dict:
+                return await _in_turn(
+                    lambda: _snmp_get_values(host["ip_address"], 5.0, snmp_cfg, oids, engine=snmp_engine)
+                )
 
             # Resolve vendor-specific OIDs (DB overrides → built-in map → fallback)
-            device_type = host.get("device_type", "cisco_ios")
             oid_map = await resolve_oids_for_device(device_type)
             cpu_oid = oid_map.get("cpu_oid", "1.3.6.1.4.1.9.9.109.1.1.1.1.8")
             cpu_old_oid = "1.3.6.1.4.1.9.2.1.58.0"  # avgBusy5 (Cisco legacy fallback)
@@ -539,7 +578,16 @@ async def _poll_host_monitoring(host: dict, cred: dict, snmp_cfg: dict) -> dict:
 
             # An APC UPS: its battery, output and identity (PowerNet-MIB).
             if device_type == apc_snmp.STATUS_KIND:
-                result["ups"] = await apc_snmp.read_ups_status(_walk)
+                result["ups"] = await apc_snmp.read_ups_status(_get, _walk)
+                if not result["ups"]:
+                    # No state is no alerts and no UPS firmware row: say why.
+                    LOGGER.warning(
+                        "monitoring: no UPS state read from %s over SNMP: %s",
+                        host.get("hostname", host["ip_address"]),
+                        redact_value(
+                            snmp_errors[-1] if snmp_errors else "the card answered none of the PowerNet-MIB objects"
+                        ),
+                    )
 
         except Exception as exc:
             LOGGER.warning(
@@ -547,6 +595,9 @@ async def _poll_host_monitoring(host: dict, cred: dict, snmp_cfg: dict) -> dict:
                 host.get("hostname", host["ip_address"]),
                 redact_value(str(exc)),
             )
+        finally:
+            if snmp_engine is not None:
+                snmp_engine.close_dispatcher()
 
     # ── SSH polling for VPN and routes ──
     # Not for a host that is only pinged, nor for a platform with no command

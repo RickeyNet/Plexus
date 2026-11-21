@@ -9,6 +9,8 @@ rows it really receives without a device.
 
 from __future__ import annotations
 
+import asyncio
+
 import netcontrol.routes.state as state
 import pytest
 import routes.database as db
@@ -49,6 +51,8 @@ PDU_DESCR = (
 # upsBasicOutputStatus / upsBasicBatteryStatus codes used below.
 ON_LINE, ON_BATTERY, OFF, HARDWARE_BYPASS, BATTERY_TEST = 2, 3, 7, 10, 15
 NORMAL, LOW, FAULT = 2, 3, 4
+# What pysnmp gives for an object the device does not have.
+NO_SUCH_OBJECT = "No Such Object currently exists at this OID"
 
 
 def _values(**over) -> dict:
@@ -77,6 +81,11 @@ def _walk_rows(values: dict, sys_descr: str = NMC2_DESCR) -> dict[str, dict]:
     rows["1.3.6.1.2.1.2.2.1.7"] = {"1.3.6.1.2.1.2.2.1.7.2": 1}  # ifAdminStatus
     rows["1.3.6.1.2.1.31.1.1.1.1"] = {"1.3.6.1.2.1.31.1.1.1.1.2": "eth0"}  # ifName
     return rows
+
+
+def _instances(rows: dict[str, dict]) -> dict[str, object]:
+    """The instance values of walked ``rows``: what a GET of them answers."""
+    return {oid: value for walked in rows.values() for oid, value in walked.items()}
 
 
 # ── Device type and driver ───────────────────────────────────────────────────
@@ -251,19 +260,88 @@ def test_no_powernet_answer_is_no_state():
     assert apc_snmp.parse_ups_status(dict.fromkeys(apc_snmp.UPS_OIDS, "No Such Object currently exists")) == {}
 
 
-async def test_the_state_is_read_with_the_poll_walk():
+async def test_the_state_is_read_in_a_few_gets_one_at_a_time():
+    """A card answers SNMP slowly: its scalars are read in a few GETs, one
+    request at a time, not in a walk per object."""
     rows = _walk_rows(_values(output_status=ON_BATTERY, battery_capacity=87, runtime=141_000))
-    asked: list[str] = []
+    answers = _instances(rows)
+    gets: list[tuple[str, ...]] = []
+    walked: list[str] = []
+    in_flight = 0
+
+    async def get(oids: tuple[str, ...]) -> dict:
+        nonlocal in_flight
+        assert in_flight == 0
+        in_flight += 1
+        await asyncio.sleep(0)
+        in_flight -= 1
+        gets.append(oids)
+        return {oid: answers.get(oid, NO_SUCH_OBJECT) for oid in oids}
 
     async def walk(oid: str) -> dict:
-        asked.append(oid)
+        assert in_flight == 0
+        walked.append(oid)
         return rows.get(oid, {})
 
-    status = await apc_snmp.read_ups_status(walk)
-    assert set(asked) == {*apc_snmp.UPS_OIDS.values(), apc_snmp.SYS_DESCR_OID, apc_snmp.PROBE_TEMPERATURE_OID}
+    status = await apc_snmp.read_ups_status(get, walk)
+    asked = [oid for oids in gets for oid in oids]
+    assert sorted(asked) == sorted([*(f"{oid}.0" for oid in apc_snmp.UPS_OIDS.values()), f"{apc_snmp.SYS_DESCR_OID}.0"])
+    assert 1 < len(gets) <= 3 and all(len(oids) <= apc_snmp.SCALARS_PER_GET for oids in gets)
+    assert walked == [apc_snmp.PROBE_TEMPERATURE_OID]
     assert status["output_status_label"] == "On battery"
     assert (status["battery_capacity_pct"], status["runtime_minutes"]) == (87, 23.5)
     assert status["nmc_firmware"] == "6.8.2"
+
+
+async def test_a_card_that_does_not_answer_is_asked_once():
+    """No answer to the first GET: the rest (each one more timeout) is not sent."""
+    gets: list[tuple[str, ...]] = []
+
+    async def get(oids: tuple[str, ...]) -> dict:
+        gets.append(oids)
+        return {}
+
+    async def walk(_oid: str) -> dict:
+        raise AssertionError("the probe table of a silent card is not walked")
+
+    assert await apc_snmp.read_ups_status(get, walk) == {}
+    assert len(gets) == 1
+
+
+async def test_get_values_reads_the_instances_in_one_get(monkeypatch):
+    from netcontrol.routes.snmp import _snmp_get_values
+
+    gets = _fake_snmp_agent(monkeypatch, {"1.3.6.1.2.1.1.1.0": NMC2_DESCR})
+    oids = ("1.3.6.1.2.1.1.1.0", "1.3.6.1.2.1.1.5.0")
+    values, error = await _snmp_get_values("192.0.2.60", 1.0, _V2C, oids)
+    assert error is None and gets == [oids]
+    assert values["1.3.6.1.2.1.1.1.0"] == NMC2_DESCR and set(values) == set(oids)
+
+
+async def test_get_values_reports_no_answer_and_keeps_a_shared_engine_open(monkeypatch):
+    from netcontrol.routes import snmp as snmp_module
+
+    _fake_snmp_agent(monkeypatch, {})
+    closed: list[object] = []
+
+    class _Engine:
+        def close_dispatcher(self):
+            closed.append(self)
+
+    async def _timed_out(_engine, _auth, _transport, _context, *_oids):
+        return snmp_module.SNMP_TIMEOUT_ERROR, 0, 0, []
+
+    monkeypatch.setattr(snmp_module, "SnmpEngine", _Engine)
+    monkeypatch.setattr(snmp_module, "get_cmd", _timed_out)
+    shared = _Engine()
+    oids = ("1.3.6.1.2.1.1.1.0",)
+    assert await snmp_module._snmp_get_values("192.0.2.60", 1.0, _V2C, oids, engine=shared) == (
+        {},
+        snmp_module.SNMP_TIMEOUT_ERROR,
+    )
+    assert closed == []  # the caller's engine is the caller's to close
+    assert (await snmp_module._snmp_get_values("192.0.2.60", 1.0, _V2C, oids))[0] == {}
+    assert len(closed) == 1 and closed[0] is not shared
 
 
 def test_the_metric_samples():
@@ -350,18 +428,104 @@ async def _ups_host() -> tuple[int, int]:
     return group_id, host_id
 
 
-async def _poll(monkeypatch, host: dict, values: dict) -> dict:
+class _FakeCard:
+    """The SNMP side of a poll: answers ``rows`` to the poll's walks and
+    GETs, and records each request as ``(kind, engine)``. ``silent`` is a
+    card that answers nothing (every request times out)."""
+
+    def __init__(self, rows: dict[str, dict], *, silent: bool = False):
+        self.rows = rows
+        self.answers = _instances(rows)
+        self.silent = silent
+        self.requests: list[tuple[str, object]] = []
+        self.engines: list[_FakeCard._Engine] = []
+        self.overlapped = False
+        self._in_flight = 0
+
+    class _Engine:
+        closed = False
+
+        def close_dispatcher(self):
+            self.closed = True
+
+    def _engine(self):
+        self.engines.append(self._Engine())
+        return self.engines[-1]
+
+    async def _request(self, kind: str, engine: object) -> None:
+        self.requests.append((kind, engine))
+        self.overlapped = self.overlapped or self._in_flight > 0
+        self._in_flight += 1
+        await asyncio.sleep(0)
+        self._in_flight -= 1
+
+    async def walk(self, _ip, _timeout, _cfg, oid, *_args, return_errors=False, engine=None, **_kwargs):
+        from netcontrol.routes.snmp import SNMP_TIMEOUT_ERROR
+
+        await self._request("walk", engine)
+        rows = {} if self.silent else self.rows.get(oid, {})
+        return (rows, SNMP_TIMEOUT_ERROR if self.silent else None) if return_errors else rows
+
+    async def get(self, _ip, _timeout, _cfg, oids, *, engine=None):
+        from netcontrol.routes.snmp import SNMP_TIMEOUT_ERROR
+
+        await self._request("get", engine)
+        if self.silent:
+            return {}, SNMP_TIMEOUT_ERROR
+        return {oid: self.answers.get(oid, NO_SUCH_OBJECT) for oid in oids}, None
+
+    def install(self, monkeypatch) -> None:
+        import netcontrol.routes.monitoring as monitoring
+
+        monkeypatch.setattr(monitoring, "PYSMNP_AVAILABLE", True)
+        monkeypatch.setattr(monitoring, "SnmpEngine", self._engine)
+        monkeypatch.setattr(monitoring, "_snmp_walk", self.walk)
+        monkeypatch.setattr(monitoring, "_snmp_get_values", self.get)
+        monkeypatch.setitem(state.MONITORING_CONFIG, "icmp_enabled", False)
+
+
+async def _poll(monkeypatch, host: dict, values: dict, *, silent: bool = False) -> tuple[dict, _FakeCard]:
     import netcontrol.routes.monitoring as monitoring
 
-    rows = _walk_rows(values)
+    card = _FakeCard(_walk_rows(values), silent=silent)
+    card.install(monkeypatch)
+    return await monitoring._poll_host_monitoring(host, None, {"enabled": True}), card
 
-    async def fake_walk(_ip, _timeout, _cfg, oid, *args, **kwargs):
-        return rows.get(oid, {})
 
-    monkeypatch.setattr(monitoring, "PYSMNP_AVAILABLE", True)
-    monkeypatch.setattr(monitoring, "_snmp_walk", fake_walk)
-    monkeypatch.setitem(state.MONITORING_CONFIG, "icmp_enabled", False)
-    return await monitoring._poll_host_monitoring(host, None, {"enabled": True})
+async def test_the_poll_talks_to_a_ups_in_one_session_one_request_at_a_time(monkeypatch):
+    """A card answers SNMPv3 slowly and has a short receive queue: the poll's
+    usual burst of parallel walks, each an SNMP session of its own (an engine
+    discovery apiece), loses requests on it."""
+    group_id, host_id = await _ups_host()
+    host = {**(await db.get_host(host_id)), "group_id": group_id}
+
+    result, card = await _poll(monkeypatch, host, _values())
+    assert result["ups"]["output_status_label"] == "On line" and result["uptime_seconds"] == 3600
+    assert len(card.engines) == 1 and card.engines[0].closed
+    assert {engine for _kind, engine in card.requests} == {card.engines[0]}
+    assert not card.overlapped
+    assert 1 < sum(kind == "get" for kind, _engine in card.requests) <= 3
+
+
+async def test_a_ups_that_answers_no_snmp_is_asked_once_a_poll(monkeypatch):
+    """Requests wait for each other, so a silent card must not cost one
+    timeout per request: the poll stops asking after the first."""
+    group_id, host_id = await _ups_host()
+    host = {**(await db.get_host(host_id)), "group_id": group_id}
+
+    result, card = await _poll(monkeypatch, host, _values(), silent=True)
+    assert len(card.requests) == 1 and card.engines[0].closed
+    assert not result.get("ups") and result["uptime_seconds"] is None
+    assert result["poll_status"] == "ok"
+
+
+async def test_other_devices_keep_their_parallel_walks(monkeypatch):
+    await db.init_db()
+    host = {"id": 1, "hostname": "sw-a", "ip_address": "192.0.2.70", "device_type": "cisco_ios"}
+
+    _result, card = await _poll(monkeypatch, host, _values())
+    assert card.engines == [] and card.overlapped
+    assert {(kind, engine) for kind, engine in card.requests} == {("walk", None)}
 
 
 async def test_the_poll_reads_stores_and_alerts(monkeypatch):
@@ -371,7 +535,9 @@ async def test_the_poll_reads_stores_and_alerts(monkeypatch):
     group_id, host_id = await _ups_host()
     host = {**(await db.get_host(host_id)), "group_id": group_id}
 
-    result = await _poll(monkeypatch, host, _values(output_status=ON_BATTERY, battery_capacity=87, runtime=141_000))
+    result, _card = await _poll(
+        monkeypatch, host, _values(output_status=ON_BATTERY, battery_capacity=87, runtime=141_000)
+    )
     assert result["cpu_percent"] is None and result["uptime_seconds"] == 3600
     assert result["ups"]["output_status_label"] == "On battery"
     await _process_poll_result(host, result, [])
@@ -400,7 +566,7 @@ async def test_the_poll_reads_stores_and_alerts(monkeypatch):
 
     # Power is back: the alert is resolved.
     host = {**(await db.get_host(host_id)), "group_id": group_id}
-    result = await _poll(monkeypatch, host, _values())
+    result, _card = await _poll(monkeypatch, host, _values())
     await _process_poll_result(host, result, [])
     assert await db.get_monitoring_alerts(host_id, acknowledged=False) == []
     resolved = await db.get_monitoring_alerts(host_id, acknowledged=True)

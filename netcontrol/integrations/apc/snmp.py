@@ -6,8 +6,8 @@ vendor status (``host_vendor_status``, shown on the device page), emits the
 numbers as metric samples (kept and rolled up like CPU and memory) and
 raises the built-in UPS alerts below into ``monitoring_alerts``.
 
-Object identifiers, checked against the PowerNet-MIB text (the ``.0``
-instance is returned by walking the object):
+Object identifiers, checked against the PowerNet-MIB text (the poll GETs
+the ``.0`` instance of each):
 
   upsBasicIdentModel             1.3.6.1.4.1.318.1.1.1.1.1.1   DisplayString
   upsAdvIdentFirmwareRevision    1.3.6.1.4.1.318.1.1.1.1.2.1   DisplayString
@@ -37,7 +37,6 @@ the card's sysDescr (``parse_apc_nmc_sys_descr``), read in the same poll.
 
 from __future__ import annotations
 
-import asyncio
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -69,6 +68,10 @@ UPS_OIDS: dict[str, str] = {
     "battery_temp_hp": "1.3.6.1.4.1.318.1.1.1.2.3.2",  # upsHighPrecBatteryTemperature
     "battery_temp": "1.3.6.1.4.1.318.1.1.1.2.2.2",  # upsAdvBatteryTemperature
 }
+# Instances asked for in one GET. The card's agent is small and answers
+# SNMPv3 slowly: a few modest requests, one at a time, not one per object.
+# A cautious size, not a documented limit of the card.
+SCALARS_PER_GET = 10
 # uioSensorStatusTemperatureDegC: one row per probe on the card's universal
 # I/O ports (index port.sensor); -1 when the reading is invalid.
 PROBE_TEMPERATURE_OID = "1.3.6.1.4.1.318.1.1.25.1.2.1.6"
@@ -205,11 +208,6 @@ def _int(raw: Any) -> int | None:
         return None
 
 
-def _first(rows: dict | None) -> Any:
-    """The value of a walked scalar (its one ``.0`` row), None when absent."""
-    return next(iter(rows.values()), None) if rows else None
-
-
 def _precise(tenths: Any, whole: Any) -> float | None:
     """A reading from its high-precision object (tenths), else its plain one."""
     value = _int(tenths)
@@ -291,17 +289,29 @@ def parse_ups_status(values: dict[str, Any], sys_descr: str = "", probe_rows: di
     return status
 
 
-async def read_ups_status(walk: Callable[[str], Awaitable[dict]]) -> dict[str, Any]:
-    """Read and parse the UPS state with ``walk(oid) -> {oid: value}`` (the
-    monitoring poll's SNMP walk). ``{}`` when nothing answered."""
+async def read_ups_status(
+    get: Callable[[tuple[str, ...]], Awaitable[dict]], walk: Callable[[str], Awaitable[dict]]
+) -> dict[str, Any]:
+    """Read and parse the UPS state with the monitoring poll's SNMP requests:
+    ``get(instance oids) -> {oid: value}`` for the scalars, in requests of
+    ``SCALARS_PER_GET`` sent one after the other, and ``walk(oid) -> {oid:
+    value}`` for the probe table. ``{}`` when nothing answered: a card that
+    does not answer the first GET is not asked again."""
     keys = list(UPS_OIDS)
-    results = await asyncio.gather(
-        *(walk(UPS_OIDS[key]) for key in keys), walk(SYS_DESCR_OID), walk(PROBE_TEMPERATURE_OID)
-    )
-    values = {key: _first(rows) for key, rows in zip(keys, results[: len(keys)])}
-    sys_descr_raw = _first(results[len(keys)])
+    sys_descr_oid = f"{SYS_DESCR_OID}.0"
+    oids = [*(f"{UPS_OIDS[key]}.0" for key in keys), sys_descr_oid]
+    answers: dict = {}
+    for start in range(0, len(oids), SCALARS_PER_GET):
+        answer = await get(tuple(oids[start : start + SCALARS_PER_GET]))
+        if not answer and not answers:
+            return {}
+        answers.update(answer)
+    values = {key: answers.get(f"{UPS_OIDS[key]}.0") for key in keys}
+    sys_descr_raw = answers.get(sys_descr_oid)
     return parse_ups_status(
-        values, _snmp_str(sys_descr_raw) if sys_descr_raw is not None else "", results[len(keys) + 1] or None
+        values,
+        _snmp_str(sys_descr_raw) if sys_descr_raw is not None else "",
+        await walk(PROBE_TEMPERATURE_OID) or None,
     )
 
 
