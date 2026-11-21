@@ -99,7 +99,7 @@ def test_bulk_edit_needs_inventory(admin):
     host = _host(admin, _group(admin))
     body = {"host_ids": [host], "set": {"location_detail": "Rack 1"}}
     assert user_client(admin, "no-inventory").post(BULK, json=body).status_code == 403
-    operator = user_client(admin, "operator", features=["inventory"])
+    operator = user_client(admin, "operator", features=["inventory", "inventory.write"])
     assert _ok(operator.post(BULK, json=body)) == {"ok": True, "updated": 1}
     # The catalogues stay admin-only for an inventory user.
     assert operator.post(f"{DCIM}/roles", json={"name": "Core"}).status_code == 403

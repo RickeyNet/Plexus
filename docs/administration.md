@@ -92,7 +92,10 @@ An access group grants features. Open **Settings > Access Groups**, choose
 **Description** and **Feature Access**. Feature Access is a grid with one
 row per feature and two columns: **View** and **Modify**. Some features are
 read only and have no **Modify** box ("Read-only feature: nothing to
-modify"). A user gets every feature of every group they are in.
+modify"). **View** alone is read-only: creating, changing, deleting and
+running anything in the feature (launching a job, restoring a backup,
+executing a deployment) needs **Modify** as well. A user gets every feature
+of every group they are in.
 
 **Device access** chooses **All devices** or **Selected inventory groups**.
 The second limits members to some inventory groups and closes many pages to

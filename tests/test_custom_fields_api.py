@@ -97,7 +97,7 @@ def test_user_without_inventory_cannot_touch_host_data(admin):
 def test_user_with_inventory_can_tag_and_create_tags(admin):
     gid = _group(admin)
     host = _host(admin, gid)
-    user = user_client(admin, "operator", features=["inventory"])
+    user = user_client(admin, "operator", features=["inventory", "inventory.write"])
     created = user.post(TAGS, json={"name": "edge", "color": "teal"})
     assert created.status_code == 201, created.text
     tag = created.json()

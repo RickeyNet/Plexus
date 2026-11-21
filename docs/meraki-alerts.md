@@ -296,7 +296,8 @@ server {
         proxy_pass http://plexus:8080;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        # Overwrite, never append: the sender must not choose its address.
+        proxy_set_header X-Forwarded-For $remote_addr;
         proxy_set_header X-Forwarded-Proto $scheme;
         proxy_http_version 1.1;
         proxy_set_header Connection '';
@@ -312,9 +313,10 @@ server {
 
 Publish the extra address or port in `docker-compose.yml` (for example
 `"203.0.113.10:443:443"` next to the existing mappings) and mount the public
-certificate next to the internal one. With `FORWARDED_ALLOW_IPS: "*"` (set in
-`docker-compose.yml`) Plexus sees the real sender address, so its own rate
-limit applies per Meraki source IP.
+certificate next to the internal one. nginx passes the sender's address in
+`X-Forwarded-For`, and Plexus trusts that header from the nginx container
+(`FORWARDED_ALLOW_IPS` in `docker-compose.yml`), so its own rate limit applies
+per Meraki source IP.
 
 Plexus also rate limits the receiver itself when API rate limiting is on (the
 default): 600 deliveries per rate-limit window (60 seconds by default) per
@@ -349,9 +351,11 @@ internal network.
    `proxy_ssl_verify on` with your internal CA.
 3. Allow only the proxy to reach Plexus on 443 from the DMZ, and only the
    proxy's public listener to be reachable from the internet.
-4. Set `X-Forwarded-For` on the proxy and trust it in Plexus
-   (`FORWARDED_ALLOW_IPS` set to the proxy address) so the per-source-IP rate
-   limit sees Meraki's addresses rather than the proxy's.
+4. Have the proxy set `X-Forwarded-For` to the sender's address, and have
+   the Plexus nginx restore it with `set_real_ip_from <proxy address>` and
+   `real_ip_header X-Forwarded-For` (see "Behind another load balancer" in
+   `deploy/DEPLOYMENT.md`), so the per-source-IP rate limit sees Meraki's
+   addresses rather than the proxy's.
 
 Trade-offs: the most control and no third party in the path; needs a DMZ, a
 public certificate and a firewall change.

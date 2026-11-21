@@ -29,6 +29,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 
+from netcontrol.csv_cells import csv_text_row
 from netcontrol.object_scope import (
     SCOPED_REFUSED_DETAIL,
     ScopeModel,
@@ -1109,7 +1110,7 @@ def _rows_to_csv(rows: list[dict]) -> str:
     output = io.StringIO()
     writer = csv.DictWriter(output, fieldnames=rows[0].keys())
     writer.writeheader()
-    writer.writerows(rows)
+    writer.writerows(csv_text_row(row) for row in rows)
     return output.getvalue()
 
 

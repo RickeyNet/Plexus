@@ -83,7 +83,9 @@ _DEFAULT_CONFIG: dict[str, Any] = {
 
 _VALID_CHANNELS = {"release", "edge", "git", "disabled"}
 _REPO_RE = re.compile(r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$")
-_REF_RE = re.compile(r"^[A-Za-z0-9._/-]+$")
+# A git remote or branch name. No leading "-": the value is passed to git as
+# an argument and must never be read as an option (--upload-pack=...).
+_REF_RE = re.compile(r"^[A-Za-z0-9._/][A-Za-z0-9._/-]*$")
 _IMAGE_REPO_RE = re.compile(r"^[a-z0-9.-]+(/[a-z0-9._-]+)+$")
 # A tag / short SHA accepted by /apply. deploy/plexus-updater.sh re-validates
 # the resulting image ref against the same character set on the host.

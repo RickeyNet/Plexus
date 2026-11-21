@@ -234,6 +234,46 @@ async def test_radius_never_resyncs_role(monkeypatch):
     assert user["role"] == "admin"
 
 
+@pytest.mark.asyncio
+async def test_radius_refuses_local_admin_collision(monkeypatch):
+    # A RADIUS identity named like a local admin must not sign in as that
+    # admin: RADIUS asserts no role, so it can never grant admin.
+    await _fresh_db()
+    cfg = app_module._sanitize_auth_config(
+        {"provider": "radius", "radius": {"enabled": True, "server": "r.local", "secret": "s"}}
+    )
+    monkeypatch.setattr(app_module.state, "AUTH_CONFIG", cfg)
+
+    await db_module.create_user("admin", "hash", "salt", role="admin")
+
+    assert await app_module.upsert_radius_user("admin") is None
+    local = await db_module.get_user_by_username("admin")
+    assert local["role"] == "admin"
+    assert (local.get("auth_provider") or "") == ""
+
+
+@pytest.mark.asyncio
+async def test_radius_claims_preexisting_non_admin_without_default_groups(monkeypatch):
+    # An existing non-admin account is adopted (stamped as radius-managed)
+    # but default access groups go to newly created accounts only.
+    await _fresh_db()
+    group_id = await db_module.create_access_group("RADIUS Operators", "Default RADIUS access", ["dashboard"])
+    cfg = app_module._sanitize_auth_config(
+        {
+            "provider": "radius",
+            "radius": {"enabled": True, "server": "r.local", "secret": "s", "default_group_ids": [group_id]},
+        }
+    )
+    monkeypatch.setattr(app_module.state, "AUTH_CONFIG", cfg)
+
+    await db_module.create_user("legacy", "hash", "salt", role="user")
+
+    user = await app_module.upsert_radius_user("legacy")
+    assert user is not None
+    assert (await db_module.get_user_by_username("legacy"))["auth_provider"] == "radius"
+    assert await db_module.get_user_group_ids(user["id"]) == []
+
+
 # ── Sanitizer ────────────────────────────────────────────────────────────────
 
 

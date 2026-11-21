@@ -334,7 +334,7 @@ def test_deployment_creation_needs_both_features(admin, lab):
     body = {"host_ids": [lab["hA"]], "credential_id": lab["cred"]}
     drift_only = user_client(admin, "drift-only", features=["config-drift"])
     assert drift_only.post(DEPLOY, json=body).status_code == 403
-    deploy_only = user_client(admin, "deploy-only", features=["deployments"])
+    deploy_only = user_client(admin, "deploy-only", features=["deployments", "deployments.write"])
     resp = deploy_only.post(DEPLOY, json=body)
     assert resp.status_code == 403 and "config-drift" in resp.text
     assert deploy_only.get(f"{BASE}/hosts/{lab['hA']}/remediation").status_code == 403
@@ -345,7 +345,7 @@ def test_scoped_user_remediates_only_writable_hosts(admin, lab, monkeypatch):
     # feature today; enrol it here to check the write-scope gate itself.
     monkeypatch.setattr(object_scope, "SCOPE_ENFORCED_FEATURES", object_scope.SCOPE_ENFORCED_FEATURES | {"deployments"})
     grants = [{"inventory_group_id": lab["A"]}, {"inventory_group_id": lab["B"], "can_write": True}]
-    scoped = _scoped(admin, "remediator", grants, ["config-drift", "deployments", "credentials"])
+    scoped = _scoped(admin, "remediator", grants, ["config-drift", "deployments", "deployments.write", "credentials"])
     # Preview: read scope.
     assert _ok(scoped.get(f"{BASE}/hosts/{lab['hA']}/remediation"))["state"] == "ok"
     hidden = scoped.get(f"{BASE}/hosts/{lab['hC']}/remediation")

@@ -46,6 +46,7 @@ class VaultProvider(SecretsProvider):
         Setting("timeout", "int", default=10, minimum=1, maximum=60),
     )
     SECRETS: ClassVar[tuple[str, ...]] = ("token", "secret_id")
+    DESTINATION_SETTINGS: ClassVar[tuple[str, ...]] = ("url", "verify_tls", "ca_pem")
 
     @classmethod
     def validate(cls, config: dict, secrets: dict) -> dict:

@@ -51,6 +51,8 @@ class AwsSecretsManagerProvider(SecretsProvider):
         Setting("timeout", "int", default=10, minimum=1, maximum=60),
     )
     SECRETS: ClassVar[tuple[str, ...]] = ("secret_access_key", "session_token")
+    # The endpoint (or the region's endpoint) receives the session token.
+    DESTINATION_SETTINGS: ClassVar[tuple[str, ...]] = ("endpoint_url", "region")
     SDK_MODULES: ClassVar[dict[str, str]] = {"boto3": "boto3"}
 
     @classmethod

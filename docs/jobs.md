@@ -34,7 +34,12 @@ need:
 
 ## Managing tasks
 
-On the **Tasks** tab, choose **+ New Task**.
+On the **Tasks** tab, an admin chooses **+ New Task**. Creating and deleting
+tasks, and changing a task's code or filename, are admin only: a Python task
+runs inside the Plexus server and an Ansible task on the Plexus host. A user
+with the `playbooks` Modify permission can edit a task's name, description,
+tags and run inputs. Plexus never saves a task over the file of a built-in
+task or of another task; save a changed copy under a new filename.
 
 | Field | Meaning |
 |---|---|
@@ -295,15 +300,16 @@ days** or **Last 30 days**.
 
 | Action | Needs |
 |---|---|
-| See the job list, launch a Python task | `jobs` feature, plus `playbooks` to load the task list, and the task's run permission |
+| See the job list and job output | `jobs` feature (View), plus `playbooks` to load the task list |
+| Launch a Python task, cancel, retry, run live, change a queued job's priority | `jobs` Modify (`jobs.write`) and the task's run permission; for a job, also being the user who launched it, or an admin |
 | Commit changes (run live, Run Live, retry a live job) | The task's commit permission |
-| Launch an Ansible task | Admin |
+| Launch, retry or run live an Ansible task | Admin (a queued Ansible job whose launcher is not an admin fails when it starts) |
 | Set a task's run and commit permissions, and whether it requires approval | Admin |
-| Approve or deny jobs (not your own) | `jobs.approve` (admins always) |
-| Open output, cancel, retry, run live | The user who launched the job, or an admin |
-| Create, edit and delete tasks | `playbooks` feature |
-| Create, edit and delete instruction sets | `templates` feature |
-| Manage your own credentials | `credentials` feature |
+| Approve or deny jobs (not your own) | `jobs.approve` (admins always); `jobs.write` is not needed |
+| Create and delete tasks, change a task's code or filename | Admin |
+| Edit a task's name, description, tags and run inputs | `playbooks` Modify (`playbooks.write`) |
+| Create, edit and delete instruction sets | `templates` Modify (`templates.write`) |
+| Manage your own credentials | `credentials` Modify (`credentials.write`) |
 | Manage secret variables | Admin |
 | Set job retention and the default credential | Admin |
 

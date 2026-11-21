@@ -255,24 +255,24 @@ def test_host_relations_to_every_model(admin, world):
 
 def test_root_queries_and_reverse_relations(admin, world):
     query = """{
-      regions(limit: 10) { name path depth children { name } sites { name } }
+      regions(limit: 10) { name path depth children { name } sites(limit: 20) { name } }
       sites(name: "dc-a", limit: 10) {
         name address facility status lat
-        tenant { name } hosts { hostname } racks { name } powerPanels { name powerFeeds { name } }
-        circuits { cid } clusters { name } vlans { vid }
+        tenant { name } hosts(limit: 20) { hostname } racks(limit: 20) { name } powerPanels(limit: 20) { name powerFeeds { name } }
+        circuits(limit: 20) { cid } clusters(limit: 20) { name } vlans(limit: 20) { vid }
       }
-      tenantGroups(limit: 10) { name tenants { name } }
-      tenants(limit: 10) { name sites { name } hosts { hostname } circuits { cid } racks { name } clusters { name }
-                virtualMachines { name } }
-      manufacturers(limit: 10) { name deviceTypes { model hosts { hostname } hardwareNotices { endOfSale } } }
-      deviceRoles(name: "core") { name hosts { hostname } virtualMachines { name } }
-      lifecycleStatuses(name: "in service") { name isDefault hosts { hostname } }
-      circuitProviders(limit: 10) { name account circuits { cid } networks { name } }
-      circuitTypes(limit: 10) { name circuits { cid provider { name } circuitType { name } tenant { name }
+      tenantGroups(limit: 10) { name tenants(limit: 20) { name } }
+      tenants(limit: 10) { name sites(limit: 20) { name } hosts(limit: 20) { hostname } circuits(limit: 20) { cid } racks(limit: 20) { name } clusters(limit: 20) { name }
+                virtualMachines(limit: 20) { name } }
+      manufacturers(limit: 10) { name deviceTypes(limit: 20) { model hosts(limit: 20) { hostname } hardwareNotices { endOfSale } } }
+      deviceRoles(name: "core") { name hosts(limit: 20) { hostname } virtualMachines(limit: 20) { name } }
+      lifecycleStatuses(name: "in service") { name isDefault hosts(limit: 20) { hostname } }
+      circuitProviders(limit: 10) { name account circuits(limit: 20) { cid } networks { name } }
+      circuitTypes(limit: 10) { name circuits(limit: 20) { cid provider { name } circuitType { name } tenant { name }
                      commitRateKbps terminations { termSide host { hostname } } } }
-      racks(limit: 10) { name uHeight descUnits width site { name } role { name } tenant { name } hosts { hostname }
+      racks(limit: 10) { name uHeight descUnits width site { name } role { name } tenant { name } hosts(limit: 20) { hostname }
               powerFeeds { name powerPanel { name } cable { label } } }
-      rackRoles(limit: 10) { name racks { name } }
+      rackRoles(limit: 10) { name racks(limit: 20) { name } }
       cables(limit: 10) { label a { type } b { type } }
       frontPorts(limit: 10) { name host { hostname } }
       rearPorts(limit: 10) { name }
@@ -281,14 +281,14 @@ def test_root_queries_and_reverse_relations(admin, world):
       powerFeeds(limit: 10) { name rack { name } voltage amperage }
       powerPorts(limit: 10) { name }
       powerOutlets(limit: 10) { name }
-      clusters(limit: 10) { name clusterTypeName site { name } hosts { hostname }
-                 virtualMachines { name vcpus role { name } tenant { name } cluster { name }
+      clusters(limit: 10) { name clusterTypeName site { name } hosts(limit: 20) { hostname }
+                 virtualMachines(limit: 20) { name vcpus role { name } tenant { name } cluster { name }
                                    interfaces { name macAddress enabled addresses } } }
-      autonomousSystems(limit: 10) { asn tenant { name } routingInstances { name } peerings { remoteAddress } }
+      autonomousSystems(limit: 10) { asn tenant { name } routingInstances { name } peerings(limit: 20) { remoteAddress } }
       routingInstances(limit: 10) { name host { hostname } peerings { remoteAddress routingInstance { name } host { hostname } } }
       bgpPeerings(limit: 10) { remoteAddress localAsn addressFamilies }
-      hardwareNotices(limit: 10) { endOfSale deviceType { model } hosts { hostname } }
-      supportContracts(limit: 10) { provider contractId hosts { hostname } }
+      hardwareNotices(limit: 10) { endOfSale deviceType { model } hosts(limit: 20) { hostname } }
+      supportContracts(limit: 10) { provider contractId hosts(limit: 20) { hostname } }
     }"""
     body = _gql(admin, query)
     assert "errors" not in body, body
@@ -731,7 +731,7 @@ def test_ipam_model_types_and_relations(admin, world):
     query = """{
       namespaces { name vrfCount }
       routeTargets { name importVrfCount tenant { name } }
-      vlanGroups { name minVid maxVid site { name } vlans { vid } }
+      vlanGroups { name minVid maxVid site { name } vlans(limit: 20) { vid } }
       rirs { name isPrivate aggregates { prefix } }
       aggregates(contains: "192.0.2.5") { prefix prefixCount totalAddresses usedAddresses utilizationPct rir { name } }
       vrfs(name: "BLUE") { name namespace { name } routeTargets { import { name } export { name } } }

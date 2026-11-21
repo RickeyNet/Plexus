@@ -511,7 +511,16 @@ def test_parse_cors_origins_from_env(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_login_cookie_uses_secure_flag_when_https_enabled(monkeypatch):
+@pytest.mark.parametrize(
+    ("https_enabled", "cookie_secure", "expect_secure"),
+    [
+        (True, True, True),
+        # TLS ends at the reverse proxy: APP_HTTPS is false, APP_COOKIE_SECURE true.
+        (False, True, True),
+        (False, False, False),
+    ],
+)
+async def test_login_cookie_secure_flag_follows_settings(monkeypatch, https_enabled, cookie_secure, expect_secure):
     user_row = {
         "id": 1,
         "username": "admin",
@@ -532,7 +541,8 @@ async def test_login_cookie_uses_secure_flag_when_https_enabled(monkeypatch):
     monkeypatch.setattr(app_module, "_get_user_features", fake_features)
     monkeypatch.setattr(app_module, "LOGIN_ATTEMPTS", {})
     monkeypatch.setattr(app_module, "LOCKED_OUT", {})
-    monkeypatch.setattr(app_module, "APP_HTTPS_ENABLED", True)
+    monkeypatch.setattr(app_module, "APP_HTTPS_ENABLED", https_enabled)
+    monkeypatch.setattr(app_module, "APP_COOKIE_SECURE", cookie_secure)
 
     class FakeClient:
         host = "127.0.0.1"
@@ -545,7 +555,7 @@ async def test_login_cookie_uses_secure_flag_when_https_enabled(monkeypatch):
     resp = await app_module.login(body, cast(Request, req))
 
     set_cookie_header = resp.headers.get("set-cookie", "")
-    assert "Secure" in set_cookie_header
+    assert ("Secure" in set_cookie_header) is expect_secure
 
 
 def test_security_check_payload_reflects_runtime_flags(monkeypatch):
@@ -583,3 +593,42 @@ def test_security_check_payload_warns_when_hardening_disabled(monkeypatch):
     assert "APP_HSTS is false" in warnings
     assert "APP_REQUIRE_API_TOKEN is false" in warnings
     assert "APP_API_TOKEN is not set" in warnings
+
+
+# ── Session signing key file ─────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("stored", ["", "\n", "short-key"])
+def test_secret_key_file_with_unusable_key_is_replaced(monkeypatch, tmp_path, stored):
+    # An empty or truncated key file must never become the signing key.
+    key_file = tmp_path / "session.key"
+    key_file.write_text(stored, encoding="utf-8")
+    monkeypatch.setattr(app_module, "SECRET_KEY_FILE", str(key_file))
+
+    key = app_module._load_or_create_secret_key()
+
+    assert len(key) == 64
+    assert key_file.read_text(encoding="utf-8") == key
+    assert not (tmp_path / "session.key.new").exists()
+    # The replacement is stable: the next start reads the same key.
+    assert app_module._load_or_create_secret_key() == key
+
+
+def test_secret_key_file_with_valid_key_is_kept(monkeypatch, tmp_path):
+    key_file = tmp_path / "session.key"
+    stored = "k" * 64
+    key_file.write_text(stored + "\n", encoding="utf-8")
+    monkeypatch.setattr(app_module, "SECRET_KEY_FILE", str(key_file))
+
+    assert app_module._load_or_create_secret_key() == stored
+    assert key_file.read_text(encoding="utf-8") == stored + "\n"
+
+
+def test_secret_key_file_is_created_when_missing(monkeypatch, tmp_path):
+    key_file = tmp_path / "keys" / "session.key"
+    monkeypatch.setattr(app_module, "SECRET_KEY_FILE", str(key_file))
+
+    key = app_module._load_or_create_secret_key()
+
+    assert len(key) == 64
+    assert key_file.read_text(encoding="utf-8") == key

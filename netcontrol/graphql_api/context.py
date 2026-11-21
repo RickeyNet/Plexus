@@ -27,6 +27,7 @@ import routes.database as db
 from strawberry.dataloader import DataLoader
 
 from netcontrol.custom_fields import OBJECT_TYPE_SPECS, OBJECT_TYPES
+from netcontrol.dynamic_groups import resolve_hosts
 from netcontrol.object_scope import ObjectScope, filter_rows
 from netcontrol.routes.custom_fields import object_custom_data_bulk
 from netcontrol.routes.inventory import _visible_tree
@@ -122,10 +123,21 @@ def _row_key(row: dict) -> str:
 
 
 class GraphQLContext:
-    def __init__(self, *, scope: ObjectScope, features: frozenset[str] | None, max_limit: int) -> None:
+    def __init__(
+        self,
+        *,
+        scope: ObjectScope,
+        features: frozenset[str] | None,
+        max_limit: int,
+        max_objects: int | None = None,
+    ) -> None:
         self.scope = scope
         self.features = features
         self.max_limit = max_limit
+        # Most list items one request may resolve (``count_objects``); None:
+        # no cap.
+        self.max_objects = max_objects
+        self.objects = 0
         self._memo: dict[str, asyncio.Future[Any]] = {}
         self.interfaces = DataLoader(load_fn=self._load_interfaces)
         self.addresses = DataLoader(load_fn=self._load_addresses)
@@ -150,16 +162,27 @@ class GraphQLContext:
 
     def page(self, rows: list[Any], limit: int | None, offset: int, *, bounded: bool = True) -> list[Any]:
         """``rows[offset:offset + limit]``; ``limit`` None (nested lists
-        only) is every row from ``offset``."""
+        only) is at most ``max_limit`` rows from ``offset``, the size the
+        cost estimate assumes for it (``limits._list_size``)."""
         if offset < 0:
             raise GraphQLClientError("offset must be 0 or more")
         if limit is None:
             if bounded:
                 raise GraphQLClientError("limit is required")
-            return rows[offset:]
+            return rows[offset : offset + self.max_limit]
         if not 1 <= limit <= self.max_limit:
             raise GraphQLClientError(f"limit must be between 1 and {self.max_limit}")
         return rows[offset : offset + limit]
+
+    def count_objects(self, count: int) -> None:
+        """Add ``count`` resolved list items to the request's total; past
+        ``max_objects`` every further list fails, so a query the cost
+        estimate let through cannot build an unbounded response."""
+        self.objects += count
+        if self.max_objects is not None and self.objects > self.max_objects:
+            raise GraphQLClientError(
+                f"Query result is too large: it resolves more than {self.max_objects} objects (see limit arguments)"
+            )
 
     async def _once(self, key: str, factory: Callable[[], Awaitable[Any]]) -> Any:
         future = self._memo.get(key)
@@ -217,6 +240,15 @@ class GraphQLContext:
             return out
 
         return await self._once("hosts_by_group", load)
+
+    async def dynamic_group_hosts(self, group: dict) -> list[dict]:
+        """The readable hosts dynamic group ``group`` matches now, resolved
+        once per group per request against the request's host list."""
+
+        async def load() -> list[dict]:
+            return await resolve_hosts(group.get("filter") or {}, self.scope, hosts=await self.hosts())
+
+        return await self._once(f"dynamic_group_hosts:{int(group['id'])}", load)
 
     async def latest_backups(self) -> dict[int, dict]:
         """``host_id -> newest backup`` (metadata only) of the readable hosts."""

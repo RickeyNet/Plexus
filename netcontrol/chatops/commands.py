@@ -604,7 +604,7 @@ async def _launch(user: ChatUser, preset: dict, spec: dict, commit: bool) -> int
     from fastapi import HTTPException
 
     from netcontrol import job_inputs
-    from netcontrol.routes.jobs import queue_job_from_spec
+    from netcontrol.routes.jobs import playbook_admin_only, queue_job_from_spec
     from netcontrol.routes.playbooks import playbook_permissions, playbook_supports_dry_run
     from netcontrol.routes.shared import require_credential_access
 
@@ -619,7 +619,7 @@ async def _launch(user: ChatUser, preset: dict, spec: dict, commit: bool) -> int
         raise CommandError(f"You are not allowed to run '{playbook['name']}'.")
     if commit and not job_inputs.is_allowed(permissions, "commit", role=role, group_ids=group_ids):
         raise CommandError(f"You may not run '{playbook['name']}' with commit.")
-    if playbook.get("type") == "ansible" and not user.is_admin:
+    if playbook_admin_only(playbook) and not user.is_admin:
         raise CommandError("Ansible playbooks can be launched by admins only.")
     if not commit and not playbook_supports_dry_run(playbook):
         raise CommandError(f"'{playbook['name']}' has no dry-run mode.")

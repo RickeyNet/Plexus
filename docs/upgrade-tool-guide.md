@@ -77,10 +77,10 @@ Phases 1 and 2 can be run during business hours with no impact. Only Phase 3 nee
 | Upgrade tool | Plexus web UI: **Network → Software → Upgrades** |
 | Software images | **Network → Software → Upgrades → Images** tab |
 | Campaigns | **Network → Software → Upgrades → Campaigns** tab |
-| Config backups | **Backups** tab inside the campaign (`backup_<hostname>_<timestamp>.txt`) |
+| Config backups | **Backups** tab inside the campaign (`backup_<hostname>_<timestamp>_campaign<id>.txt`) |
 | Per-device logs | Click a device in the campaign's device table |
 | Operation history | **Operation history** table inside the campaign |
-| Device credential | A credential you own, or the site-wide service credential in Settings |
+| Device credential | A credential you own, or (admins only) the site-wide service credential in Settings |
 | Jump host / workstation | |
 | Console / OOB access | |
 | Cisco Software Download | https://software.cisco.com/download/home |
@@ -183,7 +183,7 @@ Try not to be too technical. However, as this is a technical MOP, sometimes acro
 | Prestage | The upgrade phase that backs up and saves the config and frees up flash space. No outage. |
 | RFC | Request for Change. The formal change-control ticket. |
 | SCP | Secure Copy Protocol. Used to copy the software image to the switch over SSH. |
-| Service Credential | The site-wide device credential configured in Settings, used automatically when a campaign has no credential set. Required for scheduled, unattended reloads. |
+| Service Credential | The site-wide device credential configured in Settings, used automatically when a campaign an admin created has no credential set. Another user's campaign must select one of that user's own credentials. Required for scheduled, unattended reloads. |
 | SSH | Secure Shell. Encrypted remote command-line access to the switch. |
 | SSO | Stateful Switchover. The redundancy mode that lets the standby supervisor take over without dropping traffic. |
 | Stack | Two or more physical switches joined to act as one logical switch. They upgrade and reboot together. |
@@ -223,7 +223,7 @@ Check each item off as it is completed. All items must be done before the mainte
 
 The Prestage phase does this automatically. For each switch it:
 
-1. Retrieves the full `show running-config` and saves it under the campaign's **Backups** tab as `backup_<hostname>_<timestamp>.txt`. For a switch that is in the inventory, the same capture (with `show running-config all`) is also stored in **Config Backups**, where backup search finds it
+1. Retrieves the full `show running-config` and saves it under the campaign's **Backups** tab as `backup_<hostname>_<timestamp>_campaign<id>.txt`. For a switch that is in the inventory, the same capture (with `show running-config all`) is also stored in **Config Backups**, where backup search finds it
 2. Runs `write memory` so the startup-config on the switch matches the running-config
 
 Confirm a backup file exists for every switch before proceeding by opening the **Backups** tab in the campaign.
@@ -364,6 +364,8 @@ If the commit fails or the post-commit version is wrong, the device is marked **
 
 Click **Verify upgrade** any time after the reload. The tool reconnects to each device and confirms the running version matches the target image. Use it as the final sign-off, or to re-check devices later.
 
+A device that is verified on its target version (by Activate, by Verify, or because it already ran the target) is updated everywhere at once: the tool writes the running version to the device's inventory host, so the **Software** column on the Inventory page, the **Software** page and its vulnerability alerts change with the campaign, and the log shows "Inventory and software alerts updated". No discovery sync is needed. A device added to the campaign by IP address has no inventory host and is skipped.
+
 Then log in to each switch and confirm by hand:
 
 ```
@@ -401,7 +403,7 @@ The **Operation history** table inside the campaign records every phase run with
 - **Cancel scheduled reload** - cancels a pending scheduled Activate before it fires.
 - **Cancel selected activate** - during a running or scheduled Activate, cancels only the selected devices. The rest continue.
 - **Retry** - re-running a phase with failed or cancelled devices selected clears their state and runs them again.
-- Campaign details, logs, and backups are visible only to the campaign's creator and admins.
+- Campaign details, logs, and backups are visible only to the campaign's creator and admins, and only they can edit, run, cancel or delete the campaign. Backups taken before backup names carried the campaign id are visible to admins only.
 
 ---
 
@@ -455,7 +457,7 @@ The tool cannot recover a switch that does not respond to SSH. This requires con
 
 ### Restoring configuration
 
-The reload does not change configuration. If configuration is ever lost, the pre-change backup is on the campaign's **Backups** tab as `backup_<hostname>_<timestamp>.txt`. Download it and paste it into config mode, or copy it to the switch with SCP and run `configure replace`.
+The reload does not change configuration. If configuration is ever lost, the pre-change backup is on the campaign's **Backups** tab as `backup_<hostname>_<timestamp>_campaign<id>.txt`. Download it and paste it into config mode, or copy it to the switch with SCP and run `configure replace`.
 
 ### Backout decision point
 
@@ -527,7 +529,7 @@ The switch warns that a larger SSH window can raise CPU load and should be used 
 2. Fill in:
    - **Campaign Name / Description** - for example `Q2 2026 IOS-XE 17.15 Upgrade`.
    - **Image map** - one row per hardware family: a model pattern (for example `9200`) and the image to install on devices matching it. Longer or more specific patterns win when several match. A device whose model matches no pattern is skipped with a warning.
-   - **Credential** - pick your credential, or leave "Use default service credential".
+   - **Credential** - pick your credential, or (admins only) leave "Use default service credential".
    - **Devices** - tick inventory groups and hosts, and/or paste ad-hoc IPs (one per line).
 3. Options (defaults are sensible; change only with a reason):
 
@@ -546,7 +548,7 @@ A campaign can be edited later (devices, images, options) as long as no phase is
 
 ### Appendix D. Backups
 
-The **Backups** tab lists every running-config capture taken during Prestage (`backup_<hostname>_<timestamp>.txt`). Download one to diff or restore a config after an upgrade. Delete old ones as needed.
+The **Backups** tab lists every running-config capture taken during Prestage (`backup_<hostname>_<timestamp>_campaign<id>.txt`). Download one to diff or restore a config after an upgrade. Delete old ones as needed.
 
 ### Appendix E. Troubleshooting
 

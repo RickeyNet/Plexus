@@ -25,12 +25,12 @@ from typing import Any
 
 import routes.database as db
 import strawberry
+from graphql import GraphQLObjectType, GraphQLSchema
 from strawberry.extensions import MaskErrors
 from strawberry.tools import merge_types
 from strawberry.types import Info
 
-from netcontrol.dynamic_groups import resolve_hosts
-from netcontrol.graphql_api import models
+from netcontrol.graphql_api import limits, models
 from netcontrol.graphql_api.common import DEFAULT_LIMIT, CustomData, _ctx, _opt_int, _text
 from netcontrol.graphql_api.context import GraphQLClientError, network_of
 
@@ -737,7 +737,7 @@ class DynamicGroup:
     @strawberry.field(description="The hosts the filter matches now, among those you may read.")
     async def members(self, info: Info, limit: int | None = None, offset: int = 0) -> list[Host]:
         ctx = _ctx(info)
-        rows = await resolve_hosts(self.row.get("filter") or {}, ctx.scope)
+        rows = await ctx.dynamic_group_hosts(self.row)
         return [Host(row=r) for r in ctx.page(rows, limit, offset, bounded=False)]
 
 
@@ -923,5 +923,28 @@ Query = merge_types("Query", (InventoryQuery, models.ModelQuery, models.IpamMode
 
 schema = strawberry.Schema(
     query=Query,
-    extensions=[lambda: MaskErrors(should_mask_error=_should_mask, error_message="Internal error")],
+    extensions=[
+        lambda: MaskErrors(should_mask_error=_should_mask, error_message="Internal error"),
+        limits.ResultSizeLimit,
+    ],
 )
+
+
+def _describe_nested_limits(gql_schema: GraphQLSchema) -> None:
+    """Say on every nested list's ``limit`` argument (no default) what the
+    list returns without one: at most ``max_limit`` rows
+    (``GraphQLContext.page``), which is also what the cost estimate
+    assumes."""
+    for gql_type in gql_schema.type_map.values():
+        if not isinstance(gql_type, GraphQLObjectType) or gql_type.name.startswith("__"):
+            continue
+        for field in gql_type.fields.values():
+            arg = field.args.get("limit")
+            if arg is not None and arg.default_value is None and not arg.description:
+                arg.description = (
+                    "Most rows to return. Without it, at most the max_limit of the graphql_api "
+                    "setting (1000 by default); the cost estimate counts that many."
+                )
+
+
+_describe_nested_limits(schema._schema)

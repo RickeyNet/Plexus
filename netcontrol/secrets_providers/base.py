@@ -29,6 +29,7 @@ from urllib.parse import quote, urlsplit
 import httpx
 
 from netcontrol.routes.outbound_http import OutboundRequestError, send_request, tls_verify
+from netcontrol.sso import is_allowed_url
 
 # Error codes (``SecretsProviderError.code``), also returned by the test
 # endpoint and written to the audit log.
@@ -232,6 +233,10 @@ def normalize_settings(settings: tuple[Setting, ...], raw: dict) -> dict:
                 parts = urlsplit(value)
                 if parts.scheme not in ("http", "https") or not parts.hostname:
                     raise ValueError(f"{s.name} must be an http:// or https:// URL")
+                # The provider's token or key goes to this address, so
+                # plain http only to this machine (a local dev Vault).
+                if not is_allowed_url(value):
+                    raise ValueError(f"{s.name} must be an https:// URL (http:// only to localhost)")
                 value = value.rstrip("/")
         if s.required and value in ("", None):
             raise ValueError(f"{s.name} is required")
@@ -250,6 +255,10 @@ class SecretsProvider(ABC):
     label: ClassVar[str]
     SETTINGS: ClassVar[tuple[Setting, ...]]
     SECRETS: ClassVar[tuple[str, ...]]
+    # Settings that decide where the secrets are sent (address, TLS checks):
+    # changing one on update needs the secrets entered again
+    # (service.prepare_provider, netcontrol.secret_fields).
+    DESTINATION_SETTINGS: ClassVar[tuple[str, ...]] = ()
     # Python modules the provider imports lazily -> pip distribution name.
     SDK_MODULES: ClassVar[dict[str, str]] = {}
 

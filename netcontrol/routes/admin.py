@@ -18,7 +18,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 import netcontrol.routes.state as state
-from netcontrol import oidc, saml
+from netcontrol import lab_images, oidc, saml
 from netcontrol.object_scope import scope_for_user
 from netcontrol.routes.auth import _oidc_redirect_uri, saml_acs_url, saml_sp_entity_id
 from netcontrol.routes.shared import _audit, _corr_id, _get_session, _session_user
@@ -470,6 +470,34 @@ async def admin_update_feature_visibility(body: AdminFeatureVisibilityRequest, r
         "catalog": state.FEATURE_VISIBILITY_CATALOG,
         "hidden": list(state.FEATURE_VISIBILITY_HIDDEN),
     }
+
+
+class AdminLabImageAllowlistRequest(BaseModel):
+    entries: list[str] = []
+
+
+@router.get("/api/admin/lab-image-allowlist")
+async def admin_get_lab_image_allowlist():
+    """The container images (or registry / repository prefixes) users who
+    are not admins may deploy in the lab (``netcontrol.lab_images``)."""
+    return {"entries": await lab_images.load_allowlist()}
+
+
+@router.put("/api/admin/lab-image-allowlist")
+async def admin_update_lab_image_allowlist(body: AdminLabImageAllowlistRequest, request: Request):
+    try:
+        entries = await lab_images.save_allowlist(body.entries)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    session = _get_session(request)
+    await _audit(
+        "lab",
+        "image_allowlist.update",
+        user=session["user"] if session else "",
+        detail=f"entries={entries}",
+        correlation_id=_corr_id(request),
+    )
+    return {"entries": entries}
 
 
 @router.get("/api/admin/security-check")

@@ -26,6 +26,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
+from netcontrol.csv_cells import csv_text_cell
+from netcontrol.integrations.traffic import format_bps
 from netcontrol.object_scope import filter_rows, readable_host_ids, require_new_row, require_row, scoped
 from netcontrol.routes.shared import _audit, _corr_id, _get_session
 from netcontrol.telemetry import configure_logging
@@ -255,15 +257,7 @@ async def generate_billing_for_circuit(
     return period
 
 
-def _format_bps(bps: float) -> str:
-    """Human-readable bits-per-second formatting."""
-    if bps >= 1_000_000_000:
-        return f"{bps / 1_000_000_000:.2f} Gbps"
-    if bps >= 1_000_000:
-        return f"{bps / 1_000_000:.2f} Mbps"
-    if bps >= 1_000:
-        return f"{bps / 1_000:.2f} Kbps"
-    return f"{bps:.0f} bps"
+_format_bps = format_bps
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -552,10 +546,10 @@ async def export_periods_csv(
             {
                 "period_start": p.get("period_start", ""),
                 "period_end": p.get("period_end", ""),
-                "customer": p.get("customer", ""),
-                "circuit_name": p.get("circuit_name", ""),
-                "hostname": p.get("hostname", ""),
-                "if_name": p.get("if_name", ""),
+                "customer": csv_text_cell(p.get("customer", "")),
+                "circuit_name": csv_text_cell(p.get("circuit_name", "")),
+                "hostname": csv_text_cell(p.get("hostname", "")),
+                "if_name": csv_text_cell(p.get("if_name", "")),
                 "p95_in_mbps": round(p.get("p95_in_bps", 0) / 1_000_000, 4),
                 "p95_out_mbps": round(p.get("p95_out_bps", 0) / 1_000_000, 4),
                 "p95_billing_mbps": round(p.get("p95_billing_bps", 0) / 1_000_000, 4),
@@ -568,7 +562,7 @@ async def export_periods_csv(
                 "overage_cost": p.get("overage_cost", 0),
                 "total_cost": p.get("total_cost", 0),
                 "total_samples": p.get("total_samples", 0),
-                "status": p.get("status", ""),
+                "status": csv_text_cell(p.get("status", "")),
             }
         )
 

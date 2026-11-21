@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import os
 
+from netcontrol.bounded_map import BoundedDict
 from netcontrol.telemetry import configure_logging
 
 LOGGER = configure_logging("plexus.state")
@@ -601,12 +602,39 @@ JOB_RETENTION_CLEANUP_INTERVAL_SECONDS = 60 * 60 * 6
 
 # ── Mutable config state (populated at startup, mutated by admin routes) ────
 
-LOGIN_ATTEMPTS: dict = {}
-LOCKED_OUT: dict = {}
+# Per-client tracker maps are keyed by client address, so each is capped at
+# this many keys (expired entries go first, then the least recently written).
+TRACKER_MAX_ENTRIES = 100_000
 
-# Global API rate-limit state - keyed by client IP.
-# Each value is a list of ``time.time()`` timestamps of recent requests.
-API_RATE_LIMIT_TRACKER: dict[str, list[float]] = {}
+
+def lockout_expired(_ip: str, unlock_at: float, now: float) -> bool:
+    """A ``LOCKED_OUT`` entry whose lockout has ended."""
+    return now >= unlock_at
+
+
+def login_attempts_expired(ip: str, attempts: list[float], now: float) -> bool:
+    """A ``LOGIN_ATTEMPTS`` entry no window still looks at (kept while the
+    address is locked out)."""
+    if ip in LOCKED_OUT:
+        return False
+    ttl = max(int(LOGIN_RULES.get("lockout_time", 900)), int(LOGIN_RULES.get("rate_limit_window", 60)))
+    return not attempts or (now - max(attempts)) > ttl
+
+
+def rate_limit_entry_expired(_key: str, stamps: list[float], now: float) -> bool:
+    """An ``API_RATE_LIMIT_TRACKER`` entry whose newest hit left the window."""
+    window = max(1, int(API_RATE_LIMIT.get("window", 60)))
+    return not stamps or (now - stamps[-1]) > window
+
+
+# Login lockout state - keyed by client IP. ``LOGIN_ATTEMPTS`` holds failure
+# timestamps, ``LOCKED_OUT`` the time each lockout ends.
+LOGIN_ATTEMPTS: dict = BoundedDict(TRACKER_MAX_ENTRIES, login_attempts_expired)
+LOCKED_OUT: dict = BoundedDict(TRACKER_MAX_ENTRIES, lockout_expired)
+
+# Global API rate-limit state - keyed by client IP (and by MCP auth-failure
+# keys). Each value is a list of ``time.time()`` timestamps of recent requests.
+API_RATE_LIMIT_TRACKER: dict[str, list[float]] = BoundedDict(TRACKER_MAX_ENTRIES, rate_limit_entry_expired)
 API_RATE_LIMIT_LOCK: asyncio.Lock | None = None  # initialised at startup
 
 LOGIN_RULES = dict(DEFAULT_LOGIN_RULES)

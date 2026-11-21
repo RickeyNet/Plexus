@@ -150,6 +150,10 @@ async def test_cancel_campaign_marks_running_operation_cancelled(monkeypatch: py
     async def fake_broadcast(*_args, **_kwargs):
         return None
 
+    async def fake_get_upgrade_campaign(_campaign_id):
+        return {"id": 5, "created_by": "alice"}
+
+    monkeypatch.setattr(upgrades.db, "get_upgrade_campaign", fake_get_upgrade_campaign)
     monkeypatch.setattr(upgrades, "_running_campaigns", {5: task})
     monkeypatch.setattr(upgrades, "_running_campaign_operations", {5: 44})
     monkeypatch.setattr(upgrades.db, "update_upgrade_campaign", fake_update_upgrade_campaign)
@@ -313,14 +317,18 @@ async def test_resolve_campaign_credential_explicit(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_resolve_campaign_credential_falls_back_to_service(monkeypatch):
-    """No credential set → use the configured service credential, with no
-    per-user ownership check (it's the system default)."""
+    """No credential set on an admin's campaign → use the configured service
+    credential, with no per-user ownership check (it's the system default)."""
     monkeypatch.setattr(upgrades.state, "AUTH_CONFIG", {"service_credential_id": 42})
 
     async def fake_get_raw(cred_id):
         return {"id": cred_id, "username": "svc", "password": "p", "secret": "", "is_service": 1}
 
+    async def fake_user(username):
+        return {"id": 1, "username": username, "role": "admin"}
+
     monkeypatch.setattr(upgrades.db, "get_credential_raw", fake_get_raw)
+    monkeypatch.setattr(upgrades.db, "get_user_by_username", fake_user)
 
     called = False
 
@@ -348,8 +356,12 @@ async def test_resolve_campaign_credential_uses_sole_service_credential(monkeypa
     async def fake_get_raw(cred_id):
         return {"id": cred_id, "username": "svc", "password": "p", "secret": "", "is_service": 1}
 
+    async def fake_user(username):
+        return {"id": 1, "username": username, "role": "admin"}
+
     monkeypatch.setattr(upgrades.db, "get_service_credentials", fake_list_service)
     monkeypatch.setattr(upgrades.db, "get_credential_raw", fake_get_raw)
+    monkeypatch.setattr(upgrades.db, "get_user_by_username", fake_user)
 
     cred = await upgrades._resolve_campaign_credential(None, "alice")
     assert cred["id"] == 4

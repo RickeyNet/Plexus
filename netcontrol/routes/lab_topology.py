@@ -32,6 +32,7 @@ import routes.database as db
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field, field_validator
 
+from netcontrol.lab_images import check_image_allowed
 from netcontrol.object_scope import request_scope, scoped
 from netcontrol.routes import lab_runtime
 from netcontrol.routes.lab import (
@@ -215,12 +216,19 @@ def _validate_member_for_deploy(device: dict) -> None:
 # ── Driver operations ───────────────────────────────────────────────────────
 
 
-async def deploy_topology(topology: dict, *, actor: str = "") -> dict:
+async def deploy_topology(topology: dict, *, actor: str = "", is_admin: bool = False) -> dict:
+    """Deploy every member of ``topology``. A caller that is not an admin
+    may deploy only members whose image is in the lab image allowlist."""
     devices = await db.list_topology_devices(topology["id"])
     if not devices:
         raise HTTPException(status_code=400, detail="Topology has no member devices")
     for d in devices:
         _validate_member_for_deploy(d)
+        refusal = await check_image_allowed(
+            d["runtime_image"], is_admin=is_admin, what=f"Device '{d.get('hostname')}' image"
+        )
+        if refusal:
+            raise HTTPException(status_code=403, detail=refusal)
 
     # Reject if any member has a free-standing Phase B-1 runtime still running.
     busy = [
@@ -669,7 +677,8 @@ async def remove_link_endpoint(topology_id: int, link_id: int, request: Request)
 async def deploy_topology_endpoint(topology_id: int, request: Request):
     topo, session = await _resolve_topology_or_403(topology_id, request)
     actor = session["user"] if session else ""
-    result = await deploy_topology(topo, actor=actor)
+    _, _, role = await _resolve_session_user(request)
+    result = await deploy_topology(topo, actor=actor, is_admin=role == "admin")
     await _audit(
         "lab",
         "topology.deploy",

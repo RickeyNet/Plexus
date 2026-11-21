@@ -75,6 +75,13 @@ stored encrypted with the Plexus encryption key, never returned by the API,
 and the edit form shows **Stored; leave blank to keep**. Each has a Show/Hide
 button to check what you typed.
 
+A stored secret is kept only while it goes to the same place. Changing the
+address or the TLS settings (Vault address, TLS verification or CA bundle;
+AWS region or endpoint URL; Azure vault URL, authority host or tenant ID)
+needs the provider's secrets entered again in the same save; otherwise the
+save is refused with a message naming them. Addresses must be `https://`
+(`http://` only to `localhost`).
+
 ### HashiCorp Vault
 
 | Setting | Default | Notes |
@@ -193,7 +200,7 @@ All routes follow the usual session and CSRF rules; see
 GET    /api/secrets-providers                 providers and the supported types
 GET    /api/secrets-providers/{id}
 POST   /api/secrets-providers                 {name, provider_type, description?, enabled?, allow_user_credentials?, cache_ttl?, config, secrets}
-PUT    /api/secrets-providers/{id}            any of the above but provider_type; a blank secret keeps the stored one
+PUT    /api/secrets-providers/{id}            any of the above but provider_type; a blank secret keeps the stored one, except after an address or TLS change (400)
 DELETE /api/secrets-providers/{id}            409 while referenced
 POST   /api/secrets-providers/{id}/test       {path, key?} -> {ok} or {ok: false, code, message}
 GET    /api/credentials/secrets-providers     the providers the caller may reference (id, name, type)

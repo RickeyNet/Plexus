@@ -105,6 +105,21 @@ def test_sanitize_rejects_unknown_channel():
         au._sanitize_config({"channel": "nightly"})
 
 
+@pytest.mark.parametrize("field", ["git_remote", "git_branch"])
+@pytest.mark.parametrize("bad", ["--upload-pack=touch /tmp/x", "-c", "--all", "main branch", "main;id", ""])
+def test_sanitize_rejects_git_names_that_read_as_options(field, bad):
+    # The remote and branch are passed to git as arguments.
+    with pytest.raises(HTTPException) as exc:
+        au._sanitize_config({"channel": "git", field: bad})
+    assert _status(exc) == 400
+
+
+def test_sanitize_accepts_ordinary_git_names():
+    out = au._sanitize_config({"channel": "git", "git_remote": "upstream", "git_branch": "release/1.2-hotfix"})
+    assert out["git_remote"] == "upstream"
+    assert out["git_branch"] == "release/1.2-hotfix"
+
+
 # ── apply guards ─────────────────────────────────────────────────────────
 
 

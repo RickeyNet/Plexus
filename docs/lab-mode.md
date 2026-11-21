@@ -87,7 +87,9 @@ Plexus host" and only offline mode works.
    `nokia_srlinux`, `sonic-vs`, `srl`, `vr-csr`, `vr-sros`, `vr-veos`,
    `vr-vmx`, `vr-xrv9k`.
 2. **Container image:** the image to run, for example `frrouting/frr:latest`.
-   You must have the image (and any vendor licence) yourself.
+   You must have the image (and any vendor licence) yourself. A user who is
+   not an admin may deploy only an image on the lab image allowlist (see
+   below); any other image is refused with a message naming it.
 3. **SSH credential ID (for live push):** the numeric ID of one of your
    credentials. It is needed only for live simulation.
 4. Choose **Deploy live**. When the container is up, the card shows the node
@@ -123,6 +125,31 @@ lab, for testing routing or switching between devices.
 
 Members and links cannot change while the topology runs, and a running
 topology cannot be deleted.
+
+## Lab image allowlist
+
+containerlab runs some node kinds (`ceos`, the `vr-*` kinds) as privileged
+containers, so the image of a live device runs with root rights on the lab
+host. Admins choose which images other users may deploy:
+
+- `GET /api/admin/lab-image-allowlist` answers `{"entries": [...]}`;
+  `PUT` with `{"entries": [...]}` replaces the list (admin only, audited as
+  `lab` / `image_allowlist.update`; `422` for an invalid entry, at most 200).
+- An entry with a tag (`ghcr.io/nokia/srlinux:23.10.1`) allows that image
+  only. An entry without a tag (`frrouting/frr`, `registry.example.com/team`)
+  allows that repository with any tag and every repository below it, by
+  whole path segments: `registry.example.com/team` allows
+  `registry.example.com/team/frr:9` but not `registry.example.com/team-evil/x`.
+  A registry with a trailing slash (`registry.example.com/`) allows all of
+  its images. The registry host must match exactly; an image without one is
+  on `docker.io`, and a one-part name such as `ceos` is `docker.io/library/ceos`.
+- The list starts empty: until an admin adds entries, only admins can
+  deploy live devices or topologies. Admins may deploy any image whose name
+  passes the character check.
+- **Deploy live** and **Deploy topology** both check it; a topology is
+  refused when any member's image is not allowed, also when an admin set
+  that image earlier.
+- There is no settings page for the list yet; use the API.
 
 ## Checking drift from production
 

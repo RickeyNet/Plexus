@@ -2,10 +2,13 @@
 rendered intended configuration of each host and its comparison with the
 host's newest configuration backup.
 
-Two routers, each registered in ``app.py``:
+Three routers, each registered in ``app.py``:
 
-- ``router`` (signed-in user with the ``config-drift`` feature): read the
-  templates, contexts, rows, a host's detail and variables; generate.
+- ``router`` (signed-in user with the ``config-drift`` feature; changes,
+  such as generate, need ``config-drift.write``): read the templates,
+  contexts, rows, a host's detail and variables; generate.
+- ``read_router`` (the ``config-drift`` feature): POST routes that only
+  read, the bulk remediation preview.
 - ``admin_router`` (admin): create, change and delete templates and
   contexts; preview a template against a host; manage remediation ignore
   rules.
@@ -79,6 +82,7 @@ from netcontrol.routes.shared import _audit, _corr_id, _session_user
 LOGGER = logging.getLogger("plexus.intended_config")
 
 router = APIRouter()
+read_router = APIRouter()
 admin_router = APIRouter()
 
 PREFIX = "/api/intended-config"
@@ -842,7 +846,7 @@ async def host_remediation(host_id: int, request: Request) -> dict:
     return (await remediation_for_hosts([host]))[0]
 
 
-@router.post(f"{PREFIX}/remediation")
+@read_router.post(f"{PREFIX}/remediation")
 @scoped("hosts")
 async def bulk_remediation(body: RemediationTargets, request: Request) -> dict:
     """The remediation of several hosts (``host_ids``, an inventory group or a

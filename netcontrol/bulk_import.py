@@ -46,6 +46,7 @@ from typing import Any
 import routes.database as db
 import yaml
 
+from netcontrol.csv_cells import CSV_FORMULA_PREFIXES, csv_text_cell
 from netcontrol.custom_fields import TEXT_MAX, CustomFieldError, check_object_values, clean_tag_name, typed_value
 from netcontrol.data_validation import CUSTOM_FIELD_PREFIX, pick, validate_object
 from netcontrol.device_model import LOCATION_DETAIL_MAX
@@ -81,16 +82,8 @@ class BulkImportError(ValueError):
 
 # ── CSV cells ────────────────────────────────────────────────────────────────
 
-# A cell starting with one of these is read as a formula by spreadsheet apps.
-CSV_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
-
-
-def csv_text_cell(value: object) -> str:
-    """A user-entered text cell made safe to open in a spreadsheet: a leading
-    apostrophe stops a value such as ``=cmd`` or ``@SUM(A1)`` running as a
-    formula."""
-    text = "" if value is None else str(value)
-    return f"'{text}" if text.startswith(CSV_FORMULA_PREFIXES) else text
+# The formula guards (``csv_text_cell``) live in netcontrol.csv_cells and are
+# imported above, so exporters outside bulk import can share them.
 
 
 def csv_field_cell(field_def: dict, value: object) -> str:

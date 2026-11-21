@@ -109,7 +109,7 @@ A prefix tree with its addresses:
     vrf { name rd }
     vlan { vid name }
     parent { prefix }
-    children { prefix }
+    children(limit: 20) { prefix }
     ipAddresses(limit: 50) { address dnsName status }
   }
 }
@@ -142,12 +142,12 @@ A site with its racks, devices and circuits:
 
 ```graphql
 {
-  sites(name: "dc-a") {
+  sites(name: "dc-a", limit: 5) {
     name status facility
     region { path }
-    racks { name uHeight hosts { hostname } powerFeeds { name voltage amperage } }
-    circuits { cid status terminations { termSide host { hostname } } }
-    clusters { name hosts { hostname } virtualMachines(limit: 50) { name primaryIp4 } }
+    racks(limit: 20) { name uHeight hosts(limit: 50) { hostname } powerFeeds { name voltage amperage } }
+    circuits(limit: 20) { cid status terminations { termSide host { hostname } } }
+    clusters(limit: 10) { name hosts(limit: 20) { hostname } virtualMachines(limit: 50) { name primaryIp4 } }
   }
 }
 ```
@@ -180,8 +180,8 @@ A group with its hosts, and VLAN and VRF records with their prefixes:
 ```graphql
 {
   groups(name: "site-a") { path children { name } hosts(limit: 20) { hostname } }
-  vlans(vid: 10) { name siteName prefixes { prefix } }
-  vrfs(name: "BLUE") { name prefixes { prefix } }
+  vlans(vid: 10) { name siteName prefixes(limit: 20) { prefix } }
+  vrfs(name: "BLUE") { name prefixes(limit: 20) { prefix } }
 }
 ```
 
@@ -292,7 +292,7 @@ Relations:
 Nested lists of rows that can be many (`children`, `hosts`, `ipAddresses`,
 `prefixes`, `sites`, `tenants`, `circuits`, `racks`, `clusters`,
 `virtualMachines`, `deviceTypes`, `peerings`) take an optional `limit`
-(none: every row) and `offset`.
+(none: at most `max_limit` rows, 1000 by default) and `offset`.
 
 With introspection enabled, `{ __schema { types { name } } }` or GraphiQL
 shows the full schema with descriptions.
@@ -317,18 +317,28 @@ Checked before a query runs; a query over a limit answers `400`.
 | Depth (nested selections below the root field) | 8 | `max_depth` (2 to 20) |
 | Aliases per document | 15 | `max_aliases` (0 to 200) |
 | Estimated cost | 50,000 | `max_complexity` (100 to 1,000,000) |
+| List items resolved while the query runs | 100,000 | twice `max_complexity` |
 | Largest `limit` argument | 1000 | `max_limit` (10 to 10,000) |
 | Introspection (`__schema`, `__type`) | off | `introspection` |
 
 The cost estimate counts each object the query resolves: a list resolves as
-many objects as its `limit` argument (a variable counts with its value), its
-default when it has one (100 for root lists) or 10 when it has none, and
-multiplies what is selected under it. `groups(limit: 100) { hosts(limit: 50)
-{ id } }` costs 100 + 100 × 50 = 5,100. Scalar fields are free. A few
+many objects as its `limit` argument (a variable counts with its value, or
+with its default in the operation when the request gives none), its default
+when it has one (100 for root lists), else `max_limit` (1000 by default:
+what a nested list returns without a `limit`), and multiplies what is
+selected under it. A list that takes no `limit` (a host's interfaces, tags,
+ports) counts 10. `groups(limit: 100) { hosts(limit: 50) { id } }` costs
+100 + 100 × 50 = 5,100; `groups(limit: 100) { hosts { id } }` costs
+100 + 100 × 1,000 and is over the default budget. Scalar fields are free. A few
 fields cost 2 per object because each row takes more reads to build: cables
 (both ends described), circuits (with their terminations) and support
 contracts (with the hosts they cover), so `cables(limit: 100) { id }` costs
 200. Give nested lists a `limit` to keep large queries under the budget.
+
+The estimate is backed by a hard cap checked while the query runs: once the
+lists it resolved hold more than twice `max_complexity` items in total
+(100,000 by default), every further list answers `null` with a `Query result
+is too large` error.
 
 Reads are batched: each relation is loaded for all the objects of a step in
 one query (data loaders), so a nested query runs a fixed number of database
@@ -353,8 +363,8 @@ GraphiQL needs `introspection` on for completion and the docs pane. With
 - Read only: no mutations or subscriptions.
 - Custom field filters (`cf.<key>=` in REST) and device model filters on
   `hosts` (manufacturer, role, lifecycle status) are not offered yet; use
-  `tags`, or start from the catalogue (`deviceRoles(name: "core") { hosts
-  { hostname } }`).
+  `tags`, or start from the catalogue (`deviceRoles(name: "core") { hosts(limit:
+  100) { hostname } }`).
 - Relationships between objects (custom data links) are not exposed.
 - Floors, rack reservations, cluster types and groups, BGP peer groups and
   provider networks as root lists are not in the schema (their names are,

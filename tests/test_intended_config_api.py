@@ -119,7 +119,7 @@ def test_reads_need_config_drift_and_writes_need_admin(admin):
     for path in reads:
         assert plain.get(path).status_code == 403, path
     assert plain.post(GENERATE, json={}).status_code == 403
-    reader = user_client(admin, "drift-user", features=["config-drift"])
+    reader = user_client(admin, "drift-user", features=["config-drift", "config-drift.write"])
     for path in reads:
         assert reader.get(path).status_code == 200, path
     assert _ok(reader.post(GENERATE, json={"host_ids": [host]}))["generated"] == 1

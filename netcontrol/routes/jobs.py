@@ -72,6 +72,9 @@ except ImportError:
 LOGGER = configure_logging("plexus.jobs")
 
 router = APIRouter()
+# Approve and deny: gated by jobs.approve in the handler, which is granted on
+# its own (not with jobs.write), so mounted with the plain jobs feature.
+approvals_router = APIRouter()
 ws_router = APIRouter()  # WebSocket routes - registered without HTTP auth dependency
 
 # ── Late-binding auth dependencies ────────────────────────────────────────────
@@ -306,6 +309,37 @@ def _coerce_parameters(schema: list[dict], raw: dict) -> dict:
         return job_inputs.validate_inputs(job_inputs.normalize_schema(schema), raw)
     except job_inputs.JobInputError as exc:
         raise _input_error(exc)
+
+
+_ANSIBLE_ADMIN_ONLY = "Ansible playbooks can be run by admins only"
+
+
+def playbook_admin_only(playbook: dict) -> bool:
+    """Ansible playbooks run arbitrary code on the controller: only admins
+    launch, retry or re-run them."""
+    return playbook.get("type") == "ansible"
+
+
+async def _require_playbook_launch(request: Request, playbook: dict) -> None:
+    """Refuse (403) a non-admin caller a playbook only admins may run. Used
+    by launch, retry and rerun; the queue re-checks the launcher
+    (``_launcher_may_run``) before the job starts."""
+    if not playbook_admin_only(playbook):
+        return
+    try:
+        await require_owner_or_admin(request, None)
+    except HTTPException as exc:
+        raise HTTPException(403, _ANSIBLE_ADMIN_ONLY) from exc
+
+
+async def _launcher_may_run(playbook: dict, launched_by: str | None) -> bool:
+    """Whether the job's launcher may still run ``playbook`` when the queue
+    starts it: the playbook may have become Ansible after launch, and the
+    launcher may have lost the admin role. Fails closed on an unknown user."""
+    if not playbook_admin_only(playbook):
+        return True
+    user = await db.get_user_by_username(launched_by) if launched_by else None
+    return bool(user and user.get("role") == "admin")
 
 
 async def _require_job_permission(request: Request, playbook: dict, *, commit: bool) -> None:
@@ -686,6 +720,10 @@ async def _process_job_queue_inner():
     if not playbook:
         await db.finish_job(job_id, status="failed")
         await db.add_job_event(job_id, "error", "Playbook not found")
+        return
+    if not await _launcher_may_run(playbook, next_job.get("launched_by")):
+        await db.finish_job(job_id, status="failed")
+        await db.add_job_event(job_id, "error", f"{_ANSIBLE_ADMIN_ONLY}; the job's launcher is not an admin")
         return
 
     hosts = await _resolve_job_hosts(next_job)
@@ -1166,14 +1204,14 @@ async def _decide_job(job_id: int, body: ApprovalDecision, request: Request, *, 
     return {"ok": True, "job_id": job_id, "status": status, "approval_status": "approved" if approve else "denied"}
 
 
-@router.post("/api/jobs/{job_id}/approve")
+@approvals_router.post("/api/jobs/{job_id}/approve")
 @scoped("job")
 async def approve_job(job_id: int, body: ApprovalDecision, request: Request):
     """Approve a job awaiting approval; it is queued and runs as usual."""
     return await _decide_job(job_id, body, request, approve=True)
 
 
-@router.post("/api/jobs/{job_id}/deny")
+@approvals_router.post("/api/jobs/{job_id}/deny")
 @scoped("job")
 async def deny_job(job_id: int, body: ApprovalDecision, request: Request):
     """Deny a job awaiting approval; it ends in ``denied`` and never runs."""
@@ -1217,9 +1255,7 @@ async def launch_job(body: JobLaunch, request: Request):
     if not playbook:
         raise HTTPException(404, "Playbook not found")
 
-    # Ansible playbooks can execute arbitrary code - restrict to admin only
-    if playbook.get("type") == "ansible" and _require_admin:
-        await _require_admin(request)
+    await _require_playbook_launch(request, playbook)
 
     # ``commit`` wins over the legacy ``dry_run`` flag; a dry run is the default.
     dry_run = (not body.commit) if body.commit is not None else body.dry_run
@@ -1452,6 +1488,7 @@ async def retry_job_endpoint(job_id: int, request: Request):
     await require_owner_or_admin(request, job.get("launched_by"))
     playbook = await db.get_playbook(job["playbook_id"])
     if playbook:
+        await _require_playbook_launch(request, playbook)
         await _require_job_permission(request, playbook, commit=not bool(job.get("dry_run", 1)))
         await _require_input_scope(request, effective_input_schema(playbook)[0], _stored_params(job.get("parameters")))
     session = _get_session(request)
@@ -1487,6 +1524,7 @@ async def rerun_job_endpoint(job_id: int, request: Request):
     await require_owner_or_admin(request, job.get("launched_by"))
     playbook = await db.get_playbook(job["playbook_id"])
     if playbook:
+        await _require_playbook_launch(request, playbook)
         await _require_job_permission(request, playbook, commit=True)
         await _require_input_scope(request, effective_input_schema(playbook)[0], _stored_params(job.get("parameters")))
     session = _get_session(request)

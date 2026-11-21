@@ -270,9 +270,10 @@ export function PlaybookFormModal({ mode, playbookId, onClose }: Props) {
               value={filename}
               onChange={(e) => { setFilename(e.target.value); setErrors((p) => ({ ...p, filename: undefined })); }}
               aria-invalid={!!errors.filename}
+              readOnly={!isAdmin}
               required
             />
-            <small className="text-muted">{extHint}</small>
+            <small className="text-muted">{isAdmin ? extHint : 'Only an admin can change the filename or code.'}</small>
             <FieldError>{errors.filename}</FieldError>
           </div>
           <div className="form-group">
@@ -289,6 +290,7 @@ export function PlaybookFormModal({ mode, playbookId, onClose }: Props) {
               value={content}
               theme={dracula}
               extensions={editorExtensions}
+              readOnly={!isAdmin}
               onChange={(value) => {
                 setContent(value);
                 setContentDirty(true);

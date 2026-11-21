@@ -89,7 +89,9 @@ def env(monkeypatch, request):
 
     async def _seed():
         users = {n: await db_module.get_user_by_username(n) for n in ("requester", "approver", "bystander")}
-        runners = await db_module.create_access_group("ja-runners", "", ["jobs", "jobs.write", "playbooks"])
+        runners = await db_module.create_access_group(
+            "ja-runners", "", ["jobs", "jobs.write", "playbooks", "playbooks.write"]
+        )
         approvers = await db_module.create_access_group(
             "ja-approvers", "", ["jobs", "jobs.write", "jobs.approve", "playbooks"]
         )

@@ -140,6 +140,7 @@ SCOPE_ENFORCED_ROUTERS: tuple[str, ...] = (
     "netcontrol.routes.config_drift:router",
     "netcontrol.routes.config_drift:ws_router",
     "netcontrol.routes.intended_config:router",
+    "netcontrol.routes.intended_config:read_router",
     "netcontrol.routes.credentials:router",
     "netcontrol.routes.graphql:router",
     # The change log is open to every signed-in user; it filters by feature
@@ -161,6 +162,7 @@ SCOPE_ENFORCED_ROUTERS: tuple[str, ...] = (
     "netcontrol.routes.dashboards:router",
     # Jobs, change management and compliance.
     "netcontrol.routes.jobs:router",
+    "netcontrol.routes.jobs:approvals_router",
     "netcontrol.routes.jobs:ws_router",
     "netcontrol.routes.playbooks:router",
     "netcontrol.routes.templates:router",
@@ -203,6 +205,7 @@ SCOPE_ENFORCED_ROUTERS: tuple[str, ...] = (
     "netcontrol.routes.audit:router",
     "netcontrol.routes.graph_templates:router",
     "netcontrol.routes.cdef_engine:router",
+    "netcontrol.routes.cdef_engine:read_router",
     "netcontrol.routes.graph_export:router",
     "netcontrol.routes.billing:router",
     "netcontrol.routes.federation:router",

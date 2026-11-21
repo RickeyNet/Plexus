@@ -46,6 +46,7 @@ import routes.database as db
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
+from netcontrol.lab_images import check_image_allowed
 from netcontrol.object_scope import scope_exempt, scoped
 from netcontrol.routes.lab import (
     _evaluate_compliance_impact,
@@ -249,12 +250,18 @@ async def deploy_lab_device(
     image: str,
     credential_id: int | None,
     actor: str = "",
+    is_admin: bool = False,
 ) -> dict:
-    """Deploy a single-node containerlab topology for the given lab device."""
+    """Deploy a single-node containerlab topology for the given lab device.
+    A caller that is not an admin may deploy only an image of the lab image
+    allowlist (``netcontrol.lab_images``)."""
     if node_kind not in ALLOWED_NODE_KINDS:
         raise HTTPException(status_code=400, detail=f"Unsupported node kind '{node_kind}'")
     if not _IMAGE_RE.match(image or ""):
         raise HTTPException(status_code=400, detail="Image reference contains unsafe characters")
+    refusal = await check_image_allowed(image, is_admin=is_admin)
+    if refusal:
+        raise HTTPException(status_code=403, detail=refusal)
 
     runtime_status = await get_runtime_status()
     if not runtime_status["available"]:
@@ -564,12 +571,14 @@ async def runtime_status_endpoint():
 async def deploy_endpoint(device_id: int, body: DeployRequest, request: Request):
     device, session = await _get_device_or_403(device_id, request)
     actor = session["user"] if session else ""
+    _, _, role = await _resolve_session_user(request)
     result = await deploy_lab_device(
         device,
         node_kind=body.node_kind,
         image=body.image,
         credential_id=body.credential_id,
         actor=actor,
+        is_admin=role == "admin",
     )
     await _audit(
         "lab",

@@ -4,7 +4,9 @@ import { Badge } from '@/components/Badge';
 import { DeleteButton } from '@/components/DeleteButton';
 import { useDialogs } from '@/components/DialogProvider-context';
 import { isGitOwned } from '@/api/gitSources';
+import { useAuthStatus } from '@/api/auth';
 import { useDeletePlaybook, usePlaybooks, type Playbook } from '@/api/jobs';
+import { canWriteFeature } from '@/lib/tabGating';
 import { EmptyState } from '@/components/EmptyState';
 import { GitOwnedBadge } from '@/components/GitOwnedBadge';
 import { LoadingState } from '@/components/LoadingState';
@@ -24,6 +26,10 @@ export function PlaybooksTab() {
   const query = usePlaybooks();
   const deleteMut = useDeletePlaybook();
   const deleting = usePendingKeys<number>();
+  const auth = useAuthStatus().data;
+  // Creating and deleting tasks is admin only; editing needs playbooks.write.
+  const isAdmin = auth?.role === 'admin';
+  const canEdit = canWriteFeature('playbooks', auth);
   const [search, setSearch] = useState('');
   const [editing, setEditing] = useState<{ mode: 'create' } | { mode: 'edit'; id: number } | null>(null);
 
@@ -70,7 +76,9 @@ export function PlaybooksTab() {
           style={{ width: 240 }}
         />
         <span className="toolbar-spacer" />
-        <button className="btn btn-primary" onClick={() => setEditing({ mode: 'create' })}>+ New Task</button>
+        {isAdmin && (
+          <button className="btn btn-primary" onClick={() => setEditing({ mode: 'create' })}>+ New Task</button>
+        )}
       </div>
 
       {query.error && !query.data ? (
@@ -86,6 +94,8 @@ export function PlaybooksTab() {
             <PlaybookRow
               key={pb.id}
               pb={pb}
+              canEdit={canEdit}
+              canDelete={isAdmin}
               onEdit={() => setEditing({ mode: 'edit', id: pb.id })}
               isDeleting={deleting.isPending(pb.id)}
               onDelete={() => void handleDelete(pb)}
@@ -109,11 +119,15 @@ export function PlaybooksTab() {
 
 function PlaybookRow({
   pb,
+  canEdit,
+  canDelete,
   isDeleting,
   onEdit,
   onDelete,
 }: {
   pb: Playbook;
+  canEdit: boolean;
+  canDelete: boolean;
   isDeleting: boolean;
   onEdit: () => void;
   onDelete: () => void;
@@ -140,8 +154,8 @@ function PlaybookRow({
       <div style={{ display: 'flex', gap: '0.4rem' }}>
         {!isGitOwned(pb) && (
           <>
-            <button className="btn btn-sm btn-secondary" onClick={onEdit}>Edit</button>
-            <DeleteButton busy={isDeleting} onClick={onDelete} />
+            {canEdit && <button className="btn btn-sm btn-secondary" onClick={onEdit}>Edit</button>}
+            {canDelete && <DeleteButton busy={isDeleting} onClick={onDelete} />}
           </>
         )}
       </div>

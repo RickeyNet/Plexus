@@ -20,6 +20,12 @@ Plexus login supports four auth providers:
 When RADIUS auth succeeds, Plexus will create a local shadow user automatically if needed.
 This allows sessions, roles, and feature access policies to continue working in-app.
 
+RADIUS never grants the admin role. A RADIUS login whose username matches a local
+admin account that RADIUS does not already manage is refused ("RADIUS login succeeded
+but local account provisioning failed"): that account signs in with its local
+password instead. An account created by a RADIUS login and later promoted to admin in
+**Settings → Users** keeps signing in through RADIUS.
+
 ## 2. Prerequisites
 
 Before enabling RADIUS in Plexus, ensure you have:
@@ -149,6 +155,11 @@ If login fails unexpectedly:
 
 4. Test local fallback intentionally
 - Temporarily stop RADIUS service and confirm local login path
+
+5. "RADIUS login succeeded but local account provisioning failed"
+- The username matches a local admin account that RADIUS does not manage (see
+  section 1). Sign in to that account with its local password, or use a different
+  username on one side.
 
 ## 10. Operational Rollout Plan
 

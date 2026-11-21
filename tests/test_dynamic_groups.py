@@ -350,7 +350,7 @@ def test_job_launch_with_dynamic_group_stores_the_group(admin, monkeypatch):
 def test_graphql_dynamic_groups_members_are_scope_filtered(admin):
     t = _tree(admin)
     admin.post(API, json={"name": "gql sw", "filter": {"search": {"value": "sw-"}}})
-    query = '{ dynamicGroups(name: "gql") { name members { id } } }'
+    query = '{ dynamicGroups(name: "gql") { name members(limit: 20) { id } } }'
 
     full = admin.post("/api/graphql", json={"query": query})
     assert full.status_code == 200, full.text

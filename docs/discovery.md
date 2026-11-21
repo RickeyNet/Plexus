@@ -66,6 +66,9 @@ To check the settings without scanning, open **Discover Devices**, choose
 the **Target Inventory Group**, tick **Test only**, enter a **Test Target
 IP** and select **Test SNMP**. The result shows the host name, device type,
 protocol, vendor, OS and `sysDescr` the device returned, or "SNMP Failed".
+The test sends the group's SNMP community or v3 keys to that address, so
+only an admin can test any address; other users can test the address of a
+host already in the group (one they may change).
 
 ## Scan and add devices
 
@@ -161,8 +164,9 @@ Two cases skip or soften the login:
   the login.
 - A device of unknown platform that answers `show version` with an APC
   Network Management Card status code (`E101: Command Not Found`) is asked
-  `upsabout`; a card with a UPS behind it is added as an **APC Smart-UPS
-  (NMC)** with its model and serial (`docs/apc-ups.md`). A PDU or transfer
+  `upsabout` and `about` in one more login; a card with a UPS behind it is
+  added as an **APC Smart-UPS (NMC)** with its model, serial and the card's
+  firmware as its software version (`docs/apc-ups.md`). A PDU or transfer
   switch card stays unknown.
 
 ## What discovery fills in on a host
@@ -221,10 +225,10 @@ deletions count as **Removed**.
 
 | Action | Needs |
 |---|---|
-| Scan, sync, onboard, test SNMP | The `inventory` feature and write access to the group |
+| Scan, sync, onboard, test SNMP | The `inventory` feature and write access to the group (testing SNMP against an address that is not a host of the group: admin) |
 | Choose a group's SNMP profile | The `inventory` feature and write access to the group |
 | Choose a host's SNMP profile, test SNMP on a host | The `inventory` feature and write access to the host's group |
-| See SNMP profiles | The `inventory` feature |
+| See SNMP profiles | The `inventory` feature (names and settings only; the community strings and v3 keys are shown to admins only) |
 | Create, change or delete SNMP profiles | Admin |
 | Use a stored credential for SSH | Access to that credential (your own, or any as admin) |
 | See which credential a group remembers | The `inventory` feature and read access to the group |

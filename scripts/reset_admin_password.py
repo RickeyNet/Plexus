@@ -3,7 +3,8 @@
 Usage (from repo root):
     python scripts/reset_admin_password.py --username admin --password "TempPass123!"
 
-If --password is omitted, default password "netcontrol" is used.
+If --password is omitted, PLEXUS_DEFAULT_ADMIN_PASSWORD is used when set,
+else a random password; either way it is printed once.
 """
 
 from __future__ import annotations
@@ -44,9 +45,10 @@ async def _run(username: str, password: str | None) -> int:
     await db.init_db()
 
     username = _sanitize_username(username)
-    default_bootstrap_password = os.getenv("PLEXUS_DEFAULT_ADMIN_PASSWORD", "netcontrol").strip() or "netcontrol"
     if not password:
-        password = default_bootstrap_password
+        # No shared fallback: a fixed default would let anyone who knows it
+        # sign in as admin until the operator changes it.
+        password = os.getenv("PLEXUS_DEFAULT_ADMIN_PASSWORD", "").strip() or secrets.token_urlsafe(16)
 
     salt = secrets.token_hex(16)
     pw_hash = _hash_password(password, salt)
