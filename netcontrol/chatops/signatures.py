@@ -9,8 +9,12 @@
 - A Teams outgoing webhook signs the raw body with HMAC-SHA256 keyed by the
   base64-decoded security token (``Authorization: HMAC <base64>``).
 
-Webex and Teams sign no timestamp, so their deliveries are de-duplicated by
-message / activity id in ``ReplayGuard`` instead.
+Webex and Teams sign no timestamp header, but the signed body carries one
+(Webex ``data.created``, the Teams activity ``timestamp``):
+``fresh_delivery_time`` refuses a delivery whose time is more than
+``DELIVERY_MAX_AGE_SECONDS`` old (or missing or unparseable), and
+``ReplayGuard`` de-duplicates by message / activity id within that window.
+A delivery with no id cannot be de-duplicated, so it is refused.
 """
 
 from __future__ import annotations
@@ -22,7 +26,33 @@ import hmac
 import time
 from collections import OrderedDict
 
+from netcontrol.routes.maintenance_windows import _parse_iso
+
 SLACK_REPLAY_WINDOW_SECONDS = 300
+# Webex and Teams: how old a delivery's signed time may be, and how far ahead
+# of this server's clock it may run (clock skew).
+DELIVERY_MAX_AGE_SECONDS = 300
+DELIVERY_MAX_SKEW_SECONDS = 60
+
+
+def within_replay_window(stamp: float, max_age: float, max_skew: float, now: float | None = None) -> bool:
+    """Whether a signed time ``stamp`` (epoch seconds) is at most ``max_age``
+    seconds old and at most ``max_skew`` seconds in the future."""
+    current = time.time() if now is None else now
+    return -max_skew <= current - stamp <= max_age
+
+
+def fresh_delivery_time(value: object, now: float | None = None) -> bool:
+    """Whether a Webex or Teams delivery's signed ISO 8601 time (naive: UTC)
+    is recent (``DELIVERY_MAX_AGE_SECONDS``, ``DELIVERY_MAX_SKEW_SECONDS``).
+    Missing or unparseable: ``False``."""
+    if not isinstance(value, str) or not value.strip():
+        return False
+    try:
+        stamp = _parse_iso(value).timestamp()
+    except ValueError:
+        return False
+    return within_replay_window(stamp, DELIVERY_MAX_AGE_SECONDS, DELIVERY_MAX_SKEW_SECONDS, now)
 
 
 def verify_slack(secret: str, timestamp: str, body: bytes, signature: str, now: float | None = None) -> bool:
@@ -32,8 +62,7 @@ def verify_slack(secret: str, timestamp: str, body: bytes, signature: str, now: 
         stamp = int(timestamp)
     except ValueError:
         return False
-    current = time.time() if now is None else now
-    if abs(current - stamp) > SLACK_REPLAY_WINDOW_SECONDS:
+    if not within_replay_window(stamp, SLACK_REPLAY_WINDOW_SECONDS, SLACK_REPLAY_WINDOW_SECONDS, now):
         return False
     base = b"v0:" + str(stamp).encode() + b":" + body
     expected = "v0=" + hmac.new(secret.encode("utf-8"), base, hashlib.sha256).hexdigest()
@@ -64,8 +93,10 @@ def verify_teams(security_token: str, body: bytes, authorization: str) -> bool:
 
 class ReplayGuard:
     """Remembers ids seen in the last ``ttl`` seconds (at most ``size``):
-    ``seen(id)`` is ``True`` for a repeat. Platforms retry deliveries they
-    think failed, and an attacker can resend a captured signed body."""
+    ``seen(id)`` is ``True`` for a repeat, and for an empty id (a delivery
+    that cannot be de-duplicated is refused like a repeat). Platforms retry
+    deliveries they think failed, and an attacker can resend a captured
+    signed body; ``fresh_delivery_time`` refuses one older than the ttl."""
 
     def __init__(self, ttl: float = 600.0, size: int = 5000) -> None:
         self._ttl, self._size = ttl, size
@@ -79,7 +110,7 @@ class ReplayGuard:
                 break
             self._ids.pop(oldest)
         if not key:
-            return False
+            return True
         if key in self._ids:
             return True
         self._ids[key] = current

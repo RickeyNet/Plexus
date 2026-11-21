@@ -46,3 +46,20 @@ def test_the_api_answers_404_for_a_panel_of_another_dashboard(admin) -> None:
     assert admin.put(url, json={"title": "Hijacked"}).status_code == 404
     assert admin.delete(url).status_code == 404
     assert admin.get(f"/api/dashboards/{other['id']}").json()["panels"][0]["title"] == "Other panel"
+
+
+def test_a_new_dashboard_belongs_to_its_creator(admin) -> None:
+    """The owner is the session user (it used to be stored empty, which
+    locked the creator out of their own dashboard)."""
+    from mcp_helpers import user_client
+
+    creator = user_client(admin, "dash-creator", features=["dashboard"])
+    created = creator.post("/api/dashboards", json={"name": "Creator board"})
+    assert created.status_code == 201, created.text
+    assert created.json()["owner"] == "dash-creator"
+    assert creator.get(f"/api/dashboards/{created.json()['id']}").status_code == 200
+    assert [d["name"] for d in creator.get("/api/dashboards").json()["dashboards"]] == ["Creator board"]
+
+    stranger = user_client(admin, "dash-stranger", features=["dashboard"])
+    assert stranger.get(f"/api/dashboards/{created.json()['id']}").status_code == 403
+    assert admin.get(f"/api/dashboards/{created.json()['id']}").status_code == 200

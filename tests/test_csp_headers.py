@@ -2,15 +2,20 @@
 
 The global security-headers middleware now sets ``script-src 'self'`` (no
 ``'unsafe-inline'`` and no CDN) for the whole app: the React bundle ships as
-external hashed modules, so nothing in the SPA needs an inline script. The one
-page that genuinely needs a looser policy -- the graph-export embed page, with
-its inline bootstrap <script> and CDN ECharts -- sets its own CSP, and the
+external hashed modules, so nothing in the SPA needs an inline script. The
+graph-export embed page has an inline bootstrap <script> and sets its own CSP
+(script-src 'self' plus that script's hash, ECharts served by the app), and the
 middleware must not clobber it (it uses setdefault).
 """
 
 from __future__ import annotations
 
+import asyncio
+import re
+
 import pytest
+
+import pg_raw
 
 
 @pytest.fixture
@@ -64,3 +69,67 @@ def test_middleware_does_not_clobber_endpoint_csp(monkeypatch, client):
 
     resp = client.get("/api/_csp_probe")
     assert resp.headers.get("Content-Security-Policy") == scoped
+
+
+# ── Graph embed page (internal security review CFG-8) ───────────────────────────────
+
+
+def test_embed_csp_allows_only_self_and_the_bootstrap_hash():
+    from netcontrol.csp import script_hash_source
+    from netcontrol.routes import graph_export
+
+    directives = {d.strip().split(" ", 1)[0]: d.strip() for d in graph_export.EMBED_CSP.split(";") if d.strip()}
+    expected = f"script-src 'self' {script_hash_source(graph_export.EMBED_BOOTSTRAP_SCRIPT)}"
+    assert directives["script-src"] == expected
+    assert "'unsafe-inline'" not in directives["script-src"]
+    assert "http" not in graph_export.EMBED_CSP
+    assert directives["frame-ancestors"] == "frame-ancestors 'none'"
+
+
+def test_script_hash_source_matches_the_csp_spec_example():
+    from netcontrol.csp import script_hash_source
+
+    # CSP Level 3: sha256 of "alert('Hello, world.');".
+    assert script_hash_source("alert('Hello, world.');") == "'sha256-qznLcsROx4GACP2dm0UCKCzCG+HiZ1guq6ZZDob/Tng='"
+
+
+def _seed_host_graph() -> int:
+    async def _seed() -> int:
+        conn = await pg_raw.connect()
+        try:
+            gid = await conn.fetchval("INSERT INTO inventory_groups (name) VALUES ('csp-g') RETURNING id")
+            hid = await conn.fetchval(
+                "INSERT INTO hosts (group_id, hostname, ip_address) VALUES ($1, 'csp-h', '192.0.2.10') RETURNING id",
+                gid,
+            )
+            tid = await conn.fetchval("INSERT INTO graph_templates (name) VALUES ('CPU') RETURNING id")
+            return await conn.fetchval(
+                "INSERT INTO host_graphs (host_id, graph_template_id) VALUES ($1, $2) RETURNING id", hid, tid
+            )
+        finally:
+            await conn.close()
+
+    return asyncio.run(_seed())
+
+
+@pytest.mark.parametrize("theme", ["dark", "light"])
+def test_embed_page_loads_echarts_from_the_app_under_its_csp(client, theme):
+    from netcontrol.csp import script_hash_source
+    from netcontrol.routes import graph_export
+
+    resp = client.post("/api/auth/login", json={"username": "admin", "password": "netcontrol"})
+    assert resp.status_code == 200
+    hgid = _seed_host_graph()
+
+    resp = client.get(f"/api/graphs/{hgid}/embed", params={"theme": theme})
+    assert resp.status_code == 200
+    assert resp.headers["Content-Security-Policy"] == graph_export.EMBED_CSP
+    html = resp.text
+    srcs = re.findall(r'<script src="([^"]+)"', html)
+    assert srcs == [graph_export.ECHARTS_SCRIPT_SRC] == ["/vendor/echarts.min.js"]
+    assert "cdn.jsdelivr.net" not in html
+    # Every inline executable script is the one the CSP hash allows, whatever the theme.
+    inline = re.findall(r"<script>(.*?)</script>", html, flags=re.S)
+    assert inline == [graph_export.EMBED_BOOTSTRAP_SCRIPT]
+    assert script_hash_source(inline[0]) in resp.headers["Content-Security-Policy"]
+    assert f'data-theme="{"dark" if theme == "dark" else ""}"' in html

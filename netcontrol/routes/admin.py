@@ -20,7 +20,8 @@ from pydantic import BaseModel, Field
 import netcontrol.routes.state as state
 from netcontrol import lab_images, listener_sources, oidc, saml
 from netcontrol.object_scope import scope_for_user
-from netcontrol.routes.auth import _oidc_redirect_uri, saml_acs_url, saml_sp_entity_id
+from netcontrol.routes.auth import _oidc_redirect_uri, saml_acs_url, saml_default_sp_urls, saml_sp_entity_id
+from netcontrol.routes.outbound_http import OutboundRequestError, guard_host
 from netcontrol.routes.shared import _audit, _corr_id, _get_session, _session_user
 from netcontrol.routes.state import _env_flag
 from netcontrol.secret_fields import (
@@ -652,8 +653,12 @@ async def admin_update_user(user_id: int, body: AdminUserUpdateRequest, request:
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     # A role change alters privileges; revoke the target's outstanding
-    # sessions so a demotion/promotion takes effect immediately.
-    if role is not None and role != (target.get("role") or ""):
+    # sessions so a demotion/promotion takes effect immediately. A rename
+    # does too: tokens and CSRF tokens carry the old username, which owner
+    # checks compare and which a new account may later take.
+    role_changed = role is not None and role != (target.get("role") or "")
+    renamed = username is not None and username != (target.get("username") or "")
+    if role_changed or renamed:
         await db.bump_user_session_epoch(user_id)
     # Handing the account to another sign-in provider (or back to local):
     # the explicit, audited way to let an external sign-in use an existing
@@ -915,6 +920,30 @@ def _refuse_moved_auth_secrets(old: dict, new: dict, reused: list[str]) -> None:
             raise HTTPException(status_code=400, detail=f"{label}: {exc}") from exc
 
 
+async def _refuse_guarded_host(label: str, host: str) -> None:
+    """400 when ``host`` fails the outbound address guard (``net_guard``)."""
+    try:
+        await guard_host(host)
+    except OutboundRequestError as exc:
+        raise HTTPException(status_code=400, detail=f"{label} refused by the outbound address guard: {exc}") from None
+
+
+async def _refuse_guarded_auth_servers(old: dict, new: dict) -> None:
+    """Run the outbound address guard on each enabled RADIUS, TACACS+ and
+    LDAP server that this save turns on or points somewhere new. An
+    unchanged server is not checked again here (the login checks it before
+    each connection), so a resolver hiccup does not block unrelated saves."""
+    for block, label, _field, _where in _AUTH_SECRET_DESTINATIONS:
+        cfg = new.get(block) or {}
+        server = str(cfg.get("server") or "").strip()
+        if not cfg.get("enabled") or not server:
+            continue
+        before = old.get(block) or {}
+        if before.get("enabled") and str(before.get("server") or "").strip() == server:
+            continue
+        await _refuse_guarded_host(f"{label} server", server)
+
+
 def _redact_auth_config(cfg: dict) -> dict:
     """Return a copy of auth config with secrets masked for API responses."""
     import copy
@@ -985,8 +1014,13 @@ def _oidc_config_to_store(submitted: dict) -> dict:
     return out
 
 
-def _saml_config_to_store(submitted: dict) -> dict:
-    """Validate a submitted SAML block; certificates are stored as PEM."""
+def _saml_config_to_store(submitted: dict, request: Request | None = None) -> dict:
+    """Validate a submitted SAML block; certificates are stored as PEM.
+
+    A blank SP entity ID or ACS URL is filled from the address the admin
+    reached Plexus on (``request``, an authenticated admin request) and
+    stored: sign-in uses only stored values, never the Host header of the
+    sign-in request itself."""
     out = dict(submitted)
     raw_certs = [str(c) for c in submitted.get("idp_certs") or [] if str(c).strip()]
     if len(raw_certs) > state.SAML_MAX_CERTS:
@@ -995,12 +1029,17 @@ def _saml_config_to_store(submitted: dict) -> dict:
         out["idp_certs"] = list(dict.fromkeys(saml.normalize_cert(c) for c in raw_certs))
     except saml.SamlError as exc:
         raise HTTPException(status_code=400, detail=exc.step) from exc
+    default_entity_id, default_acs = saml_default_sp_urls(request) if request is not None else ("", "")
     for key, label in (
         ("idp_sso_url", "SAML IdP SSO URL"),
         ("idp_metadata_url", "SAML IdP metadata URL"),
         ("acs_url", "SAML ACS URL"),
     ):
         value = str(submitted.get(key) or "").strip()
+        # The ACS URL a blank field stores (this admin's own address, which
+        # may be plain http) passes when it comes back on the next save.
+        if key == "acs_url" and value and value == default_acs:
+            continue
         if value and not saml.is_allowed_url(value):
             raise HTTPException(status_code=400, detail=f"{label} must be an https URL")
     if submitted.get("enabled"):
@@ -1011,6 +1050,9 @@ def _saml_config_to_store(submitted: dict) -> dict:
         if not out["idp_certs"]:
             raise HTTPException(status_code=400, detail="At least one SAML IdP signing certificate is required")
     _check_sso_common(submitted, "SAML")
+    if request is not None:
+        out["sp_entity_id"] = str(submitted.get("sp_entity_id") or "").strip() or default_entity_id
+        out["acs_url"] = str(submitted.get("acs_url") or "").strip() or default_acs
     return out
 
 
@@ -1024,7 +1066,7 @@ async def admin_get_auth_config():
 
 
 @router.put("/api/admin/auth-config")
-async def admin_update_auth_config(body: AuthConfigRequest):
+async def admin_update_auth_config(body: AuthConfigRequest, request: Request = None):  # type: ignore[assignment]
     data = body.model_dump()
     # Preserve existing secrets when client sends back the redaction mask
     reused: list[str] = []
@@ -1045,9 +1087,10 @@ async def admin_update_auth_config(body: AuthConfigRequest):
     if submitted_saml is None:
         data["saml"] = dict(state.AUTH_CONFIG.get("saml") or {})
     else:
-        data["saml"] = _saml_config_to_store(submitted_saml)
+        data["saml"] = _saml_config_to_store(submitted_saml, request)
     new_config = state._sanitize_auth_config(data)
     _refuse_moved_auth_secrets(state.AUTH_CONFIG, new_config, reused)
+    await _refuse_guarded_auth_servers(state.AUTH_CONFIG, new_config)
     state.AUTH_CONFIG = new_config
     await db.set_auth_setting("auth_config", state.AUTH_CONFIG)
     return _redact_auth_config(state.AUTH_CONFIG)
@@ -1092,16 +1135,28 @@ async def admin_test_oidc(request: Request, body: OidcTestRequest | None = None)
 @router.get("/api/admin/auth-config/saml/sp")
 async def admin_saml_sp_info(request: Request):
     """The SP entity ID, ACS URL and metadata URL to register at the IdP,
-    and the saved IdP certificates' fingerprints and expiry dates."""
+    and the saved IdP certificates' fingerprints and expiry dates.
+
+    ``configured`` is false while either SP value is not stored yet; the
+    values shown then are the ones saving the settings would store (the
+    address this admin reached Plexus on)."""
     cfg = state.AUTH_CONFIG.get("saml") or {}
     try:
         certs = _saml_cert_summary(list(cfg.get("idp_certs") or []))
     except saml.SamlError:
         certs = []
-    sp_entity_id = saml_sp_entity_id(request, cfg)
-    acs = saml_acs_url(request, cfg)
+    default_entity_id, default_acs = saml_default_sp_urls(request)
+    stored_entity_id, stored_acs = saml_sp_entity_id(cfg), saml_acs_url(cfg)
+    sp_entity_id = stored_entity_id or default_entity_id
+    acs = stored_acs or default_acs
     metadata_url = acs[: -len(saml.ACS_PATH)] + saml.METADATA_PATH if acs.endswith(saml.ACS_PATH) else ""
-    return {"sp_entity_id": sp_entity_id, "acs_url": acs, "metadata_url": metadata_url, "certs": certs}
+    return {
+        "sp_entity_id": sp_entity_id,
+        "acs_url": acs,
+        "metadata_url": metadata_url,
+        "certs": certs,
+        "configured": bool(stored_entity_id and stored_acs),
+    }
 
 
 # Tests replace this with an httpx.MockTransport (None = the network).
@@ -1156,6 +1211,8 @@ async def admin_update_syslog_config(body: SyslogConfigRequest, request: Request
         raise HTTPException(status_code=400, detail="Syslog host is required when enabled")
 
     sanitized = state._sanitize_syslog_config(data)
+    if sanitized.get("enabled"):
+        await _refuse_guarded_host("Syslog host", str(sanitized.get("host") or ""))
     if sanitized.get("enabled") and not configure_syslog_logging(sanitized):
         LOGGER.warning("syslog: failed to configure outbound logging handler")
         raise HTTPException(status_code=400, detail="Unable to configure syslog logging")
@@ -1398,6 +1455,19 @@ def _channel_index(channel_id: str) -> int:
     return -1
 
 
+async def _refuse_guarded_smtp_host(
+    cfg: notification_channels.ChannelConfig, existing: notification_channels.ChannelConfig | None = None
+) -> None:
+    """400 when an email channel's SMTP server, new or changed, fails the
+    outbound address guard (``notification_channels.check_smtp_host``)."""
+    if existing is not None and (existing.type, existing.smtp_host) == (cfg.type, cfg.smtp_host):
+        return
+    try:
+        await notification_channels.check_smtp_host(cfg)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+
+
 @router.get("/api/admin/notification-channels")
 async def admin_list_notification_channels():
     """Return configured channels (secrets redacted), default channel ids, and
@@ -1417,6 +1487,7 @@ async def admin_create_notification_channel(body: NotificationChannelRequest, re
     cfg = notification_channels.sanitize_channel(data)
     if cfg is None:
         raise HTTPException(status_code=400, detail="Invalid channel configuration")
+    await _refuse_guarded_smtp_host(cfg)
     async with _channel_mutation_lock:
         if _channel_index(cfg.id) >= 0:
             raise HTTPException(status_code=409, detail="Channel id already exists")
@@ -1455,6 +1526,7 @@ async def admin_update_notification_channel(
             notification_channels.refuse_moved_secrets(existing, cfg, reused)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        await _refuse_guarded_smtp_host(cfg, existing)
         state.NOTIFICATION_CHANNELS[idx] = cfg
         redacted = await _persist_and_apply_channels()
     session = _get_session(request)

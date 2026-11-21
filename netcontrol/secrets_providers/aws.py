@@ -13,9 +13,11 @@ from __future__ import annotations
 import asyncio
 from typing import Any, ClassVar
 
+from netcontrol.routes.net_guard import OutboundRequestError, validate_outbound_url
 from netcontrol.secrets_providers.base import (
     AUTH_FAILED,
     FORBIDDEN,
+    INVALID_CONFIG,
     NOT_FOUND,
     PROVIDER_ERROR,
     SDK_NOT_INSTALLED,
@@ -37,6 +39,10 @@ _AUTH_CODES = {
 }
 _AUTH_EXCEPTIONS = {"NoCredentialsError", "PartialCredentialsError", "NoRegionError"}
 _NETWORK_EXCEPTIONS = {"EndpointConnectionError", "ConnectTimeoutError", "ReadTimeoutError", "ConnectionClosedError"}
+# A custom endpoint receives a SigV4-signed request, with the session token
+# when there is one. Signed with the server's own role (the default chain),
+# that request would hand the role's token to whatever the endpoint names.
+_ENDPOINT_NEEDS_KEY = "endpoint_url needs an explicit access key; the default credential chain is only sent to AWS"
 
 
 class AwsSecretsManagerProvider(SecretsProvider):
@@ -60,6 +66,8 @@ class AwsSecretsManagerProvider(SecretsProvider):
         config = normalize_settings(cls.SETTINGS, config)
         if config["access_key_id"] and not secrets.get("secret_access_key"):
             raise ValueError("An access key ID needs its secret access key (or clear both for the default chain)")
+        if config["endpoint_url"] and not config["access_key_id"]:
+            raise ValueError(_ENDPOINT_NEEDS_KEY)
         return config
 
     @classmethod
@@ -95,8 +103,19 @@ class AwsSecretsManagerProvider(SecretsProvider):
             if self.secrets.get("session_token"):
                 session_kwargs["aws_session_token"] = self.secrets["session_token"]
         client_kwargs: dict[str, Any] = {"region_name": region}
-        if self.config.get("endpoint_url"):
-            client_kwargs["endpoint_url"] = self.config["endpoint_url"]
+        endpoint_url = str(self.config.get("endpoint_url") or "")
+        if endpoint_url:
+            if not self.config.get("access_key_id"):
+                raise SecretsProviderError(INVALID_CONFIG, f"{self.name}: {_ENDPOINT_NEEDS_KEY}")
+            # boto3 opens its own connections, so the shared sender's check
+            # runs here (not pinned).
+            try:
+                validate_outbound_url(endpoint_url)
+            except OutboundRequestError as exc:
+                raise SecretsProviderError(
+                    UNREACHABLE, f"{self.name}: endpoint_url refused by the outbound address guard ({exc})"
+                ) from exc
+            client_kwargs["endpoint_url"] = endpoint_url
         try:
             from botocore.config import Config
 

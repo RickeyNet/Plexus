@@ -181,9 +181,13 @@ it and within 30 seconds in any other Plexus worker process.
 ### Outbound address check
 
 Every request Plexus sends to an address an admin typed in (event webhooks,
-notification channels, SIEM sinks, federation peers, secrets providers,
-identity providers, sync connections, Git data sources) first passes one
-guard (`netcontrol/routes/net_guard.py`):
+notification channels including the SMTP server of an email channel, SIEM
+sinks, federation peers, secrets providers including the AWS Secrets
+Manager endpoint URL, identity providers, the RADIUS, TACACS+ and LDAP
+servers, the application syslog forwarder, sync connections, Git data
+sources, and the topology source APIs: FMC, Panorama, Appgate, OPNsense,
+Cato, Meraki and the FDM API of a Cisco FTD host) first passes one guard
+(`netcontrol/routes/net_guard.py`):
 
 1. **Cloud metadata addresses are always refused**: `169.254.169.254`,
    the AWS IPv6 endpoint `fd00:ec2::254`, the ECS and EKS credential
@@ -218,3 +222,28 @@ connections, so they are not pinned.
   Webhook settings are not themselves an object type that fires webhooks,
   and deliveries write no audit events, so a webhook can never trigger
   itself.
+
+**Checked before connecting, not pinned.** These open their own
+connections, so the check runs before each one but the connection itself
+resolves the name again:
+
+- The topology source API clients (FMC, Panorama, Appgate, OPNsense,
+  Cato, Meraki, FDM) check the source address when a collection opens
+  its connection. A refused address fails that collection the same way as
+  a device that cannot be reached, with a message that names the guard.
+- The SMTP server of an email channel, before each message.
+- The RADIUS, TACACS+ and LDAP servers, before each login. A refused
+  server fails the login as an unreachable server does (local fallback
+  applies when it is on).
+- The application syslog forwarder host, when the forwarder starts.
+- The AWS Secrets Manager endpoint URL, before each fetch. A custom
+  endpoint URL also needs an explicit access key: the default credential
+  chain (the server's own instance or task role) is only ever sent to AWS
+  itself.
+
+**Checked when saved.** Saving a topology source address, an email
+channel's SMTP server, the syslog forwarder host, an enabled RADIUS,
+TACACS+ or LDAP server, or a secrets provider address (Vault URL, Azure
+vault URL and authority host, AWS endpoint URL) runs the same check and
+answers `400` naming the guard when it refuses. A setting saved earlier
+that the check now refuses is reported when it is used.

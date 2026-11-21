@@ -182,6 +182,92 @@ def test_an_unknown_provider_is_rejected_and_other_updates_leave_it_alone(monkey
     assert resp.json()["auth_provider"] == "radius"
 
 
+def _login(client, username: str, password: str = "password123") -> str:
+    resp = client.post("/api/auth/login", json={"username": username, "password": password})
+    assert resp.status_code == 200, resp.text
+    return resp.json().get("csrf_token", "")
+
+
+def _signed_in_browser(username: str):
+    """A second browser signed in as ``username`` (the app is already up)."""
+    import netcontrol.app as app_module
+    from starlette.testclient import TestClient
+
+    browser = TestClient(app_module.app, raise_server_exceptions=False)
+    _login(browser, username)
+    return browser
+
+
+def test_renaming_a_user_revokes_their_sessions(monkeypatch, request):
+    client, csrf = _auth_client(monkeypatch, request)
+    user_id = _create(client, csrf, "ivan")["id"]
+    call = client.portal.call
+    ivan = _signed_in_browser("ivan")
+    assert ivan.get("/api/help").status_code == 200
+    epoch_before = call(db_module.get_user_by_id, user_id)["session_epoch"]
+
+    # A display-name change alone keeps the sessions...
+    resp = client.put(f"/api/admin/users/{user_id}", json={"display_name": "Ivan"}, headers={"X-CSRF-Token": csrf})
+    assert resp.status_code == 200
+    assert call(db_module.get_user_by_id, user_id)["session_epoch"] == epoch_before
+
+    # ...a rename ends them: the token still names "ivan", which a new
+    # account could take.
+    resp = client.put(f"/api/admin/users/{user_id}", json={"username": "ivan-old"}, headers={"X-CSRF-Token": csrf})
+    assert resp.status_code == 200, resp.text
+    assert call(db_module.get_user_by_id, user_id)["session_epoch"] != epoch_before
+    assert ivan.get("/api/help").status_code == 401
+    assert ivan.get("/api/auth/status").json()["authenticated"] is False
+
+
+def test_logout_revokes_the_session_on_the_server(monkeypatch, request):
+    client, csrf = _auth_client(monkeypatch, request)
+    _create(client, csrf, "judy")
+    client.post("/api/auth/logout", headers={"X-CSRF-Token": csrf})
+    own_csrf = _login(client, "judy")
+    stolen = client.cookies.get("session")
+    assert stolen
+
+    resp = client.post("/api/auth/logout", headers={"X-CSRF-Token": own_csrf})
+    assert resp.status_code == 200 and resp.json() == {"ok": True}
+    assert any(c.startswith("session=") and "Max-Age=0" in c for c in resp.headers.get_list("set-cookie"))
+    events = client.portal.call(db_module.get_audit_events, 50)
+    assert any(e["action"] == "logout" and e["user"] == "judy" for e in events)
+
+    # A copy of the cookie taken before the sign-out no longer works.
+    client.cookies.set("session", stolen)
+    assert client.get("/api/help").status_code == 401
+    assert client.get("/api/auth/status").json()["authenticated"] is False
+    # Signing out again with the revoked cookie still answers 200 and
+    # revokes nothing more (other sessions of the account stay as they are).
+    user_id = client.portal.call(db_module.get_user_by_username, "judy")["id"]
+    epoch = client.portal.call(db_module.get_user_by_id, user_id)["session_epoch"]
+    assert client.post("/api/auth/logout", headers={"X-CSRF-Token": own_csrf}).status_code == 200
+    assert client.portal.call(db_module.get_user_by_id, user_id)["session_epoch"] == epoch
+
+
+@pytest.mark.parametrize("cookie", [None, "not-a-signed-token"])
+def test_logout_without_a_valid_session_answers_200(monkeypatch, request, cookie):
+    client, csrf = _auth_client(monkeypatch, request)
+    client.cookies.clear()
+    if cookie:
+        client.cookies.set("session", cookie)
+    resp = client.post("/api/auth/logout")
+    assert resp.status_code == 200 and resp.json() == {"ok": True}
+
+
+def test_a_deleted_users_session_is_refused_everywhere(monkeypatch, request):
+    client, csrf = _auth_client(monkeypatch, request)
+    user_id = _create(client, csrf, "karl")["id"]
+    karl = _signed_in_browser("karl")
+    assert karl.get("/api/help").status_code == 200
+    assert client.delete(f"/api/admin/users/{user_id}", headers={"X-CSRF-Token": csrf}).status_code == 200
+    # /api/help is mounted with require_auth only (no feature gate).
+    resp = karl.get("/api/help")
+    assert resp.status_code == 401
+    assert karl.get("/api/auth/status").json()["authenticated"] is False
+
+
 def test_setting_the_provider_needs_an_admin(monkeypatch, request):
     client, csrf = _auth_client(monkeypatch, request)
     user_id = _create(client, csrf, "henry")["id"]

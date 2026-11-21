@@ -306,6 +306,46 @@ def test_sanitize_ldap_rejects_bogus_tls_and_role_values():
     assert cfg["default_role"] == "user"
 
 
+# ── Outbound address guard on the directory servers ─────────────────────────
+
+
+def test_ldap_and_radius_refuse_a_guarded_server_before_connecting(monkeypatch):
+    import types
+
+    opened: list = []
+    monkeypatch.setattr(auth, "LDAP_AVAILABLE", True)
+    monkeypatch.setattr(auth, "python_ldap", types.SimpleNamespace(initialize=lambda uri: opened.append(uri)))
+    monkeypatch.setattr(auth, "PYRAD_AVAILABLE", True)
+    monkeypatch.setattr(auth, "RadiusClient", lambda **kw: opened.append(kw))
+    monkeypatch.setattr(auth, "RadiusDictionary", object)
+    monkeypatch.setattr(auth, "radius_packet", object())
+    ldap_cfg = {"server": "169.254.169.254", "user_dn_template": "CN={username},DC=example,DC=com"}
+    assert auth._ldap_authenticate_sync("jdoe", "pw", ldap_cfg) == (False, "error", {})
+    radius_cfg = {"server": "169.254.169.254", "secret": "s"}
+    assert auth._radius_authenticate_sync("jdoe", "pw", radius_cfg) == (False, "error")
+    monkeypatch.setenv("APP_SSRF_BLOCK_PRIVATE", "true")
+    assert auth._ldap_authenticate_sync("jdoe", "pw", {**ldap_cfg, "server": "10.0.0.8"})[1] == "error"
+    assert auth._radius_authenticate_sync("jdoe", "pw", {**radius_cfg, "server": "10.0.0.8"})[1] == "error"
+    assert opened == []
+
+
+@pytest.mark.asyncio
+async def test_auth_settings_save_refuses_a_guarded_directory_server():
+    from fastapi import HTTPException
+    from netcontrol.routes import admin
+
+    old = {"radius": {"enabled": True, "server": "169.254.169.254"}, "ldap": {"enabled": False}}
+    # An unchanged server is not checked again; a disabled block is not checked.
+    await admin._refuse_guarded_auth_servers(old, {**old, "ldap": {"enabled": False, "server": "169.254.169.254"}})
+    for block, label in (("radius", "RADIUS"), ("tacacs", "TACACS+"), ("ldap", "LDAP")):
+        new = {block: {"enabled": True, "server": "169.254.169.254"}}
+        with pytest.raises(HTTPException) as raised:
+            await admin._refuse_guarded_auth_servers({}, new)
+        assert raised.value.status_code == 400
+        assert f"{label} server refused by the outbound address guard" in raised.value.detail
+    await admin._refuse_guarded_auth_servers({}, {"ldap": {"enabled": True, "server": "dc1.example.com"}})
+
+
 # ── DN / UPN helpers ─────────────────────────────────────────────────────────
 
 

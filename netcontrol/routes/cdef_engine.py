@@ -28,6 +28,7 @@ from netcontrol.object_scope import (
     scope_exempt,
     scoped,
 )
+from netcontrol.routes.shared import _session_user
 from netcontrol.telemetry import configure_logging
 
 router = APIRouter()  # graph-templates; changes need graph-templates.write
@@ -241,8 +242,7 @@ async def get_cdef(cdef_id: int):
 @scoped("catalog")
 async def create_cdef(body: CdefCreate, request: Request):
     await require_model_write(request)
-    user = getattr(request.state, "user", None)
-    username = user.get("username", "") if user else ""
+    username = _session_user(request)
     cdef_id = await db.create_cdef_definition(
         name=body.name,
         expression=body.expression,

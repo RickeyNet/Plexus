@@ -103,7 +103,26 @@ def test_replay_guard_expires_and_caps():
     for key in ("b", "c", "d"):
         guard.seen(key, now=12)
     assert guard.seen("a", now=12) is False  # pushed out by the size cap
-    assert guard.seen("", now=12) is False
+    # An id-less delivery cannot be de-duplicated: refused like a repeat.
+    assert guard.seen("", now=12) is True
+
+
+def test_fresh_delivery_time_window():
+    now = 1_800_000_000.0
+    stamp = "2027-01-15T08:00:00.000Z"  # == now
+    assert signatures.fresh_delivery_time(stamp, now=now)
+    # Teams writes seven fractional digits; an offset and a naive (UTC) time parse too.
+    assert signatures.fresh_delivery_time("2027-01-15T07:58:00.1234567Z", now=now)
+    assert signatures.fresh_delivery_time("2027-01-15T08:00:00+00:00", now=now)
+    assert signatures.fresh_delivery_time("2027-01-15T08:00:00", now=now)
+    # Older than five minutes: a replay.
+    assert signatures.fresh_delivery_time(stamp, now=now + 300)
+    assert not signatures.fresh_delivery_time(stamp, now=now + 301)
+    # A little ahead of this server's clock is skew; more is refused.
+    assert signatures.fresh_delivery_time(stamp, now=now - 60)
+    assert not signatures.fresh_delivery_time(stamp, now=now - 61)
+    for bad in (None, "", "   ", "yesterday", 1_800_000_000, "2027-13-45T99:00:00Z"):
+        assert not signatures.fresh_delivery_time(bad, now=now), bad
 
 
 # ── Parser and formatters ────────────────────────────────────────────────────
@@ -750,6 +769,11 @@ def _webex_post(admin: CsrfClient, payload: dict, secret: str = WEBEX_SECRET):
     )
 
 
+def _iso_ago(seconds: float = 0) -> str:
+    """An ISO 8601 UTC time ``seconds`` ago, as Webex and Teams write it."""
+    return time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime(time.time() - seconds))
+
+
 def test_webex_webhook(admin, monkeypatch):
     sent: list[tuple] = []
 
@@ -781,6 +805,7 @@ def test_webex_webhook(admin, monkeypatch):
             "roomType": "group",
             "personId": "p1",
             "personEmail": "ana@example.com",
+            "created": _iso_ago(),
         },
     }
     assert _webex_post(admin, message, secret="wrong-secret-value").status_code == 401
@@ -795,10 +820,36 @@ def test_webex_webhook(admin, monkeypatch):
     action = {
         "resource": "attachmentActions",
         "event": "created",
-        "data": {"id": "act1", "roomId": "room1", "personId": "p1"},
+        "data": {"id": "act1", "roomId": "room1", "personId": "p1", "created": _iso_ago()},
     }
     assert _ok(_webex_post(admin, action)) == {"ok": True}
     assert "Plexus ChatOps commands" in sent[-1][2]["markdown"]
+
+
+def test_webex_webhook_refuses_old_timeless_and_idless_deliveries(admin, monkeypatch):
+    sent: list[tuple] = []
+
+    async def _text(token, message_id):
+        return "help"
+
+    async def _send(token, room, body, parent_id=""):
+        sent.append((token, room, body))
+
+    monkeypatch.setattr(adapters, "webex_message_text", _text)
+    monkeypatch.setattr(adapters, "webex_send", _send)
+    _setup_bot(admin, "webex", WEBEX_SECRET, bot_token="webex-example-token")
+    data = {"id": "msg-old", "roomId": "room1", "personEmail": "ana@example.com"}
+
+    def message(**fields) -> dict:
+        return {"resource": "messages", "event": "created", "data": {**data, **fields}}
+
+    # A captured delivery resent after the five-minute window.
+    assert _webex_post(admin, message(created=_iso_ago(400))).status_code == 400
+    assert _webex_post(admin, message()).status_code == 400  # no created time
+    assert _webex_post(admin, message(created="not-a-time")).status_code == 400
+    assert _webex_post(admin, message(id="", created=_iso_ago())).status_code == 400
+    assert sent == []
+    assert _ok(_webex_post(admin, message(created=_iso_ago(30)))) == {"ok": True}
 
 
 def _teams_post(admin: CsrfClient, activity: dict, token: str = TEAMS_TOKEN):
@@ -817,6 +868,7 @@ def test_teams_outgoing_webhook(admin):
     activity = {
         "type": "message",
         "id": "1700000000001",
+        "timestamp": _iso_ago(),
         "text": "<at>Plexus</at> device edge-rtr-01",
         "from": {"id": "29:example", "aadObjectId": "00000000-0000-0000-0000-000000000001", "name": "Ana"},
     }
@@ -826,6 +878,14 @@ def test_teams_outgoing_webhook(admin):
     card = answer["attachments"][0]["content"]
     assert answer["type"] == "message" and card["body"][0]["text"] == "edge-rtr-01 (192.0.2.1)"
     assert "Already answered" in json.dumps(_ok(_teams_post(admin, activity)))
+
+    # Replays: a signed timestamp older than five minutes, none at all, and an
+    # activity with no id (which could never be de-duplicated) are refused.
+    fresh = {**activity, "id": "1700000000002"}
+    assert _teams_post(admin, {**fresh, "timestamp": _iso_ago(400)}).status_code == 400
+    assert _teams_post(admin, {k: v for k, v in fresh.items() if k != "timestamp"}).status_code == 400
+    assert _teams_post(admin, {k: v for k, v in fresh.items() if k != "id"}).status_code == 400
+    assert _teams_post(admin, fresh).status_code == 200
 
 
 def test_inbound_endpoints_need_no_session_but_a_bot(admin):

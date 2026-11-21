@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 
 import netcontrol.app as app_module
+import pytest
 
 import pg_raw
 
@@ -443,3 +444,164 @@ def test_monitoring_summary_shape(monkeypatch, request):
     resp = client.get("/api/monitoring/summary")
     assert resp.status_code == 200
     assert isinstance(resp.json(), dict)
+
+
+# ── One fleet poll at a time ─────────────────────────────────────────────────
+
+_POLL_ENDPOINTS = (
+    "/api/monitoring/poll-now",
+    "/api/monitoring/poll-now/stream",
+    "/api/admin/monitoring/run-now",
+)
+
+
+def _fresh_fleet_lock(monkeypatch) -> asyncio.Lock:
+    from netcontrol.routes import monitoring
+
+    lock = asyncio.Lock()
+    monkeypatch.setattr(monitoring, "_FLEET_POLL_LOCK", lock)
+    return lock
+
+
+def test_manual_poll_while_a_sweep_runs_answers_409(monkeypatch, request):
+    from netcontrol.routes import monitoring
+
+    client = _auth_client(monkeypatch, request)
+    lock = _fresh_fleet_lock(monkeypatch)
+    calls: list[bool] = []
+
+    async def fake_once(*, force=False, host_ids=None):
+        calls.append(force)
+        return {"enabled": True, "hosts_polled": 0, "alerts_created": 0, "errors": 0}
+
+    monkeypatch.setattr(monitoring, "_run_monitoring_poll_once", fake_once)
+    # A sweep is running (taking a free lock never waits, so this binds no loop).
+    asyncio.run(lock.acquire())
+    for url in _POLL_ENDPOINTS:
+        resp = client.post(url)
+        assert resp.status_code == 409, url
+        assert resp.json()["error"]["message"] == monitoring.FLEET_POLL_RUNNING, url
+    assert calls == []
+
+    lock.release()
+    for url in ("/api/monitoring/poll-now", "/api/admin/monitoring/run-now"):
+        assert client.post(url).status_code == 200, url
+        assert not lock.locked(), url
+    assert calls == [True, True]
+
+
+def test_fleet_poll_lock_is_released_when_the_poll_fails(monkeypatch, request):
+    from netcontrol.routes import monitoring
+
+    client = _auth_client(monkeypatch, request)
+    lock = _fresh_fleet_lock(monkeypatch)
+
+    async def boom(*, force=False, host_ids=None):
+        raise RuntimeError("poll failed")
+
+    monkeypatch.setattr(monitoring, "_run_monitoring_poll_once", boom)
+    assert client.post("/api/monitoring/poll-now").status_code == 500
+    assert not lock.locked()
+
+
+async def test_a_second_manual_poll_does_not_run_while_one_holds_the_lock(monkeypatch):
+    from netcontrol.routes import monitoring
+
+    lock = asyncio.Lock()
+    monkeypatch.setattr(monitoring, "_FLEET_POLL_LOCK", lock)
+    calls: list[bool] = []
+
+    async def fake_once(*, force=False, host_ids=None):
+        calls.append(force)
+        return {"enabled": True}
+
+    monkeypatch.setattr(monitoring, "_run_monitoring_poll_once", fake_once)
+    async with lock:
+        assert await monitoring._run_fleet_poll() is None
+    assert calls == []
+    assert await monitoring._run_fleet_poll() == {"enabled": True}
+    assert not lock.locked()
+
+
+async def test_poll_stream_holds_the_lock_until_the_client_goes(monkeypatch):
+    from netcontrol.routes import monitoring
+
+    lock = asyncio.Lock()
+    monkeypatch.setattr(monitoring, "_FLEET_POLL_LOCK", lock)
+    host = {"id": 1, "hostname": "edge-sw1", "ip_address": "192.0.2.10"}
+    started = asyncio.Event()
+    cancelled = asyncio.Event()
+
+    async def targets():
+        return [(host, None, {})]
+
+    async def hang(h, cred, snmp_cfg):
+        started.set()
+        try:
+            await asyncio.sleep(3600)
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+
+    async def no_hosts(request, *, write=False):
+        return None
+
+    async def empty(*args, **kwargs):
+        return []
+
+    monkeypatch.setattr(monitoring, "_build_poll_targets", targets)
+    monkeypatch.setattr(monitoring, "_poll_host_monitoring", hang)
+    monkeypatch.setattr(monitoring, "readable_host_ids", no_hosts)
+    monkeypatch.setattr(monitoring, "_get_session", lambda request: None)
+    monkeypatch.setattr(monitoring.db, "get_alert_rules", empty)
+    monkeypatch.setattr(monitoring.db, "get_active_alert_suppressions", empty)
+
+    response = await monitoring.monitoring_poll_now_stream(object())
+    events = response.body_iterator
+    assert '"type": "start"' in await events.__anext__()
+    # The next event waits on the hung poll.
+    pending = asyncio.ensure_future(events.__anext__())
+    await asyncio.wait_for(started.wait(), timeout=5)
+    assert lock.locked()
+
+    # A second stream while this one runs is refused before it starts.
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException) as refused:
+        await monitoring.monitoring_poll_now_stream(object())
+    assert refused.value.status_code == 409
+
+    # The client goes away (the server cancels the body): the sweep's polls
+    # are cancelled and the lock freed.
+    pending.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await pending
+    await events.aclose()
+    assert not lock.locked()
+    await asyncio.wait_for(cancelled.wait(), timeout=5)
+
+    # A disconnect between two events (GeneratorExit at a yield) frees it too.
+    events = (await monitoring.monitoring_poll_now_stream(object())).body_iterator
+    assert '"type": "start"' in await events.__anext__()
+    assert lock.locked()
+    await events.aclose()
+    assert not lock.locked()
+
+
+async def test_poll_stream_started_after_another_reports_an_error_event(monkeypatch):
+    from netcontrol.routes import monitoring
+
+    lock = asyncio.Lock()
+    monkeypatch.setattr(monitoring, "_FLEET_POLL_LOCK", lock)
+
+    async def no_hosts(request, *, write=False):
+        return None
+
+    monkeypatch.setattr(monitoring, "readable_host_ids", no_hosts)
+    monkeypatch.setattr(monitoring, "_get_session", lambda request: None)
+    # The handler's check passes; another sweep starts before the body runs.
+    response = await monitoring.monitoring_poll_now_stream(object())
+    async with lock:
+        chunks = [chunk async for chunk in response.body_iterator]
+    assert len(chunks) == 1
+    assert '"type": "error"' in chunks[0] and monitoring.FLEET_POLL_RUNNING in chunks[0]

@@ -41,6 +41,13 @@ changes the SMTP server or port, turns SMTP encryption off, changes the
 webhook URL's scheme, host or port, or turns certificate checks off is
 refused with `400` until the secret is typed again. The secrets are stored
 encrypted in the database.
+The webhook and Teams URLs and an email channel's SMTP server pass the
+outbound address guard ([webhooks.md](webhooks.md#outbound-address-check)):
+the SMTP server when a new or changed one is saved (`400` naming the guard)
+and before each message. A cloud metadata address is always refused, a
+name that does not resolve too, and a private address when
+`APP_SSRF_BLOCK_PRIVATE=true`; list a trusted SMTP relay in
+`APP_SSRF_ALLOW` if needed.
 Slack and Webex channels take `chat_channel` (the channel or room id); their
 token is the ChatOps bot's, stored with the bot.
 

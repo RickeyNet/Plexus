@@ -1,7 +1,10 @@
 # ──────────────────────────────────────────────────────────────────────────────
 # Stage 1: build the React frontend (netcontrol/static/frontend)
 # ──────────────────────────────────────────────────────────────────────────────
-FROM node:24-alpine AS frontend-build
+# Base images are pinned to the multi-arch index digest (the release build is
+# multi-platform), so a re-pushed tag cannot change what is built. Dependabot
+# (.github/dependabot.yml, docker ecosystem) proposes digest bumps.
+FROM node:24-alpine@sha256:116b800c3754b440ee0aa3ed2f20f5bf3d99a554bfd9adeea09ea8017f6e85f5 AS frontend-build
 WORKDIR /frontend
 
 # Extra CA certificates the build trusts (deploy/build-ca/*.crt, PEM): the
@@ -24,7 +27,7 @@ RUN npm run build
 # ──────────────────────────────────────────────────────────────────────────────
 # Stage 2: runtime image
 # ──────────────────────────────────────────────────────────────────────────────
-FROM python:3.14-slim
+FROM python:3.14-slim@sha256:9aaa474097d094040649f2162a627c0049b408f52138d980916788d80f04802f
 
 ENV PYTHONUNBUFFERED=1
 WORKDIR /app
@@ -76,7 +79,10 @@ RUN if [ "$INCLUDE_PYODIDE" = "true" ]; then python scripts/fetch_pyodide.py; fi
 
 # Pull in the pre-built React bundle from the frontend stage. Source files
 # under netcontrol/static/frontend/ (TS, package.json, etc) are not needed at
-# runtime - only the dist/ directory.
+# runtime - only the dist/ directory - and the /static mount would serve them
+# to anyone, so everything else there is removed. (.dockerignore cannot
+# exclude them: the node stage above copies the source from the same context.)
+RUN find /app/netcontrol/static/frontend -mindepth 1 -maxdepth 1 ! -name dist -exec rm -rf {} +
 COPY --from=frontend-build /frontend/dist /app/netcontrol/static/frontend/dist
 
 RUN mkdir -p /app/state /app/certs /app/state/software_images

@@ -33,6 +33,9 @@ DEFAULT_RULES = {
     "netcontrol/mcp/auth.py": 95.0,
     "netcontrol/mcp/dispatch.py": 90.0,
     "netcontrol/mcp/redact.py": 90.0,
+    # The shared secret key names behind the MCP masking and the log
+    # redaction. Measured by tests/test_log_redaction.py (100%).
+    "netcontrol/secret_keys.py": 95.0,
     "netcontrol/mcp/registry.py": 95.0,
     "netcontrol/mcp/server.py": 85.0,
     "netcontrol/routes/mcp_tokens.py": 90.0,
@@ -138,6 +141,9 @@ DEFAULT_RULES = {
     "netcontrol/graphql_api/limits.py": 95.0,
     "netcontrol/graphql_api/schema.py": 82.0,
     "netcontrol/routes/graphql.py": 90.0,
+    # CSP hash helper shared by the GraphiQL and graph embed pages. Measured
+    # by tests/test_csp_headers.py; do not lower it to land a change.
+    "netcontrol/csp.py": 100.0,
     # Plugin framework: declaration validation, discovery / allow-list /
     # failure isolation, and the manifest and router mounting. Measured by
     # tests/test_plugins.py; do not lower them to land a change.

@@ -398,6 +398,9 @@ def _saml_cfg(idp: FakeSamlIdP, **over) -> dict:
         "groups_attribute": "groups",
         "admin_groups": ["plexus-admins"],
         "button_label": "Sign in with Example SAML",
+        # Sign-in uses only stored SP values (an admin save fills them).
+        "sp_entity_id": SP_ENTITY_ID,
+        "acs_url": ACS_URL,
     }
     cfg.update(over)
     return state._sanitize_saml_config(cfg)
@@ -632,6 +635,70 @@ def test_configured_entity_and_acs(env, monkeypatch):
     assert browser.post(ACS, data={"SAMLResponse": encode(raw)}).status_code == 303
 
 
+def test_host_header_does_not_change_audience_or_acs(env, monkeypatch):
+    """The audience, recipient and destination come from the stored values,
+    never from the Host header of the sign-in request."""
+    _, idp = env
+    monkeypatch.setitem(
+        state.AUTH_CONFIG,
+        "saml",
+        _saml_cfg(idp, sp_entity_id="urn:example:plexus", acs_url="https://plexus.example.com/api/auth/saml/acs"),
+    )
+    spoofed = {"Host": "sp.attacker.example.com"}
+    root = etree.fromstring(_browser().get(METADATA, headers=spoofed).content)
+    assert root.get("entityID") == "urn:example:plexus"
+    browser = _browser()
+    start = browser.get(LOGIN, headers=spoofed)
+    assert start.status_code == 302
+    assert "attacker" not in start.headers["location"]
+    request_id, _ = request_from_redirect(start.headers["location"])
+    # An assertion made for the attacker's SP (audience and recipient on the
+    # spoofed host) is refused even when posted with that Host header.
+    response = idp.response(
+        request_id,
+        audience="http://sp.attacker.example.com/api/auth/saml/metadata",
+        recipient="http://sp.attacker.example.com/api/auth/saml/acs",
+    )
+    raw = base64.b64decode(response).replace(
+        b'Destination="http://testserver/api/auth/saml/acs"',
+        b'Destination="http://sp.attacker.example.com/api/auth/saml/acs"',
+    )
+    resp = browser.post(ACS, data={"SAMLResponse": encode(raw)}, headers=spoofed)
+    assert _error_code(resp) == "token"
+
+
+@pytest.mark.parametrize("missing", ["sp_entity_id", "acs_url"])
+def test_unstored_sp_values_disable_sign_in(env, monkeypatch, missing):
+    """A configuration saved before the SP values were required (either one
+    blank) offers no SAML sign-in until an admin saves it once."""
+    admin, idp = env
+    monkeypatch.setitem(state.AUTH_CONFIG, "saml", _saml_cfg(idp, **{missing: ""}))
+    status = _browser().get("/api/auth/status").json()
+    assert status["sso"]["saml"]["enabled"] is False
+    assert _error_code(_browser().get(LOGIN)) == "setup"
+    assert _error_code(_browser().post(ACS, data={"SAMLResponse": "x"})) == "setup"
+    assert _browser().get(METADATA).status_code == 404
+    info = admin.get(SP_INFO).json()
+    assert info["configured"] is False
+    assert info["sp_entity_id"] and info["acs_url"]
+
+
+def test_saving_fills_blank_sp_values_from_the_admin_request(env, monkeypatch):
+    admin, idp = env
+    monkeypatch.setitem(state.AUTH_CONFIG, "saml", _saml_cfg(idp, sp_entity_id="", acs_url=""))
+    body = _config_body(admin, idp_certs=[cert_body(idp.cert_pem)], sp_entity_id="", acs_url="")
+    assert admin.put(AUTH_CONFIG, json=body).status_code == 200
+    saved = state.AUTH_CONFIG["saml"]
+    assert saved["sp_entity_id"] == SP_ENTITY_ID and saved["acs_url"] == ACS_URL
+    stored = asyncio.run(db_module.get_auth_setting("auth_config"))
+    assert stored["saml"]["acs_url"] == ACS_URL
+    assert admin.get(SP_INFO).json()["configured"] is True
+    # Stored values are kept as given, not replaced by the request address.
+    body = _config_body(admin, sp_entity_id="urn:example:plexus")
+    assert admin.put(AUTH_CONFIG, json=body).status_code == 200
+    assert state.AUTH_CONFIG["saml"]["sp_entity_id"] == "urn:example:plexus"
+
+
 def test_acs_is_csrf_exempt(env):
     """A browser that already holds a session still reaches the ACS (the
     IdP's POST carries no CSRF token)."""
@@ -733,6 +800,7 @@ def test_sp_info(env):
     assert body["acs_url"] == ACS_URL and body["sp_entity_id"] == SP_ENTITY_ID
     assert body["metadata_url"] == "http://testserver" + METADATA
     assert body["certs"][0]["fingerprint"] == saml.cert_fingerprint(idp.cert_pem)
+    assert body["configured"] is True
 
 
 def test_admin_endpoints_need_admin(env):

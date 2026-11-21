@@ -38,6 +38,8 @@ from typing import Any
 
 import httpx
 
+from netcontrol.integrations.http_common import guard_api_host
+
 DEFAULT_API_VERSION = "latest"
 DEFAULT_HTTPS_PORT = 443
 DEFAULT_TIMEOUT_SECONDS = 30.0
@@ -118,8 +120,9 @@ class FdmClient:
 
     # ── HTTP plumbing ──────────────────────────────────────────────────────
 
-    def _ensure_client(self) -> httpx.AsyncClient:
+    async def _ensure_client(self) -> httpx.AsyncClient:
         if self._client is None:
+            await guard_api_host(self._api_base, "FDM", FdmApiError)
             self._client = httpx.AsyncClient(
                 base_url=self._api_base,
                 timeout=self._timeout,
@@ -132,7 +135,7 @@ class FdmClient:
 
     async def _token_request(self, payload: dict[str, Any]) -> None:
         """POST a grant to ``fdm/token`` and store the resulting token set."""
-        client = self._ensure_client()
+        client = await self._ensure_client()
         try:
             resp = await client.post("fdm/token", json=payload)
         except httpx.HTTPError as exc:
@@ -208,7 +211,7 @@ class FdmClient:
         surfaces as an :class:`FdmApiError` rather than looping.
         """
         token = await self._ensure_token()
-        client = self._ensure_client()
+        client = await self._ensure_client()
         headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
         try:
             resp = await client.request(method, path.lstrip("/"), params=params, json=json_body, headers=headers)

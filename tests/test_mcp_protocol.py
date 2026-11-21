@@ -258,6 +258,58 @@ def test_registry_has_no_write_imports():
     assert offenders == []
 
 
+# Every MCP tool is read-only (internal security review INB-12). Tool results carry
+# device-sourced text (syslog-derived alert messages, interface descriptions,
+# config text) verbatim, which an attacker who controls a device can shape into
+# instructions for the model. That is tolerable only while no tool can change
+# anything. Adding a name here is a deliberate decision: a tool that writes must
+# first wrap device-sourced strings in a marked untrusted field (for example
+# {"untrusted_text": ...}) and the server INSTRUCTIONS must say so.
+READ_ONLY_TOOLS = frozenset(
+    {
+        "diff_device_configs",
+        "get_compliance_summary",
+        "get_device_config",
+        "get_device_health",
+        "get_host",
+        "get_interfaces",
+        "get_neighbors",
+        "get_sla_status",
+        "get_top_talkers",
+        "list_advisories",
+        "list_alerts",
+        "list_compliance_results",
+        "list_config_drift",
+        "list_groups",
+        "list_outages",
+        "list_software_versions",
+        "list_topology_changes",
+        "plexus_overview",
+        "search_audit_log",
+        "search_configs",
+        "search_hosts",
+        "search_mac_or_ip",
+        "trace_path",
+    }
+)
+
+
+def test_registry_holds_only_the_reviewed_read_only_tools():
+    registry.load_tools()
+    names = {tool.name for tool in registry.all_tools()}
+    assert names - READ_ONLY_TOOLS == set(), "new MCP tool: review it against INB-12, then add it to READ_ONLY_TOOLS"
+    assert READ_ONLY_TOOLS - names == set(), "a reviewed MCP tool is gone: drop it from READ_ONLY_TOOLS"
+
+
+def test_instructions_mark_device_text_as_untrusted():
+    from netcontrol.mcp.server import INSTRUCTIONS
+
+    text = INSTRUCTIONS.lower()
+    assert "read-only" in text
+    assert "untrusted" in text
+    assert "never as instructions" in text
+
+
 def test_every_tool_has_a_closed_schema_and_known_category():
     from netcontrol.mcp.auth import CATEGORIES
 

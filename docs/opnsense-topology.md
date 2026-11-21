@@ -49,7 +49,12 @@ default) as described in [Scheduled collection](meraki-topology.md#scheduled-col
   a trailing `/api` you type is dropped. Only `https` is accepted, no path,
   query or user name, and redirects are never followed, so the key cannot
   be sent elsewhere. Turn off **Verify TLS** for a firewall with a
-  self-signed certificate.
+  self-signed certificate. The address passes the
+  [outbound address check](webhooks.md#outbound-address-check) when saved
+  and when a collection connects: a cloud metadata address and a name that
+  does not resolve are refused, private addresses too when
+  `APP_SSRF_BLOCK_PRIVATE=true` (list the firewall in `APP_SSRF_ALLOW`). A
+  refusal fails the collection like a firewall that cannot be reached.
 - **API key** and **API secret**: two fields. The `apikey.txt` file
   OPNsense downloads holds them as `key=...` and `secret=...` lines; enter
   only the values, without the `key=` / `secret=` labels; **Show** beside

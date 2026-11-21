@@ -133,6 +133,14 @@ export async function startPollNow(): Promise<void> {
             log: [...prev.log, { ok, hostname: event.hostname ?? '', detail }],
           };
         }
+        if (event.type === 'error') {
+          return {
+            ...prev,
+            active: false,
+            failed: true,
+            title: `Poll failed: ${event.error ?? 'the poll did not run'}`,
+          };
+        }
         if (event.type === 'done') {
           return {
             ...prev,

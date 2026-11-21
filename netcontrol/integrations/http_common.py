@@ -7,13 +7,18 @@
   never loads the device or controller it reads.
 - ``retry_delay``: how long to wait before retrying a failed call, with
   exponential backoff and an honoured ``Retry-After`` on HTTP 429.
+- ``guard_api_host``: the outbound address guard (``net_guard``) run on
+  the API host before a client opens its connection.
 """
 
 from __future__ import annotations
 
 import asyncio
 import time
+from collections.abc import Callable
 from urllib.parse import urlsplit
+
+from netcontrol.routes.outbound_http import OutboundRequestError, guard_url
 
 MAX_RETRY_AFTER_SECONDS = 60.0
 MAX_BACKOFF_SECONDS = 30.0
@@ -50,6 +55,23 @@ def validate_https_host(url: str, label: str, *, ignored_paths: tuple[str, ...] 
     if ":" in host:
         host = f"[{host}]"
     return f"https://{host}" + (f":{port}" if port else "")
+
+
+async def guard_api_host(url: str, label: str, error: Callable[[str], Exception]) -> None:
+    """Run the outbound address guard (``net_guard``) on the API host ``url``
+    before a client connects to it.
+
+    A refused address raises ``error(message)``: the caller passes the
+    exception it raises for a device it cannot reach, so a refusal shows up
+    in the collection and monitoring paths the same way, with a message that
+    names the guard."""
+    try:
+        await guard_url(url)
+    except OutboundRequestError as exc:
+        raise error(
+            f"{label} address refused by the outbound address guard: {exc} "
+            "(see APP_SSRF_ALLOW and APP_SSRF_BLOCK_PRIVATE)"
+        ) from None
 
 
 class RequestPacer:

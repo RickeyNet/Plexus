@@ -30,7 +30,13 @@ from pydantic import BaseModel, Field
 
 from netcontrol.chatops import adapters, bots, commands, dispatcher
 from netcontrol.chatops.replies import Reply, to_slack, to_teams, to_webex
-from netcontrol.chatops.signatures import ReplayGuard, verify_slack, verify_teams, verify_webex
+from netcontrol.chatops.signatures import (
+    ReplayGuard,
+    fresh_delivery_time,
+    verify_slack,
+    verify_teams,
+    verify_webex,
+)
 from netcontrol.routes.shared import _audit, _corr_id, _session_user, read_bounded_body, supervise_task
 from netcontrol.telemetry import configure_logging
 
@@ -201,7 +207,14 @@ async def webex_webhook(request: Request, background: BackgroundTasks):
         return {"ok": True, "ignored": True}
     if resource == "messages" and adapters.is_bot_email(str(data.get("personEmail") or "")):
         return {"ok": True, "ignored": True}
-    if _WEBEX_SEEN.seen(f"{resource}:{data.get('id') or ''}"):
+    # Replay: a delivery with no id or a signed time (data.created) more
+    # than five minutes old is refused; a repeat inside that window is a
+    # duplicate.
+    data_id = str(data.get("id") or "")
+    if not data_id or not fresh_delivery_time(data.get("created")):
+        LOGGER.warning("chatops webex: refused a delivery with no id or an old, missing or bad time")
+        return _status(400, "Bad Request")
+    if _WEBEX_SEEN.seen(f"{resource}:{data_id}"):
         return {"ok": True, "duplicate": True}
     if not bot.bot_token:
         LOGGER.warning("chatops webex: no bot token stored; cannot read or answer messages")
@@ -230,6 +243,11 @@ async def teams_webhook(request: Request):
     if not isinstance(activity, dict):
         return _status(400, "Bad Request")
     inbound = adapters.teams_activity(activity)
+    # Replay: an activity with no id or a signed timestamp more than five
+    # minutes old is refused; a repeat inside that window is a duplicate.
+    if not inbound.delivery_id or not fresh_delivery_time(activity.get("timestamp")):
+        LOGGER.warning("chatops teams: refused an activity with no id or an old, missing or bad timestamp")
+        return _status(400, "Bad Request")
     if _TEAMS_SEEN.seen(inbound.delivery_id):
         return to_teams(Reply(title="Already answered", ok=False))
     user = await dispatcher.resolve_user("teams", inbound.identities, inbound.display_name)

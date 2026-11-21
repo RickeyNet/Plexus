@@ -33,6 +33,8 @@ from urllib.parse import urlsplit
 
 import httpx
 
+from netcontrol.integrations.http_common import guard_api_host
+
 DEFAULT_BASE_URL = "https://api.meraki.com/api/v1"
 DEFAULT_TIMEOUT_SECONDS = 30.0
 DEFAULT_MAX_CONCURRENCY = 5
@@ -135,8 +137,9 @@ class MerakiClient:
 
     # ── HTTP plumbing ──────────────────────────────────────────────────────
 
-    def _ensure_client(self) -> httpx.AsyncClient:
+    async def _ensure_client(self) -> httpx.AsyncClient:
         if self._client is None:
+            await guard_api_host(self._base_url, "Meraki Dashboard API", MerakiApiError)
             self._client = httpx.AsyncClient(
                 timeout=self._timeout,
                 follow_redirects=False,
@@ -165,7 +168,7 @@ class MerakiClient:
 
     async def _send(self, url: str, params: dict[str, Any] | None) -> httpx.Response:
         """Issue one GET, following same-domain redirects with auth intact."""
-        client = self._ensure_client()
+        client = await self._ensure_client()
         headers = {
             "Authorization": f"Bearer {self._api_key}",
             "Accept": "application/json",

@@ -24,7 +24,8 @@ from pydantic import BaseModel, Field
 
 import netcontrol.routes.state as state
 from netcontrol import object_scope, oidc, saml
-from netcontrol.routes.shared import _audit, _corr_id, _get_session, _request_scheme
+from netcontrol.routes.net_guard import OutboundRequestError, validate_outbound_host
+from netcontrol.routes.shared import _audit, _corr_id, _get_session, _request_scheme, session_rejection
 from netcontrol.routes.state import _env_flag
 from netcontrol.sso import SsoError, SsoIdentity, safe_next
 from netcontrol.telemetry import configure_logging
@@ -146,6 +147,18 @@ ATTRIBUTE\tNAS-Identifier\t32\tstring
     return RADIUS_DICTIONARY_FILE
 
 
+def _aaa_server_refused(kind: str, server: str) -> bool:
+    """Run the outbound address guard on a RADIUS, TACACS+ or LDAP server
+    before connecting to it. Logs and answers True when it is refused; the
+    caller then fails the login as it does for an unreachable server."""
+    try:
+        validate_outbound_host(server)
+    except OutboundRequestError as exc:
+        LOGGER.warning("%s: server refused by the outbound address guard: %s", kind, exc)
+        return True
+    return False
+
+
 def _radius_authenticate_sync(username: str, password: str, radius_cfg: dict) -> tuple[bool, str]:
     """Perform a blocking RADIUS PAP authentication request."""
     # Defense in depth (mirrors the LDAP guard): never send an empty
@@ -160,6 +173,8 @@ def _radius_authenticate_sync(username: str, password: str, radius_cfg: dict) ->
     server = radius_cfg.get("server", "")
     if not server or not radius_cfg.get("secret"):
         LOGGER.warning("radius: server or shared secret not configured")
+        return False, "error"
+    if _aaa_server_refused("radius", server):
         return False, "error"
 
     dictionary_path = _ensure_radius_dictionary_file()
@@ -443,6 +458,8 @@ def _tacacs_authenticate_sync(username: str, password: str, tacacs_cfg: dict) ->
         # rather than silently downgrade to an unobfuscated exchange.
         LOGGER.warning("tacacs: server or shared secret not configured")
         return False, "error", {}
+    if _aaa_server_refused("tacacs", server):
+        return False, "error", {}
 
     authen_type_name = str(tacacs_cfg.get("authen_type") or "ascii").lower()
     authen_type = TAC_PLUS_AUTHEN_TYPE_PAP if authen_type_name == "pap" else TAC_PLUS_AUTHEN_TYPE_ASCII
@@ -624,6 +641,8 @@ def _ldap_authenticate_sync(username: str, password: str, ldap_cfg: dict) -> tup
 
     server = ldap_cfg.get("server", "").strip()
     if not server:
+        return False, "error", {}
+    if _aaa_server_refused("ldap", server):
         return False, "error", {}
 
     port = int(ldap_cfg.get("port", 389))
@@ -1373,9 +1392,23 @@ async def register(body: RegisterRequest, request: Request = None):
 
 
 @router.post("/api/auth/logout")
-async def logout():
+async def logout(request: Request):
+    """Sign out: revoke the session on the server, then drop the cookie.
+
+    A signed token carries no per-token id, so revocation bumps the user's
+    session epoch, which ends every session of that account (all browsers
+    and devices), the same mechanism a password change uses. Only a session
+    that is still valid does this: a missing, forged, expired or already
+    revoked cookie just gets deleted, so logout always answers 200.
+    """
+    session = _get_session(request)
+    if session:
+        user = await db.get_user_by_id(session["user_id"])
+        if session_rejection(session, user) is None and user:
+            await db.bump_user_session_epoch(user["id"])
+            await _audit("auth", "logout", user=user["username"], correlation_id=_corr_id(request))
     response = JSONResponse({"ok": True})
-    response.delete_cookie("session")
+    response.delete_cookie("session", samesite="strict")
     return response
 
 
@@ -1436,31 +1469,28 @@ async def auth_status(request: Request, response: Response):
     if not session:
         return _logged_out_status()
     user = await db.get_user_by_id(session["user_id"])
-    if not user:
-        return _logged_out_status()
-
-    # Mirror the idle-timeout enforcement done by require_auth so that a stale
-    # cookie can't make the SPA think it's still logged in. Kiosk accounts
-    # (session_never_expires) bypass the check just like require_auth does.
-    if not bool(user.get("session_never_expires")):
-        idle_timeout = int(state.LOGIN_RULES.get("session_idle_timeout", 1800))
-        last_activity = int(session.get("last_activity") or 0)
-        if idle_timeout > 0 and last_activity > 0:
-            elapsed = int(time.time()) - last_activity
-            if elapsed > idle_timeout:
-                response.delete_cookie("session", samesite="strict")
-                await _audit(
-                    "auth",
-                    "session.idle_timeout",
-                    user=user["username"],
-                    detail=f"idle={elapsed}s threshold={idle_timeout}s path=/api/auth/status",
-                    correlation_id=_corr_id(request),
-                )
-                return _logged_out_status()
-
-    never_expires = bool(user.get("session_never_expires"))
     idle_timeout = int(state.LOGIN_RULES.get("session_idle_timeout", 1800))
     last_activity = int(session.get("last_activity") or 0)
+
+    # Apply the checks require_auth applies (deleted user, revoked epoch,
+    # 24h cap, idle timeout; kiosk accounts skip the time checks) so a
+    # token every other route refuses can't make the SPA think it's still
+    # signed in. A forced password change is not a rejection here: the SPA
+    # reads must_change_password below to show the change-password screen.
+    rejection = session_rejection(session, user)
+    if rejection is not None or not user:
+        response.delete_cookie("session", samesite="strict")
+        if rejection == "idle" and user:
+            await _audit(
+                "auth",
+                "session.idle_timeout",
+                user=user["username"],
+                detail=f"idle={int(time.time()) - last_activity}s threshold={idle_timeout}s path=/api/auth/status",
+                correlation_id=_corr_id(request),
+            )
+        return _logged_out_status()
+
+    never_expires = bool(user.get("session_never_expires"))
     return {
         "authenticated": True,
         "username": user["username"],
@@ -1483,9 +1513,10 @@ async def auth_status(request: Request, response: Response):
     }
 
 
-async def _require_auth_dep(request: Request):
-    """Late-bound wrapper for require_auth dependency."""
-    return await _require_auth(request)
+async def _require_auth_dep(request: Request, response: Response):
+    """Late-bound wrapper for require_auth dependency. Passes the response
+    through so the idle timeout is enforced and the cookie refreshed."""
+    return await _require_auth(request, response)
 
 
 # Per-user rate limiter for change-password (keyed on user_id)
@@ -1792,30 +1823,51 @@ def _saml_config() -> dict:
     return state.AUTH_CONFIG.get("saml") or {}
 
 
-def _saml_ready(cfg: dict) -> bool:
+def _saml_idp_ready(cfg: dict) -> bool:
     return bool(cfg.get("enabled") and cfg.get("idp_entity_id") and cfg.get("idp_sso_url") and cfg.get("idp_certs"))
+
+
+def _saml_sp_stored(cfg: dict) -> bool:
+    return bool(saml_sp_entity_id(cfg) and saml_acs_url(cfg))
+
+
+def _saml_ready(cfg: dict) -> bool:
+    """SAML sign-in is offered only when it is enabled, the IdP is complete
+    and the SP entity ID and ACS URL are stored. Sign-in never derives the
+    audience or recipient from the request's Host header, which the client
+    controls (an assertion meant for another SP on the same IdP would pass)."""
+    return _saml_idp_ready(cfg) and _saml_sp_stored(cfg)
 
 
 def _request_base(request: Request) -> str:
     return f"{_request_scheme(request)}://{request.url.netloc}"
 
 
-def saml_sp_entity_id(request: Request, cfg: dict) -> str:
-    """The configured SP entity ID, else the metadata URL on this host."""
-    return str(cfg.get("sp_entity_id") or "").strip() or _request_base(request) + saml.METADATA_PATH
+def saml_sp_entity_id(cfg: dict) -> str:
+    """The stored SP entity ID, or "" when none is stored."""
+    return str(cfg.get("sp_entity_id") or "").strip()
 
 
-def saml_acs_url(request: Request, cfg: dict) -> str:
-    """The configured ACS URL, else the ACS path on this host."""
-    return str(cfg.get("acs_url") or "").strip() or _request_base(request) + saml.ACS_PATH
+def saml_acs_url(cfg: dict) -> str:
+    """The stored ACS URL, or "" when none is stored."""
+    return str(cfg.get("acs_url") or "").strip()
 
 
-def _saml_settings(request: Request, cfg: dict) -> saml.SamlSettings:
+def saml_default_sp_urls(request: Request) -> tuple[str, str]:
+    """The SP entity ID (the metadata URL) and ACS URL for the address an
+    authenticated admin reached Plexus on. Used only to fill blank values
+    when an admin saves the SAML settings or views the values to register,
+    never at sign-in or on the public metadata endpoint."""
+    base = _request_base(request)
+    return base + saml.METADATA_PATH, base + saml.ACS_PATH
+
+
+def _saml_settings(cfg: dict) -> saml.SamlSettings:
     return saml.SamlSettings(
         idp_entity_id=str(cfg.get("idp_entity_id") or ""),
         certs=tuple(cfg.get("idp_certs") or ()),
-        sp_entity_id=saml_sp_entity_id(request, cfg),
-        acs_url=saml_acs_url(request, cfg),
+        sp_entity_id=saml_sp_entity_id(cfg),
+        acs_url=saml_acs_url(cfg),
         username_attribute=str(cfg.get("username_attribute") or ""),
         email_attribute=str(cfg.get("email_attribute") or ""),
         display_name_attribute=str(cfg.get("display_name_attribute") or ""),
@@ -1845,10 +1897,26 @@ def _drop_saml_tx_cookie(response: Response) -> None:
 
 @router.get(saml.METADATA_PATH)
 async def saml_metadata(request: Request):
-    """The SP metadata to register at the IdP (entity ID and ACS URL)."""
+    """The SP metadata to register at the IdP (entity ID and ACS URL). Only
+    stored values are published: 404 until an admin saves them."""
     cfg = _saml_config()
-    xml = saml.sp_metadata_xml(saml_sp_entity_id(request, cfg), saml_acs_url(request, cfg))
+    if not _saml_sp_stored(cfg):
+        raise HTTPException(status_code=404, detail="The SAML SP entity ID and ACS URL are not configured")
+    xml = saml.sp_metadata_xml(saml_sp_entity_id(cfg), saml_acs_url(cfg))
     return Response(content=xml, media_type="application/samlmetadata+xml")
+
+
+def _saml_unavailable_code(cfg: dict) -> str:
+    """The sign-in error code when SAML is not ready: ``setup`` for an
+    enabled, complete IdP whose SP entity ID or ACS URL was never stored (a
+    configuration saved by an older version), else ``disabled``."""
+    if _saml_idp_ready(cfg):
+        LOGGER.warning(
+            "saml: sign-in unavailable: the SP entity ID and ACS URL are not stored; "
+            "an admin must save the SAML settings once"
+        )
+        return "setup"
+    return "disabled"
 
 
 @router.get(saml.LOGIN_PATH)
@@ -1857,14 +1925,14 @@ async def saml_login(request: Request, next_path: str = Query("/", alias="next")
     the IdP with an AuthnRequest."""
     cfg = _saml_config()
     if not _saml_ready(cfg):
-        return _sso_error_redirect("disabled", _drop_saml_tx_cookie)
+        return _sso_error_redirect(_saml_unavailable_code(cfg), _drop_saml_tx_cookie)
     request_id = saml.new_request_id()
     relay_state = safe_next(next_path)
     url = saml.authn_request_url(
         str(cfg["idp_sso_url"]),
         request_id=request_id,
-        sp_entity_id=saml_sp_entity_id(request, cfg),
-        acs_url=saml_acs_url(request, cfg),
+        sp_entity_id=saml_sp_entity_id(cfg),
+        acs_url=saml_acs_url(cfg),
         relay_state=relay_state,
     )
     response = RedirectResponse(url, status_code=302)
@@ -1903,7 +1971,10 @@ async def saml_acs(request: Request):
         return refused
     cfg = _saml_config()
     if not _saml_ready(cfg):
-        return await attempt.fail("disabled", "SAML single sign-on is disabled")
+        code = _saml_unavailable_code(cfg)
+        if code == "setup":
+            return await attempt.fail(code, "the SAML SP entity ID and ACS URL are not configured")
+        return await attempt.fail(code, "SAML single sign-on is disabled")
     tx = _load_saml_tx(request)
     if tx is None:
         return await attempt.fail("state", "transaction cookie is missing, expired or invalid")
@@ -1916,7 +1987,7 @@ async def saml_acs(request: Request):
     try:
         result = saml.parse_response(
             saml_response if isinstance(saml_response, str) else "",
-            _saml_settings(request, cfg),
+            _saml_settings(cfg),
             request_id=tx["request_id"],
         )
     except SsoError as exc:

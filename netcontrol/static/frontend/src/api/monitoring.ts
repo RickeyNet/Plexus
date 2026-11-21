@@ -6,7 +6,7 @@
  */
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
-import { apiRequest, getCsrfToken } from './client';
+import { apiRequest, errorMessage, getCsrfToken } from './client';
 
 // ── Types ─────────────────────────────────────────────────────────────────
 
@@ -312,7 +312,9 @@ export interface CapacityPlanningResponse {
 }
 
 export interface PollNowEvent {
-  type: 'start' | 'host_done' | 'host_error' | 'done';
+  /** `error`: the poll did not run (another poll started first); see `error`. */
+  type: 'start' | 'host_done' | 'host_error' | 'done' | 'error';
+  error?: string;
   total_hosts?: number;
   completed?: number;
   hostname?: string;
@@ -663,8 +665,16 @@ export async function streamPollNow(
   });
 
   if (!res.ok || !res.body) {
+    // A 409 (a poll is already running) and other errors carry the API's
+    // JSON error body: show its message, not the raw JSON.
     const text = await res.text().catch(() => '');
-    throw new Error(text || `Poll stream failed: ${res.status}`);
+    let message: string | null = null;
+    try {
+      message = errorMessage(JSON.parse(text));
+    } catch {
+      /* not JSON */
+    }
+    throw new Error(message || text || `Poll stream failed: ${res.status}`);
   }
 
   const reader = res.body.getReader();

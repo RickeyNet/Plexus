@@ -384,7 +384,7 @@ from netcontrol.routes.virtualization import (
     admin_router as virtualization_admin_router,
     router as virtualization_router,
 )
-from netcontrol.scoped_dashboard import scoped_dashboard_data
+from netcontrol.scoped_dashboard import dashboard_for_caller, scoped_dashboard_data
 from netcontrol.sync.runner import sync_jobs_loop
 
 # Ensure project root is on path for imports
@@ -913,6 +913,15 @@ async def _load_request_features(request: Request, user: dict) -> list[str]:
     return features
 
 
+def _session_user_gone(response: Response | None) -> HTTPException:
+    """The 401 for a validly signed session whose user record is gone
+    (deleted by an admin). Clears the orphan cookie so the next request
+    takes the unauthenticated path cleanly; the caller raises the result."""
+    if response is not None:
+        response.delete_cookie("session", samesite="strict")
+    return HTTPException(status_code=401, detail="Session user not found")
+
+
 async def require_auth(request: Request, response: Response = None):
     """Dependency that checks for a valid session cookie. Returns session dict.
 
@@ -955,15 +964,17 @@ async def require_auth(request: Request, response: Response = None):
         raise HTTPException(status_code=401, detail="Session expired")
 
     user = await _load_request_user(request, session)
+    if not user:
+        raise _session_user_gone(response)
     # Session revocation: reject tokens minted before the user's current
-    # epoch (bumped on password change, admin reset, privilege change).
-    if user is not None:
-        token_epoch = int(session.get("session_epoch") or 0)
-        user_epoch = int(user.get("session_epoch") or 0)
-        if token_epoch != user_epoch:
-            if response is not None:
-                response.delete_cookie("session", samesite="strict")
-            raise HTTPException(status_code=401, detail="Session has been revoked")
+    # epoch (bumped on password change, admin reset, privilege change,
+    # rename and sign-out).
+    token_epoch = int(session.get("session_epoch") or 0)
+    user_epoch = int(user.get("session_epoch") or 0)
+    if token_epoch != user_epoch:
+        if response is not None:
+            response.delete_cookie("session", samesite="strict")
+        raise HTTPException(status_code=401, detail="Session has been revoked")
     if user and user.get("must_change_password") and path not in PASSWORD_CHANGE_ALLOWED_PATHS:
         raise HTTPException(
             status_code=403,
@@ -1257,12 +1268,7 @@ def require_feature(feature_key: str):
             return session
         user = await _load_request_user(request, session)
         if not user:
-            # Session is valid but the user record is gone (deleted, renamed
-            # via a different user_id, etc.). Clear the orphan cookie so the
-            # next request takes the unauthenticated path cleanly.
-            if response is not None:
-                response.delete_cookie("session", samesite="strict")
-            raise HTTPException(status_code=401, detail="Session user not found")
+            raise _session_user_gone(response)
         features = await _load_request_features(request, user)
         if user.get("role") != "admin" and feature_key not in features:
             raise HTTPException(status_code=403, detail=f"Access denied for feature '{feature_key}'")
@@ -2310,8 +2316,32 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
     return JSONResponse(status_code=500, content={"detail": "Internal server error"})
 
 
+async def _public_path_caller_authenticated(request: Request) -> bool:
+    """For a public path (no ``require_auth``): whether the request carries
+    the server API token or, unless ``APP_REQUIRE_API_TOKEN`` is set, a live
+    session cookie (``verify_ws_session``: the checks of ``require_auth``
+    without refreshing the cookie)."""
+    api_token = _extract_api_token(request)
+    if APP_API_TOKEN and api_token and secrets.compare_digest(api_token, APP_API_TOKEN):
+        return True
+    if _env_flag("APP_REQUIRE_API_TOKEN", False):
+        return False
+    token = request.cookies.get("session")
+    return bool(token) and await shared.verify_ws_session(token) is not None
+
+
+def _health_body(body: dict, full: bool) -> dict:
+    """The health payload for the caller: only ``ok`` and ``status`` without
+    a session or the API token (no metrics, uptime or database error)."""
+    return body if full else {"ok": body["ok"], "status": body["status"]}
+
+
 @app.get("/api/health")
-async def health(probe: str = ""):
+async def health(request: Request, probe: str = ""):
+    # Unauthenticated callers (load balancers, the container healthchecks)
+    # get ok/status and the same status code; the metrics, uptime and the
+    # database error class are for a session or the API token.
+    full = await _public_path_caller_authenticated(request)
     body = {
         "ok": True,
         "status": "healthy",
@@ -2321,7 +2351,7 @@ async def health(probe: str = ""):
     if probe == "live":
         # Liveness only: the process is up and serving requests. Use this
         # where a briefly busy database must not restart the container.
-        return body
+        return _health_body(body, full)
 
     # Readiness: every deploy gate (Dockerfile/compose healthchecks,
     # deploy/upgrade.sh) urlopen()s this path and treats non-2xx as
@@ -2345,16 +2375,19 @@ async def health(probe: str = ""):
         body["ok"] = False
         body["status"] = "degraded"
         body["db"] = f"error: {type(exc).__name__}"
-        return JSONResponse(status_code=503, content=body)
-    return body
+        return JSONResponse(status_code=503, content=_health_body(body, full))
+    return _health_body(body, full)
 
 
 @app.get("/api/version")
-async def version():
-    # Public on purpose so deploy/upgrade.sh and external monitoring can
-    # read it without holding a session.  Mirrors how /api/health is exposed.
+async def version(request: Request):
+    # The release number is public so external monitoring can read it
+    # without a session; the exact build (git SHA) is for a session or the
+    # API token (Settings > System compares it during an upgrade).
     from netcontrol.version import APP_GIT_SHA, APP_VERSION
 
+    if not await _public_path_caller_authenticated(request):
+        return {"version": APP_VERSION}
     return {"version": APP_VERSION, "git_sha": APP_GIT_SHA}
 
 
@@ -2364,13 +2397,6 @@ async def version():
 _DASHBOARD_CACHE_TTL_SECONDS = 10.0
 _dashboard_cache: dict = {"data": None, "expires": 0.0}
 _dashboard_cache_lock = asyncio.Lock()
-
-
-# The dashboard's "topology" section (the state of the entities integrations
-# collect) is the data of /api/availability/topology/*, which the monitoring
-# feature gates, and its chips link to Monitoring -> Availability; a user
-# without that feature gets the dashboard without it.
-_DASHBOARD_TOPOLOGY_FEATURE = "monitoring"
 
 
 async def _has_feature(request: Request, feature_key: str) -> bool:
@@ -2417,15 +2443,15 @@ async def _dashboard_data() -> dict:
 @app.get("/api/dashboard", dependencies=[Depends(require_auth), Depends(require_feature("dashboard"))])
 async def dashboard(request: Request):
     scope = await request_scope(request)
+    username = str((_get_session(request) or {}).get("user") or "")
     if scope.restricted:
         # Limited to selected inventory groups: computed over its scope, uncached.
-        session = _get_session(request) or {}
-        return await scoped_dashboard_data(scope, str(session.get("user") or ""))
-    # The cache is shared by every user, so the per-user gate applies after it.
-    data = await _dashboard_data()
-    if await _has_feature(request, _DASHBOARD_TOPOLOGY_FEATURE):
-        return data
-    return {key: value for key, value in data.items() if key != "topology"}
+        data = await scoped_dashboard_data(scope, username)
+    else:
+        data = await _dashboard_data()
+    # The cache is shared by every user, so the per-user feature gate applies
+    # after it, to a copy (dashboard_for_caller).
+    return await dashboard_for_caller(request, data, scope, username)
 
 
 # ═════════════════════════════════════════════════════════════════════════════

@@ -74,6 +74,11 @@ Regional clouds are supported through the *API base URL* field
 (`api.meraki.com`, `api.meraki.cn`, `api.meraki.in`, `api.meraki.ca`,
 `api.gov-meraki.com`). Other hosts are rejected, and redirects are followed
 only within the same Meraki domain, so the key cannot be sent elsewhere.
+The base URL also passes the
+[outbound address check](webhooks.md#outbound-address-check) when it is
+saved and when a collection connects: a name that does not resolve from
+the Plexus server is refused (list it in `APP_SSRF_ALLOW` when only a
+proxy resolves it).
 
 ## On the map
 

@@ -57,7 +57,7 @@ from typing import Any
 
 import httpx
 
-from netcontrol.routes.outbound_http import OutboundRequestError, guard_url, send_request, tls_verify
+from netcontrol.routes.outbound_http import OutboundRequestError, guard_host, guard_url, send_request, tls_verify
 from netcontrol.secret_fields import (
     NOTIFICATION_CHANNEL_SECRET_FIELDS,
     SECRET_MASK,
@@ -600,8 +600,22 @@ def _send_email_blocking(cfg: ChannelConfig, msg: EmailMessage) -> None:
             server.send_message(msg, from_addr=cfg.mail_from, to_addrs=recipients)
 
 
+async def check_smtp_host(cfg: ChannelConfig) -> None:
+    """The outbound address guard on an email channel's SMTP server (a no-op
+    for other channel types). Raises ``OutboundRequestError`` (a
+    ``ValueError``) naming the guard when the server is refused; the admin
+    save route turns it into a 400."""
+    if cfg.type != "email" or not cfg.smtp_host:
+        return
+    try:
+        await guard_host(cfg.smtp_host)
+    except OutboundRequestError as exc:
+        raise OutboundRequestError(f"SMTP server refused by the outbound address guard: {exc}") from None
+
+
 async def _deliver_email(cfg: ChannelConfig, alert: dict) -> None:
     msg = build_email(alert, cfg)
+    await check_smtp_host(cfg)
     loop = asyncio.get_running_loop()
     await loop.run_in_executor(None, _send_email_blocking, cfg, msg)
 

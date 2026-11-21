@@ -62,7 +62,12 @@ The map shows the most recent collection until you run another.
   nothing else. A bare host is taken as https; `http` and a URL with a path
   are refused, and redirects are not followed, so the credentials cannot be
   sent elsewhere. Untick **Verify the Panorama certificate** for a Panorama
-  that still has its self-signed certificate.
+  that still has its self-signed certificate. The address passes the
+  [outbound address check](webhooks.md#outbound-address-check) when saved
+  and when a collection connects: a cloud metadata address and a name that
+  does not resolve are refused, private addresses too when
+  `APP_SSRF_BLOCK_PRIVATE=true` (list Panorama in `APP_SSRF_ALLOW`). A
+  refusal fails the collection like a Panorama that cannot be reached.
 - **Device group**: blank reads every device group; a name (in any letter
   case) reads only the firewalls of that device group and of the device
   groups below it. The objects and rules of the ancestors and of shared are

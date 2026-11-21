@@ -122,6 +122,7 @@ from netcontrol.integrations.fmc.sample import build_sample_raw as build_fmc_sam
 from netcontrol.integrations.gcp.normalize import build_snapshot as build_gcp_snapshot
 from netcontrol.integrations.gcp.reachability import Reachability as GcpReachability
 from netcontrol.integrations.gcp.sample import build_sample as build_gcp_sample
+from netcontrol.integrations.http_common import guard_api_host
 from netcontrol.integrations.meraki.client import (
     DEFAULT_BASE_URL,
     MerakiApiError,
@@ -707,6 +708,14 @@ def _clean_base_url(raw: str | None, provider: str = PROVIDER_MERAKI) -> str:
         ) from None
 
 
+async def _checked_base_url(raw: str | None, provider: str) -> str:
+    """``_clean_base_url``, then the outbound address guard, so an address
+    the clients would refuse is a 400 at save time (``guard_api_host``)."""
+    base_url = _clean_base_url(raw, provider)
+    await guard_api_host(base_url, "Source", lambda message: HTTPException(status_code=400, detail=message))
+    return base_url
+
+
 def _options_for(provider: str, raw: object) -> dict[str, Any]:
     if provider == PROVIDER_CATO:
         return sanitize_cato_options(raw)
@@ -1023,7 +1032,7 @@ async def create_meraki_org_api(body: MerakiOrgCreate, request: Request):
         body.name.strip(),
         provider=provider,
         org_id=org_id,
-        base_url=_clean_base_url(body.base_url, provider),
+        base_url=await _checked_base_url(body.base_url, provider),
         api_key=body.api_key.strip(),
         options=_options_for(provider, body.options),
         auto_collect=body.auto_collect,
@@ -1090,7 +1099,7 @@ async def update_meraki_org_api(org_ref: int, body: MerakiOrgUpdate, request: Re
     if body.org_id is not None:
         updates["org_id"] = body.org_id.strip()
     if body.base_url is not None:
-        updates["base_url"] = _clean_base_url(body.base_url, provider)
+        updates["base_url"] = await _checked_base_url(body.base_url, provider)
     if body.api_key and body.api_key.strip():
         _check_secret(provider, body.api_key)
         updates["api_key"] = body.api_key.strip()

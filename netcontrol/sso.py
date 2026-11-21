@@ -30,7 +30,7 @@ from netcontrol.routes.outbound_http import OutboundRequestError, guard_url
 
 # Codes a sign-in failure may put in ``/login?sso_error=``. The login page
 # maps each to a fixed sentence; nothing else from the provider is echoed.
-SSO_ERROR_CODES = ("disabled", "state", "provider", "token", "claims", "account", "denied")
+SSO_ERROR_CODES = ("disabled", "setup", "state", "provider", "token", "claims", "account", "denied")
 
 HTTP_TIMEOUT_SECONDS = 10.0
 # Provider documents are small; refuse anything that is not, so a

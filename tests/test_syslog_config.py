@@ -89,3 +89,33 @@ async def test_admin_update_syslog_config_persists_and_applies(monkeypatch):
     finally:
         configure_syslog_logging({"enabled": False})
         state.SYSLOG_CONFIG = state._sanitize_syslog_config(None)
+
+
+def test_syslog_handler_refuses_a_guarded_host(monkeypatch):
+    # The forwarder host passes the outbound address guard before the
+    # handler is built: a metadata address is always refused, a private one
+    # with APP_SSRF_BLOCK_PRIVATE.
+    config = {"enabled": True, "host": "169.254.169.254", "port": 514, "protocol": "udp"}
+    try:
+        assert configure_syslog_logging(config) is False
+        assert syslog_logging_enabled() is False
+        monkeypatch.setenv("APP_SSRF_BLOCK_PRIVATE", "true")
+        assert configure_syslog_logging({**config, "host": "10.0.0.7"}) is False
+    finally:
+        configure_syslog_logging({"enabled": False})
+
+
+@pytest.mark.asyncio
+async def test_admin_update_syslog_config_refuses_a_guarded_host(monkeypatch):
+    from fastapi import HTTPException
+
+    monkeypatch.setattr(admin_module.db, "set_auth_setting", AsyncMock())
+    monkeypatch.setattr(admin_module, "_audit", AsyncMock())
+    before = dict(state.SYSLOG_CONFIG)
+    body = admin_module.SyslogConfigRequest(enabled=True, host="169.254.169.254", port=514, protocol="udp")
+    with pytest.raises(HTTPException) as raised:
+        await admin_module.admin_update_syslog_config(body, SimpleNamespace(cookies={}))
+    assert raised.value.status_code == 400
+    assert "Syslog host refused by the outbound address guard" in raised.value.detail
+    assert state.SYSLOG_CONFIG == before
+    admin_module.db.set_auth_setting.assert_not_awaited()

@@ -12,6 +12,7 @@ only when matched to one of their inventory hosts.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import random
 import re
@@ -1315,6 +1316,27 @@ async def _run_monitoring_poll_once(*, force: bool = False, host_ids: frozenset[
     }
 
 
+# One manual fleet sweep at a time: both poll-now endpoints and the admin
+# run-now share this lock, so parallel requests cannot multiply the SSH/SNMP
+# sessions to every device. A manual poll while another runs answers 409
+# (FLEET_POLL_RUNNING). The lock is only taken when it is free, never waited
+# on. The scheduled cycle does not take it: it runs one sweep at a time by
+# itself, and holding the lock for its whole sweep would refuse every Poll
+# Now pressed meanwhile. So at most two sweeps overlap (the scheduled one
+# and one manual), as before for a single user.
+_FLEET_POLL_LOCK = asyncio.Lock()
+FLEET_POLL_RUNNING = "A manual monitoring poll is already running. Try again when it finishes."
+
+
+async def _run_fleet_poll(*, force: bool = False, host_ids: frozenset[int] | None = None) -> dict | None:
+    """``_run_monitoring_poll_once`` under the manual poll lock; ``None``,
+    without polling, when a manual sweep is already running."""
+    if _FLEET_POLL_LOCK.locked():
+        return None
+    async with _FLEET_POLL_LOCK:
+        return await _run_monitoring_poll_once(force=force, host_ids=host_ids)
+
+
 async def poll_host_now(host_id: int) -> dict:
     """Poll one host now, outside the schedule, through the scheduled
     cycle's code (an APC UPS after one of its SNMP traps). Nothing while
@@ -1778,7 +1800,9 @@ async def monitoring_poll_now(request: Request):
     limited by object scope polls the hosts it may change)."""
     session = _get_session(request)
     user = session["user"] if session else ""
-    result = await _run_monitoring_poll_once(force=True, host_ids=await readable_host_ids(request, write=True))
+    result = await _run_fleet_poll(force=True, host_ids=await readable_host_ids(request, write=True))
+    if result is None:
+        raise HTTPException(status_code=409, detail=FLEET_POLL_RUNNING)
     await _audit(
         "monitoring",
         "poll.manual",
@@ -1797,8 +1821,24 @@ async def monitoring_poll_now_stream(request: Request):
     session = _get_session(request)
     user = session["user"] if session else ""
     allowed_hosts = await readable_host_ids(request, write=True)
+    if _FLEET_POLL_LOCK.locked():
+        raise HTTPException(status_code=409, detail=FLEET_POLL_RUNNING)
 
     async def _event_generator():
+        # The fleet poll lock is taken here, not in the handler, so a response
+        # whose body never starts cannot leave it held; ``async with`` frees it
+        # when the sweep ends or fails, on cancellation and on a client
+        # disconnect (GeneratorExit at a yield, which aclosing passes on to
+        # the sweep so it cancels its polls). Another sweep may have started
+        # since the handler's check: say so as an event.
+        if _FLEET_POLL_LOCK.locked():
+            yield f"data: {json.dumps({'type': 'error', 'error': FLEET_POLL_RUNNING})}\n\n"
+            return
+        async with _FLEET_POLL_LOCK, contextlib.aclosing(_sweep_events()) as events:
+            async for chunk in events:
+                yield chunk
+
+    async def _sweep_events():
         # Same target building, persistence, and post-processing as the
         # scheduled cycle (_build_poll_targets/_process_poll_result) — this
         # stream previously carried an inline copy that silently drifted
@@ -1926,7 +1966,9 @@ async def admin_update_monitoring_config(body: dict, request: Request):
 
 @admin_router.post("/api/admin/monitoring/run-now")
 async def admin_run_monitoring_now(request: Request):
-    result = await _run_monitoring_poll_once(force=True)
+    result = await _run_fleet_poll(force=True)
+    if result is None:
+        raise HTTPException(status_code=409, detail=FLEET_POLL_RUNNING)
     session = _get_session(request)
     await _audit(
         "monitoring",

@@ -159,6 +159,14 @@ to present it.
   [TACACS+](../TACACS_CONFIGURATION_GUIDE.md), LDAP in
   [deploy/DEPLOYMENT.md](../deploy/DEPLOYMENT.md), and OIDC single sign-on,
   set up on this tab as well, in [sso-oidc.md](sso-oidc.md).
+- **Server address check.** An enabled RADIUS, TACACS+ or LDAP server
+  passes the outbound address guard
+  ([webhooks.md](webhooks.md#outbound-address-check)) when a save turns it
+  on or changes it (`400` naming the guard) and before each login (the
+  login then fails as for an unreachable server). A cloud metadata address
+  is always refused, a name that does not resolve too, and a private
+  address when `APP_SSRF_BLOCK_PRIVATE=true`; list a trusted server in
+  `APP_SSRF_ALLOW`.
 - **Stored secrets.** The RADIUS and TACACS+ secrets, the LDAP bind
   password and the OIDC client secret are shown masked. Saving the mask
   keeps a secret only while its server stays the same: a new server or
@@ -198,7 +206,21 @@ Sends the Plexus application log to a syslog server. Tick **Enable Syslog
 Forwarding**, then set **Host**, **Port** (1 to 65535), **Protocol** (UDP or
 TCP), **Facility**, **Level** (the lowest level sent: DEBUG, INFO, WARNING,
 ERROR or CRITICAL) and **App Name**. Choose **Save Syslog Settings**, then
-**Send Test Message**. A host is required when forwarding is on.
+**Send Test Message**. A host is required when forwarding is on, and it
+passes the outbound address guard
+([webhooks.md](webhooks.md#outbound-address-check)) when saved and when
+the forwarder starts: a refused host is a `400` naming the guard.
+
+Every line Plexus logs, to the console and to this forwarder, is redacted
+first, and so are the before and after values in the change log. The value
+under a secret key name is masked (`password`, `secret`, `token`,
+`api_key`, `authorization`, `community`, `psk`, `private_key`,
+`passphrase`, `routing_key`, `credential`, ...), in `key=value`,
+`key: value` and JSON `"key": "value"` form, as are `password x` and
+`secret 5 x` in device configuration, `Bearer` and `Basic` credentials and
+`snmp-server community x`. A name that only references a secret stays
+readable (`credential_id`, `token_count`, `community_list`,
+`secret_variables`), and so do `true`, `false` and empty values.
 
 ### SIEM
 
@@ -379,11 +401,18 @@ section "Update from the web UI".
 
 ## Rules worth knowing
 
-- **Sign-out on change.** Changing a user's role, changing their access
-  groups, or resetting their password signs that user out of all sessions.
-  Changing your own password signs out your other sessions only. The
+- **Sign-out on change.** Changing a user's role, renaming them, changing
+  their access groups, or resetting their password signs that user out of
+  all sessions. Renaming your own account signs you out too. Changing your
+  own password signs out your other sessions only. The
   **Edit User Account** dialog always saves the access groups too, so
   saving it signs the user out even when only the display name changed.
+  Deleting a user ends their open sessions at once.
+- **Sign out ends every session of the account.** Signing out revokes the
+  session on the server, so a copied cookie stops working. Plexus cannot
+  revoke a single browser, so the account is signed out in every browser
+  and device. Kiosk displays that share one account are signed out
+  together when one of them signs out. It is audited as `auth` / `logout`.
 - **You cannot** delete your own account, remove your own admin role, or
   delete the last admin.
 - **Feature visibility is global.** It applies to all users. Use access

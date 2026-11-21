@@ -179,7 +179,9 @@ There is no drag-and-drop layout: each panel has a width and height on a
   up to 2 hours, hourly rollups up to 2 days, and daily rollups beyond.
 - **Custom dashboards are personal.** A non-admin user sees and changes only
   the dashboards they created. An admin sees all of them. Deleting a
-  dashboard deletes its panels.
+  dashboard deletes its panels. A dashboard created with the API token, or
+  created before Plexus recorded the creator, has no owner and only admins
+  can open it.
 - **Panel data needs `monitoring`.** Custom dashboard panels read
   `/api/metrics/query`, which needs the `monitoring` feature.
 
@@ -190,6 +192,9 @@ There is no drag-and-drop layout: each panel has a width and height on a
 | Open the Dashboard | The `dashboard` feature |
 | See integration sources | The `topology` feature |
 | See integration entity counts and problems, mute from Active Alerts | The `monitoring` feature (muting needs `monitoring.write`) |
+| See device health, open alerts and the device panels' data | The `monitoring` feature |
+| See the inventory group tiles | The `inventory` feature |
+| See recent jobs | The `jobs` feature; a non-admin sees only the jobs they launched |
 | See Top Talkers | The `traffic-analysis` feature |
 | See Backup Status | The `config-backups` feature |
 | Add source, most setup steps | Admin |
@@ -204,7 +209,7 @@ API. The full list is in [API reference](api-reference.md).
 
 | Method and path | Purpose |
 |---|---|
-| `GET /api/dashboard` | The summary: `stats`, `groups`, `device_health`, `open_alerts`, `topology` |
+| `GET /api/dashboard` | The summary: `stats`, `recent_jobs` (with `jobs`), `groups` (with `inventory`), `monitoring`, `device_health`, `open_alerts` and `topology` (with `monitoring`). A section whose feature the caller lacks is left out |
 | `GET /api/dashboard/top-interfaces?range=6h&limit=5` | Busiest interfaces with their samples; `range` 1h, 6h, 24h or 7d; `limit` 1-20 |
 | `GET /api/annotations?start=&end=&categories=deployment,config,alert` | Events for the feed and chart markers |
 | `GET /api/dashboards`, `POST`, `GET/PUT/DELETE /api/dashboards/{id}` | Custom dashboards |

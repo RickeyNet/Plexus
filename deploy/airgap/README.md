@@ -37,8 +37,8 @@ contains:
 plexus-airgap-bundle/
 ├── images/
 │   ├── plexus.tar          # Plexus app image (built from this repo)
-│   ├── postgres.tar        # postgres:16-alpine
-│   └── nginx.tar           # nginx:alpine
+│   ├── postgres.tar        # the postgres image docker-compose.yml pins
+│   └── nginx.tar           # the nginx image docker-compose.yml pins
 ├── debs/
 │   └── docker-*.deb        # Docker Engine + compose plugin (resolute/amd64)
 ├── desktop-debs/
@@ -88,8 +88,7 @@ The installer:
 
 1. Installs Docker Engine + compose plugin from the bundled `.deb`s (skips if
    Docker is already present).
-2. Loads `plexus`, `postgres:16-alpine`, and `nginx:alpine` images via
-   `docker load`.
+2. Loads the `plexus`, `postgres` and `nginx` images via `docker load`.
 3. Stages the compose project into `/opt/plexus`.
 4. Runs `deploy/setup.sh` to generate `.env` (random DB and first-login
    passwords; `APP_API_TOKEN` stays empty unless you run the installer as
@@ -98,8 +97,21 @@ The installer:
    and a self-signed TLS cert from the VM's hostname, then pins
    `PLEXUS_IMAGE=plexus:airgap` in `.env` so compose uses the loaded image
    instead of trying to build (no internet, can't reach Docker Hub).
+   It also sets `COMPOSE_FILE=docker-compose.yml:docker-compose.airgap.yml`
+   in `.env` (see below).
 5. `docker compose up -d` to start `plexus`, `postgres`, and `nginx`.
 6. Opens firewall ports if `ufw` is active.
+
+**Pinned images offline.** `docker-compose.yml` names `postgres` and `nginx`
+by tag and digest (`name:tag@sha256:...`). An image loaded from a tar has no
+registry digest, so on the offline VM that reference would make compose try
+to pull and fail. `bundle.sh` therefore pulls each image by its pinned digest
+on the online machine, saves it under its plain tag, and writes
+`repo/docker-compose.airgap.yml`, an override that names the same images by
+that tag. The installer adds the override through `COMPOSE_FILE` in `.env`,
+so every `docker compose` command run in `/opt/plexus` uses it. A command
+that passes `-f docker-compose.yml` on its own skips the override; that is
+fine for `logs`, `ps` and `down`, but run `up` without `-f`.
 
 ## Step 4 - First login
 

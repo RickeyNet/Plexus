@@ -195,6 +195,9 @@ export interface SamlSpInfo {
   acs_url: string;
   metadata_url: string;
   certs: SamlCertSummary[];
+  /** False while the SP entity ID or ACS URL is not stored yet: the values
+   * above are what saving the settings stores. Missing on older servers. */
+  configured?: boolean;
 }
 
 export interface SamlMetadataImport {

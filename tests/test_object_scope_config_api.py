@@ -362,6 +362,29 @@ def test_capture_jobs_and_websockets_hide_out_of_scope_hosts(abc, scoped, drift,
         assert ws.receive_json() == {"type": "line", "data": "edge\n"}
 
 
+def test_capture_job_status_is_for_its_launcher_or_an_admin(admin, abc, monkeypatch):
+    """The HTTP twin of /ws/config-capture checks the launcher like the
+    socket does; another user's job answers like an unknown one."""
+    job = {
+        "job_id": "other-capture",
+        "status": "completed",
+        "started_at": "",
+        "finished_at": "",
+        "output_lines": ["hostname edge-1\n"],
+        "launched_by": "someone-else",
+        "group_ids": [abc["B"]],
+    }
+    monkeypatch.setitem(config_drift._capture_jobs, "other-capture", job)
+    everyone = user_client(admin, "all-capture", features=["config-drift"])
+    other = everyone.get("/api/config-drift/capture-job/other-capture")
+    unknown = everyone.get("/api/config-drift/capture-job/no-such-capture")
+    expected = (404, _error("Capture job not found"))
+    assert (other.status_code, other.json()) == (unknown.status_code, unknown.json()) == expected
+    monkeypatch.setitem(config_drift._capture_jobs, "own-capture", {**job, "launched_by": "all-capture"})
+    assert everyone.get("/api/config-drift/capture-job/own-capture").status_code == 200
+    assert admin.get("/api/config-drift/capture-job/other-capture").json()["output"] == "hostname edge-1\n"
+
+
 def test_unrestricted_user_sees_every_drift_record(admin, abc, drift):
     everyone = user_client(admin, "all-drift", features=["config-drift"])
     hosts = {e["host_id"] for e in everyone.get("/api/config-drift/events").json()}

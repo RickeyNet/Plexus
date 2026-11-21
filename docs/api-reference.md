@@ -14,7 +14,8 @@ OpenID Connect single sign-on next to the password login. See [sso-oidc.md](sso-
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET    | `/api/auth/status` | Signed out, the body also holds `sso: {oidc: {enabled, label, primary}}` (`enabled` only when SSO is on and an issuer and client id are set) |
+| GET    | `/api/auth/status` | Signed out, the body also holds `sso: {oidc: {enabled, label, primary}}` (`enabled` only when SSO is on and an issuer and client id are set). A cookie every other route refuses (deleted user, revoked, past the 24 h cap or idle) answers `authenticated: false` and is deleted. A user who must change their password gets `authenticated: true` with `must_change_password: true` |
+| POST   | `/api/auth/logout` | Always `200 {ok: true}` and deletes the cookie. A valid session is also revoked on the server, which ends every session of that account (all browsers and devices); audited `logout`. A missing, invalid, expired or revoked cookie revokes nothing |
 | GET    | `/api/auth/oidc/login?next=/path` | Public. Redirects (302) to the provider's authorization endpoint with `state`, `nonce` and an S256 `code_challenge`, setting the signed `oidc_tx` cookie (HttpOnly, SameSite=Lax, 600 s, path `/api/auth/oidc`). `next` is kept only when it is a same-site path, else `/`. When SSO is off or discovery fails, 303 to `/login?sso_error=disabled` or `provider` |
 | GET    | `/api/auth/oidc/callback` | Public. On success sets the session cookie, drops `oidc_tx` and redirects (303) to `next`; audited `login.success` with `source=oidc`. On failure 303 to `/login?sso_error=<code>` with `code` one of `disabled`, `state`, `provider`, `token`, `claims`, `account`, `denied`; audited `login.failure` naming the failed step, and counted toward the per-IP login lockout |
 | GET    | `/api/admin/auth-config` | Admin. Includes `oidc` (see sso-oidc.md for the fields); `client_secret` is the mask when one is stored, else `""` |
@@ -38,8 +39,9 @@ For a scoped user the inventory, config backup, config drift and intended config
 ### Dashboard
 | Method | Endpoint         | Description                                          |
 |--------|------------------|------------------------------------------------------|
-| GET    | `/api/dashboard` | Stats, recent jobs, inventory overview, device health, open alerts; with the `monitoring` feature also `topology`: entity counts by state (total, per provider, and `by_source`: one `{provider, org_ref, entity_type, up, degraded, down, unknown}` row per entity type of each source; the AWS, Azure and GCP accounts of one cloud share one `org_ref`) and the down / degraded integration entities, down first, newest first, at most 50 |
-| GET    | `/api/health`    | Service health + lightweight counters/timing metrics |
+| GET    | `/api/dashboard` | Stats for every holder of the `dashboard` feature; with `jobs` also recent jobs (a non-admin sees only their own); with `inventory` the inventory groups; with `monitoring` the monitoring summary, device health, open alerts and `topology`: entity counts by state (total, per provider, and `by_source`: one `{provider, org_ref, entity_type, up, degraded, down, unknown}` row per entity type of each source; the AWS, Azure and GCP accounts of one cloud share one `org_ref`) and the down / degraded integration entities, down first, newest first, at most 50 |
+| GET    | `/api/health`    | Service health: `{ok, status}` for anyone (200 healthy, 503 degraded); uptime, counters/timing metrics and the database probe result only with a session or the API token |
+| GET    | `/api/version`   | Release number for anyone; the git SHA of the build only with a session or the API token |
 
 ### Inventory
 | Method | Endpoint                      | Description                                      |
