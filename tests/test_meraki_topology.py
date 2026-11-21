@@ -141,6 +141,24 @@ def test_scrub_secrets_removes_nested_secret_keys():
     assert cleaned["peers"][0] == {"name": "aws", "publicIp": "192.0.2.1"}
 
 
+def test_scrub_secrets_uses_the_shared_secret_key_names():
+    """The key rules of netcontrol.secret_keys: separators and case do not
+    matter, a reference to a secret (an id, a flag) is kept."""
+    payload = {
+        "communityString": "example-community",
+        "private_key": "example-key",
+        "api-key": "example-api-key",
+        "pskGroupId": "12",
+        "passwordEnabled": True,
+        "users": [{"username": "monitor", "passphrase": "example-phrase"}],
+    }
+    assert scrub_secrets(payload) == {
+        "pskGroupId": "12",
+        "passwordEnabled": True,
+        "users": [{"username": "monitor"}],
+    }
+
+
 def test_sanitize_options_clamps_and_defaults():
     opts = sanitize_options({"requests_per_second": 500, "max_concurrency": 0, "network_tags": "a, b ,", "bogus": 1})
     assert opts["requests_per_second"] == 10.0

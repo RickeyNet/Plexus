@@ -20,7 +20,13 @@ from pydantic import BaseModel, Field
 import netcontrol.routes.state as state
 from netcontrol import lab_images, listener_sources, oidc, saml
 from netcontrol.object_scope import scope_for_user
-from netcontrol.routes.auth import _oidc_redirect_uri, saml_acs_url, saml_default_sp_urls, saml_sp_entity_id
+from netcontrol.routes.auth import (
+    _oidc_redirect_uri,
+    oidc_default_redirect_uri,
+    saml_acs_url,
+    saml_default_sp_urls,
+    saml_sp_entity_id,
+)
 from netcontrol.routes.outbound_http import OutboundRequestError, guard_host
 from netcontrol.routes.shared import _audit, _corr_id, _get_session, _session_user
 from netcontrol.routes.state import _env_flag
@@ -975,9 +981,13 @@ def _check_sso_common(submitted: dict, protocol: str) -> None:
         )
 
 
-def _oidc_config_to_store(submitted: dict) -> dict:
+def _oidc_config_to_store(submitted: dict, request: Request | None = None) -> dict:
     """Validate a submitted OIDC block and turn its client secret into the
-    stored ciphertext (mask = keep the saved one, empty = public client)."""
+    stored ciphertext (mask = keep the saved one, empty = public client).
+
+    A blank redirect URI is filled from the address the admin reached Plexus
+    on (``request``, an authenticated admin request) and stored: sign-in uses
+    only the stored value, never the Host header of the sign-in request."""
     current = state.AUTH_CONFIG.get("oidc") or {}
     issuer = str(submitted.get("issuer") or "").strip()
     if submitted.get("enabled"):
@@ -985,8 +995,11 @@ def _oidc_config_to_store(submitted: dict) -> dict:
             raise HTTPException(status_code=400, detail="OIDC issuer must be an https URL")
         if not str(submitted.get("client_id") or "").strip():
             raise HTTPException(status_code=400, detail="OIDC client id is required")
+    default_redirect = oidc_default_redirect_uri(request) if request is not None else ""
     redirect_uri = str(submitted.get("redirect_uri") or "").strip()
-    if redirect_uri and not oidc.is_allowed_url(redirect_uri):
+    # The value a blank field stores (this admin's own address, which may be
+    # plain http) passes when it comes back on the next save.
+    if redirect_uri and redirect_uri != default_redirect and not oidc.is_allowed_url(redirect_uri):
         raise HTTPException(status_code=400, detail="OIDC redirect URI must be an https URL")
     _check_sso_common(submitted, "OIDC")
     out = dict(submitted)
@@ -1011,6 +1024,8 @@ def _oidc_config_to_store(submitted: dict) -> dict:
         out["client_secret_enc"] = encrypt(secret)
     else:
         out["client_secret_enc"] = ""
+    if request is not None:
+        out["redirect_uri"] = redirect_uri or default_redirect
     return out
 
 
@@ -1082,7 +1097,7 @@ async def admin_update_auth_config(body: AuthConfigRequest, request: Request = N
     if submitted_oidc is None:
         data["oidc"] = dict(state.AUTH_CONFIG.get("oidc") or {})
     else:
-        data["oidc"] = _oidc_config_to_store(submitted_oidc)
+        data["oidc"] = _oidc_config_to_store(submitted_oidc, request)
     submitted_saml = data.pop("saml", None)
     if submitted_saml is None:
         data["saml"] = dict(state.AUTH_CONFIG.get("saml") or {})
@@ -1100,8 +1115,13 @@ async def admin_update_auth_config(body: AuthConfigRequest, request: Request = N
 async def admin_test_oidc(request: Request, body: OidcTestRequest | None = None):
     """Fetch the provider's discovery document and JWKS (fresh, not from
     cache) for the given or saved issuer, and show the redirect URI to
-    register."""
+    register.
+
+    ``configured`` is false while no redirect URI is stored; the value shown
+    then is the one saving the settings would store (the address this admin
+    reached Plexus on)."""
     cfg = state.AUTH_CONFIG.get("oidc") or {}
+    stored_redirect = _oidc_redirect_uri(cfg)
     issuer = (body.issuer if body and body.issuer is not None else str(cfg.get("issuer") or "")).strip()
     ca = (body.ca_cert_file if body and body.ca_cert_file is not None else str(cfg.get("ca_cert_file") or "")).strip()
     result: dict = {
@@ -1112,7 +1132,8 @@ async def admin_test_oidc(request: Request, body: OidcTestRequest | None = None)
         "userinfo_endpoint": "",
         "algorithms": [],
         "key_count": 0,
-        "redirect_uri": _oidc_redirect_uri(request, cfg),
+        "redirect_uri": stored_redirect or oidc_default_redirect_uri(request),
+        "configured": bool(stored_redirect),
         "error": "",
     }
     try:

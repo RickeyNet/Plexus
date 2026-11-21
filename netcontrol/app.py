@@ -922,6 +922,15 @@ def _session_user_gone(response: Response | None) -> HTTPException:
     return HTTPException(status_code=401, detail="Session user not found")
 
 
+# The 401 detail for each reason shared.session_rejection gives, a missing
+# user aside (_session_user_gone).
+_SESSION_REJECTION_DETAIL = {
+    "revoked": "Session has been revoked",
+    "expired": "Session expired",
+    "idle": "Session idle timeout exceeded",
+}
+
+
 async def require_auth(request: Request, response: Response = None):
     """Dependency that checks for a valid session cookie. Returns session dict.
 
@@ -964,52 +973,37 @@ async def require_auth(request: Request, response: Response = None):
         raise HTTPException(status_code=401, detail="Session expired")
 
     user = await _load_request_user(request, session)
-    if not user:
+    # The same decision the WebSocket check and /api/auth/status take: a
+    # deleted user, a revoked epoch (password change, admin reset, privilege
+    # change, rename, sign-out), the 24h cap and the idle timeout. Kiosk
+    # accounts skip the two time checks.
+    rejection = shared.session_rejection(session, user)
+    if rejection == "user_missing" or not user:
         raise _session_user_gone(response)
-    # Session revocation: reject tokens minted before the user's current
-    # epoch (bumped on password change, admin reset, privilege change,
-    # rename and sign-out).
-    token_epoch = int(session.get("session_epoch") or 0)
-    user_epoch = int(user.get("session_epoch") or 0)
-    if token_epoch != user_epoch:
+    if rejection is not None:
         if response is not None:
             response.delete_cookie("session", samesite="strict")
-        raise HTTPException(status_code=401, detail="Session has been revoked")
-    if user and user.get("must_change_password") and path not in PASSWORD_CHANGE_ALLOWED_PATHS:
+        if rejection == "idle":
+            idle_timeout = int(state.LOGIN_RULES.get("session_idle_timeout", 1800))
+            elapsed = int(time.time()) - int(session.get("last_activity") or 0)
+            await shared._audit(
+                "auth",
+                "session.idle_timeout",
+                user=session.get("user", ""),
+                detail=f"idle={elapsed}s threshold={idle_timeout}s path={path}",
+                correlation_id=shared._corr_id(request),
+            )
+        raise HTTPException(status_code=401, detail=_SESSION_REJECTION_DETAIL[rejection])
+    if user.get("must_change_password") and path not in PASSWORD_CHANGE_ALLOWED_PATHS:
         raise HTTPException(
             status_code=403,
             detail="Password change required before accessing this resource",
         )
 
-    never_expires = bool((user or {}).get("session_never_expires"))
-
-    # Absolute lifetime cap (24h) - skipped for kiosk/display accounts.
-    if not never_expires:
-        originally_issued = int(session.get("originally_issued_at") or 0)
-        if originally_issued > 0 and int(time.time()) - originally_issued > SESSION_MAX_AGE:
-            if response is not None:
-                response.delete_cookie("session", samesite="strict")
-            raise HTTPException(status_code=401, detail="Session expired")
-
-    # Idle-timeout enforcement + cookie refresh. Skip for kiosk accounts and
-    # for endpoints that don't pass a Response (rare - most routes do).
-    if not never_expires and response is not None:
-        idle_timeout = int(state.LOGIN_RULES.get("session_idle_timeout", 1800))
-        last_activity = int(session.get("last_activity") or 0)
-        if idle_timeout > 0 and last_activity > 0:
-            elapsed = int(time.time()) - last_activity
-            if elapsed > idle_timeout:
-                response.delete_cookie("session", samesite="strict")
-                await shared._audit(
-                    "auth",
-                    "session.idle_timeout",
-                    user=session.get("user", ""),
-                    detail=f"idle={elapsed}s threshold={idle_timeout}s path={path}",
-                    correlation_id=shared._corr_id(request),
-                )
-                raise HTTPException(status_code=401, detail="Session idle timeout exceeded")
-        # Bump activity by re-issuing the cookie. Re-using the same attributes
-        # the login flow uses keeps the cookie behavior consistent.
+    # Bump activity by re-issuing the cookie, with the attributes the login
+    # flow uses. Kiosk accounts keep their cookie; a call with no Response
+    # has nowhere to set one.
+    if not user.get("session_never_expires") and response is not None:
         refreshed = _refresh_session_token(session)
         response.set_cookie(
             key="session",
@@ -1298,9 +1292,7 @@ def require_feature_method(feature_key: str):
             return session
         user = await _load_request_user(request, session)
         if not user:
-            if response is not None:
-                response.delete_cookie("session", samesite="strict")
-            raise HTTPException(status_code=401, detail="Session user not found")
+            raise _session_user_gone(response)
         if user.get("role") == "admin":
             return session
         features = set(await _load_request_features(request, user))
@@ -1332,9 +1324,7 @@ async def require_admin(request: Request, response: Response = None):
     # for the rest of the session.
     user = await _load_request_user(request, session)
     if not user:
-        if response is not None:
-            response.delete_cookie("session", samesite="strict")
-        raise HTTPException(status_code=401, detail="Session user not found")
+        raise _session_user_gone(response)
     if user["role"] != "admin":
         raise HTTPException(status_code=403, detail="Admin access required")
     return session
@@ -2463,7 +2453,7 @@ async def dashboard(request: Request):
 # ═════════════════════════════════════════════════════════════════════════════
 
 # Initialize late-binding dependencies for modules that need them
-init_jobs(require_auth, require_feature, verify_session_token, _get_user_features, require_admin_fn=require_admin)
+init_jobs(require_auth, require_feature, verify_session_token, _get_user_features)
 init_config_drift(verify_session_token, _get_user_features)
 init_compliance(require_auth, require_feature, require_admin)
 init_deployments(verify_session_token, _get_user_features)
@@ -2542,8 +2532,8 @@ app.include_router(
 )
 app.include_router(sync_admin_router, dependencies=[Depends(require_admin)])
 # External secrets providers (Vault, AWS Secrets Manager, Azure Key Vault):
-# read with secrets-providers, changed and tested with
-# secrets-providers.write (docs/secrets-providers.md).
+# read with secrets-providers; only admins add, change, delete and test
+# them (docs/secrets-providers.md).
 app.include_router(
     secrets_providers_router,
     dependencies=[Depends(require_auth), Depends(require_feature_method("secrets-providers"))],

@@ -57,6 +57,38 @@ def test_protected_endpoint_accepts_bearer_token(token_protected_client):
     assert "feature_flags" in payload
 
 
+TOKEN = {"X-API-Token": "week6-secret-token"}
+
+
+def test_api_token_reaches_the_credential_routes(token_protected_client):
+    """The token is no user: it lists every credential, and what it creates
+    has no owner."""
+    created = token_protected_client.post(
+        "/api/credentials",
+        json={"name": "token-made", "username": "svc-example", "password": "example-pass"},
+        headers=TOKEN,
+    )
+    assert created.status_code == 201, created.text
+    cred_id = created.json()["id"]
+    listed = token_protected_client.get("/api/credentials", headers=TOKEN)
+    assert listed.status_code == 200, listed.text
+    (row,) = [c for c in listed.json() if c["id"] == cred_id]
+    assert row.get("owner_id") is None
+    assert token_protected_client.delete(f"/api/credentials/{cred_id}", headers=TOKEN).status_code == 200
+
+
+def test_api_token_is_an_admin_for_service_credentials_and_secret_variables(token_protected_client):
+    assert token_protected_client.get("/api/credentials/service", headers=TOKEN).status_code == 200
+    assert token_protected_client.get("/api/credentials/secrets-providers", headers=TOKEN).status_code == 200
+    assert token_protected_client.get("/api/secret-variables", headers=TOKEN).status_code == 200
+
+
+def test_credential_routes_refuse_a_request_without_the_token(token_protected_client):
+    assert token_protected_client.get("/api/credentials").status_code == 401
+    assert token_protected_client.get("/api/credentials/service").status_code == 401
+    assert token_protected_client.get("/api/secret-variables").status_code == 401
+
+
 def test_token_requirement_overrides_valid_session_cookie(token_protected_client):
     session_token = app_module.create_session_token("admin", 1)
     response = token_protected_client.get(

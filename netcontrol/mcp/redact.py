@@ -28,9 +28,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from netcontrol.integrations.meraki.collector import _SECRET_KEY_FRAGMENTS as _MERAKI_SECRET_KEY_FRAGMENTS
 from netcontrol.integrations.opnsense.secrets import mask_config_xml
-from netcontrol.secret_keys import SECRET_KEY_FRAGMENTS, should_mask
+from netcontrol.secret_keys import should_mask
 
 MASK = "********"
 
@@ -261,11 +260,6 @@ def redact_config_text(text: str, *, keep_lines: bool = False) -> str:
 
 # ── Structured values ────────────────────────────────────────────────────────
 
-# The shared secret key names (``netcontrol.secret_keys``, also used by the
-# log redaction) plus the ones the Meraki collector scrubs.
-_DENY_KEY_FRAGMENTS: tuple[str, ...] = tuple(dict.fromkeys((*SECRET_KEY_FRAGMENTS, *_MERAKI_SECRET_KEY_FRAGMENTS)))
-
-
 def redact_value(value: Any) -> Any:
     """A masked copy of ``value``. Dicts, lists and tuples are walked; a
     value under a secret-bearing key is replaced whole (booleans and nulls
@@ -276,7 +270,7 @@ def redact_value(value: Any) -> Any:
     if isinstance(value, dict):
         masked: dict[Any, Any] = {}
         for key, item in value.items():
-            if should_mask(key, item, _DENY_KEY_FRAGMENTS):
+            if should_mask(key, item):
                 masked[key] = MASK
             else:
                 masked[key] = redact_value(item)

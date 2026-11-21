@@ -108,9 +108,18 @@ _ENFORCED_READ = (
     "secrets-providers",
 )
 # Read-only catalog keys (no ``.write``): dashboard, reports, mac-tracking,
-# traffic-analysis, organization, graphql, chatops.
+# traffic-analysis, organization, graphql, chatops, secrets-providers.
 _NO_WRITE = frozenset(
-    {"dashboard", "reports", "mac-tracking", "traffic-analysis", "organization", "graphql", "chatops"}
+    {
+        "dashboard",
+        "reports",
+        "mac-tracking",
+        "traffic-analysis",
+        "organization",
+        "graphql",
+        "chatops",
+        "secrets-providers",
+    }
 )
 # Further per-feature permissions whose routes enforce the scope too
 # (jobs.approve: the approvals list and decisions check every job target).

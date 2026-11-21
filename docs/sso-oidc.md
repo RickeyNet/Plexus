@@ -26,10 +26,22 @@ Create a **web application** (OIDC, authorization code flow) and note:
 | Token endpoint authentication | `client_secret_basic` (default) or `client_secret_post`; none for a public client |
 | ID token signing | RS256/384/512, PS256/384/512 or ES256/384/512. `none` and `HS*` are refused. |
 
-The redirect URI is derived from the request (the scheme from
-`X-Forwarded-Proto` as the HTTPS redirect middleware reads it, the `Host`
-header, plus the callback path). Behind a proxy that rewrites the host
-name, set **Redirect URI Override** to the public URL.
+Sign-in uses only the stored redirect URI. When you save the OIDC
+settings with **Redirect URI** blank, Plexus fills it from the address you
+are using at that moment (the scheme from `X-Forwarded-Proto` as the HTTPS
+redirect middleware reads it, then the host name, plus the callback path)
+and stores it. So open Settings on the public URL users will sign in on,
+or type the public URL in the field. Until a value is stored the form says
+so, shows the value a save would store, and OIDC sign-in is off. Plexus
+never derives the redirect URI from the `Host` header of a sign-in
+request, which the client controls.
+
+**Upgrading.** An OIDC configuration saved by an older version with a
+blank redirect URI has no stored value, so OIDC sign-in is off after the
+upgrade (the login page offers no OIDC button and a direct sign-in shows
+"Single sign-on is not set up yet"). An admin opens Settings >
+Authentication on the public URL and saves once to restore it. Check that
+the stored value matches the redirect URI registered at the provider.
 
 ## 2. Configure Plexus
 
@@ -52,15 +64,16 @@ Settings > Authentication > **Single sign-on (OpenID Connect)**:
 | Group Mappings | | Up to 200 pairs of group claim value and access group. Unknown access groups are skipped with a warning. |
 | Button Label | `Sign in with SSO` | At most 60 characters |
 | Lead with SSO on the login page | off | Display only: the SSO button comes first and the password form folds behind "Use a local account" |
-| Redirect URI Override | | Empty = derived from the request |
+| Redirect URI | empty | Empty = filled from the address you save on, then stored. Sign-in needs it stored. A typed value must be `https`; the one filled in from a plain `http` address is kept as it is. |
 | CA Certificate File | | A CA bundle path on the Plexus host for a provider behind a private CA; empty = system trust store |
 
 **Test connection** fetches the discovery document and the signing keys of
 the issuer in the form (fresh, not from cache) and shows the endpoints, the
-allowed algorithms, the number of signing keys and the redirect URI.
+allowed algorithms, the number of signing keys and the redirect URI (the
+stored one, else the one a save would store).
 
 Saving with SSO enabled and an empty or non-https issuer or an empty client
-ID is refused (HTTP 400), as is a non-https redirect URI override.
+ID is refused (HTTP 400), as is a typed redirect URI that is not https.
 
 ## 3. Accounts, roles and groups
 
@@ -112,9 +125,10 @@ named `groups` with "Full group path" off and "Add to ID token" on.
 ## Sign-in flow and failures
 
 1. The SSO button goes to `GET /api/auth/oidc/login?next=<path>`. Plexus
-   stores state, nonce, PKCE verifier, redirect URI and the return path in a
+   stores state, nonce, PKCE verifier and the return path in a
    signed, HttpOnly, SameSite=Lax cookie (`oidc_tx`, 10 minutes, path
-   `/api/auth/oidc`) and redirects to the provider. `next` is kept only
+   `/api/auth/oidc`) and redirects to the provider with the stored
+   redirect URI, which the token request sends again. `next` is kept only
    when it is a same-site path (one leading `/`, no `//`, `\` or control
    characters).
 2. The provider redirects to `/api/auth/oidc/callback`. Plexus checks the
@@ -125,7 +139,9 @@ named `groups` with "Full group path" off and "Add to ID token" on.
    cookie.
 3. On any failure the browser lands on `/login?sso_error=<code>` and the
    login page shows a fixed sentence for the code: `disabled`, `state`,
-   `provider`, `token`, `claims`, `account`, `denied`. The provider's
+   `provider`, `token`, `claims`, `account`, `denied`, plus `setup` when
+   OIDC is enabled but no redirect URI is stored yet (the server log says
+   an admin must save the OIDC settings once). The provider's
    `error_description` is logged (redacted and truncated), never shown.
    The audit log records `login.failure` with `source=oidc` and the step
    that failed; tokens, codes, the client secret and the verifier are never

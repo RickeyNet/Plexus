@@ -104,9 +104,12 @@ jobs:
     # PLEXUS_TEST_PG_URL). It DROPs and re-creates plexus_test and
     # plexus_test_template, so the service user must be allowed to
     # CREATE DATABASE; the image's POSTGRES_USER is a superuser.
+    # Pinned by digest like the postgres service of docker-compose.yml.
+    # Dependabot does not update service images in workflows: copy the
+    # digest from docker-compose.yml when it moves there.
     services:
       postgres:
-        image: postgres:16-alpine
+        image: postgres:16-alpine@sha256:1d5b02d3a9941fbd52437db4107f8c52d6297dac553ca1e5c299ebb3756b4857
         env:
           # CI-only ephemeral credentials - not used in any deployed environment
           POSTGRES_DB: plexus
@@ -181,6 +184,11 @@ jobs:
       - name: Security audit of the cloud SDK lock (pip-audit)
         if: needs.changes.outputs.backend == 'true'
         run: bash tools/retry_on_network_error.sh pip-audit -r requirements-cloud-lock.txt --progress-spinner off --no-deps --timeout 60
+
+      # The image build installs pip itself from a hashed pin (Dockerfile).
+      - name: Security audit of the image's pip pin (pip-audit)
+        if: needs.changes.outputs.backend == 'true'
+        run: bash tools/retry_on_network_error.sh pip-audit -r requirements-pip.txt --progress-spinner off --no-deps --timeout 60
 
       - name: Generate SBOM (CycloneDX)
         if: needs.changes.outputs.backend == 'true'

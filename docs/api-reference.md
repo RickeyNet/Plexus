@@ -16,11 +16,11 @@ OpenID Connect single sign-on next to the password login. See [sso-oidc.md](sso-
 |--------|----------|-------------|
 | GET    | `/api/auth/status` | Signed out, the body also holds `sso: {oidc: {enabled, label, primary}}` (`enabled` only when SSO is on and an issuer and client id are set). A cookie every other route refuses (deleted user, revoked, past the 24 h cap or idle) answers `authenticated: false` and is deleted. A user who must change their password gets `authenticated: true` with `must_change_password: true` |
 | POST   | `/api/auth/logout` | Always `200 {ok: true}` and deletes the cookie. A valid session is also revoked on the server, which ends every session of that account (all browsers and devices); audited `logout`. A missing, invalid, expired or revoked cookie revokes nothing |
-| GET    | `/api/auth/oidc/login?next=/path` | Public. Redirects (302) to the provider's authorization endpoint with `state`, `nonce` and an S256 `code_challenge`, setting the signed `oidc_tx` cookie (HttpOnly, SameSite=Lax, 600 s, path `/api/auth/oidc`). `next` is kept only when it is a same-site path, else `/`. When SSO is off or discovery fails, 303 to `/login?sso_error=disabled` or `provider` |
-| GET    | `/api/auth/oidc/callback` | Public. On success sets the session cookie, drops `oidc_tx` and redirects (303) to `next`; audited `login.success` with `source=oidc`. On failure 303 to `/login?sso_error=<code>` with `code` one of `disabled`, `state`, `provider`, `token`, `claims`, `account`, `denied`; audited `login.failure` naming the failed step, and counted toward the per-IP login lockout |
+| GET    | `/api/auth/oidc/login?next=/path` | Public. Redirects (302) to the provider's authorization endpoint with `state`, `nonce` and an S256 `code_challenge`, setting the signed `oidc_tx` cookie (HttpOnly, SameSite=Lax, 600 s, path `/api/auth/oidc`). `next` is kept only when it is a same-site path, else `/`. When SSO is off or discovery fails, 303 to `/login?sso_error=disabled` or `provider`; `setup` when OIDC is enabled but no redirect URI is stored. The redirect URI sent is always the stored one, never derived from the request |
+| GET    | `/api/auth/oidc/callback` | Public. On success sets the session cookie, drops `oidc_tx` and redirects (303) to `next`; audited `login.success` with `source=oidc`. On failure 303 to `/login?sso_error=<code>` with `code` one of `disabled`, `setup`, `state`, `provider`, `token`, `claims`, `account`, `denied`; audited `login.failure` naming the failed step, and counted toward the per-IP login lockout |
 | GET    | `/api/admin/auth-config` | Admin. Includes `oidc` (see sso-oidc.md for the fields); `client_secret` is the mask when one is stored, else `""` |
-| PUT    | `/api/admin/auth-config` | Admin. `oidc` is optional (omitted = keep the saved block); its `client_secret` set to the mask keeps the stored secret, `""` clears it (public client), any other value replaces it (stored encrypted). `400` when `oidc.enabled` and the issuer is empty or not https or the client id is empty, on a non-https `redirect_uri`, more than 200 `group_mappings` or a `button_label` over 60 characters |
-| POST   | `/api/admin/auth-config/oidc/test` | Admin. Optional body `{issuer, ca_cert_file}` (default: the saved values). Fetches discovery and the JWKS fresh. Returns `{ok, issuer, authorization_endpoint, token_endpoint, userinfo_endpoint, algorithms, key_count, redirect_uri, error}` |
+| PUT    | `/api/admin/auth-config` | Admin. `oidc` is optional (omitted = keep the saved block); its `client_secret` set to the mask keeps the stored secret, `""` clears it (public client), any other value replaces it (stored encrypted). A blank `oidc.redirect_uri` is filled from the address of this request (scheme, host, `/api/auth/oidc/callback`) and stored; sign-in uses only the stored value. `400` when `oidc.enabled` and the issuer is empty or not https or the client id is empty, on a non-https `redirect_uri` (other than the value a blank one stores), more than 200 `group_mappings` or a `button_label` over 60 characters |
+| POST   | `/api/admin/auth-config/oidc/test` | Admin. Optional body `{issuer, ca_cert_file}` (default: the saved values). Fetches discovery and the JWKS fresh. Returns `{ok, issuer, authorization_endpoint, token_endpoint, userinfo_endpoint, algorithms, key_count, redirect_uri, configured, error}`. `redirect_uri` is the stored one; while none is stored, `configured` is false and `redirect_uri` is what a save would store |
 
 ### Object-level permissions
 Access groups limited to selected inventory groups. See [object-permissions.md](object-permissions.md).
@@ -348,8 +348,9 @@ Service credentials (`/api/credentials/service`) and secret variables
 [secrets-providers.md](secrets-providers.md).
 
 ### Secrets providers
-Reads need the `secrets-providers` feature, writes and tests
-`secrets-providers.write` (admins have both). A provider's own secrets are
+Reads need the `secrets-providers` feature. Create, update, delete and test
+are admin only (an admin session or the server API token; others get
+`403`). A provider's own secrets are
 write-only (`secrets_set` lists which are stored); no route returns a
 resolved value. Audited as `secrets_providers`. See
 [secrets-providers.md](secrets-providers.md).

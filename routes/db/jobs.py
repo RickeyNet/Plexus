@@ -107,6 +107,15 @@ def job_scope_condition(
     return sql, (*hosts_params, launched_by or "", *ids)
 
 
+def launched_by_condition(cond: str, params: tuple, username: str | None, alias: str = "j") -> tuple[str, tuple]:
+    """``cond`` (and its parameters) narrowed to the jobs ``username``
+    launched; unchanged for ``None``. ``alias`` is a fixed identifier."""
+    if username is None:
+        return cond, params
+    own = f"{alias}.launched_by = ?"
+    return (f"({cond}) AND {own}" if cond else own), (*params, username)
+
+
 async def get_all_jobs(
     limit: int = 50,
     *,
@@ -117,10 +126,7 @@ async def get_all_jobs(
     """The newest jobs. ``group_ids`` (object scope): only jobs whose every
     target is in those inventory groups (``job_scope_condition``).
     ``only_launched_by``: only the jobs that user launched."""
-    cond, cond_params = job_scope_condition(group_ids, launched_by)
-    if only_launched_by is not None:
-        cond = f"({cond}) AND j.launched_by = ?" if cond else "j.launched_by = ?"
-        cond_params = (*cond_params, only_launched_by)
+    cond, cond_params = launched_by_condition(*job_scope_condition(group_ids, launched_by), only_launched_by)
     where = f"WHERE {cond}" if cond else ""
     db = await _dbcore.get_db(read_only=True)
     try:

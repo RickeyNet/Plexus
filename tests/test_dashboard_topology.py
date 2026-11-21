@@ -355,6 +355,9 @@ def test_dashboard_jobs_and_groups_follow_features(client):
     body = resp.json()
     # A non-admin sees only the jobs they launched, even from the shared cache.
     assert body["recent_jobs"] and {job["launched_by"] for job in body["recent_jobs"]} == {"jobs-user"}
+    # The job counts cover the same jobs; the admin's count covers both.
+    assert body["stats"]["total_jobs"] == 1
+    assert app_module._dashboard_cache["data"]["stats"]["total_jobs"] == 2
     assert isinstance(body["groups"], list)
     assert not {"device_health", "open_alerts", "monitoring", "topology"} & set(body)
     # The cache was not changed by the per-user filter.

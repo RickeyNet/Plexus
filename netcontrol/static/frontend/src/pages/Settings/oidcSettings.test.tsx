@@ -124,6 +124,19 @@ describe('OidcPanel', () => {
     expect(html).toContain('Test connection');
   });
 
+  it('says sign-in is off until a redirect URI is saved', () => {
+    const notice = 'The redirect URI is not saved yet, so OIDC sign-in is off.';
+    const render = (oidc: OidcConfig) =>
+      renderToStaticMarkup(
+        <OidcPanel draft={{ oidc } as unknown as AuthConfig} setDraft={() => {}} groups={groups} />,
+      );
+    expect(render(OIDC)).toContain(notice);
+    expect(render({ ...OIDC, redirect_uri: 'https://plexus.example.com/api/auth/oidc/callback' })).not.toContain(
+      notice,
+    );
+    expect(render({ ...OIDC, enabled: false })).not.toContain(notice);
+  });
+
   it('shows the test result and the server redirect URI', () => {
     testState.value = {
       isPending: false,

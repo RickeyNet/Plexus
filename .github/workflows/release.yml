@@ -75,6 +75,18 @@ jobs:
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             raw="${DISPATCH_TAG}"
+            # A manual run builds the commit it was started on and publishes
+            # it under the given tag, so that tag must exist and name this
+            # commit. The peeled line (^{}) is the commit of an annotated tag.
+            if ! [[ "$raw" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "::error::release_tag must look like v1.2.3"
+              exit 1
+            fi
+            tag_sha=$(git ls-remote origin "refs/tags/${raw}" "refs/tags/${raw}^{}" | sort -k2 | tail -n 1 | cut -f1)
+            if [ "$tag_sha" != "$GITHUB_SHA" ]; then
+              echo "::error::Tag ${raw} names ${tag_sha:-no commit}, this run builds ${GITHUB_SHA}. Start the run from the tag."
+              exit 1
+            fi
           else
             raw="${GITHUB_REF_NAME}"
           fi

@@ -1,5 +1,6 @@
 import { useId, useState } from 'react';
 
+import { useAuthStatus } from '@/api/auth';
 import {
   type SecretsProvider,
   useDeleteSecretsProvider,
@@ -123,8 +124,11 @@ function TestReferenceModal({ provider, onClose }: { provider: SecretsProvider; 
 }
 
 /** Settings tab: HashiCorp Vault, AWS Secrets Manager and Azure Key Vault
- *  providers that credentials and secret variables can reference. */
+ *  providers that credentials and secret variables can reference. Only admins
+ *  add, edit, delete and test providers (the server refuses anyone else);
+ *  other readers see the list. */
 export function SecretsProvidersTab() {
+  const isAdmin = useAuthStatus().data?.role === 'admin';
   const query = useSecretsProviders();
   const remove = useDeleteSecretsProvider();
   const deleting = usePendingKeys<number>();
@@ -133,11 +137,11 @@ export function SecretsProvidersTab() {
   const [testing, setTesting] = useState<SecretsProvider | null>(null);
 
   const rows = query.data?.providers ?? [];
-  const addButton = (
+  const addButton = isAdmin ? (
     <button type="button" className="btn btn-sm btn-primary" onClick={() => setEditing('new')}>
       Add secrets provider
     </button>
-  );
+  ) : undefined;
 
   const handleDelete = (provider: SecretsProvider) =>
     void deleting.run(provider.id, async () => {
@@ -163,12 +167,16 @@ export function SecretsProvidersTab() {
 
   return (
     <div className="stack stack-sm">
-      {rows.length > 0 && <div style={{ display: 'flex', justifyContent: 'flex-end' }}>{addButton}</div>}
+      {rows.length > 0 && addButton && <div style={{ display: 'flex', justifyContent: 'flex-end' }}>{addButton}</div>}
       {rows.length === 0 ? (
         <EmptyState
           compact
           message="No secrets providers yet."
-          description="Add HashiCorp Vault, AWS Secrets Manager or Azure Key Vault, then point credentials and secret variables at secrets kept there instead of storing them in Plexus."
+          description={
+            isAdmin
+              ? 'Add HashiCorp Vault, AWS Secrets Manager or Azure Key Vault, then point credentials and secret variables at secrets kept there instead of storing them in Plexus.'
+              : 'An admin adds HashiCorp Vault, AWS Secrets Manager or Azure Key Vault providers here.'
+          }
           action={addButton}
         />
       ) : (
@@ -179,7 +187,7 @@ export function SecretsProvidersTab() {
               <th>Type</th>
               <th>Used by</th>
               <th>Cache</th>
-              <th style={RIGHT}>Actions</th>
+              {isAdmin && <th style={RIGHT}>Actions</th>}
             </tr>
           </thead>
           <tbody>
@@ -219,34 +227,36 @@ export function SecretsProvidersTab() {
                 </td>
                 <td>{usageText(provider)}</td>
                 <td>{provider.cache_ttl ? `${provider.cache_ttl.toLocaleString()} s` : 'Off'}</td>
-                <td style={RIGHT}>
-                  <div style={{ display: 'inline-flex', gap: 'var(--space-1)', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-                    <button type="button" className="btn btn-sm btn-secondary" onClick={() => setTesting(provider)}>
-                      Test
-                    </button>
-                    <button type="button" className="btn btn-sm btn-secondary" onClick={() => setEditing(provider)}>
-                      Edit
-                    </button>
-                    <DeleteButton
-                      busy={deleting.isPending(provider.id)}
-                      onClick={() => handleDelete(provider)}
-                      aria-label={`Delete secrets provider ${provider.name}`}
-                    />
-                  </div>
-                </td>
+                {isAdmin && (
+                  <td style={RIGHT}>
+                    <div style={{ display: 'inline-flex', gap: 'var(--space-1)', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                      <button type="button" className="btn btn-sm btn-secondary" onClick={() => setTesting(provider)}>
+                        Test
+                      </button>
+                      <button type="button" className="btn btn-sm btn-secondary" onClick={() => setEditing(provider)}>
+                        Edit
+                      </button>
+                      <DeleteButton
+                        busy={deleting.isPending(provider.id)}
+                        onClick={() => handleDelete(provider)}
+                        aria-label={`Delete secrets provider ${provider.name}`}
+                      />
+                    </div>
+                  </td>
+                )}
               </tr>
             ))}
           </tbody>
         </DataTable>
       )}
-      {editing && (
+      {isAdmin && editing && (
         <SecretsProviderModal
           key={editing === 'new' ? 'new' : editing.id}
           provider={editing === 'new' ? null : editing}
           onClose={() => setEditing(null)}
         />
       )}
-      {testing && <TestReferenceModal provider={testing} onClose={() => setTesting(null)} />}
+      {isAdmin && testing && <TestReferenceModal provider={testing} onClose={() => setTesting(null)} />}
     </div>
   );
 }

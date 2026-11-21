@@ -44,6 +44,36 @@ def test_compose_service_images_are_pinned_by_digest():
     assert re.match(r"^\d+\.\d+\.\d+-alpine$", tag), tag
 
 
+def test_ci_service_images_are_pinned_by_digest():
+    jobs = _yaml(WORKFLOWS / "ci.yml")["jobs"]
+    images = [
+        (job_name, service["image"])
+        for job_name, job in jobs.items()
+        for service in (job.get("services") or {}).values()
+    ]
+    assert images
+    for job_name, image in images:
+        assert DIGEST.match(image), f"{job_name}: {image}"
+
+
+def test_image_installs_python_packages_only_from_hashed_pins():
+    """Every pip install of the Dockerfile, pip's own upgrade included."""
+    dockerfile = _read(ROOT / "Dockerfile")
+    installs = re.findall(r"pip install[^\n&;]*", dockerfile)
+    assert installs
+    for install in installs:
+        assert "--require-hashes" in install, install
+    pin = [
+        line
+        for line in _read(ROOT / "requirements-pip.txt").splitlines()
+        if line.strip() and not line.startswith("#")
+    ]
+    assert re.fullmatch(r"pip==\d+(\.\d+)+ \\", pin[0]), pin[0]
+    assert len(pin) > 1
+    for line in pin[1:]:
+        assert re.fullmatch(r"\s+--hash=sha256:[0-9a-f]{64}( \\)?", line), line
+
+
 def test_airgap_bundle_saves_the_compose_images_under_their_tag():
     """A loaded tar has no registry digest, so the offline host must name
     the images by tag: bundle.sh writes an override and install.sh enables
@@ -160,3 +190,13 @@ def test_release_publishes_only_after_ci_succeeded():
         if name != "ci-gate":
             needs = job.get("needs")
             assert needs == "ci-gate" or (isinstance(needs, list) and "ci-gate" in needs), name
+
+
+def test_manual_release_run_builds_only_the_commit_its_tag_names():
+    steps = _yaml(WORKFLOWS / "release.yml")["jobs"]["validate-and-publish"]["steps"]
+    names = [step.get("name") for step in steps]
+    resolve = steps[names.index("Resolve release tag")]["run"]
+    assert 'git ls-remote origin "refs/tags/${raw}" "refs/tags/${raw}^{}"' in resolve
+    assert '[ "$tag_sha" != "$GITHUB_SHA" ]' in resolve
+    # Checked before anything is built or pushed.
+    assert names.index("Resolve release tag") < names.index("Build image for vulnerability scan (amd64)")

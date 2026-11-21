@@ -111,13 +111,6 @@ def test_scope_string_always_has_openid_first():
     assert oidc.scope_string("") == "openid"
 
 
-def test_derive_redirect_uri():
-    assert oidc.derive_redirect_uri("", "https", "plexus.example.com") == (
-        "https://plexus.example.com/api/auth/oidc/callback"
-    )
-    assert oidc.derive_redirect_uri(" https://sso.example.com/cb ", "http", "x") == "https://sso.example.com/cb"
-
-
 def test_group_claim_as_string_or_list():
     assert oidc.claim_groups({"groups": "netops"}, "groups") == ["netops"]
     assert oidc.claim_groups({"groups": ["a", "", 5, None, {"x": 1}]}, "groups") == ["a", "5"]

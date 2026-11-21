@@ -18,7 +18,7 @@ from pydantic import BaseModel
 from routes.crypto import encrypt
 
 from netcontrol.object_scope import scope_exempt
-from netcontrol.routes.shared import _audit, _corr_id, _get_session
+from netcontrol.routes.shared import _audit, _corr_id, admin_session, request_session
 from netcontrol.secrets_providers.base import check_reference
 from netcontrol.secrets_providers.service import reference_provider
 
@@ -47,18 +47,6 @@ def _can_modify(cred: dict, session: dict | None) -> bool:
     if owner is None:
         return False
     return owner == session["user_id"]
-
-
-async def _require_admin_session(session: dict | None) -> dict:
-    """Return *session* if it represents an admin caller. Raises 401/403."""
-    if not session:
-        raise HTTPException(401, "Not authenticated")
-    if session.get("auth_mode") == "token":
-        return session
-    user = await db.get_user_by_id(session["user_id"])
-    if not user or user.get("role") != "admin":
-        raise HTTPException(403, "Admin access required")
-    return session
 
 
 class ExternalReference(BaseModel):
@@ -178,15 +166,14 @@ def _what_changed(updates: dict) -> str:
 @router.get("/api/credentials/service")
 @scope_exempt("service credentials: admin only, no host or inventory group data")
 async def list_service_credentials(request: Request):
-    session = _get_session(request)
-    await _require_admin_session(session)
+    await admin_session(request)
     return await db.get_service_credentials()
 
 
 @router.post("/api/credentials/service", status_code=201)
 @scope_exempt("service credentials: admin only, no host or inventory group data")
 async def create_service_credential(body: CredentialCreate, request: Request):
-    session = await _require_admin_session(_get_session(request))
+    session = await admin_session(request)
     fields = await _create_fields(body, session)
     cid = await db.create_credential(body.name, body.username, owner_id=None, is_service=True, **fields)
     await _audit(
@@ -202,7 +189,7 @@ async def create_service_credential(body: CredentialCreate, request: Request):
 @router.put("/api/credentials/service/{cred_id}")
 @scope_exempt("service credentials: admin only, no host or inventory group data")
 async def update_service_credential(cred_id: int, body: CredentialUpdate, request: Request):
-    session = await _require_admin_session(_get_session(request))
+    session = await admin_session(request)
     cred = await db.get_credential_raw(cred_id, resolve_external=False)
     if not cred or not cred.get("is_service"):
         raise HTTPException(404, "Service credential not found")
@@ -223,7 +210,7 @@ async def update_service_credential(cred_id: int, body: CredentialUpdate, reques
 @router.delete("/api/credentials/service/{cred_id}")
 @scope_exempt("service credentials: admin only, no host or inventory group data")
 async def delete_service_credential(cred_id: int, request: Request):
-    session = await _require_admin_session(_get_session(request))
+    session = await admin_session(request)
     cred = await db.get_credential_raw(cred_id, resolve_external=False)
     if not cred or not cred.get("is_service"):
         raise HTTPException(404, "Service credential not found")
@@ -247,7 +234,7 @@ async def list_reference_providers(request: Request):
     """The enabled providers the caller may point a credential at (admins:
     all; others: those allowing personal credentials). Names and types
     only; settings are managed under /api/secrets-providers."""
-    session = _get_session(request)
+    session = request_session(request)
     if not session:
         raise HTTPException(401, "Not authenticated")
     admin = await _is_admin(session)
@@ -264,7 +251,7 @@ async def list_reference_providers(request: Request):
 @router.get("/api/credentials")
 @scope_exempt("credentials are per owner: no host or inventory group data")
 async def list_credentials(request: Request):
-    session = _get_session(request)
+    session = request_session(request)
     if not session:
         raise HTTPException(401, "Not authenticated")
     # Credentials are strictly per-owner: every user (including admins)
@@ -277,10 +264,12 @@ async def list_credentials(request: Request):
 @router.post("/api/credentials", status_code=201)
 @scope_exempt("credentials are per owner: no host or inventory group data")
 async def create_credential(body: CredentialCreate, request: Request):
-    session = _get_session(request)
+    session = request_session(request)
     if not session:
         raise HTTPException(401, "Not authenticated")
-    owner_id = session["user_id"]
+    # The API token is no user: what it creates has no owner, and only
+    # the token can list, change or use it.
+    owner_id = None if session.get("auth_mode") == "token" else session["user_id"]
     fields = await _create_fields(body, session)
     cid = await db.create_credential(body.name, body.username, owner_id=owner_id, **fields)
     await _audit(
@@ -296,7 +285,7 @@ async def create_credential(body: CredentialCreate, request: Request):
 @router.delete("/api/credentials/{cred_id}")
 @scope_exempt("credentials are per owner: no host or inventory group data")
 async def delete_credential(cred_id: int, request: Request):
-    session = _get_session(request)
+    session = request_session(request)
     if not session:
         raise HTTPException(401, "Not authenticated")
     cred = await db.get_credential_raw(cred_id, resolve_external=False)
@@ -318,7 +307,7 @@ async def delete_credential(cred_id: int, request: Request):
 @router.put("/api/credentials/{cred_id}")
 @scope_exempt("credentials are per owner: no host or inventory group data")
 async def update_credential(cred_id: int, body: CredentialUpdate, request: Request):
-    session = _get_session(request)
+    session = request_session(request)
     if not session:
         raise HTTPException(401, "Not authenticated")
     cred = await db.get_credential_raw(cred_id, resolve_external=False)

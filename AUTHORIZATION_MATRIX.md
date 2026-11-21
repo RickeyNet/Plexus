@@ -110,7 +110,7 @@ below. Admins and the API token pass every feature check.
 | `virtualization` | `/api/virtualization/*` (cluster types, cluster groups, clusters and their hosts, virtual machines and VM interfaces; writes need `virtualization.write`, audited as `virtualization`). Scope-enforced: clusters by tenant, site or member host, VMs by tenant or their cluster's site and hosts; types and groups are read-only shared catalogues for scoped users. See `docs/virtualization.md` | virtualization (router) |
 | `sync` | `/api/sync/catalog`, `/api/sync/connections` (GET), `/api/sync/jobs*`, `/api/sync/runs*` (job writes and `POST /api/sync/jobs/{id}/run` need `sync.write`; a job that writes into Plexus also needs admin, or `inventory.write` for devices only, when saved and when run for real; a dry run needs `sync.write` only; audited as `sync`). Scope-enforced: scoped users read jobs and runs (run entries of their own devices only) and are refused every job write and run (`403`) | sync |
 | `lifecycle` | `/api/lifecycle/*` (end-of-life notices, support contracts, device lifecycle status and CSV report, alert settings, `POST /api/lifecycle/check`; writes need `lifecycle.write`, audited as `lifecycle`). Scope-enforced: notices are a read-only shared catalogue for scoped users, contracts and status follow their hosts, settings and `check` are refused. See `docs/hardware-lifecycle.md` | hardware_lifecycle (router) |
-| `secrets-providers` | `/api/secrets-providers/*` (HashiCorp Vault, AWS Secrets Manager and Azure Key Vault providers; writes and `POST /api/secrets-providers/{id}/test` need `secrets-providers.write`, audited as `secrets_providers`; provider secrets are write-only and no route returns a resolved value). Scope-enforced: scoped users read the providers and are refused every write and test (`403`). See `docs/secrets-providers.md` | secrets_providers (router) |
+| `secrets-providers` | `/api/secrets-providers/*` (HashiCorp Vault, AWS Secrets Manager and Azure Key Vault providers; the feature reads them; create, update, delete and `POST /api/secrets-providers/{id}/test` are admin only (admin session or server API token, else `403`; no `.write` key), audited as `secrets_providers`; provider secrets are write-only and no route returns a resolved value). Scope-enforced: scoped users read the providers; only admins, who are never scoped, change or test them. See `docs/secrets-providers.md` | secrets_providers (router) |
 | `credentials` | `GET /api/credentials/secrets-providers` (the providers the caller may reference: admins all, others those allowing personal credentials; names and types only). An `external` reference on a user credential needs the provider to allow personal credentials unless the caller is an admin | credentials |
 | `chatops` | No HTTP route of its own: lets the user's mapped chat identity run ChatOps commands, each also needing its own feature (see the ChatOps public paths above and `docs/chatops.md`). Commands are refused for users limited to selected inventory groups | chatops (inbound_router) |
 | `graphql` | `POST /api/graphql` (read-only queries; CSRF applies to session callers), `GET /api/graphql` (GraphiQL, `404` unless the admin setting `graphiql` is on). Each field also needs the feature of its REST counterpart (`inventory`; `reports` for interfaces, interface addresses and device VLANs; `ipam` for prefixes, addresses, VLAN and VRF records; `config-backups` for backup metadata) and leaves out hosts and groups outside the caller's object scope. `graphql` is scope-enforced, so scoped users see only their groups' hosts. See `docs/graphql-api.md` | graphql (router) |
@@ -172,10 +172,13 @@ signature (ChatOps) authenticates each delivery.
 
 | Operation | Own credential | Unowned (NULL owner) | Other user's credential |
 |-----------|---------------|---------------------|------------------------|
-| List | ✅ | ❌ (admin only) | ❌ (admin only) |
+| List | ✅ | ❌ (API token only) | ❌ (API token only) |
 | Create | ✅ (auto-owned) | - | - |
-| Update | ✅ | ❌ (admin only) | ❌ |
-| Delete | ✅ | ❌ (admin only) | ❌ |
+| Update | ✅ | ❌ (API token only) | ❌ (API token only) |
+| Delete | ✅ | ❌ (API token only) | ❌ (API token only) |
+
+The admin role gives no access to another user's credential. A credential
+created with the API token has no owner.
 
 Operational endpoints (job launch, deployments, config backups/drift,
 compliance, upgrades, risk analysis, inventory discovery) enforce the same
@@ -211,7 +214,12 @@ The server API token (`X-API-Token`) is **admin-equivalent by design**: it
 bypasses role checks (`require_admin` short-circuits on `auth_mode ==
 "token"`) and credential-ownership checks (including unowned and other
 users' credentials). It exists for CI/CD and machine-to-machine use
-(federation peers authenticate with it). Consequences:
+(federation peers authenticate with it). On `/api/credentials*` and
+`/api/secret-variables*` it lists every user credential, acts as an admin
+for service credentials and secret variables, and what it creates has no
+owner. Routes that act on the caller's own account or history (password
+change, profile, tool history, group order) answer `401`: the token is not
+a user. Consequences:
 
 - Treat the API token like a root credential: store it in a secrets
   manager, rotate it, and never send it over plaintext HTTP (federation

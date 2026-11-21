@@ -153,6 +153,31 @@ def _session_user(request) -> str:
     return (_get_session(request) or {}).get("user", "")
 
 
+def request_session(request) -> dict | None:
+    """The session of an authenticated request, the server API token
+    included. ``require_auth`` gives a token caller the session
+    ``{"user": "api-token", "user_id": 0, "auth_mode": "token"}``, which the
+    cookie-only ``_get_session`` never returns. For a handler that serves
+    token callers and tells them apart by ``auth_mode``."""
+    session = getattr(getattr(request, "state", None), "auth_session", None)
+    if isinstance(session, dict) and session.get("auth_mode") == "token":
+        return session
+    return _get_session(request)
+
+
+async def admin_session(request) -> dict:
+    """The session of an admin caller (an admin user or the server API
+    token): 401 without a session, 403 for anyone else."""
+    session = request_session(request)
+    if not session:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    if session.get("auth_mode") != "token":
+        user = await db.get_user_by_id(session["user_id"])
+        if not user or user.get("role") != "admin":
+            raise HTTPException(status_code=403, detail="Admin access required")
+    return session
+
+
 async def caller_features(request) -> frozenset[str] | None:
     """The feature keys of the caller of an HTTP request, ``None`` for an
     admin or the server API token (every feature). Reads what the feature

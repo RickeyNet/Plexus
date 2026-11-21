@@ -195,6 +195,7 @@ There is no drag-and-drop layout: each panel has a width and height on a
 | See device health, open alerts and the device panels' data | The `monitoring` feature |
 | See the inventory group tiles | The `inventory` feature |
 | See recent jobs | The `jobs` feature; a non-admin sees only the jobs they launched |
+| See the job counts (**Total Jobs**, running jobs, success rate) | The `dashboard` feature; a non-admin's counts cover only the jobs they launched |
 | See Top Talkers | The `traffic-analysis` feature |
 | See Backup Status | The `config-backups` feature |
 | Add source, most setup steps | Admin |

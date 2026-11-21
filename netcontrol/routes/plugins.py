@@ -21,7 +21,7 @@ from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
 
 from netcontrol.plugins.registry import STATUS_ACTIVE, PluginRecord, PluginRegistry, registry
 from netcontrol.routes.auth import _get_user_features
-from netcontrol.routes.shared import _get_session
+from netcontrol.routes.shared import caller_features
 
 router = APIRouter()
 
@@ -72,18 +72,11 @@ def mount_plugin_routers(
 
 
 async def _caller(request: Request) -> tuple[bool, set[str]]:
-    """(is admin, feature keys) of the authenticated caller."""
-    session = _get_session(request)
-    if session is None or session.get("auth_mode") == "token":
-        # require_auth already passed, so no cookie means the API token:
-        # admin-equivalent by design.
-        return True, set()
-    user = await db.get_user_by_id(session["user_id"])
-    if not user:
-        raise HTTPException(status_code=401, detail="Session user not found")
-    if user.get("role") == "admin":
-        return True, set()
-    return False, set(await _get_user_features(user))
+    """(is admin, feature keys) of the authenticated caller. An admin and
+    the API token hold every feature; a request ``require_auth`` did not
+    pass holds none."""
+    features = await caller_features(request)
+    return (True, set()) if features is None else (False, set(features))
 
 
 def _public_entry(record: PluginRecord) -> dict[str, Any]:

@@ -695,9 +695,13 @@ export function OidcPanel({ draft, setDraft, groups }: PanelProps) {
           <CopyButton text={result?.redirect_uri || redirectUri} />
         </div>
         <div className="form-help" id={`${fid}-redirect-help`}>
-          Behind a proxy that changes the host name, set the redirect URI override below.
+          Sign-in uses only the saved redirect URI. Behind a proxy that changes the host name, type the
+          public one in the Redirect URI field below.
         </div>
       </div>
+      {o.enabled && !o.redirect_uri.trim() && (
+        <SsoUnsavedNotice what="The redirect URI is" protocol="OIDC" shown="the value" />
+      )}
       <FormRow>
         <TextField
           label="Issuer"
@@ -766,11 +770,11 @@ export function OidcPanel({ draft, setDraft, groups }: PanelProps) {
       <SsoRoleFields value={o} onChange={setO} groupNoun="group claim value" />
       <FormRow>
         <TextField
-          label="Redirect URI Override (optional)"
+          label="Redirect URI"
           value={o.redirect_uri}
           onChange={(v) => setO({ redirect_uri: v })}
           flex="1 1 280px"
-          help="Blank derives it from the request."
+          help="Blank stores the callback path on the address you are using now."
         />
         <TextField
           label="CA Certificate File (optional)"
@@ -803,6 +807,16 @@ export function OidcPanel({ draft, setDraft, groups }: PanelProps) {
         </Callout>
       )}
     </ProviderFieldset>
+  );
+}
+
+/** Sign-in uses only stored values (never the request's host), so a
+ * protocol stays off until a save stores them. */
+function SsoUnsavedNotice({ what, protocol, shown }: { what: string; protocol: string; shown: string }) {
+  return (
+    <Callout tone="warning">
+      {what} not saved yet, so {protocol} sign-in is off. Save these settings to store {shown} shown above.
+    </Callout>
   );
 }
 
@@ -960,10 +974,7 @@ export function SamlPanel({ draft, setDraft, groups }: PanelProps) {
         </FormRow>
       )}
       {sp.data?.configured === false && o.enabled && (
-        <Callout tone="warning">
-          The SP entity ID and ACS URL are not saved yet, so SAML sign-in is off. Save these settings to store
-          the values shown above.
-        </Callout>
+        <SsoUnsavedNotice what="The SP entity ID and ACS URL are" protocol="SAML" shown="the values" />
       )}
       <FormRow>
         <TextField

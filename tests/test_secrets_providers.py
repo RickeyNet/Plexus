@@ -16,18 +16,20 @@ import time
 import types
 
 import httpx
+import netcontrol.app as app_module
 import pytest
 import routes.database as db
 import routes.secret_resolver as secret_resolver
-from netcontrol.routes import outbound_http, state
+from netcontrol.routes import auth as auth_routes, outbound_http, state
 from netcontrol.secrets_providers import base, service
 from netcontrol.secrets_providers.aws import AwsSecretsManagerProvider
 from netcontrol.secrets_providers.azure import AzureKeyVaultProvider, vault_scope
 from netcontrol.secrets_providers.base import Reference, SecretsProviderError, TTLCache, select_key
 from netcontrol.secrets_providers.vault import VaultProvider
 from routes.crypto import decrypt, unavailable
+from starlette.testclient import TestClient
 
-from mcp_helpers import admin_client, user_client
+from mcp_helpers import CsrfClient, admin_client, user_client
 
 API = "/api/secrets-providers"
 VAULT_URL = "https://vault.example.com:8200"
@@ -644,7 +646,75 @@ def test_feature_gate(monkeypatch, request):
     reader = user_client(admin, "sp-reader", features=["secrets-providers"])
     assert reader.get(API).status_code == 200
     assert reader.post(API, json={"name": "x", "provider_type": "vault"}).status_code == 403
-    assert "secrets-providers.write" in state.FEATURE_FLAGS
+    # Changes are admin only, so there is no write key to grant.
+    assert "secrets-providers" in state.FEATURE_FLAGS
+    assert "secrets-providers.write" not in state.FEATURE_FLAGS
+
+
+def _legacy_writer(admin, username: str):
+    """A non-admin in an access group stored with both secrets-providers keys
+    (the API no longer accepts the .write key, so the group is written
+    directly, as one saved before the change would be)."""
+    group_id = asyncio.run(
+        db.create_access_group(f"{username} access", "", ["secrets-providers", "secrets-providers.write"])
+    )
+    body = {"username": username, "password": "password123", "role": "user", "group_ids": [group_id]}
+    assert admin.post("/api/admin/users", json=body).status_code == 201
+    client = TestClient(app_module.app, raise_server_exceptions=False)
+    resp = client.post("/api/auth/login", json={"username": username, "password": "password123"})
+    assert resp.status_code == 200, resp.text
+    return CsrfClient(client, resp.json().get("csrf_token", ""))
+
+
+def test_provider_changes_and_tests_are_admin_only(monkeypatch, request):
+    admin = admin_client(monkeypatch, request)
+    pid = _create_vault(admin)
+    before = admin.get(f"{API}/{pid}").json()
+    writer = _legacy_writer(admin, "sp-legacy-writer")
+    recorder = _mock(monkeypatch, _vault_routes())
+    new = {"name": "rogue", "provider_type": "vault", "config": {"url": VAULT_URL}, "secrets": {"token": "t"}}
+
+    # A stored .write key is not in the catalog, so it grants nothing.
+    assert writer.post(API, json=new).status_code == 403
+    # With the key honoured again, the routes' own admin check still refuses.
+    monkeypatch.setattr(auth_routes, "FEATURE_FLAGS", [*auth_routes.FEATURE_FLAGS, "secrets-providers.write"])
+    me = writer.get("/api/auth/status").json()
+    assert "secrets-providers.write" in me["feature_access"], me
+
+    # Reads still work with the feature.
+    assert writer.get(API).status_code == 200
+    assert writer.get(f"{API}/{pid}").status_code == 200
+
+    refused = writer.post(API, json=new)
+    assert refused.status_code == 403 and "Admin access required" in refused.text
+    moved ={"config": {"url": "https://203.0.113.5"}, "secrets": {"token": "t2"}}
+    assert writer.put(f"{API}/{pid}", json=moved).status_code == 403
+    assert writer.delete(f"{API}/{pid}").status_code == 403
+    probe = writer.post(f"{API}/{pid}/test", json={"path": "network/core", "key": "password"})
+    assert probe.status_code == 403
+
+    # Nothing changed and the provider was not contacted.
+    assert not recorder.requests
+    assert admin.get(f"{API}/{pid}").json() == before
+    assert [p["name"] for p in admin.get(API).json()["providers"]] == ["corp-vault"]
+    actions = _audit_actions()
+    assert "secrets_provider.test" not in actions and actions.count("secrets_provider.create") == 1
+
+    # An admin still can.
+    assert admin.post(f"{API}/{pid}/test", json={"path": "network/core", "key": "password"}).json() == {"ok": True}
+    assert admin.put(f"{API}/{pid}", json={"description": "lab"}).status_code == 200
+
+    # So can the server API token (admin-equivalent).
+    monkeypatch.setattr(app_module, "APP_API_TOKEN", "invented-server-token")
+    token = TestClient(app_module.app, raise_server_exceptions=False)
+    headers = {"X-Api-Token": "invented-server-token"}
+    created = token.post(API, json={**new, "name": "token-vault"}, headers=headers)
+    assert created.status_code == 201, created.text
+    other = int(created.json()["id"])
+    assert token.put(f"{API}/{other}", json={"description": "api"}, headers=headers).status_code == 200
+    tested = token.post(f"{API}/{other}/test", json={"path": "network/core", "key": "password"}, headers=headers)
+    assert tested.json() == {"ok": True}
+    assert token.delete(f"{API}/{other}", headers=headers).status_code == 200
 
 
 def test_credential_reference_resolves_at_the_choke_points(monkeypatch, request):
@@ -864,25 +934,24 @@ def test_provider_urls_need_https_except_loopback():
     assert VaultProvider.validate({"url": "http://localhost:8200"}, {"token": "t"})
 
 
-def test_writer_cannot_send_the_stored_token_to_a_new_host(monkeypatch, request):
+def test_a_new_host_needs_the_token_again(monkeypatch, request):
     admin = admin_client(monkeypatch, request)
     pid = _create_vault(admin)
-    writer = user_client(admin, "sp-writer", features=["secrets-providers", "secrets-providers.write"])
     recorder = _mock(monkeypatch, _vault_routes())
 
-    moved = writer.put(f"{API}/{pid}", json={"config": {"url": "https://203.0.113.5"}})
+    moved = admin.put(f"{API}/{pid}", json={"config": {"url": "https://203.0.113.5"}})
     assert moved.status_code == 400, moved.text
     assert "token" in moved.text and FAKE_TOKEN not in moved.text
     assert admin.get(f"{API}/{pid}").json()["config"]["url"] == VAULT_URL
 
     # The test route resolves the stored provider only: same host as before.
-    writer.post(f"{API}/{pid}/test", json={"path": "network/core", "key": "password"})
+    admin.post(f"{API}/{pid}/test", json={"path": "network/core", "key": "password"})
     assert recorder.requests, "the test route should still reach the stored address"
     for sent in recorder.requests:
         assert sent.url.host == "vault.example.com"
 
     # Re-entering the token with the new address is accepted.
-    resent = writer.put(
+    resent = admin.put(
         f"{API}/{pid}", json={"config": {"url": "https://vault2.example.com"}, "secrets": {"token": "t2"}}
     )
     assert resent.status_code == 200, resent.text

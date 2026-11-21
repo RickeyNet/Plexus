@@ -152,7 +152,8 @@ export interface OidcConfig {
   group_mappings: OidcGroupMapping[];
   button_label: string;
   primary: boolean;
-  // Empty = derived from the request.
+  // Sign-in uses only this stored value; a save with it empty stores the
+  // callback path on the address the admin is using.
   redirect_uri: string;
   ca_cert_file: string;
 }
@@ -218,6 +219,9 @@ export interface OidcTestResult {
   algorithms: string[];
   key_count: number;
   redirect_uri: string;
+  /** False while no redirect URI is stored: the value above is what saving
+   * the settings stores. Missing on older servers. */
+  configured?: boolean;
   error: string;
 }
 

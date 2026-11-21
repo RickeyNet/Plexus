@@ -60,11 +60,14 @@ RUN sed -i 's|http://deb.debian.org|https://deb.debian.org|g' \
 # lock of requirements.txt plus requirements-cloud.txt, pinned to the same
 # versions as requirements-lock.txt (tools/check_requirements_lock.py).
 # Set it to false for a smaller image that never attaches cloud accounts.
+#
+# pip itself is upgraded from a hashed pin too (requirements-pip.txt), so
+# no install in this image takes whatever PyPI serves at build time.
 ARG INSTALL_CLOUD_SDKS=false
-COPY requirements.txt requirements-lock.txt requirements-cloud.txt requirements-cloud-lock.txt ./
+COPY requirements.txt requirements-lock.txt requirements-cloud.txt requirements-cloud-lock.txt requirements-pip.txt ./
 RUN LOCK=requirements-lock.txt; \
     if [ "$INSTALL_CLOUD_SDKS" = "true" ]; then LOCK=requirements-cloud-lock.txt; fi; \
-    pip install --no-cache-dir --upgrade pip \
+    pip install --no-cache-dir --require-hashes -r requirements-pip.txt \
     && pip install --no-cache-dir --require-hashes -r "$LOCK"
 
 COPY . .

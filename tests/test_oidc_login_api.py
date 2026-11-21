@@ -25,6 +25,10 @@ LOGIN = "/api/auth/oidc/login"
 CALLBACK = "/api/auth/oidc/callback"
 AUTH_CONFIG = "/api/admin/auth-config"
 OIDC_TEST = "/api/admin/auth-config/oidc/test"
+# The stored redirect URI; sign-in uses only this, never the request's host.
+REDIRECT_URI = "https://plexus.example.com/api/auth/oidc/callback"
+# What an admin save stores for a blank field when the admin uses the test client.
+DEFAULT_REDIRECT_URI = "http://testserver/api/auth/oidc/callback"
 
 
 def _oidc_cfg(**over) -> dict:
@@ -37,6 +41,7 @@ def _oidc_cfg(**over) -> dict:
         "client_secret_enc": encrypt(CLIENT_SECRET),
         "admin_groups": ["plexus-admins"],
         "button_label": "Sign in with Example ID",
+        "redirect_uri": REDIRECT_URI,
     }
     cfg.update(over)
     return state._sanitize_oidc_config(cfg)
@@ -77,6 +82,11 @@ def _error_code(resp) -> str:
     return parse_qs(urlsplit(location).query)["sso_error"][0]
 
 
+def _token_form(idp: FakeIdP, index: int = 0) -> dict:
+    """The form fields of a token request the fake provider received."""
+    return {k: v[0] for k, v in parse_qs(idp.token_requests[index].content.decode()).items()}
+
+
 def _user(username: str) -> dict | None:
     return asyncio.run(db_module.get_user_by_username(username))
 
@@ -110,7 +120,7 @@ def test_full_sign_in(env):
     assert start.headers["location"].startswith(f"{ISSUER}/authorize?")
     assert params["client_id"] == CLIENT_ID and params["code_challenge_method"] == "S256"
     assert params["state"] and params["nonce"] and params["code_challenge"]
-    assert params["redirect_uri"] == "http://testserver/api/auth/oidc/callback"
+    assert params["redirect_uri"] == REDIRECT_URI
     assert params["scope"] == "openid profile email"
 
     resp = browser.get(CALLBACK, params={"code": "code-1", "state": params["state"]})
@@ -121,6 +131,7 @@ def test_full_sign_in(env):
     assert any(c.startswith("oidc_tx=") and "Max-Age=0" in c for c in cookies)
     # The token request authenticated with the stored (decrypted) secret.
     assert "Basic " in idp.token_requests[0].headers["Authorization"]
+    assert _token_form(idp)["redirect_uri"] == REDIRECT_URI
 
     status = browser.get("/api/auth/status").json()
     assert status["authenticated"] is True
@@ -426,7 +437,7 @@ def test_oidc_test_endpoint(env):
     assert out["issuer"] == ISSUER and out["key_count"] == 2
     assert out["token_endpoint"] == f"{ISSUER}/token"
     assert out["algorithms"] == ["RS256", "PS256", "ES256"]
-    assert out["redirect_uri"] == "http://testserver/api/auth/oidc/callback"
+    assert out["redirect_uri"] == REDIRECT_URI and out["configured"] is True
     # A different issuer given in the body is tried instead.
     out = admin.post(OIDC_TEST, json={"issuer": "https://other.example.com"}).json()
     assert out["ok"] is False and out["error"]
@@ -435,10 +446,73 @@ def test_oidc_test_endpoint(env):
     assert out["ok"] is False and out["key_count"] == 0
 
 
-def test_forwarded_proto_drives_the_redirect_uri(env):
+def test_unstored_redirect_uri_shows_the_admin_address(env, monkeypatch):
+    """With no stored redirect URI the test endpoint shows what a save would
+    store: the address this admin reached Plexus on."""
     admin, _ = env
+    monkeypatch.setitem(state.AUTH_CONFIG, "oidc", _oidc_cfg(redirect_uri=""))
     out = admin.post(OIDC_TEST, json={}, headers={"X-Forwarded-Proto": "https"}).json()
     assert out["redirect_uri"] == "https://testserver/api/auth/oidc/callback"
+    assert out["configured"] is False
+
+
+# ── the redirect URI comes from stored settings only ──────────────────────────
+
+
+def test_host_header_does_not_change_the_redirect_uri(env):
+    """The redirect URI sent to the provider, at login and to the token
+    endpoint, is the stored one whatever Host or forwarded headers the
+    sign-in request carries."""
+    _, idp = env
+    browser = _browser()
+    spoofed = {"Host": "sp.attacker.example.com", "X-Forwarded-Proto": "https"}
+    start = browser.get(LOGIN, headers=spoofed)
+    assert start.status_code == 302
+    assert "attacker" not in start.headers["location"]
+    params = idp.authorize(start.headers["location"])
+    assert params["redirect_uri"] == REDIRECT_URI
+    resp = browser.get(CALLBACK, params={"code": "code-1", "state": params["state"]}, headers=spoofed)
+    assert resp.status_code == 303, resp.text
+    assert _token_form(idp)["redirect_uri"] == REDIRECT_URI
+
+
+def test_unstored_redirect_uri_disables_sign_in(env, monkeypatch):
+    """A configuration saved before the redirect URI was required offers no
+    OIDC sign-in until an admin saves it once."""
+    _, idp = env
+    browser = _browser()
+    params = _start(browser, idp)
+    monkeypatch.setitem(state.AUTH_CONFIG, "oidc", _oidc_cfg(redirect_uri=""))
+    status = _browser().get("/api/auth/status").json()
+    assert status["sso"]["oidc"]["enabled"] is False
+    assert _error_code(_browser().get(LOGIN)) == "setup"
+    assert _error_code(browser.get(CALLBACK, params={"code": "code-1", "state": params["state"]})) == "setup"
+    assert idp.calls["token"] == 0
+    # Disabled stays "disabled", not "setup".
+    monkeypatch.setitem(state.AUTH_CONFIG, "oidc", _oidc_cfg(enabled=False, redirect_uri=""))
+    assert _error_code(_browser().get(LOGIN)) == "disabled"
+
+
+def test_saving_fills_a_blank_redirect_uri_from_the_admin_request(env, monkeypatch):
+    admin, _ = env
+    monkeypatch.setitem(state.AUTH_CONFIG, "oidc", _oidc_cfg(redirect_uri=""))
+    assert admin.put(AUTH_CONFIG, json=_config_body(admin, redirect_uri="")).status_code == 200
+    assert state.AUTH_CONFIG["oidc"]["redirect_uri"] == DEFAULT_REDIRECT_URI
+    stored = asyncio.run(db_module.get_auth_setting("auth_config"))
+    assert stored["oidc"]["redirect_uri"] == DEFAULT_REDIRECT_URI
+    assert admin.post(OIDC_TEST, json={}).json()["configured"] is True
+    # The filled-in plain http value passes when it comes back on the next save.
+    assert admin.put(AUTH_CONFIG, json=_config_body(admin)).status_code == 200
+    assert state.AUTH_CONFIG["oidc"]["redirect_uri"] == DEFAULT_REDIRECT_URI
+
+
+def test_saving_keeps_a_submitted_redirect_uri(env):
+    admin, _ = env
+    resp = admin.put(AUTH_CONFIG, json=_config_body(admin, redirect_uri=" https://sso.example.com/cb "))
+    assert resp.status_code == 200, resp.text
+    assert state.AUTH_CONFIG["oidc"]["redirect_uri"] == "https://sso.example.com/cb"
+    out = admin.post(OIDC_TEST, json={}).json()
+    assert out["redirect_uri"] == "https://sso.example.com/cb" and out["configured"] is True
 
 
 def test_non_admin_cannot_reach_admin_endpoints(env):

@@ -18,24 +18,10 @@ from pydantic import BaseModel
 from routes.crypto import encrypt
 from routes.secret_resolver import normalize_secret_name
 
-from netcontrol.routes.shared import _audit, _corr_id, _get_session
+from netcontrol.routes.shared import _audit, _corr_id, admin_session
 from netcontrol.secrets_providers.base import check_reference
 from netcontrol.secrets_providers.service import reference_provider
 from netcontrol.telemetry import configure_logging
-
-
-async def _require_admin_session(request: Request) -> dict:
-    """Extract session and verify admin role. Raises 401/403."""
-    session = _get_session(request)
-    if not session:
-        raise HTTPException(401, "Not authenticated")
-    if session.get("auth_mode") == "token":
-        return session
-    user = await db.get_user_by_id(session["user_id"])
-    if not user or user.get("role") != "admin":
-        raise HTTPException(403, "Admin access required")
-    return session
-
 
 LOGGER = configure_logging("plexus.secret_variables")
 
@@ -109,7 +95,7 @@ async def list_secret_variables(request: Request):
     variable names exposes which integrations and external services are
     wired up, which is information a regular user shouldn't need.
     """
-    await _require_admin_session(request)
+    await admin_session(request)
     return await db.get_all_secret_variables()
 
 
@@ -122,7 +108,7 @@ async def list_secret_variable_names(request: Request):
 
     Admin-only for the same reason as list_secret_variables.
     """
-    await _require_admin_session(request)
+    await admin_session(request)
     variables = await db.get_all_secret_variables()
     return [{"name": v["name"], "description": v.get("description", "")} for v in variables]
 
@@ -130,7 +116,7 @@ async def list_secret_variable_names(request: Request):
 @router.get("/api/secret-variables/{var_id}")
 async def get_secret_variable(var_id: int, request: Request):
     """Return metadata for a single secret variable (never the value)."""
-    await _require_admin_session(request)
+    await admin_session(request)
     sv = await db.get_secret_variable(var_id)
     if not sv:
         raise HTTPException(404, "Secret variable not found")
@@ -140,7 +126,7 @@ async def get_secret_variable(var_id: int, request: Request):
 @router.post("/api/secret-variables", status_code=201)
 async def create_secret_variable(body: SecretVariableCreate, request: Request):
     """Create a new secret variable. Requires admin role."""
-    session = await _require_admin_session(request)
+    session = await admin_session(request)
     name = _validate_name(body.name)
     external = await _checked_reference(body.external) if body.external is not None else None
     if not body.value and external is None:
@@ -177,7 +163,7 @@ async def create_secret_variable(body: SecretVariableCreate, request: Request):
 @router.put("/api/secret-variables/{var_id}")
 async def update_secret_variable(var_id: int, body: SecretVariableUpdate, request: Request):
     """Update an existing secret variable. Requires admin role."""
-    session = await _require_admin_session(request)
+    session = await admin_session(request)
     sv = await db.get_secret_variable(var_id)
     if not sv:
         raise HTTPException(404, "Secret variable not found")
@@ -214,7 +200,7 @@ async def update_secret_variable(var_id: int, body: SecretVariableUpdate, reques
 @router.delete("/api/secret-variables/{var_id}")
 async def delete_secret_variable(var_id: int, request: Request):
     """Delete a secret variable. Requires admin role."""
-    session = await _require_admin_session(request)
+    session = await admin_session(request)
     sv = await db.get_secret_variable(var_id)
     if not sv:
         raise HTTPException(404, "Secret variable not found")

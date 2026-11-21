@@ -14,14 +14,15 @@ from __future__ import annotations
 import asyncio
 
 import routes.database as db
-from routes.db.jobs import job_scope_condition
+from routes.db.jobs import job_scope_condition, launched_by_condition
 
 from netcontrol.object_scope import ObjectScope
 from netcontrol.routes.shared import caller_features
 
 # The feature each key of the dashboard payload belongs to: a caller without
 # that feature gets the dashboard without the key. ``stats`` (counts only) is
-# not listed and goes to every holder of the dashboard feature. ``topology``
+# not listed and goes to every holder of the dashboard feature; its job
+# counts cover the caller's own jobs unless the caller is an admin. ``topology``
 # (the state of the entities integrations collect) is the data of
 # /api/availability/topology/*, which the monitoring feature gates.
 DASHBOARD_KEY_FEATURES: dict[str, str] = {
@@ -34,11 +35,12 @@ DASHBOARD_KEY_FEATURES: dict[str, str] = {
 }
 
 
-async def _scoped_stats(scope: ObjectScope, username: str) -> dict:
-    """``get_dashboard_stats`` over the caller's hosts, groups and jobs
-    (playbooks are a shared catalogue: all of them)."""
-    reach = await scope.reach()
-    cond, params = job_scope_condition(scope.read_groups, username)
+async def _job_stats(scope: ObjectScope, username: str) -> dict:
+    """The playbook count (a shared catalogue: all of them) and the job
+    counts of ``get_dashboard_stats`` over the jobs ``username`` launched,
+    within ``scope`` for a scoped caller."""
+    groups = None if scope.unrestricted else scope.read_groups
+    cond, params = launched_by_condition(*job_scope_condition(groups, username), username)
     conn = await db.get_db(read_only=True)
     try:
         cursor = await conn.execute(
@@ -55,12 +57,20 @@ async def _scoped_stats(scope: ObjectScope, username: str) -> dict:
     finally:
         await conn.close()
     return {
-        "total_hosts": len(reach.read_hosts),
-        "total_groups": len(scope.read_groups),
         "total_playbooks": playbooks,
         "total_jobs": total,
         "running_jobs": running,
         "success_rate": round(successful / completed * 100) if completed > 0 else 0,
+    }
+
+
+async def _scoped_stats(scope: ObjectScope, username: str) -> dict:
+    """``get_dashboard_stats`` over the caller's hosts, groups and jobs."""
+    reach = await scope.reach()
+    return {
+        "total_hosts": len(reach.read_hosts),
+        "total_groups": len(scope.read_groups),
+        **await _job_stats(scope, username),
     }
 
 
@@ -92,9 +102,10 @@ async def dashboard_for_caller(request, data: dict, scope: ObjectScope, username
     """The dashboard the caller of ``request`` may see: a new dict built from
     ``data`` (the unscoped payload is a cache shared by every user, so it is
     never changed), without the keys of features the caller does not hold
-    (``DASHBOARD_KEY_FEATURES``). A non-admin sees only the jobs they
-    launched: the unscoped payload holds every user's, so they are read again
-    for this caller (``scoped_dashboard_data`` already reads only theirs)."""
+    (``DASHBOARD_KEY_FEATURES``). A non-admin sees and counts only the jobs
+    they launched: the unscoped payload holds every user's, so the list and
+    the job counts are read again for this caller (``scoped_dashboard_data``
+    already reads only theirs)."""
     features = await caller_features(request)
     view = {
         key: value
@@ -102,6 +113,9 @@ async def dashboard_for_caller(request, data: dict, scope: ObjectScope, username
         if features is None or DASHBOARD_KEY_FEATURES.get(key) is None or DASHBOARD_KEY_FEATURES[key] in features
     }
     # ``features`` is None for an admin or the API token (every feature).
-    if "recent_jobs" in view and scope.unrestricted and features is not None:
-        view["recent_jobs"] = await db.get_all_jobs(limit=5, only_launched_by=username)
+    if scope.unrestricted and features is not None:
+        if "recent_jobs" in view:
+            view["recent_jobs"] = await db.get_all_jobs(limit=5, only_launched_by=username)
+        if "stats" in view:
+            view["stats"] = {**view["stats"], **await _job_stats(scope, username)}
     return view

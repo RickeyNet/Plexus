@@ -182,12 +182,19 @@ flood the audit log.
 | Action | Needs |
 |---|---|
 | List providers and their settings | `secrets-providers` feature |
-| Add, edit, delete and test providers | `secrets-providers.write` |
+| Add, edit, delete and test providers | Admin (or the server API token) |
 | Point your own credential at a provider | `credentials.write`, and the provider allows personal credentials (admins: any provider) |
 | Point a service credential or secret variable at a provider | Admin |
 
-The Settings page is for admins; the feature keys grant the same through the
-API. Allowing personal credentials lets those users read any secret the
+Changing and testing a provider is admin only because a provider holds an
+auth secret and an address: whoever may change one can send its secret to a
+host of their choice, and whoever may test one can probe which secret paths
+exist. Other users get `403`. There is no `secrets-providers.write` key; an
+access group saved with it from an earlier version keeps the row, but the
+key grants nothing.
+
+The Settings page is for admins; the `secrets-providers` key lets other
+users read the providers through the API. Allowing personal credentials lets those users read any secret the
 provider's identity can read, by pointing a credential at it and using it on
 a device they control: allow it only on a provider whose identity reads just
 the secrets meant for them.

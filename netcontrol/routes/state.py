@@ -553,12 +553,13 @@ _FEATURE_CATALOG = [
     # command also needs its own feature (docs/chatops.md). No nav page.
     {"key": "chatops", "label": "ChatOps", "gateable": True, "writable": False, "visible_in_nav": False},
     # External secrets providers (docs/secrets-providers.md): read with the
-    # key, add, change and test with secrets-providers.write. Settings tab.
+    # key; only admins add, change, delete and test them, so there is no
+    # .write key. Settings tab.
     {
         "key": "secrets-providers",
         "label": "Secrets Providers",
         "gateable": True,
-        "writable": True,
+        "writable": False,
         "visible_in_nav": False,
     },
 ]

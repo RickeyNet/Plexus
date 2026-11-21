@@ -10,6 +10,7 @@ import time
 
 import pytest
 from netcontrol import secret_keys
+from netcontrol.integrations.meraki import collector as meraki_collector
 from netcontrol.mcp import redact as mcp_redact
 from netcontrol.telemetry import RedactingFilter, redact_value
 
@@ -141,8 +142,9 @@ def test_long_lines_do_not_backtrack():
 
 
 def test_one_definition_of_a_secret_key_name():
-    # The MCP masking uses the same names (plus the Meraki collector's).
-    assert set(secret_keys.SECRET_KEY_FRAGMENTS) <= set(mcp_redact._DENY_KEY_FRAGMENTS)
+    # The MCP masking and the Meraki / Cato payload scrubber use the same names.
+    assert mcp_redact.should_mask is secret_keys.should_mask
+    assert meraki_collector.should_mask is secret_keys.should_mask
     for key in (
         "community",
         "psk",

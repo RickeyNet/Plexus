@@ -404,6 +404,16 @@ def _included_routers():
             yield route.original_router, [d.dependency for d in route.include_context.dependencies]
 
 
+def _flat_routes(router):
+    """The routes of ``router``, those of a router included into it too
+    (``software.router`` includes the end-of-life router)."""
+    for route in router.routes:
+        if isinstance(route, _IncludedRouter):
+            yield from _flat_routes(route.original_router)
+        else:
+            yield route
+
+
 def test_every_route_of_an_enforced_feature_is_marked():
     enforced = object_scope.enforced_routers()
     enforced_ids = {id(r) for r in enforced}
@@ -421,7 +431,7 @@ def test_every_route_of_an_enforced_feature_is_marked():
     unmarked = [
         f"{sorted(getattr(r, 'methods', None) or ['WS'])} {r.path}"
         for router in enforced
-        for r in router.routes
+        for r in _flat_routes(router)
         if isinstance(r, (APIRoute, APIWebSocketRoute)) and object_scope.scope_marker(r.endpoint) is None
     ]
     assert unmarked == [], "routes without @scoped or @scope_exempt"
@@ -435,9 +445,9 @@ def test_every_websocket_of_an_enforced_feature_is_enforced():
     that owns an enforced router must itself be in an enforced router."""
     enforced = object_scope.enforced_routers()
     enforced_ids = {id(r) for r in enforced}
-    modules = {getattr(r.routes[0].endpoint, "__module__", "") for r in enforced if r.routes}
+    modules = {getattr(route.endpoint, "__module__", "") for r in enforced for route in _flat_routes(r)}
     for router, _deps in _included_routers():
-        sockets = [r for r in router.routes if isinstance(r, APIWebSocketRoute)]
+        sockets = [r for r in _flat_routes(router) if isinstance(r, APIWebSocketRoute)]
         if any(getattr(r.endpoint, "__module__", "") in modules for r in sockets):
             assert id(router) in enforced_ids, [r.path for r in sockets]
 
@@ -452,7 +462,7 @@ def test_scoped_get_routes_answer_404_out_of_scope(admin, tree):
     assert generated.json()["generated"] == 2, generated.text
     driven = []
     for router in object_scope.enforced_routers():
-        for route in router.routes:
+        for route in _flat_routes(router):
             marker = object_scope.scope_marker(route.endpoint)
             if not isinstance(route, APIRoute) or "GET" not in route.methods or not marker or marker[0] != "scoped":
                 continue

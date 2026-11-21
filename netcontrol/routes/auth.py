@@ -1610,8 +1610,20 @@ def _oidc_config() -> dict:
     return state.AUTH_CONFIG.get("oidc") or {}
 
 
-def _oidc_ready(cfg: dict) -> bool:
+def _oidc_provider_ready(cfg: dict) -> bool:
     return bool(cfg.get("enabled") and cfg.get("issuer") and cfg.get("client_id"))
+
+
+def _oidc_ready(cfg: dict) -> bool:
+    """OIDC sign-in is offered only when it is enabled, the provider is set
+    and the redirect URI is stored. Sign-in never derives the redirect URI
+    from the request's Host header, which the client controls."""
+    return _oidc_provider_ready(cfg) and bool(_oidc_redirect_uri(cfg))
+
+
+def _oidc_unavailable_code(cfg: dict) -> str:
+    """The sign-in error code when OIDC is not ready (see ``_sso_unavailable_code``)."""
+    return _sso_unavailable_code("oidc", _oidc_provider_ready(cfg), "the redirect URI is not stored")
 
 
 def _oidc_client_secret(cfg: dict) -> str:
@@ -1627,9 +1639,9 @@ def _oidc_client_secret(cfg: dict) -> str:
         raise oidc.OidcError("provider", "the stored client secret could not be decrypted") from exc
 
 
-def _oidc_redirect_uri(request: Request, cfg: dict) -> str:
-    """The configured redirect URI, else one derived from the request."""
-    return oidc.derive_redirect_uri(str(cfg.get("redirect_uri") or ""), _request_scheme(request), request.url.netloc)
+def _oidc_redirect_uri(cfg: dict) -> str:
+    """The stored redirect URI, or "" when none is stored."""
+    return str(cfg.get("redirect_uri") or "").strip()
 
 
 def _oidc_tx_serializer() -> URLSafeTimedSerializer:
@@ -1649,6 +1661,22 @@ def _sso_error_redirect(code: str, drop_tx: Callable[[Response], None] | None = 
     response = RedirectResponse(f"/login?sso_error={code}", status_code=303)
     (drop_tx or _drop_oidc_tx_cookie)(response)
     return response
+
+
+def _sso_unavailable_code(protocol: str, provider_ready: bool, missing: str) -> str:
+    """The sign-in error code when a protocol is not ready: ``setup`` when
+    it is enabled and its provider side is complete but a value sign-in
+    needs (``missing``) was never stored, e.g. a configuration saved by an
+    older version; else ``disabled``."""
+    if provider_ready:
+        LOGGER.warning(
+            "%s: sign-in unavailable: %s; an admin must save the %s settings once",
+            protocol,
+            missing,
+            protocol.upper(),
+        )
+        return "setup"
+    return "disabled"
 
 
 class _SsoAttempt:
@@ -1706,7 +1734,7 @@ async def oidc_login(request: Request, next_path: str = Query("/", alias="next")
     the provider."""
     cfg = _oidc_config()
     if not _oidc_ready(cfg):
-        return _sso_error_redirect("disabled")
+        return _sso_error_redirect(_oidc_unavailable_code(cfg))
     try:
         meta = await oidc.CLIENT.discover(str(cfg["issuer"]), str(cfg.get("ca_cert_file") or ""))
     except oidc.OidcError as exc:
@@ -1717,13 +1745,12 @@ async def oidc_login(request: Request, next_path: str = Query("/", alias="next")
         "state": oidc.new_state(),
         "nonce": oidc.new_nonce(),
         "verifier": verifier,
-        "redirect_uri": _oidc_redirect_uri(request, cfg),
         "next": oidc.safe_next(next_path),
     }
     url = oidc.CLIENT.authorization_url(
         meta,
         client_id=str(cfg["client_id"]),
-        redirect_uri=tx["redirect_uri"],
+        redirect_uri=_oidc_redirect_uri(cfg),
         scopes=str(cfg.get("scopes") or ""),
         state=tx["state"],
         nonce=tx["nonce"],
@@ -1767,7 +1794,10 @@ async def oidc_callback(request: Request):
         return refused
     cfg = _oidc_config()
     if not _oidc_ready(cfg):
-        return await attempt.fail("disabled", "single sign-on is disabled")
+        code = _oidc_unavailable_code(cfg)
+        if code == "setup":
+            return await attempt.fail(code, "the OIDC redirect URI is not configured")
+        return await attempt.fail(code, "single sign-on is disabled")
     tx = _load_oidc_tx(request)
     if tx is None:
         return await attempt.fail("state", "transaction cookie is missing, expired or invalid")
@@ -1790,7 +1820,7 @@ async def oidc_callback(request: Request):
         identity = await oidc.CLIENT.complete_login(
             cfg,
             code=code,
-            redirect_uri=str(tx.get("redirect_uri") or _oidc_redirect_uri(request, cfg)),
+            redirect_uri=_oidc_redirect_uri(cfg),
             code_verifier=tx["verifier"],
             nonce=tx["nonce"],
             client_secret=_oidc_client_secret(cfg),
@@ -1862,6 +1892,13 @@ def saml_default_sp_urls(request: Request) -> tuple[str, str]:
     return base + saml.METADATA_PATH, base + saml.ACS_PATH
 
 
+def oidc_default_redirect_uri(request: Request) -> str:
+    """The OIDC redirect URI for the address an authenticated admin reached
+    Plexus on. Used only to fill a blank value when an admin saves the OIDC
+    settings or views the value to register, never at sign-in."""
+    return _request_base(request) + oidc.CALLBACK_PATH
+
+
 def _saml_settings(cfg: dict) -> saml.SamlSettings:
     return saml.SamlSettings(
         idp_entity_id=str(cfg.get("idp_entity_id") or ""),
@@ -1907,16 +1944,8 @@ async def saml_metadata(request: Request):
 
 
 def _saml_unavailable_code(cfg: dict) -> str:
-    """The sign-in error code when SAML is not ready: ``setup`` for an
-    enabled, complete IdP whose SP entity ID or ACS URL was never stored (a
-    configuration saved by an older version), else ``disabled``."""
-    if _saml_idp_ready(cfg):
-        LOGGER.warning(
-            "saml: sign-in unavailable: the SP entity ID and ACS URL are not stored; "
-            "an admin must save the SAML settings once"
-        )
-        return "setup"
-    return "disabled"
+    """The sign-in error code when SAML is not ready (see ``_sso_unavailable_code``)."""
+    return _sso_unavailable_code("saml", _saml_idp_ready(cfg), "the SP entity ID and ACS URL are not stored")
 
 
 @router.get(saml.LOGIN_PATH)

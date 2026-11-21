@@ -15,6 +15,11 @@ python templates/run.py --version
 | `ghcr.io/rickeynet/plexus:<vX.Y.Z>`, `:latest` | `.github/workflows/release.yml` | a `v*.*.*` tag is pushed | amd64, arm64 (trivy-gated) |
 | `ghcr.io/rickeynet/plexus:edge`, `:sha-<12-char sha>` | `publish-edge` job in `.github/workflows/ci.yml` | every push to `main` after secret scan, backend and frontend jobs pass | amd64 |
 
+A manual run of the release workflow (**Run workflow**, with a release tag)
+publishes only when that tag exists and names the commit the run builds:
+start the run from the tag, not from a branch. A run started anywhere else
+fails before anything is built.
+
 Edge images report `PLEXUS_VERSION=<base>+edge.<sha>` and the full commit
 SHA, so **Settings → System** on the `edge` channel compares the head of
 `main` with the running build's SHA. Version comparison drops the `+...`

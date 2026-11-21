@@ -27,6 +27,7 @@ from typing import Any
 
 from netcontrol.integrations.meraki.client import MerakiApiError, MerakiClient
 from netcontrol.integrations.meraki.normalize import _device_kind
+from netcontrol.secret_keys import should_mask
 from netcontrol.telemetry import configure_logging
 
 LOGGER = configure_logging("plexus.meraki")
@@ -67,9 +68,6 @@ _BOOL_OPTIONS = (
     "ssh_enrich",
 )
 
-# Key fragments that mark a value as a secret wherever it appears in a payload.
-_SECRET_KEY_FRAGMENTS = ("secret", "psk", "password", "passphrase", "privatekey", "apikey", "token")
-
 _NOT_APPLICABLE_STATUSES = {400, 404}
 _CLIENT_TIMESPAN_SECONDS = 86400
 _MAX_RECORDED_ERRORS = 200
@@ -102,13 +100,10 @@ def sanitize_options(raw: object) -> dict[str, Any]:
 
 
 def scrub_secrets(value: Any) -> Any:
-    """Recursively drop secret-bearing keys from an API payload."""
+    """Recursively drop secret-bearing keys from an API payload (the key
+    names of ``netcontrol.secret_keys``, as in the log and MCP redaction)."""
     if isinstance(value, dict):
-        return {
-            k: scrub_secrets(v)
-            for k, v in value.items()
-            if not any(fragment in str(k).lower() for fragment in _SECRET_KEY_FRAGMENTS)
-        }
+        return {k: scrub_secrets(v) for k, v in value.items() if not should_mask(k, v)}
     if isinstance(value, list):
         return [scrub_secrets(v) for v in value]
     return value

@@ -2,11 +2,14 @@
 Azure Key Vault (docs/secrets-providers.md).
 
 ``router`` is registered in ``app.py`` behind ``require_auth`` and
-``require_feature_method("secrets-providers")``: read with
-``secrets-providers``, change and test with ``secrets-providers.write``
-(admins have both). Object scope: providers are global configuration with
-no host data, so accounts limited to selected inventory groups may read
-them but never change or test them (403).
+``require_feature_method("secrets-providers")``: the ``secrets-providers``
+feature reads the list. Adding, changing, deleting and testing a provider
+is admin only (an admin session or the server API token, else 403): a
+provider holds an auth secret and an address, so whoever changes or tests
+one can send that secret to a host of their choice or probe secret paths.
+Object scope: providers are global configuration with no host data, so
+accounts limited to selected inventory groups may read them; the admins
+who change them are never scoped.
 
 A provider's own auth secrets (Vault token or AppRole secret id, AWS secret
 access key and session token, Azure client secret) are write-only: they are
@@ -33,9 +36,9 @@ import routes.database as db
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from netcontrol.object_scope import refuse_scoped, scope_exempt, scoped
+from netcontrol.object_scope import scope_exempt, scoped
 from netcontrol.routes.outbound_http import OutboundRequestError, guard_url
-from netcontrol.routes.shared import _audit, _corr_id, _session_user
+from netcontrol.routes.shared import _audit, _corr_id, _session_user, admin_session
 from netcontrol.secrets_providers.base import SecretsProviderError, invalidate
 from netcontrol.secrets_providers.service import (
     CACHE_TTL_MAX,
@@ -155,9 +158,9 @@ async def get_provider(provider_id: int):
 
 
 @router.post(API, status_code=201)
-@scoped("refused")
+@scoped("admin")
 async def create_provider(body: ProviderCreate, request: Request):
-    await refuse_scoped(request)
+    await admin_session(request)
     name = _name(body.name)
     config, secret_enc = _prepared(body.provider_type, body.config, body.secrets)
     await _guard_addresses(body.provider_type, config)
@@ -185,9 +188,9 @@ async def create_provider(body: ProviderCreate, request: Request):
 
 
 @router.put(API + "/{provider_id}")
-@scoped("refused")
+@scoped("admin")
 async def update_provider(provider_id: int, body: ProviderUpdate, request: Request):
-    await refuse_scoped(request)
+    await admin_session(request)
     row = await _provider(provider_id, with_secret=True)
     if body.provider_type is not None and body.provider_type != row["provider_type"]:
         raise HTTPException(400, "The provider type cannot change; create a new provider")
@@ -230,9 +233,9 @@ async def update_provider(provider_id: int, body: ProviderUpdate, request: Reque
 
 
 @router.delete(API + "/{provider_id}")
-@scoped("refused")
+@scoped("admin")
 async def delete_provider(provider_id: int, request: Request):
-    await refuse_scoped(request)
+    await admin_session(request)
     row = await _provider(provider_id)
     try:
         await db.delete_secrets_provider(provider_id)
@@ -244,11 +247,11 @@ async def delete_provider(provider_id: int, request: Request):
 
 
 @router.post(API + "/{provider_id}/test")
-@scoped("refused")
+@scoped("admin")
 async def test_reference(provider_id: int, body: ReferenceTest, request: Request):
     """Resolve one reference without the cache. Success or failure only:
     the value is never returned or logged."""
-    await refuse_scoped(request)
+    await admin_session(request)
     row = await _provider(provider_id)
     try:
         await resolve_reference(

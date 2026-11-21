@@ -5,8 +5,9 @@ export const OIDC_MAX_GROUP_MAPPINGS = 200;
 export const OIDC_BUTTON_LABEL_MAX = 60;
 
 /** The redirect URI to register at the provider: the configured one, else
- * this site's origin plus the callback path (what the server derives when
- * the browser reaches it directly or through a proxy that keeps the host). */
+ * this site's origin plus the callback path (what a save with the field
+ * blank stores, when the browser reaches the server directly or through a
+ * proxy that keeps the host). */
 export function oidcRedirectUri(configured: string, origin: string): string {
   return configured.trim() || `${origin}${OIDC_CALLBACK_PATH}`;
 }

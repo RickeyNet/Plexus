@@ -130,14 +130,6 @@ def scope_string(scopes: str) -> str:
     return " ".join(["openid", *rest])
 
 
-def derive_redirect_uri(configured: str, scheme: str, netloc: str) -> str:
-    """The configured redirect URI, else ``<scheme>://<host>`` of the
-    request plus the callback path."""
-    if str(configured or "").strip():
-        return str(configured).strip()
-    return f"{scheme}://{netloc}{CALLBACK_PATH}"
-
-
 def claim_groups(claims: dict, name: str) -> list[str]:
     """The groups claim as a list of strings (a single string becomes one
     group; anything else is ignored)."""
