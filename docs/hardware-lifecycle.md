@@ -156,8 +156,10 @@ uniqueness rules are enforced by the database as well.
 
 - Notices are entered by hand (or through the API). No vendor publishes a
   hardware end-of-life feed Plexus can match by model, so there is no sync.
-- Software end-of-life is not a notice: software versions and their
-  advisories are the software tracker's.
+- Software end-of-life is not a notice: the end of life of a software
+  release series (OPNsense estimated by its release cadence, every other
+  platform by an administrator's entry) is the software tracker's, see
+  [software-versions.md](software-versions.md#software-end-of-life).
 - Cloud resources and API-collected devices (Meraki, Cato and the other
   integrations) are not inventory hosts and get no lifecycle status; see
   [vendor-monitoring-coverage.md](vendor-monitoring-coverage.md).

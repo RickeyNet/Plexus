@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 
-import { SeverityBadge } from '@/components/Badge';
+import { Badge, SeverityBadge } from '@/components/Badge';
 import { BusyButton } from '@/components/BusyButton';
 import { DataTable } from '@/components/DataTable';
 import { DeleteButton } from '@/components/DeleteButton';
@@ -37,10 +37,15 @@ import { DeviceHistoryModal } from './DeviceHistoryModal';
 import { ImportAdvisoriesModal } from './ImportAdvisoriesModal';
 import { LifecycleTab } from './LifecycleTab';
 import { SettingsModal } from './SettingsModal';
+import { SoftwareEolCard, SoftwareEolChip } from './SoftwareEol';
 import {
+  SOFTWARE_EOL_FILTERS,
   type SoftwareTab,
   barWidth,
+  knownExploitedTitle,
+  matchesSoftwareEolFilter,
   severityLabel,
+  severitySourceLabel,
   sourceLabel,
 } from './helpers';
 
@@ -111,6 +116,7 @@ function VersionsTab() {
   const [platform, setPlatform] = useState('');
   const [source, setSource] = useState('');
   const [search, setSearch] = useState('');
+  const [eolFilter, setEolFilter] = useState('');
   const [modal, setModal] = useState<ModalState>({ kind: 'none' });
   const [syncJobId, setSyncJobId] = useState<string | null>(null);
 
@@ -124,7 +130,7 @@ function VersionsTab() {
 
   const data = overview.data;
   const summary = data?.summary;
-  const devices = data?.devices ?? [];
+  const devices = (data?.devices ?? []).filter((d) => matchesSoftwareEolFilter(d.lifecycle, eolFilter));
   const spread = data?.platforms ?? [];
   const alerts = data?.alerts ?? [];
   const advisories = data?.advisories ?? [];
@@ -250,6 +256,19 @@ function VersionsTab() {
             </option>
           ))}
         </select>
+        <select
+          aria-label="Series end of life"
+          className="form-select form-select-sm"
+          value={eolFilter}
+          onChange={(e) => setEolFilter(e.target.value)}
+        >
+          <option value="">Any series status</option>
+          {SOFTWARE_EOL_FILTERS.map((f) => (
+            <option key={f.value} value={f.value}>
+              {f.label} ({summary?.lifecycle?.[f.value] ?? 0})
+            </option>
+          ))}
+        </select>
         <span className="toolbar-spacer" />
         {canWrite && (
           <button type="button" className="btn btn-secondary btn-sm" onClick={handleRefresh} disabled={refresh.isPending}>
@@ -349,7 +368,7 @@ function VersionsTab() {
                 <DevicesCard
                   devices={devices}
                   loading={overview.isPending}
-                  filtered={Boolean(platform || source || search)}
+                  filtered={Boolean(platform || source || search || eolFilter)}
                   onHistory={(device) => setModal({ kind: 'history', device })}
                 />
                 <AlertsCard
@@ -369,6 +388,12 @@ function VersionsTab() {
                   onImport={() => setModal({ kind: 'import' })}
                   onEdit={(advisory) => setModal({ kind: 'advisory', advisory })}
                   onDelete={handleDelete}
+                />
+                <SoftwareEolCard
+                  canWrite={canWrite}
+                  isAdmin={isAdmin}
+                  platformLabel={platformLabel}
+                  platforms={catalog.filter((p) => p.key !== 'other')}
                 />
                 <ChangesCard changes={changes} platformLabel={platformLabel} />
               </div>
@@ -464,6 +489,11 @@ function DevicesCard({ devices, loading, filtered, onHistory }: DevicesCardProps
                   {d.changed_at && (
                     <div className="text-muted" style={{ fontSize: '0.8em' }} title={formatBackendDateTime(d.changed_at, 'Never')}>
                       was {d.previous_version || '?'}
+                    </div>
+                  )}
+                  {d.lifecycle && d.lifecycle.status !== 'unknown' && (
+                    <div style={{ marginTop: '0.2rem' }}>
+                      <SoftwareEolChip status={d.lifecycle} />
                     </div>
                   )}
                 </td>
@@ -562,10 +592,15 @@ function AlertsCard({ alerts, canWrite, onAcknowledge, isAcknowledging }: Alerts
             <div key={a.id} style={{ padding: '0.7rem 0', borderBottom: '1px solid var(--border)' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.75rem', alignItems: 'flex-start' }}>
                 <div>
-                  <SeverityBadge severity={a.severity} style={{ marginRight: '0.4rem' }}>
+                  <SeverityBadge
+                    severity={a.severity}
+                    title={severitySourceLabel(a.severity_source)}
+                    style={{ marginRight: '0.4rem' }}
+                  >
                     {severityLabel(a.severity)}
                     {a.cvss != null ? ` ${a.cvss}` : ''}
                   </SeverityBadge>
+                  <KnownExploitedBadge item={a} />
                   {a.url ? (
                     <a href={a.url} target="_blank" rel="noreferrer">
                       {a.advisory_id}
@@ -604,6 +639,17 @@ function AlertsCard({ alerts, canWrite, onAcknowledge, isAcknowledging }: Alerts
   );
 }
 
+/** "Known exploited" when a CVE of the advisory is in the CISA KEV catalogue, its dates in the tooltip. */
+function KnownExploitedBadge({ item }: { item: SoftwareAdvisory | SoftwareAlert }) {
+  const title = knownExploitedTitle(item);
+  if (!title) return null;
+  return (
+    <Badge tone="danger" size="sm" title={title} style={{ marginRight: '0.4rem' }}>
+      Known exploited
+    </Badge>
+  );
+}
+
 interface AdvisoriesCardProps {
   advisories: SoftwareAdvisory[];
   canWrite: boolean;
@@ -639,9 +685,15 @@ function AdvisoriesCard({ advisories, canWrite, platformLabel, onAdd, onImport, 
           <div key={adv.advisory_id} style={{ padding: '0.6rem 0', borderBottom: '1px solid var(--border)' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.5rem', alignItems: 'flex-start' }}>
               <div style={{ minWidth: 0 }}>
-                <SeverityBadge severity={adv.severity} style={{ marginRight: '0.4rem' }}>
+                <SeverityBadge
+                  severity={adv.severity}
+                  title={severitySourceLabel(adv.severity_source, adv.cvss_source)}
+                  style={{ marginRight: '0.4rem' }}
+                >
                   {severityLabel(adv.severity)}
+                  {adv.cvss != null ? ` ${adv.cvss}` : ''}
                 </SeverityBadge>
+                <KnownExploitedBadge item={adv} />
                 {adv.url ? (
                   <a href={adv.url} target="_blank" rel="noreferrer">
                     {adv.advisory_id}

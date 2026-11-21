@@ -13,6 +13,8 @@ What runs what:
 * Advisories come from three places: entered by hand, imported as JSON, or
   synced from Cisco PSIRT (openVuln), which asks Cisco about every distinct
   version of every Cisco platform in the tracked set.
+* When turned on, the advisories' CVE ids are enriched from NVD (CVSS) and
+  the CISA KEV catalogue (known exploited); see :mod:`software_cve`.
 * A new or reopened alert at or above the configured severity floor is
   handed to the notification channels like a monitoring alert.
 
@@ -33,13 +35,19 @@ import asyncio
 import json
 import re
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Literal
 
 import routes.database as db
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from netcontrol.integrations.apc.snmp import STATUS_KIND as UPS_STATUS_KIND
+from netcontrol.integrations.software.lifecycle import (
+    MAX_WARN_DAYS,
+    WARN_DAYS_SETTING,
+    status_counts,
+    warn_days_setting,
+)
 from netcontrol.integrations.software.psirt import OS_TYPES, PsirtApiError, PsirtClient
 from netcontrol.integrations.software.versions import (
     PLATFORMS,
@@ -66,12 +74,15 @@ from netcontrol.object_scope import (
     scope_exempt,
     scoped,
 )
-from netcontrol.routes import background_jobs, notification_channels
+from netcontrol.routes import background_jobs, notification_channels, software_cve
 from netcontrol.routes.meraki_topology import latest_snapshots
 from netcontrol.routes.shared import _audit, _corr_id, _session_user, supervise_task
+from netcontrol.routes.software_eol import device_statuses, router as eol_router, sync_lifecycle_advisories
 from netcontrol.telemetry import configure_logging
 
 router = APIRouter()
+# The end-of-life entries: under this router, so they share its feature gate.
+router.include_router(eol_router)
 LOGGER = configure_logging("plexus.software")
 
 _require_admin = None
@@ -95,6 +106,7 @@ SETTING_DEFAULTS = {
     "psirt_enabled": "false",
     "psirt_client_id": "",
     "psirt_interval_seconds": str(DEFAULT_PSIRT_INTERVAL),
+    WARN_DAYS_SETTING: "60",
 }
 _PSIRT_PLATFORMS = {key: entry["psirt"] for key, entry in PLATFORMS.items() if entry.get("psirt")}
 _PLATFORM_OF_OS_TYPE = {os_type: key for key, os_type in _PSIRT_PLATFORMS.items()}
@@ -144,6 +156,10 @@ class AdvisoryBody(BaseModel):
     published: str = Field(default="", max_length=40)
     summary: str = Field(default="", max_length=4000)
     enabled: bool = True
+    # "admin": the severity is the administrator's and CVE enrichment keeps
+    # it; "default": enrichment may set it. Omitted: inferred (see
+    # ``_severity_source``).
+    severity_source: Literal["admin", "default"] | None = None
 
 
 class AdvisoryImportBody(BaseModel):
@@ -159,6 +175,29 @@ class SettingsBody(BaseModel):
     # Write-only: omitted keeps the stored secret, "" clears it.
     psirt_client_secret: str | None = Field(default=None, max_length=400)
     psirt_interval_seconds: int | None = None
+    # Days before a release series' end of life that it counts as ending.
+    eol_warn_days: int | None = None
+    # NVD / CISA KEV enrichment (``software_cve``). The API key is
+    # write-only: omitted keeps it, "" clears it. A URL "" means the default.
+    cve_enrichment_enabled: bool | None = None
+    nvd_api_key: str | None = Field(default=None, max_length=200)
+    nvd_base_url: str | None = Field(default=None, max_length=500)
+    kev_url: str | None = Field(default=None, max_length=500)
+
+
+def _severity_source(body: AdvisoryBody, existing: dict | None, severity: str) -> str:
+    """Where an advisory's severity comes from after an administrator's
+    create, edit or import: the body's ``severity_source`` when given;
+    otherwise ``admin`` when the body sets a severity (on an edit: one that
+    differs from the stored one), else ``default`` (a create or import) or
+    the stored source (an edit)."""
+    if body.severity_source:
+        return body.severity_source
+    if existing is None:
+        return "admin" if "severity" in body.model_fields_set else "default"
+    if "severity" in body.model_fields_set and severity != existing.get("severity"):
+        return "admin"
+    return str(existing.get("severity_source") or "default")
 
 
 def _clean_advisory(body: AdvisoryBody) -> dict[str, Any]:
@@ -224,6 +263,8 @@ def _public_settings(raw: dict[str, str]) -> dict[str, Any]:
         "psirt_last_sync_message": raw.get("psirt_last_sync_message") or "",
         "psirt_platforms": sorted(_PSIRT_PLATFORMS),
         "last_refresh_at": raw.get("last_refresh_at") or "",
+        "eol_warn_days": warn_days_setting(raw.get(WARN_DAYS_SETTING)),
+        **software_cve.public_settings(raw),
     }
 
 
@@ -260,6 +301,7 @@ async def collect_software_entries() -> list[dict[str, Any]]:
                     "platform": device["platform"],
                     "version": device["version"],
                     "raw_version": device["raw_version"],
+                    "major_upgrade": device.get("major_upgrade") or "",
                 }
             )
     for host in await db.list_hosts_for_software():
@@ -332,6 +374,9 @@ async def _notify(alerts: list[dict], raw_settings: dict[str, str]) -> int:
         )
         if fixed:
             message += f" - fixed in {', '.join(fixed[:3])}"
+        if advisory.get("known_exploited"):
+            added = advisory.get("kev_date_added")
+            message += " - known exploited (CISA KEV" + (f", added {added})" if added else ")")
         event = {
             "alert_id": f"software-{alert['id']}",
             "host_id": device.get("host_id"),
@@ -356,16 +401,28 @@ async def _notify(alerts: list[dict], raw_settings: dict[str, str]) -> int:
     return sent
 
 
-async def evaluate_software_alerts(*, notify: bool = True) -> dict[str, Any]:
+async def evaluate_software_alerts(
+    *, notify: bool = True, renotify_advisories: set[str] | None = None
+) -> dict[str, Any]:
     """Match every tracked device against the enabled advisories and bring
-    the alerts up to date."""
+    the alerts up to date. ``renotify_advisories``: advisories that have
+    just become known exploited, whose open alerts are notified again
+    (CVE enrichment)."""
     devices = await db.list_software_versions()
     advisories = await db.list_software_advisories(enabled_only=True)
     matches = find_advisory_matches(devices, advisories)
     result = await db.sync_software_alerts(matches)
     notified = 0
-    if notify and (result["new"] or result["reopened"]):
-        notified = await _notify([*result["new"], *result["reopened"]], await _settings())
+    to_notify = [*result["new"], *result["reopened"]]
+    if notify and renotify_advisories:
+        listed = {alert["id"] for alert in to_notify}
+        to_notify.extend(
+            alert
+            for alert in await db.list_software_alerts(include_resolved=False, limit=100_000)
+            if alert["advisory_id"] in renotify_advisories and alert["id"] not in listed
+        )
+    if notify and to_notify:
+        notified = await _notify(to_notify, await _settings())
     return {
         "open": result["open"],
         "new": len(result["new"]),
@@ -380,6 +437,8 @@ async def refresh_software(*, notify: bool = True) -> dict[str, Any]:
     async with _refresh_lock:
         entries = await collect_software_entries()
         result = await db.replace_software_versions(entries)
+        # The end-of-life advisories of the series the devices now run.
+        result["lifecycle"] = await sync_lifecycle_advisories()
         result["alerts"] = await evaluate_software_alerts(notify=notify)
         await db.set_software_settings(
             {
@@ -497,7 +556,14 @@ async def run_psirt_sync(job_id: str, user: str) -> dict[str, Any]:
                     if existing and existing.get("platform") not in ("", platform):
                         platform = ""  # affects more than one platform: match on version only
                     await db.upsert_software_advisory(
-                        {**advisory, "source": "cisco-psirt", "platform": platform, "affected_versions": [version]},
+                        {
+                            **advisory,
+                            "source": "cisco-psirt",
+                            "platform": platform,
+                            "affected_versions": [version],
+                            # Cisco's Security Impact Rating: enrichment keeps it.
+                            "severity_source": "vendor",
+                        },
                         merge_lists=True,
                     )
                     found += 1
@@ -550,8 +616,8 @@ def _start_psirt_sync(user: str) -> dict:
 
 
 async def _software_refresh_loop() -> None:
-    """Refresh the tracked set on the configured interval, and sync Cisco
-    PSIRT when enabled and due."""
+    """Refresh the tracked set on the configured interval, sync Cisco PSIRT
+    and run the NVD / CISA KEV enrichment when enabled and due."""
     await asyncio.sleep(INITIAL_REFRESH_DELAY)
     while True:
         interval = DEFAULT_REFRESH_INTERVAL
@@ -579,6 +645,9 @@ async def _software_refresh_loop() -> None:
                 if last_at is None or (datetime.now(UTC) - last_at).total_seconds() >= due_after:
                     job = background_jobs.create_job(_JOB_KIND, {"phase": "starting", "scheduled": True})
                     await run_psirt_sync(job["job_id"], "scheduler")
+            if software_cve.scheduled_run_due(await _settings()):
+                # A background job: NVD's pace must not hold the next refresh up.
+                software_cve.start_job("scheduler", evaluate_software_alerts)
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001 - the loop must survive
@@ -609,7 +678,8 @@ async def software_overview_api(
         await refresh_software(notify=False)
         raw = await _settings()
     scope_kwargs: dict[str, Any] = await group_filter(request)
-    every = await _readable_devices(request, await db.list_software_versions())
+    tracked = await db.list_software_versions()
+    every = await _readable_devices(request, tracked)
     filtered = (
         every
         if not (platform or search or source)
@@ -620,7 +690,9 @@ async def software_overview_api(
     spread = version_spread(every)
     newest = {entry["platform"]: entry["newest_version"] for entry in spread}
     alerts_by_device = await db.count_open_alerts_by_device()
+    lifecycle = await device_statuses(every, all_devices=tracked)
     for device in filtered:
+        device["lifecycle"] = lifecycle.get(device["device_key"])
         counts = alerts_by_device.get(device["device_key"]) or {}
         device["behind_newest"] = bool(device["version"]) and device["version"] != newest.get(device["platform"])
         device["platform_label"] = PLATFORMS.get(device["platform"], PLATFORMS["other"])["label"]
@@ -646,6 +718,8 @@ async def software_overview_api(
             "advisories": len(advisories),
             "enabled_advisories": sum(1 for a in advisories if a["enabled"]),
             "sources": sources,
+            # Devices per end-of-life status of the series they run.
+            "lifecycle": status_counts(list(lifecycle.values())),
             "last_refresh_at": raw.get("last_refresh_at") or "",
         },
         "platforms": spread,
@@ -706,7 +780,11 @@ async def create_advisory_api(body: AdvisoryBody, request: Request):
     existing = await db.get_software_advisory(advisory["advisory_id"])
     if existing:
         raise HTTPException(status_code=409, detail="An advisory with this ID already exists")
-    stored = await db.upsert_software_advisory(advisory)
+    advisory["severity_source"] = _severity_source(body, None, advisory["severity"])
+    await db.upsert_software_advisory(advisory, override_severity=True)
+    # CVEs already looked up apply at once (no request is sent).
+    await software_cve.apply_cached_enrichment({advisory["advisory_id"]})
+    stored = await db.get_software_advisory(advisory["advisory_id"])
     alerts = await evaluate_software_alerts(notify=True)
     await _audit(
         "software",
@@ -729,7 +807,14 @@ async def update_advisory_api(advisory_id: str, body: AdvisoryBody, request: Req
     if advisory["advisory_id"] != advisory_id:
         raise HTTPException(status_code=400, detail="advisory_id cannot be changed")
     advisory["source"] = existing.get("source") or "manual"
-    stored = await db.upsert_software_advisory(advisory)
+    if "severity" not in body.model_fields_set and not body.severity_source:
+        advisory["severity"] = existing.get("severity") or advisory["severity"]
+    advisory["severity_source"] = _severity_source(body, existing, advisory["severity"])
+    if existing.get("cvss_source") == "nvd" and advisory["cvss"] == existing.get("cvss"):
+        advisory["cvss_source"] = "nvd"  # the enriched score sent back unchanged
+    await db.upsert_software_advisory(advisory, override_severity=True)
+    await software_cve.apply_cached_enrichment({advisory_id})
+    stored = await db.get_software_advisory(advisory_id)
     alerts = await evaluate_software_alerts(notify=True)
     await _audit(
         "software",
@@ -764,9 +849,11 @@ async def import_advisories_api(body: AdvisoryImportBody, request: Request):
     if not body.advisories:
         raise HTTPException(status_code=400, detail="No advisories to import")
     cleaned = [_clean_advisory(item) for item in body.advisories]
-    for advisory in cleaned:
+    for item, advisory in zip(body.advisories, cleaned, strict=True):
         advisory["source"] = "import"
-        await db.upsert_software_advisory(advisory)
+        advisory["severity_source"] = _severity_source(item, None, advisory["severity"])
+        await db.upsert_software_advisory(advisory, override_severity=True)
+    await software_cve.apply_cached_enrichment({advisory["advisory_id"] for advisory in cleaned})
     alerts = await evaluate_software_alerts(notify=True)
     await _audit(
         "software",
@@ -849,7 +936,27 @@ async def update_settings_api(body: SettingsBody, request: Request):
                 detail=f"psirt_interval_seconds must be between {MIN_PSIRT_INTERVAL} and {MAX_REFRESH_INTERVAL * 4}",
             )
         values["psirt_interval_seconds"] = str(body.psirt_interval_seconds)
+    if body.eol_warn_days is not None:
+        if not 1 <= body.eol_warn_days <= MAX_WARN_DAYS:
+            raise HTTPException(status_code=400, detail=f"eol_warn_days must be between 1 and {MAX_WARN_DAYS}")
+        values[WARN_DAYS_SETTING] = str(body.eol_warn_days)
+    try:
+        values.update(
+            await software_cve.settings_update(
+                await db.get_software_settings(),
+                enabled=body.cve_enrichment_enabled,
+                api_key=body.nvd_api_key,
+                nvd_base_url=body.nvd_base_url,
+                kev_url=body.kev_url,
+            )
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     await db.set_software_settings(values)
+    if WARN_DAYS_SETTING in values:
+        # A wider or narrower window changes which series are ending now.
+        await sync_lifecycle_advisories()
+        await evaluate_software_alerts(notify=True)
     changed = sorted(key.replace("_enc", "") for key in values)
     await _audit(
         "software",
@@ -879,6 +986,29 @@ async def start_psirt_sync_api(request: Request):
     await _psirt_credentials()
     job = _start_psirt_sync(_session_user(request))
     return {"job_id": job["job_id"], "status": "running"}
+
+
+@router.post("/api/software/cve-enrichment/run", status_code=202, dependencies=[Depends(_require_admin_dep)])
+@scoped("admin")
+async def start_cve_enrichment_api(request: Request):
+    if not software_cve.public_settings(await _settings())["cve_enrichment_enabled"]:
+        raise HTTPException(status_code=400, detail="Turn CVE enrichment (NVD and CISA KEV) on first")
+    try:
+        job = software_cve.start_job(_session_user(request), evaluate_software_alerts)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"job_id": job["job_id"], "status": "running"}
+
+
+@router.get("/api/software/cve-enrichment/jobs/{job_id}")
+@scoped("job")
+async def get_cve_enrichment_job_api(job_id: str, request: Request):
+    # A run covers every advisory (and only an administrator starts one).
+    restricted = (await request_scope(request)).restricted
+    job = None if restricted else software_cve.get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Enrichment job not found (it may have expired)")
+    return job
 
 
 @router.get("/api/software/psirt/jobs/{job_id}")

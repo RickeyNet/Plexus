@@ -37,6 +37,11 @@ __all__ = [
     "software_alert_summary",
     "get_software_settings",
     "set_software_settings",
+    "apply_advisory_enrichment",
+    "list_cve_enrichment",
+    "store_cve_kev",
+    "store_cve_lookup",
+    "store_cve_lookup_error",
 ]
 
 _DEVICE_FIELDS = (
@@ -51,6 +56,8 @@ _DEVICE_FIELDS = (
     "platform",
     "version",
     "raw_version",
+    # Migration 0130: a newer major release the device reports as available.
+    "major_upgrade",
 )
 # ``device_keys`` (migration 0091): the tracked devices an advisory is
 # limited to; empty means every device it otherwise matches.
@@ -70,7 +77,14 @@ _ADVISORY_FIELDS = (
     "published",
     "summary",
     "enabled",
+    # Migration 0129: where the severity and the CVSS score come from.
+    "severity_source",
+    "cvss_source",
 )
+# The severity sources CVE enrichment may change (``default``: the source
+# gave none; ``enriched``: set by enrichment). ``vendor`` and ``admin`` are kept.
+_ENRICHABLE_SEVERITY = ("default", "enriched")
+_SEVERITY_SOURCES = ("default", "enriched", "vendor", "admin")
 _SEVERITY_CASE = (
     "CASE severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END"
 )
@@ -286,7 +300,39 @@ def _advisory_row(row) -> dict | None:
     for name in _ADVISORY_LISTS:
         advisory[name] = _parse_list(advisory.pop(f"{name}_json", "[]"))
     advisory["enabled"] = bool(advisory.get("enabled"))
+    advisory["known_exploited"] = bool(advisory.get("known_exploited"))
     return advisory
+
+
+def _settle_sources(advisory: dict, existing: dict | None, override_severity: bool) -> None:
+    """Fill ``severity_source`` and ``cvss_source`` of an advisory about to
+    be stored, keeping what must survive the write.
+
+    Unless ``override_severity`` (an administrator's create, edit or
+    import), a stored ``admin`` severity is kept against any other source,
+    and an ``enriched`` one against a ``default`` one (a sync that has no
+    severity of its own, such as the OPNsense audit). A score filled in by
+    enrichment (``cvss_source`` ``nvd``) is kept when the write has none.
+    """
+    source = str(advisory.get("severity_source") or "default")
+    if source not in _SEVERITY_SOURCES:
+        source = "default"
+    stored = str((existing or {}).get("severity_source") or "")
+    if (
+        existing
+        and not override_severity
+        and ((stored == "admin" and source != "admin") or (stored == "enriched" and source == "default"))
+    ):
+        advisory["severity"] = existing.get("severity") or advisory.get("severity")
+        source = stored
+    advisory["severity_source"] = source
+    if advisory.get("cvss") is None:
+        if existing and existing.get("cvss_source") == "nvd" and existing.get("cvss") is not None:
+            advisory["cvss"], advisory["cvss_source"] = existing["cvss"], "nvd"
+        else:
+            advisory["cvss_source"] = ""
+    elif advisory.get("cvss_source") != "nvd":
+        advisory["cvss_source"] = ""
 
 
 def _advisory_values(advisory: dict) -> tuple:
@@ -324,7 +370,9 @@ async def get_software_advisory(advisory_id: str) -> dict | None:
         await db.close()
 
 
-async def upsert_software_advisory(advisory: dict, *, merge_lists: bool = False) -> dict | None:
+async def upsert_software_advisory(
+    advisory: dict, *, merge_lists: bool = False, override_severity: bool = False
+) -> dict | None:
     """Create or replace an advisory by ``advisory_id``.
 
     With ``merge_lists`` the affected versions, fixed versions and CVEs
@@ -332,6 +380,11 @@ async def upsert_software_advisory(advisory: dict, *, merge_lists: bool = False)
     sync accumulates the versions Cisco answered for one advisory.
     An advisory without a ``device_keys`` field keeps the stored one (an
     edit or a PSIRT sync never widens or narrows a device scope).
+    ``severity_source`` (``default`` when missing) says where the severity
+    comes from; an administrator's severity and the values CVE enrichment
+    filled in survive a sync's write (see ``_settle_sources``), and
+    ``override_severity`` is for the administrator's own writes.
+    The KEV fields are only written by :func:`apply_advisory_enrichment`.
     """
     advisory = dict(advisory)
     advisory_id = str(advisory.get("advisory_id") or "").strip()
@@ -339,7 +392,7 @@ async def upsert_software_advisory(advisory: dict, *, merge_lists: bool = False)
         return None
     advisory["advisory_id"] = advisory_id
     now = _now()
-    existing = await get_software_advisory(advisory_id) if merge_lists or "device_keys" not in advisory else None
+    existing = await get_software_advisory(advisory_id)
     if "device_keys" not in advisory:
         advisory["device_keys"] = list((existing or {}).get("device_keys") or [])
     if merge_lists:
@@ -349,6 +402,7 @@ async def upsert_software_advisory(advisory: dict, *, merge_lists: bool = False)
                 merged.extend(item for item in advisory.get(name) or [] if item not in merged)
                 advisory[name] = merged
             advisory.setdefault("enabled", existing.get("enabled", True))
+    _settle_sources(advisory, existing, override_severity)
     columns = ", ".join(_ADVISORY_FIELDS)
     marks = ", ".join("?" for _ in _ADVISORY_FIELDS)
     updates = ", ".join(f"{field} = excluded.{field}" for field in _ADVISORY_FIELDS)
@@ -364,6 +418,46 @@ async def upsert_software_advisory(advisory: dict, *, merge_lists: bool = False)
     finally:
         await db.close()
     return await get_software_advisory(advisory_id)
+
+
+async def apply_advisory_enrichment(advisory_id: str, fields: dict) -> bool:
+    """Store what CVE enrichment derived for one advisory (see
+    ``netcontrol.integrations.software.cve_enrichment.advisory_enrichment``).
+
+    The severity is only written while the stored one is still a
+    ``default`` or ``enriched`` one and the score only while the stored one
+    is missing or from NVD, so an administrator's edit made while the run
+    was under way is never overwritten.
+    """
+    enrichable = ", ".join(f"'{source}'" for source in _ENRICHABLE_SEVERITY)
+    db = await _dbcore.get_db()
+    try:
+        cursor = await db.execute(
+            f"""UPDATE software_advisories SET
+                   severity = CASE WHEN severity_source IN ({enrichable}) THEN ? ELSE severity END,
+                   severity_source = CASE WHEN severity_source IN ({enrichable}) THEN ? ELSE severity_source END,
+                   cvss = CASE WHEN cvss IS NULL OR cvss_source = 'nvd' THEN ? ELSE cvss END,
+                   cvss_source = CASE WHEN cvss IS NULL OR cvss_source = 'nvd' THEN ? ELSE cvss_source END,
+                   known_exploited = ?, kev_date_added = ?, kev_due_date = ?, kev_ransomware = ?,
+                   enriched_at = ?
+               WHERE advisory_id = ?""",
+            (
+                str(fields.get("severity") or "medium"),
+                str(fields.get("severity_source") or "default"),
+                fields.get("cvss"),
+                str(fields.get("cvss_source") or ""),
+                1 if fields.get("known_exploited") else 0,
+                str(fields.get("kev_date_added") or ""),
+                str(fields.get("kev_due_date") or ""),
+                str(fields.get("kev_ransomware") or ""),
+                _now(),
+                advisory_id,
+            ),
+        )
+        await db.commit()
+        return bool(cursor.rowcount)
+    finally:
+        await db.close()
 
 
 async def delete_software_advisory(advisory_id: str) -> bool:
@@ -460,7 +554,8 @@ async def list_software_alerts(
             f"""SELECT a.id, a.device_key, a.advisory_id, a.severity, a.first_seen, a.last_seen,
                        a.acknowledged_at, a.acknowledged_by, a.resolved_at,
                        adv.title, adv.url, adv.cvss, adv.source AS advisory_source,
-                       adv.fixed_versions_json, adv.cves_json,
+                       adv.fixed_versions_json, adv.cves_json, adv.severity_source, adv.cvss_source,
+                       adv.known_exploited, adv.kev_date_added, adv.kev_due_date, adv.kev_ransomware,
                        v.name AS device_name, v.model, v.version, v.platform, v.site, v.org_name,
                        v.source AS device_source, v.host_id
                 FROM software_alerts a
@@ -480,6 +575,9 @@ async def list_software_alerts(
         alert["title"] = alert.get("title") or alert["advisory_id"]
         alert["acknowledged"] = bool(alert.get("acknowledged_at"))
         alert["resolved"] = bool(alert.get("resolved_at"))
+        alert["known_exploited"] = bool(alert.get("known_exploited"))
+        for name in ("severity_source", "cvss_source", "kev_date_added", "kev_due_date", "kev_ransomware"):
+            alert[name] = alert.get(name) or ""
     return alerts
 
 
@@ -561,6 +659,93 @@ async def set_software_settings(values: dict[str, str]) -> None:
             "INSERT INTO software_settings (key, value) VALUES (?, ?) "
             "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
             [(str(key), str(value if value is not None else "")) for key, value in values.items()],
+        )
+        await db.commit()
+    finally:
+        await db.close()
+
+
+# ── CVE enrichment cache (migration 0129) ────────────────────────────────────
+
+_CVE_LOOKUP_FIELDS = ("lookup_state", "nvd_status", "cvss", "cvss_severity", "cvss_vector", "cvss_version")
+
+
+async def list_cve_enrichment() -> dict[str, dict]:
+    """``cve_id`` -> the cached NVD answer and KEV flag of every CVE."""
+    db = await _dbcore.get_db(read_only=True)
+    try:
+        cursor = await db.execute("SELECT * FROM cve_enrichment")
+        rows = rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+    for row in rows:
+        row["known_exploited"] = bool(row.get("known_exploited"))
+    return {row["cve_id"]: row for row in rows}
+
+
+async def store_cve_kev(cve_ids: Iterable[str], catalog: dict[str, dict], checked_at: str) -> int:
+    """Record for every CVE of ``cve_ids`` whether the KEV ``catalog``
+    (``cve_id`` -> ``date_added``, ``due_date``, ``ransomware``) lists it.
+    Returns how many are listed."""
+    rows = []
+    for cve in cve_ids:
+        entry = catalog.get(cve)
+        rows.append(
+            (
+                cve,
+                1 if entry else 0,
+                str((entry or {}).get("date_added") or ""),
+                str((entry or {}).get("due_date") or ""),
+                str((entry or {}).get("ransomware") or ""),
+                checked_at,
+            )
+        )
+    if not rows:
+        return 0
+    db = await _dbcore.get_db()
+    try:
+        await db.executemany(
+            "INSERT INTO cve_enrichment (cve_id, known_exploited, kev_date_added, kev_due_date, kev_ransomware, "
+            "kev_checked_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(cve_id) DO UPDATE SET "
+            "known_exploited = excluded.known_exploited, kev_date_added = excluded.kev_date_added, "
+            "kev_due_date = excluded.kev_due_date, kev_ransomware = excluded.kev_ransomware, "
+            "kev_checked_at = excluded.kev_checked_at",
+            rows,
+        )
+        await db.commit()
+    finally:
+        await db.close()
+    return sum(row[1] for row in rows)
+
+
+async def store_cve_lookup(entry: dict, checked_at: str) -> None:
+    """Store one NVD answer (``cve_id`` and the lookup fields) and clear
+    the CVE's last error; the KEV fields are left as they are."""
+    columns = ", ".join(_CVE_LOOKUP_FIELDS)
+    marks = ", ".join("?" for _ in _CVE_LOOKUP_FIELDS)
+    updates = ", ".join(f"{field} = excluded.{field}" for field in _CVE_LOOKUP_FIELDS)
+    values = tuple(entry.get(field) if field == "cvss" else str(entry.get(field) or "") for field in _CVE_LOOKUP_FIELDS)
+    db = await _dbcore.get_db()
+    try:
+        await db.execute(
+            f"INSERT INTO cve_enrichment (cve_id, {columns}, nvd_checked_at, last_error) VALUES (?, {marks}, ?, '') "
+            f"ON CONFLICT(cve_id) DO UPDATE SET {updates}, nvd_checked_at = excluded.nvd_checked_at, last_error = ''",
+            (str(entry["cve_id"]), *values, checked_at),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+
+
+async def store_cve_lookup_error(cve_id: str, error: str) -> None:
+    """Note a failed NVD lookup; what was stored before is kept (and the CVE
+    stays due, so the next run asks again)."""
+    db = await _dbcore.get_db()
+    try:
+        await db.execute(
+            "INSERT INTO cve_enrichment (cve_id, last_error) VALUES (?, ?) "
+            "ON CONFLICT(cve_id) DO UPDATE SET last_error = excluded.last_error",
+            (str(cve_id), str(error or "")[:300]),
         )
         await db.commit()
     finally:

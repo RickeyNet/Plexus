@@ -176,6 +176,22 @@ Near-real-time Meraki alerts ([docs/meraki-alerts.md](../docs/meraki-alerts.md))
 # sudo ufw allow in on eth0 to 203.0.113.10 port 443 proto tcp comment 'Meraki webhooks only'
 ```
 
+## 7b. CVE enrichment of software advisories (optional)
+
+When CVE enrichment is turned on in the Software settings
+([docs/software-versions.md](../docs/software-versions.md#cve-enrichment-nvd-and-cisa-kev);
+off by default), Plexus needs outbound HTTPS (TCP 443) to
+`services.nvd.nist.gov` (the NVD CVE API) and `www.cisa.gov` (the Known
+Exploited Vulnerabilities catalogue), or to the internal mirrors configured
+instead. Only CVE ids are sent. Air-gapped deployments leave it off or use
+mirrors.
+
+```bash
+# CVE enrichment: outbound to NVD and CISA (only if outgoing is set to deny;
+# allow the two host names on a proxy, their addresses change)
+# sudo ufw allow out to any port 443 proto tcp comment 'NVD / CISA KEV (HTTPS)'
+```
+
 ## 8. Enable and verify
 
 ```bash

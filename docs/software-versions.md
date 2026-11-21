@@ -14,8 +14,8 @@ is the hardware lifecycle (end-of-life notices and support contracts; the
 Each tab is shown only to users with its feature.
 
 - Permission: the `software` feature to view, `software.write` to refresh,
-  acknowledge alerts and manage advisories, admin for the settings and the
-  Cisco PSIRT credentials
+  acknowledge alerts and manage advisories and end-of-life entries, admin
+  for the settings and the Cisco PSIRT credentials
 - API: `/api/software/*`
 
 ## Quick start
@@ -147,6 +147,91 @@ reported.
 The credentials only ever reach `id.cisco.com` (the OAuth2 token) and
 `apix.cisco.com` (the API); redirects are not followed.
 
+### CVE enrichment (NVD and CISA KEV)
+
+Every advisory that lists CVE ids, whatever its source (Cisco PSIRT, the
+OPNsense security audit, manual entry, import), can be enriched from two
+public feeds:
+
+- the **NVD CVE API 2.0** (`services.nvd.nist.gov`), asked once per CVE for
+  the CVSS base score, severity and vector. Plexus uses the newest CVSS
+  version NVD holds (4.0, then 3.1, 3.0, 2.0) and, within it, NVD's own
+  `Primary` metric before a CNA's `Secondary` one;
+- the **CISA Known Exploited Vulnerabilities catalogue** (one JSON file from
+  `www.cisa.gov`), for the *known exploited* flag with the date CISA added
+  the CVE, the remediation due date and whether it is known to be used in
+  ransomware campaigns.
+
+Only CVE ids leave Plexus (in the NVD query string); nothing about the
+devices, versions or advisories is sent. Redirects are not followed.
+
+**What changes on an advisory:**
+
+| Field | Rule |
+|---|---|
+| CVSS | The highest NVD base score among its CVEs, when the advisory has no score of its own (a Cisco PSIRT score is kept). Shown as from NVD. |
+| Known exploited | Set when any of its CVEs is in the KEV catalogue; the earliest date added and due date are kept with it. |
+| Severity | From the score: critical from 9.0, high from 7.0, medium from 4.0, low below; raised to at least high when known exploited. Only for an advisory whose severity is a **default** one (its source gave none: the OPNsense audit, an import or a manual advisory without a severity) or was set by enrichment before. |
+
+A severity is never changed when it is the **vendor's** (Cisco's Security
+Impact Rating) or an **administrator's**: one set or changed in the advisory
+dialog, sent with an advisory through the API or an import, or an OPNsense
+audit advisory whose severity was edited. The dialog says where the current
+severity comes from and offers **Let CVE enrichment set the severity** to
+hand an administrator's severity back. A later PSIRT sync or OPNsense audit
+does not reset what enrichment set. The API answers carry `severity_source`
+(`default`, `enriched`, `vendor`, `admin`), `cvss_source` (`nvd` when the
+score came from NVD), `known_exploited`, `kev_date_added`, `kev_due_date`
+and `kev_ransomware`; the advisory and alert lists show a **Known exploited**
+marker with the dates in its tooltip.
+
+Open alerts follow the advisory: an alert's severity is its advisory's, so
+the alert list, the device table and the summary show the enriched severity
+at the next evaluation, which a run ends with. No notification is sent for
+a severity that changes; when an advisory that was enriched before becomes
+known exploited, its open alerts are sent to the notification channels once
+more (subject to the severity floor; the message says *known exploited*).
+The first run re-notifies nothing, and nor does the first run after a failed
+KEV download.
+
+**Settings** (admin, Software page → **Settings**):
+
+- **Enrich advisories from NVD and CISA KEV**: off by default, since it
+  needs outbound HTTPS to `services.nvd.nist.gov` and `www.cisa.gov`.
+  Air-gapped deployments leave it off, or point it at internal mirrors.
+- **NVD API key** (optional, from the NVD's API key request page): stored
+  encrypted, never shown again, sent in the `apiKey` header. Changing the
+  NVD URL to another host requires entering the key again.
+- **NVD API URL** and **CISA KEV file URL**: blank for the public feeds, or
+  the https address of a mirror (an NVD API 2.0 compatible endpoint, a copy
+  of `known_exploited_vulnerabilities.json`). A mirror must pass the
+  outbound address guard (`APP_SSRF_ALLOW`, `APP_SSRF_BLOCK_PRIVATE`), when
+  saved and again on every run. An outbound proxy is honoured through the
+  usual `HTTPS_PROXY` environment variable.
+- **Save & Run Now** starts a run in the background; the dialog shows its
+  progress and the result of the last run (time, counts, the first error).
+
+**When it runs:** after the scheduled software refresh when it is turned on
+and due (every 12 hours, or at once while the last run left CVEs for
+later), and on **Save & Run Now**. A run downloads the KEV catalogue once,
+then asks NVD about the CVEs that are due, never-asked first. NVD allows 5
+requests per rolling 30 seconds without an API key and 50 with one; Plexus
+spaces its requests evenly inside that budget and retries a refused or
+failed request after a pause (honouring `Retry-After`). A run asks about at
+most 100 CVEs without a key (about ten minutes) or 1000 with one; the rest
+are asked on the following runs, so the first run on a large advisory set
+takes several. Each answer is cached per CVE (table `cve_enrichment`): a
+scored CVE is asked again after 7 days, one NVD has not scored yet (or does
+not know) after 1 day. New advisories whose CVEs are already cached are
+enriched as soon as they are saved, without a request.
+
+A failed download or lookup never fails the software refresh or an OPNsense
+collection: it is logged, the run's status and message say what failed, and
+what is stored is kept. A rate-limit refusal (HTTP 403 or 429) or three
+failed lookups in a row end the run's NVD lookups; the rest wait for the
+next run. Every run is recorded in the audit log (`software` /
+`cve_enrichment`).
+
 ## Alerts
 
 Every refresh, advisory change and PSIRT sync re-matches all devices
@@ -173,6 +258,105 @@ advisories arrive as *critical*, medium as *warning*, low and info as
 the CVSS score as the value and a dedup key of
 `software:<device key>:<advisory ID>`.
 
+## Software end of life
+
+Besides the advisories, every tracked device has an end-of-life status for
+the **release series** it runs: the day the series stops getting security
+fixes. This is the software side; the hardware side (end of sale and
+support of a device model) is the **Lifecycle** tab
+([hardware-lifecycle.md](hardware-lifecycle.md)).
+
+### Release series
+
+- **OPNsense** names the series in the version: the year and month of the
+  major release (`25.1.4_1` is series `25.1`, business edition `24.10.2` is
+  `24.10`; the firewall reports it as `product_series`).
+- **Every other platform** has the series an administrator's entry names.
+  An entry covers the versions it is a prefix of on a version component
+  boundary: `17.9` covers `17.9.4a` and `17.9.5`, not `17.90.1`. When two
+  entries match, the longer one wins (`17.9` over `17`).
+
+### Entries
+
+The **Software End of Life** card on the Versions tab lists the entries:
+platform, series, end-of-life date (the day security fixes stop), optional
+release date, URL and notes, and an enabled switch. **+ Add Series**, **Edit**
+and **Delete** need `software.write`; every user with the `software` feature
+sees the list. Entries can also be imported over the API (create or replace
+by platform and series, source `import`). An entry is how every platform
+gets a status; for OPNsense it overrides the built-in estimate.
+
+### The OPNsense estimate
+
+OPNsense needs no entry. Its release engineering (the `CORE_NEXT` rule of
+the opnsense/core `Makefile`) has two major series a year per edition, and a
+series is maintained until its successor is released:
+
+| Series | Successor | Estimated end of life |
+|---|---|---|
+| Community `YY.1` (January) | `YY.7` (July) | `20YY-07-31` |
+| Community `YY.7` (July) | `YY+1.1` (January) | `20YY+1-01-31` |
+| Business `YY.4` (April) | `YY.10` (October) | `20YY-10-31` |
+| Business `YY.10` (October) | `YY+1.4` (April) | `20YY+1-04-30` |
+
+The successor's release day is not known in advance, but every community
+major so far shipped inside its month (between the 2nd and the 31st, most in
+the last week), so the estimate is the **last day of the successor's release
+month**: it is never early, so a firewall on the newest series is not called
+end of life before its successor exists, and at most about a month late. The
+`ending` status warns before it, and the firewall's own report (below) gives
+the exact day in between. The API and the page mark such a date as an
+estimate.
+
+The firewall itself confirms it: once a newer major release is offered for
+upgrade, its firmware status reports it (`upgrade_major_version` of
+`core/firmware/status`, shown as **Major upgrade available** in the
+firewall's details). A firewall that reports a newer major series makes its
+series **end of life** at once, even before the estimated date (source
+`reported`); one firewall's report counts for every firewall on that
+series. Its date stays the estimate (it may still be ahead); the basis says
+"the firewall reports major release ... is available". An administrator's
+entry for platform `opnsense` and the series wins over both, with its
+exact date.
+
+### Statuses
+
+| Status | When |
+|---|---|
+| `supported` | The end-of-life date is further away than the warning window |
+| `ending` | The date is within the warning window (default 60 days, **Warning window** on the card, admin; setting `eol_warn_days`) |
+| `end_of_life` | The date has come (on the date itself, security fixes have stopped), or the firewall reports a newer major series |
+| `unknown` | No entry covers the version and the platform has no built-in rule |
+
+Each device's status (series, status, date, days left or past, source
+`entry` / `estimate` / `reported` and a one-line basis) is in the overview
+(`devices[].lifecycle`), with a count per status (`summary.lifecycle`). The
+device table shows it as a chip under the version ("End of life since
+2026-01-31 (estimate)", "Ends in 23 days") and has a filter for it.
+
+### Alerts
+
+A series that is ending or end of life and runs on at least one tracked
+device becomes a generated advisory of source `lifecycle`, ID
+`lifecycle:<platform>:<series>` (for example `lifecycle:opnsense:24.7`),
+titled "OPNsense 24.7 is end of life" or "... reaches end of life on
+<date>", affecting every version of the series (`24.7.*`), with the
+successor as the fixed version and no CVEs. It is synced on every refresh
+(on the schedule, after each topology collection and on **Refresh**) and
+after every entry or window change, so the alerts are raised, notified and
+acknowledged like any other advisory's without anyone opening the page:
+
+- severity **high** once the series is end of life (no more security
+  fixes), **low** while it is ending, so with the default notification
+  floor (high) the end of life is notified and the warning is not;
+- a severity or enabled switch you change on the advisory is kept across
+  syncs, also when an ending series reaches its end of life (the severity
+  is then an administrator's, see [CVE enrichment](#cve-enrichment-nvd-and-cisa-kev));
+  a severity nobody edited follows the status;
+- when no device runs the series any more (it was upgraded) or the series is
+  supported again (an entry moved the date), the advisory is withdrawn: it
+  keeps its settings but affects no version, so its alerts resolve.
+
 ## API reference
 
 | Method | Path | Notes |
@@ -181,31 +365,45 @@ the CVSS score as the value and a dedup key of
 | `POST` | `/api/software/refresh` | Rebuild the tracked set and re-match; returns counts and the version changes (`software.write`) |
 | `GET` | `/api/software/history?device_key=` | Every version one device was seen on, with `seen_from` / `seen_until` |
 | `GET` | `/api/software/advisories` | All advisories |
-| `POST` | `/api/software/advisories` | `{"advisory_id", "title"?, "severity"?, "cvss"?, "platform"?, "product_match"?, "affected_versions": [...], "fixed_versions"?, "cves"?, "url"?, "published"?, "summary"?, "enabled"?}`; 409 when the ID exists |
+| `POST` | `/api/software/advisories` | `{"advisory_id", "title"?, "severity"?, "cvss"?, "platform"?, "product_match"?, "affected_versions": [...], "fixed_versions"?, "cves"?, "url"?, "published"?, "summary"?, "enabled"?, "severity_source"?}`; 409 when the ID exists. `severity_source` `admin` keeps the severity from CVE enrichment, `default` lets enrichment set it; omitted, a body with a `severity` is the administrator's (on an edit: a severity that differs from the stored one) |
 | `PUT` | `/api/software/advisories/{id}` | Replace an advisory (same body) |
 | `DELETE` | `/api/software/advisories/{id}` | Delete it and its alerts |
 | `POST` | `/api/software/advisories/import` | `{"advisories": [...]}`, up to 1000; replaces by ID |
 | `GET` | `/api/software/alerts?include_resolved=` | Alerts with their advisory and device |
 | `POST` | `/api/software/alerts/{id}/acknowledge` | Mark an open alert as seen |
-| `GET` | `/api/software/settings` | Refresh interval, notification floor, PSIRT settings and last sync; `has_psirt_secret` instead of the secret (admin) |
-| `PUT` | `/api/software/settings` | Any of the fields; `psirt_client_secret` is write-only, `""` clears it (admin) |
+| `GET` | `/api/software/settings` | Refresh interval, notification floor, PSIRT settings and last sync, CVE enrichment settings and last run (`cve_*`, `nvd_base_url`, `kev_url`); `has_psirt_secret` and `has_nvd_api_key` instead of the secrets (admin) |
+| `PUT` | `/api/software/settings` | Any of the fields; `psirt_client_secret` and `nvd_api_key` are write-only, `""` clears them (admin) |
 | `POST` | `/api/software/psirt/test` | Sign in to Cisco PSIRT with the stored credentials (admin) |
 | `POST` | `/api/software/psirt/sync` | Start a sync; returns `job_id` (admin) |
 | `GET` | `/api/software/psirt/jobs/{job_id}` | Progress and result of a sync |
+| `POST` | `/api/software/cve-enrichment/run` | Start an NVD / CISA KEV enrichment run; returns `job_id`; 400 while it is turned off, 409 while one runs (admin) |
+| `GET` | `/api/software/cve-enrichment/jobs/{job_id}` | Progress and result of a run (`counts`: `cves`, `looked_up`, `failed`, `remaining`, `known_exploited`, `advisories_updated`, `became_known_exploited`) |
+| `GET` | `/api/software/eol-entries` | The end-of-life entries and the warning window (`warn_days`) |
+| `POST` | `/api/software/eol-entries` | `{"platform", "series", "eol_date", "release_date"?, "url"?, "notes"?, "enabled"?}`; 409 when the platform and series exist (`software.write`) |
+| `PUT` | `/api/software/eol-entries/{id}` | Replace an entry (same body) |
+| `DELETE` | `/api/software/eol-entries/{id}` | Delete an entry |
+| `POST` | `/api/software/eol-entries/import` | `{"entries": [...]}`, up to 1000; replaces by platform and series |
 
 Every write is recorded in the audit log under category `software`. Tables:
 `software_versions`, `software_version_history`, `software_advisories`,
-`software_alerts`, `software_settings` (migration 0067).
+`software_alerts`, `software_settings` (migration 0067), `cve_enrichment` and
+the advisories' severity source and KEV columns (migration 0129), `software_eol_entries`
+and `software_versions.major_upgrade` (migration 0130).
 
 ## Limits
 
-- Plexus does not know which versions a vendor has released or declared
-  end-of-life; "behind" is relative to your own fleet. Meraki firmware
+- Plexus does not know which versions a vendor has released; "behind" is
+  relative to your own fleet. End of life is known for OPNsense (estimated
+  from the release cadence, confirmed by the firewall) and for the series an
+  administrator enters; there is no end-of-life feed for the other vendors. Meraki firmware
   availability (the Dashboard's per-network upgrade information) is not
   read yet.
 - Cisco PSIRT is the only advisory feed. Advisories for Meraki, Cato,
   Juniper, Arista, Fortinet, Palo Alto, Aruba, Netgear and APC devices have to be entered or
   imported; the version specification grammar is meant to make that quick.
+- CVE enrichment adds scores and the known-exploited flag to the CVEs an
+  advisory already names. It does not find CVEs for a version: matching
+  versions to CVEs through NVD's CPE data is not done.
 - A version is matched as a string of parts; an advisory that depends on a
   feature being configured (most Cisco advisories list "vulnerable
   configurations") will alert on every device running an affected version,

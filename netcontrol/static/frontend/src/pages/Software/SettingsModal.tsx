@@ -6,10 +6,14 @@ import { useDialogs } from '@/components/DialogProvider-context';
 import {
   type SoftwareSettings,
   type SoftwareSettingsPayload,
+  useCveEnrichmentJob,
   useSaveSoftwareSettings,
+  useStartCveEnrichment,
   useTestPsirt,
 } from '@/api/software';
 import { formatBackendDateTime } from '@/lib/datetime';
+
+import { cveRunSummary } from './helpers';
 
 
 interface Props {
@@ -31,6 +35,14 @@ export function SettingsModal({ settings, severities, onClose }: Props) {
   const [clientSecret, setClientSecret] = useState('');
   const [clearSecret, setClearSecret] = useState(false);
   const [psirtHours, setPsirtHours] = useState(Math.max(1, Math.round(settings.psirt_interval_seconds / 3600)));
+  const [cveEnabled, setCveEnabled] = useState(settings.cve_enrichment_enabled ?? false);
+  const [nvdKey, setNvdKey] = useState('');
+  const [clearNvdKey, setClearNvdKey] = useState(false);
+  const [nvdUrl, setNvdUrl] = useState(settings.nvd_base_url ?? '');
+  const [kevUrl, setKevUrl] = useState(settings.kev_url ?? '');
+  const [cveJobId, setCveJobId] = useState<string | null>(null);
+  const startCve = useStartCveEnrichment();
+  const cveJob = useCveEnrichmentJob(cveJobId);
   const [saveError, setSaveError] = useState<string | null>(null);
   const formId = useId();
 
@@ -42,11 +54,34 @@ export function SettingsModal({ settings, severities, onClose }: Props) {
       psirt_enabled: psirtEnabled,
       psirt_client_id: clientId.trim(),
       psirt_interval_seconds: Math.max(3600, psirtHours * 3600),
+      cve_enrichment_enabled: cveEnabled,
+      nvd_base_url: nvdUrl.trim(),
+      kev_url: kevUrl.trim(),
     };
     if (clearSecret) body.psirt_client_secret = '';
     else if (clientSecret) body.psirt_client_secret = clientSecret;
+    if (clearNvdKey) body.nvd_api_key = '';
+    else if (nvdKey) body.nvd_api_key = nvdKey;
     return body;
   };
+
+  const runEnrichment = async () => {
+    setSaveError(null);
+    try {
+      await save.mutateAsync(payload());
+      setNvdKey('');
+      const job = await startCve.mutateAsync();
+      setCveJobId(job.job_id);
+    } catch (err) {
+      setSaveError((err as Error).message);
+    }
+  };
+
+  const job = cveJob.data;
+  const cveRunning = job?.status === 'running' || (!job && settings.cve_running);
+  const lastRun = job && job.status !== 'running'
+    ? cveRunSummary(job.status, job.result?.message ?? job.error ?? '')
+    : cveRunSummary(settings.cve_last_run_status, settings.cve_last_run_message);
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
@@ -209,6 +244,93 @@ export function SettingsModal({ settings, severities, onClose }: Props) {
             {settings.psirt_last_sync_status ? ` (${settings.psirt_last_sync_status}` : ''}
             {settings.psirt_last_sync_message ? `: ${settings.psirt_last_sync_message})` : settings.psirt_last_sync_status ? ')' : ''}
           </div>
+        </div>
+
+        <h4 style={{ margin: '1rem 0 0.5rem' }}>CVE enrichment (NVD and CISA KEV)</h4>
+        <p className="text-muted" style={{ fontSize: '0.88em', marginTop: 0 }}>
+          Looks up the CVE ids of every advisory at the NVD for the CVSS score and checks them against the CISA
+          Known Exploited Vulnerabilities catalogue. Only CVE ids are sent. An advisory without a severity of its
+          own gets one from the score, at least high when known exploited; a vendor&apos;s or an administrator&apos;s
+          severity is kept. Needs outbound HTTPS to services.nvd.nist.gov and www.cisa.gov, or to the mirrors below.
+          Without an API key NVD allows about 100 lookups per run (5 requests per 30 seconds); the rest follow on
+          the next run.
+        </p>
+        <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.75rem' }}>
+          <input type="checkbox" checked={cveEnabled} onChange={(e) => setCveEnabled(e.target.checked)} />
+          Enrich advisories from NVD and CISA KEV (runs after the scheduled refresh)
+        </label>
+        <div className="form-group">
+          <label className="form-label" htmlFor={`${formId}-nvd-key`}>
+            NVD API key{' '}
+            <span className="text-muted">
+              {settings.has_nvd_api_key ? '(stored; leave blank to keep)' : '(optional, not stored)'}
+            </span>
+          </label>
+          <input
+            id={`${formId}-nvd-key`}
+            className="form-input"
+            type="password"
+            value={nvdKey}
+            onChange={(e) => {
+              setNvdKey(e.target.value);
+              if (e.target.value) setClearNvdKey(false);
+            }}
+            maxLength={200}
+            autoComplete="new-password"
+            disabled={clearNvdKey}
+          />
+          {settings.has_nvd_api_key && (
+            <label
+              style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.85em', marginTop: '0.3rem' }}
+            >
+              <input type="checkbox" checked={clearNvdKey} onChange={(e) => setClearNvdKey(e.target.checked)} />
+              Remove the stored API key
+            </label>
+          )}
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 1rem' }}>
+          <div className="form-group">
+            <label className="form-label" htmlFor={`${formId}-nvd-url`}>
+              NVD API URL <span className="text-muted">(blank = NVD)</span>
+            </label>
+            <input
+              id={`${formId}-nvd-url`}
+              className="form-input"
+              value={nvdUrl}
+              onChange={(e) => setNvdUrl(e.target.value)}
+              maxLength={500}
+              placeholder={settings.nvd_default_url}
+            />
+          </div>
+          <div className="form-group">
+            <label className="form-label" htmlFor={`${formId}-kev-url`}>
+              CISA KEV file URL <span className="text-muted">(blank = CISA)</span>
+            </label>
+            <input
+              id={`${formId}-kev-url`}
+              className="form-input"
+              value={kevUrl}
+              onChange={(e) => setKevUrl(e.target.value)}
+              maxLength={500}
+              placeholder={settings.kev_default_url}
+            />
+          </div>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+          <button
+            type="button"
+            className="btn btn-secondary btn-sm"
+            onClick={runEnrichment}
+            disabled={!cveEnabled || save.isPending || startCve.isPending || cveRunning}
+            title="Saves the settings, then runs the enrichment in the background"
+          >
+            {cveRunning ? 'Running…' : 'Save & Run Now'}
+          </button>
+          <span className="text-muted" style={{ fontSize: '0.82em' }}>
+            {cveRunning && job?.progress?.total
+              ? `Running: ${job.progress.phase ?? ''} ${job.progress.done ?? 0}/${job.progress.total}`
+              : `Last run: ${formatBackendDateTime(settings.cve_last_run_at ?? '', 'Never')}${lastRun ? ` (${lastRun})` : ''}`}
+          </span>
         </div>
       </form>
     </Modal>

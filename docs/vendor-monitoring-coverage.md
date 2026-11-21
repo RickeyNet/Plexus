@@ -121,7 +121,14 @@ The software tracker (`netcontrol/integrations/software/versions.py`,
 `netcontrol/routes/software.py`) reduces every source's version string to one
 platform key and version, matches devices against advisories, and opens
 `software_alerts` with notification fan-out. Advisory sources are listed per
-platform.
+platform. Every advisory that names CVE ids, whatever its source, can be
+enriched (off by default; `netcontrol/routes/software_cve.py`) from the NVD
+CVE API 2.0 (CVSS base score) and the CISA Known Exploited Vulnerabilities
+catalogue (known-exploited flag, dates): a missing score is filled, a default
+or enriched severity follows the score (at least high when known exploited),
+a vendor's or an administrator's severity is kept, and the results are cached
+per CVE (`cve_enrichment`) and persisted on the advisory. See
+[software-versions.md](software-versions.md#cve-enrichment-nvd-and-cisa-kev).
 
 | Vendor / platform | Version source | Advisory source | Status | Notes |
 |---|---|---|---|---|
@@ -133,7 +140,7 @@ platform.
 | GCP | None | None | No | |
 | Palo Alto PAN-OS / Panorama | SNMP/SSH, Panorama snapshot | Manual / import | Manual | Candidate: Palo Alto security advisories feed. Discovery's SSH `show version` does not read PAN-OS (`show system info`): gap. |
 | Appgate SDP | collective snapshot appliance version | Manual / import | Manual | |
-| OPNsense | OPNsense snapshot: `core/firmware/status` product version (platform `opnsense`); pending update shown and warned | The firewall's own security audit (`pkg audit -F` via `core/firmware/audit`), synced at each collection as advisories of source `opnsense-audit` (one per VuXML entry, affected version the firewall's version, CVE ids, link), upserted by id, limited to the firewall(s) whose audit reported them (`device_keys`) and withdrawn per firewall when its audit no longer reports them; only an audit that verifiably completed (pkg audit's result line, no fetch / database error) changes advisories; manual / import as well | Partial | Covers vulnerable FreeBSD packages installed on the firewall, not OPNsense's own security advisories (OPNsense publishes no version-matched vulnerability API). `pkg audit` gives no severity and Plexus has no CVE severity source (no NVD client): new advisories are `medium`, an administrator's severity is kept. |
+| OPNsense | OPNsense snapshot: `core/firmware/status` product version (platform `opnsense`); pending update shown and warned | The firewall's own security audit (`pkg audit -F` via `core/firmware/audit`), synced at each collection as advisories of source `opnsense-audit` (one per VuXML entry, affected version the firewall's version, CVE ids, link), upserted by id, limited to the firewall(s) whose audit reported them (`device_keys`) and withdrawn per firewall when its audit no longer reports them; only an audit that verifiably completed (pkg audit's result line, no fetch / database error) changes advisories; manual / import as well | Partial | Covers vulnerable FreeBSD packages installed on the firewall, not OPNsense's own security advisories (OPNsense publishes no version-matched vulnerability API). `pkg audit` gives no severity: new advisories start as a default `medium`, which the NVD / CISA KEV enrichment of their CVE ids replaces with the score's severity (at least high when known exploited), filling the CVSS score and the known-exploited flag; later audits keep them, and an administrator's severity is kept. |
 | Juniper Junos | SNMP/SSH; SSH `show version` at inventory discovery / sync (model, version, hostname; serial needs `show chassis hardware`) | Manual / import | Manual | Candidate: Juniper JSA feed. |
 | Arista EOS | SNMP/SSH; SSH `show version` at inventory discovery / sync | Manual / import | Manual | |
 | Fortinet FortiOS | SNMP/SSH | Manual / import | Manual | Candidate: FortiGuard PSIRT feed. Discovery's SSH `show version` does not read FortiOS (`get system status`): gap. |
@@ -141,7 +148,7 @@ platform.
 | HPE Aruba Instant On | SNMP sysDescr (platform `instant-on`) | Manual / import | Manual | Same gap. No SSH on the switch, so the version comes from SNMP only. |
 | Netgear managed switches | SNMP sysDescr; SSH `show version` at inventory discovery / sync (platform `netgear-managed`) | Manual / import | Manual | Gap: Netgear publishes security advisories as web pages, with no version-matched vulnerability API. |
 | Netgear smart switches and access points | SNMP sysDescr (platforms `netgear-smart`, `netgear-ap`) | Manual / import | Manual | Same gap. No SSH, so the version comes from SNMP only; an access point's sysDescr seldom carries it (gap: the version is then not tracked). |
-| APC Network Management Card and Smart-UPS | Card: sysDescr `PF` firmware at discovery and every poll (platform `apc-nmc`, the host's version); a discovery that identifies the card over SSH with no SNMP answer reads it from the card's `about` instead. UPS: PowerNet-MIB `upsAdvIdentFirmwareRevision` read by the poll (platform `apc-ups`, tracked device `host:<id>:ups`) | Manual / import | Manual | Gap: Schneider Electric publishes security notifications as documents, with no version-matched vulnerability API, and Plexus has no NVD client (CPE matching would cover the card firmware). Candidate: NVD CPE matching of the card firmware once an NVD client exists (gap 6 below). An advisory's `product_match` is compared with the host model, which is the UPS model, not the card's. |
+| APC Network Management Card and Smart-UPS | Card: sysDescr `PF` firmware at discovery and every poll (platform `apc-nmc`, the host's version); a discovery that identifies the card over SSH with no SNMP answer reads it from the card's `about` instead. UPS: PowerNet-MIB `upsAdvIdentFirmwareRevision` read by the poll (platform `apc-ups`, tracked device `host:<id>:ups`) | Manual / import | Manual | Gap: Schneider Electric publishes security notifications as documents, with no version-matched vulnerability API, and Plexus does not match versions to CVEs through NVD's CPE data (the NVD client only scores the CVE ids an advisory already names, so a manual or imported card advisory with CVE ids gets its CVSS score and KEV flag). Candidate: NVD CPE matching of the card firmware (gap 6 below). An advisory's `product_match` is compared with the host model, which is the UPS model, not the card's. |
 
 ### Hardware lifecycle (end of life and support contracts)
 
@@ -157,8 +164,27 @@ condition, resolved when it clears, through the notification channels.
 | Vendor / platform | Hardware source | Notice source | Status | Notes |
 |---|---|---|---|---|
 | Every vendor with inventory hosts (Cisco, Juniper, Arista, Fortinet, Palo Alto, HPE Aruba, Netgear...) | Device type from the device model catalogue (discovery links the model), DCIM modules | Manual / API | Manual | Gap for every vendor: no notice import or sync. Candidate: Cisco's Support EoX API (needs a Cisco support API account), matched by product ID. |
-| Cisco Meraki, Cato Sockets, Appgate, OPNsense, Panorama devices (API-collected) | None | None | No | Not inventory hosts, so no device type and no lifecycle status. Gap: a lifecycle status for topology nodes by model. |
+| Cisco Meraki, Cato Sockets, Appgate, OPNsense, Panorama devices (API-collected) | None | None | No | Not inventory hosts, so no device type and no hardware lifecycle status. Gap: a hardware lifecycle status for topology nodes by model. Their software release series has an end-of-life status: see [Software lifecycle](#software-lifecycle-end-of-life-per-release-series) below. |
 | AWS, Azure, GCP | Not applicable | Not applicable | Not applicable | Cloud services have no hardware lifecycle; retirements of instance types and engine versions are not tracked (gap). |
+
+### Software lifecycle (end of life per release series)
+
+The software lifecycle (`netcontrol/integrations/software/lifecycle.py`,
+`netcontrol/routes/software_eol.py`, [software-versions.md](software-versions.md#software-end-of-life))
+gives every tracked device the end-of-life status of the release series it
+runs (`supported`, `ending` within the warning window, `end_of_life`,
+`unknown`), from an administrator's entry per platform and series, or for
+OPNsense from a built-in estimate. A series that is ending or end of life
+becomes a generated advisory (source `lifecycle`, `high` once end of life,
+`low` while ending), synced on every scheduled refresh, so its devices get
+persisted `software_alerts` and notifications through the software
+tracker's channels, which resolve when the device is upgraded.
+
+| Vendor / platform | Series source | End-of-life source | Alerting | Notes |
+|---|---|---|---|---|
+| OPNsense | The version (`25.1.4_1` is `25.1`; business edition `24.10`) | Yes: built-in estimate by release cadence (a series ends when its successor ships; estimated as the last day of the successor's release month, never early), confirmed by the firewall's own major-upgrade report (`upgrade_major_version`), administrator entry overrides | Yes | The firewall's details show the series status and an end-of-life series is an informational collection warning. |
+| Every other platform (Cisco, Juniper, Arista, Fortinet, Palo Alto, HPE Aruba, Netgear, APC, Meraki, Cato, Appgate) | Administrator entries (a version prefix on a component boundary) | Manual: administrator entries (or the import API) | Yes, once an entry exists | Gap: no automatic end-of-life source. Candidate: a public end-of-life feed such as endoflife.date, or the vendors' end-of-life bulletins (Cisco's EoX API also covers software releases). |
+| AWS, Azure, GCP | Not applicable | Not applicable | Not applicable | Managed services carry no tracked software version. |
 
 ## Internet egress and cloud ingress (path trace)
 
@@ -297,8 +323,11 @@ Monitoring > Security (`GET /api/monitoring/security-events`).
 4. Cloud security findings: AWS Inspector / Security Hub and Azure Defender
    for Cloud mapped onto the advisory and alert model.
 5. Cato Socket release-note import as a `cato-socket` advisory source.
-6. NVD / CISA KEV enrichment of every advisory by CVE id (CVSS, known
-   exploited flag).
+6. NVD CPE matching: finding the CVEs that affect a tracked version from
+   NVD's CPE configurations (for platforms with no version-matched advisory
+   source, such as the APC card firmware). Enrichment by CVE id is done:
+   every advisory with CVE ids gets its CVSS score, a severity from it and
+   the CISA KEV known-exploited flag (`software_cve`).
 7. Public endpoints that are not instances (AWS RDS and load balancers,
    now collected with their security groups, Azure load balancers,
    application gateways and firewall DNAT rules, now collected too, GCP

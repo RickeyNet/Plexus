@@ -166,6 +166,13 @@ DEFAULT_RULES = {
     "netcontrol/hardware_lifecycle.py": 95.0,
     "routes/db/hardware_lifecycle.py": 90.0,
     "netcontrol/routes/hardware_lifecycle.py": 90.0,
+    # Software end of life per release series: the series / estimate /
+    # status rules, the entry storage and the API with the advisory sync.
+    # Measured by tests/test_software_lifecycle.py (98%, 98%, 100%); do not
+    # lower them to land a change.
+    "netcontrol/integrations/software/lifecycle.py": 95.0,
+    "routes/db/software_eol.py": 92.0,
+    "netcontrol/routes/software_eol.py": 92.0,
     # Git data sources: remote/branch rules, the git runner's credential
     # handling, checkout parsing, sync/import and the API. Measured by
     # tests/test_git_sources.py; do not lower them to land a change.
@@ -211,6 +218,11 @@ DEFAULT_RULES = {
     # Source allowlist and per-source rate limit of the trap, syslog and
     # flow listeners. Measured by tests/test_listener_sources.py.
     "netcontrol/listener_sources.py": 90.0,
+    # NVD / CISA KEV enrichment of software advisories: the parsing, rules
+    # and client, and the runs. Measured by tests/test_cve_enrichment.py
+    # (98%, 90%); do not lower them to land a change.
+    "netcontrol/integrations/software/cve_enrichment.py": 95.0,
+    "netcontrol/routes/software_cve.py": 85.0,
 }
 
 

@@ -6,6 +6,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { apiRequest } from './client';
+import type { SoftwareEolStatus } from './softwareEol';
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -36,6 +37,8 @@ export interface SoftwareDevice {
   alert_count?: number;
   unacknowledged_alerts?: number;
   worst_severity?: string;
+  /** End-of-life status of the release series the device runs. */
+  lifecycle?: SoftwareEolStatus | null;
 }
 
 export interface SoftwareVersionCount {
@@ -75,7 +78,20 @@ export interface SoftwareAdvisory {
   enabled: boolean;
   created_at?: string;
   updated_at?: string;
+  /** Where the severity comes from; only `default` and `enriched` are changed by CVE enrichment. */
+  severity_source?: SeveritySource;
+  /** `nvd` when the CVSS score was filled in from NVD; '' when it is the advisory's own. */
+  cvss_source?: string;
+  /** A CVE of the advisory is in the CISA Known Exploited Vulnerabilities catalogue. */
+  known_exploited?: boolean;
+  kev_date_added?: string;
+  kev_due_date?: string;
+  /** CISA's knownRansomwareCampaignUse: 'Known', 'Unknown' or ''. */
+  kev_ransomware?: string;
+  enriched_at?: string;
 }
+
+export type SeveritySource = 'default' | 'enriched' | 'vendor' | 'admin';
 
 export interface SoftwareAdvisoryPayload {
   advisory_id: string;
@@ -91,6 +107,8 @@ export interface SoftwareAdvisoryPayload {
   published?: string;
   summary?: string;
   enabled?: boolean;
+  /** 'admin': the severity is the administrator's; 'default': CVE enrichment may set it. Omit to infer. */
+  severity_source?: 'admin' | 'default';
 }
 
 export interface SoftwareAlert {
@@ -119,6 +137,11 @@ export interface SoftwareAlert {
   org_name: string | null;
   device_source: string | null;
   host_id: number | null;
+  severity_source?: string;
+  known_exploited?: boolean;
+  kev_date_added?: string;
+  kev_due_date?: string;
+  kev_ransomware?: string;
 }
 
 export interface SoftwareVersionChange {
@@ -146,6 +169,32 @@ export interface SoftwareSettings {
   psirt_last_sync_message: string;
   psirt_platforms: string[];
   last_refresh_at: string;
+  /** Days before a series' end of life that it counts as ending. */
+  eol_warn_days?: number;
+  /** NVD / CISA KEV enrichment of the advisories' CVE ids (off by default). */
+  cve_enrichment_enabled?: boolean;
+  has_nvd_api_key?: boolean;
+  /** '' = the default address (nvd_default_url / kev_default_url). */
+  nvd_base_url?: string;
+  kev_url?: string;
+  nvd_default_url?: string;
+  kev_default_url?: string;
+  cve_last_run_at?: string;
+  cve_last_run_status?: string;
+  cve_last_run_message?: string;
+  cve_last_run_counts?: CveEnrichmentCounts;
+  cve_running?: boolean;
+}
+
+export interface CveEnrichmentCounts {
+  cves?: number;
+  looked_up?: number;
+  failed?: number;
+  remaining?: number;
+  known_exploited?: number;
+  kev_downloaded?: boolean;
+  advisories_updated?: number;
+  became_known_exploited?: number;
 }
 
 export interface SoftwareSettingsPayload {
@@ -157,6 +206,12 @@ export interface SoftwareSettingsPayload {
   /** Write-only: omit to keep the stored secret, '' to clear it. */
   psirt_client_secret?: string;
   psirt_interval_seconds?: number;
+  eol_warn_days?: number;
+  cve_enrichment_enabled?: boolean;
+  /** Write-only: omit to keep the stored key, '' to clear it. */
+  nvd_api_key?: string;
+  nvd_base_url?: string;
+  kev_url?: string;
 }
 
 export interface SoftwareSummary {
@@ -172,6 +227,8 @@ export interface SoftwareSummary {
   advisories: number;
   enabled_advisories: number;
   sources: Record<string, number>;
+  /** Devices per end-of-life status of the series they run. */
+  lifecycle?: Record<string, number>;
   last_refresh_at: string;
 }
 
@@ -225,6 +282,14 @@ export interface PsirtSyncJob {
   error: string | null;
 }
 
+export interface CveEnrichmentJob {
+  job_id: string;
+  status: 'running' | 'completed' | 'partial' | 'failed';
+  progress: { phase?: string; done?: number; total?: number; current?: string };
+  result: { status?: string; message?: string; counts?: CveEnrichmentCounts; errors?: string[] } | null;
+  error: string | null;
+}
+
 // ── Query keys ─────────────────────────────────────────────────────────────
 
 export const KEYS = {
@@ -233,6 +298,7 @@ export const KEYS = {
   history: (deviceKey: string) => ['software-history', deviceKey] as const,
   settings: ['software-settings'] as const,
   psirtJob: (jobId: string | null) => ['software-psirt-job', jobId] as const,
+  cveJob: (jobId: string | null) => ['software-cve-job', jobId] as const,
 };
 
 function invalidateAll(qc: ReturnType<typeof useQueryClient>) {
@@ -278,6 +344,16 @@ export function usePsirtSyncJob(jobId: string | null) {
     queryFn: () => apiRequest(`/software/psirt/jobs/${jobId}`),
     enabled: jobId != null,
     // A sync is a background job with no push channel; poll until it settles.
+    refetchInterval: (query) => (query.state.data?.status === 'running' ? 2000 : false),
+  });
+}
+
+export function useCveEnrichmentJob(jobId: string | null) {
+  return useQuery<CveEnrichmentJob>({
+    queryKey: KEYS.cveJob(jobId),
+    queryFn: () => apiRequest(`/software/cve-enrichment/jobs/${jobId}`),
+    enabled: jobId != null,
+    // A run is a background job (NVD is asked at its rate limit); poll until it settles.
     refetchInterval: (query) => (query.state.data?.status === 'running' ? 2000 : false),
   });
 }
@@ -355,6 +431,14 @@ export function useStartPsirtSync() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: () => apiRequest<{ job_id: string }>('/software/psirt/sync', { method: 'POST' }),
+    onSuccess: () => invalidateAll(qc),
+  });
+}
+
+export function useStartCveEnrichment() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => apiRequest<{ job_id: string }>('/software/cve-enrichment/run', { method: 'POST' }),
     onSuccess: () => invalidateAll(qc),
   });
 }

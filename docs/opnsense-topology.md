@@ -1330,6 +1330,30 @@ tracked on the **Software** page under platform **OPNsense**. When an
 update is pending, the firewall's details say so and the collection gets a
 warning naming the current and the latest version.
 
+The **Firmware** section also shows the release **Series** the firewall
+runs (`25.7` for `25.7.6`; business edition `24.10`) and its **Series
+status**: supported until, ending on, or end of life since a date, and how
+that is known (see [software-versions.md](software-versions.md#software-end-of-life)):
+
+- **estimate**: a series is maintained until its successor is released
+  (community `YY.1` -> `YY.7` -> `YY+1.1`, business `YY.4` -> `YY.10` ->
+  `YY+1.4`), so its end of life is estimated as the last day of the
+  successor's release month (never early, at most about a month late);
+- **reported**: the firewall offers a newer major release
+  (`upgrade_major_version` of the firmware status, shown as **Major upgrade
+  available**), so its series is superseded and end of life from the day
+  the successor is offered;
+- **administrator entry**: an end-of-life entry for platform `opnsense` and
+  the series on the Software page, which overrides both.
+
+A series that is end of life adds an informational collection warning
+("Release series end of life: OPNsense 24.7 ..."), like the pending update:
+it does not count as an incomplete collection, so it never holds back the
+removal of gone entities. The summary carries `series`, `major_upgrade` and
+`software_lifecycle`. The software tracker raises the alert for it (a
+`lifecycle:opnsense:<series>` advisory: high once end of life, low while
+ending, within the software warning window).
+
 With **Firmware security audit** on (the default), each collection also
 runs the firewall's built-in security audit (**System → Firmware → Status →
 Run an audit**, `pkg audit -F`), waits for it (up to about 90 seconds) and
@@ -1360,10 +1384,16 @@ firewall, with the usual notifications. A second firewall on the same
 version is alerted only when its own audit reports the finding, and is then
 added to the same advisory. When a firewall's audit no longer reports a
 finding, that firewall is taken off the advisory and its alert resolves;
-the other firewalls keep theirs. `pkg audit` gives no severity, and Plexus
-has no CVE severity source it could look the CVE ids up in, so a new
-advisory is `medium`; a severity you change is kept, and so is the list of
-firewalls when you edit the advisory.
+the other firewalls keep theirs. `pkg audit` gives no severity, so a new
+advisory starts as a default `medium` with no CVSS score. With CVE
+enrichment turned on (Software settings, see
+[software-versions.md](software-versions.md#cve-enrichment-nvd-and-cisa-kev)),
+its CVE ids are looked up at NVD and in the CISA Known Exploited
+Vulnerabilities catalogue: the advisory gets the highest CVSS score of its
+CVEs, the severity of that score (at least high when a CVE is known
+exploited) and the known-exploited flag, and later audits keep them. A
+severity you change is kept (enrichment no longer changes it), and so is
+the list of firewalls when you edit the advisory.
 
 ## What is collected
 

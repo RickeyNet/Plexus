@@ -367,7 +367,9 @@ async def test_collect_is_best_effort_past_a_refused_or_missing_endpoint(no_slee
     assert by_path["/wireguard/service/show"]["status"] == 404
     assert "no such endpoint" in by_path["/wireguard/service/show"]["message"]
     snapshot = build_snapshot(raw)
-    assert snapshot["summary"]["wan_uplinks"] == 0 and len(snapshot["collection"]["errors"]) == 4
+    # The two refusals, the pending update, the audit findings and the end of
+    # life of the sample's 25.7 series (an informational warning).
+    assert snapshot["summary"]["wan_uplinks"] == 0 and len(snapshot["collection"]["errors"]) == 5
 
 
 @pytest.mark.asyncio
@@ -747,9 +749,91 @@ def test_incomplete_audit_is_shown_and_warned_but_not_counted():
 
 def test_firmware_and_audit_are_info_warnings(snapshot):
     warnings = snapshot["collection"]["errors"]
-    assert [w["path"] for w in warnings] == ["/core/firmware/status", "/core/firmware/audit"]
+    assert [(w["scope"], w["path"]) for w in warnings] == [
+        ("firmware", "/core/firmware/status"),
+        ("firmware", "/core/firmware/audit"),
+        ("lifecycle", "/core/firmware/status"),
+    ]
     assert all(w["info"] for w in warnings)
     assert "25.7.6 to 25.7.7" in warnings[0]["message"] and "CVE-2026-0003" in warnings[1]["message"]
+    assert warnings[2]["message"].startswith("Release series end of life: OPNsense 25.7.")
+
+
+def _firmware_raw(**status: object) -> dict:
+    """The sample collection with its ``core/firmware/status`` answer changed
+    (fields as the firmware check script writes them) and scrubbed as the
+    collector scrubs it."""
+    from netcontrol.integrations.opnsense.collector import scrub_firmware
+
+    answer = copy.deepcopy(sample_api_answers()["core/firmware/status"])
+    answer.update(status)
+    raw = build_sample_raw()
+    raw["firmware"] = scrub_firmware(answer)
+    return raw
+
+
+def test_series_status_by_estimate_in_the_firmware_section(snapshot):
+    firmware = _kv(_node(snapshot, FIREWALL), "Firmware")
+    assert firmware["Series"] == "25.7"
+    assert firmware["Series status"] == "End of life since 2026-01-31 (estimate)"
+    summary = snapshot["summary"]
+    assert summary["series"] == "25.7" and summary["major_upgrade"] is None
+    lifecycle = summary["software_lifecycle"]
+    assert lifecycle["status"] == "end_of_life" and lifecycle["source"] == "estimate" and lifecycle["estimate"]
+    assert lifecycle["date"] == "2026-01-31" and lifecycle["days"] < 0
+
+
+def test_a_supported_series_has_no_end_of_life_warning():
+    raw = _firmware_raw(
+        product={**sample_api_answers()["core/firmware/status"]["product"], "product_version": "26.7.2"}
+    )
+    built = build_snapshot(raw)  # collected on 2026-11-14: 26.7 ends with 27.1, January 2027
+    firmware = _kv(_node(built, FIREWALL), "Firmware")
+    assert firmware["Series"] == "26.7" and firmware["Series status"] == "Supported until 2027-01-31 (estimate)"
+    assert built["summary"]["software_lifecycle"]["status"] == "supported"
+    assert not [w for w in built["collection"]["errors"] if w["scope"] == "lifecycle"]
+
+
+def test_the_firewalls_major_upgrade_report_marks_the_series_superseded():
+    # A 26.7 firewall offered the 27.1 major upgrade (``opnsense-update -vR``),
+    # before the estimated end of life of 26.7.
+    product = {**sample_api_answers()["core/firmware/status"]["product"], "product_version": "26.7.2"}
+    raw = _firmware_raw(
+        product=product,
+        upgrade_major_version="27.1",
+        upgrade_major_message="<p>This is the upgrade to 27.1.</p>",
+        upgrade_needs_reboot="1",
+        all_sets={"base": {"name": "base", "old": "26.7.2", "new": "27.1", "reason": "upgrade"}},
+    )
+    assert raw["firmware"]["upgrade_major_version"] == "27.1"
+    assert "upgrade_major_message" not in raw["firmware"]  # HTML for the GUI: not kept
+    built = build_snapshot(raw)
+    firmware = _kv(_node(built, FIREWALL), "Firmware")
+    assert firmware["Major upgrade available"] == "27.1"
+    assert firmware["Series status"].startswith("End of life: The firewall reports major release 27.1 is available")
+    assert built["summary"]["major_upgrade"] == "27.1"
+    assert built["summary"]["software_lifecycle"]["source"] == "reported"
+    (warning,) = [w for w in built["collection"]["errors"] if w["scope"] == "lifecycle"]
+    assert warning["info"] is True and "27.1" in warning["message"]
+    # The tracker reads the report off the firewall's details.
+    (device,) = snapshot_devices(built, "opnsense")
+    assert device["major_upgrade"] == "27.1" and device["version"] == "26.7.2"
+
+
+def test_apply_series_status_replaces_the_rows_and_the_warning(snapshot):
+    from netcontrol.integrations.opnsense.normalize import apply_series_status
+    from netcontrol.integrations.software.lifecycle import evaluate
+
+    built = copy.deepcopy(snapshot)
+    entry = {"platform": "opnsense", "series": "25.7", "eol_date": "2027-06-30", "enabled": True}
+    apply_series_status(built, evaluate("opnsense", "25.7.6", datetime(2026, 11, 14, tzinfo=UTC).date(), [entry]))
+    firmware = _section(_node(built, FIREWALL), "Firmware")["rows"]
+    assert [r for r in firmware if r[0] == "Series status"] == [
+        ["Series status", "Supported until 2027-06-30 (administrator entry)"]
+    ]
+    assert sum(1 for r in firmware if r[0] == "Series") == 1
+    assert not [w for w in built["collection"]["errors"] if w["scope"] == "lifecycle"]
+    assert built["summary"]["software_lifecycle"]["source"] == "entry"
 
 
 def test_config_xml_never_reaches_the_snapshot():

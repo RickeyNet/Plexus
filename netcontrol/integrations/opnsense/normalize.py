@@ -43,7 +43,15 @@ The firmware status (a pending update) and the findings of the security
 audit are shown in the firewall's details and added to the collection
 report as informational warnings (``info``: they do not mean the collection
 was incomplete); so is an audit that did not verifiably complete ("Audit
-incomplete"). The CARP virtual IPs are the firewall's "High availability"
+incomplete"). The release series the firewall runs and its end-of-life
+status (``netcontrol.integrations.software.lifecycle``: the estimate by
+release cadence, or end of life when the firewall reports a newer major
+release, ``upgrade_major_version``) are the "Series" and "Series status"
+rows of the "Firmware" section and the summary's ``series``,
+``major_upgrade`` and ``software_lifecycle``; a series that is end of life
+is an informational warning too (``apply_series_status``, which the
+collection calls again with the administrator's end-of-life entries).
+The CARP virtual IPs are the firewall's "High availability"
 section and the snapshot's ``ha`` block (``ha_block``: one record per CARP
 group with its role and status), which availability tracking reads as
 entities and the Topology map uses to draw two firewalls of a CARP pair as
@@ -92,6 +100,7 @@ from netcontrol.integrations.meraki.normalize import (
 from netcontrol.integrations.opnsense.certificates import certificate_records, days_text
 from netcontrol.integrations.opnsense.collector import LEASE_BACKENDS, info_warning
 from netcontrol.integrations.remote_users import DIRECTORY_KEY, directory_entry
+from netcontrol.integrations.software.lifecycle import evaluate, series_of, status_text
 from netcontrol.integrations.software.versions import canonical_version
 from netcontrol.integrations.traffic import counter_pair, traffic_block
 
@@ -126,6 +135,11 @@ SECTION_LEASES = "DHCP leases"
 SECTION_HEALTH = "Health"
 SECTION_SERVICES = "Services"
 SECTION_CERTIFICATES = "Certificates"
+# The rows of the "Firmware" section that ``apply_series_status`` writes, and
+# the scope of its collection warning.
+ROW_SERIES = "Series"
+ROW_SERIES_STATUS = "Series status"
+LIFECYCLE_SCOPE = "lifecycle"
 # Section titles of the gateway, tunnel peer and OpenVPN server nodes.
 SECTION_GATEWAY = "Gateway"
 SECTION_IPSEC_PEER = "IPsec peer"
@@ -586,7 +600,9 @@ def audit_advisories(audit: dict | None, version: str) -> list[dict[str, Any]]:
     """The findings of a security audit as software advisories for the
     ``opnsense`` platform at ``version`` (one per VuXML entry; the entry id,
     or the package and description when there is none, names it).
-    ``pkg audit`` gives no severity: every advisory is ``medium``."""
+    ``pkg audit`` gives no severity: an advisory starts as a ``default``
+    ``medium`` with no CVSS score, which the NVD / CISA KEV enrichment of
+    its CVE ids may replace (``netcontrol.routes.software_cve``)."""
     version = canonical_version(version)
     if not audit or not version:
         return []
@@ -605,6 +621,7 @@ def audit_advisories(audit: dict | None, version: str) -> list[dict[str, Any]]:
                 "source": ADVISORY_SOURCE,
                 "title": f"{package}: {description}"[:300] if description else package,
                 "severity": "medium",
+                "severity_source": "default",
                 "cvss": None,
                 "platform": PROVIDER,
                 "product_match": "",
@@ -1028,6 +1045,22 @@ class _Builder:
             if match:
                 return match.group(1).rsplit("-", 1)[0]
         return ""
+
+    def series(self) -> str:
+        """The release series: of the version, else the firmware status's
+        ``product_series``."""
+        return series_of(PROVIDER, self.version()) or _text(self.product.get("product_series"))
+
+    def major_upgrade(self) -> str:
+        """The newer major release the firewall reports as available
+        (``upgrade_major_version``: set only while one is offered)."""
+        return canonical_version(self.firmware.get("upgrade_major_version"))
+
+    def series_status(self) -> dict[str, Any]:
+        """The built-in end-of-life status of the series on the collection
+        day (no administrator entries: the collection adds those)."""
+        today = datetime.fromtimestamp(self.now, UTC).date() if self.now is not None else datetime.now(UTC).date()
+        return evaluate(PROVIDER, self.version(), today, reported=self.major_upgrade())
 
     def update_pending(self) -> bool:
         status = _text(self.firmware.get("status")).lower()
@@ -1578,7 +1611,9 @@ class _Builder:
         ]
         if due:
             self.warnings.append(
-                info_warning("certificates", "/trust/cert/search", f"Certificates expiring or expired: {', '.join(due)}")
+                info_warning(
+                    "certificates", "/trust/cert/search", f"Certificates expiring or expired: {', '.join(due)}"
+                )
             )
 
     def health_warnings(self) -> None:
@@ -1946,6 +1981,51 @@ class _Builder:
             )
 
 
+def apply_series_status(snapshot: dict, status: dict[str, Any]) -> None:
+    """Put the end-of-life ``status`` (``lifecycle.evaluate``) of the
+    firewall's release series into its snapshot: the "Series" and "Series
+    status" rows of the "Firmware" section, the summary's
+    ``software_lifecycle`` and, when the series is end of life, an
+    informational collection warning. Replaces what an earlier call put
+    there."""
+    snapshot.setdefault("summary", {})["software_lifecycle"] = {
+        key: status.get(key) for key in ("series", "status", "date", "days", "source", "estimate", "basis")
+    }
+    series = status.get("series") or ""
+    firewall = next(
+        (
+            n
+            for n in snapshot.get("nodes") or []
+            if n.get("kind") == "appliance" and str(n.get("id") or "").startswith(DEVICE_NODE_PREFIX)
+        ),
+        None,
+    )
+    section = next(
+        (
+            s
+            for s in (firewall or {}).get("sections") or []
+            if s.get("title") == SECTION_FIRMWARE and s.get("kind") == "kv"
+        ),
+        None,
+    )
+    if section is not None:
+        rows = [r for r in section["rows"] if r[0] not in (ROW_SERIES, ROW_SERIES_STATUS)]
+        if series:
+            rows.extend([[ROW_SERIES, series], [ROW_SERIES_STATUS, status_text(status)]])
+        section["rows"] = rows
+    errors = snapshot.setdefault("collection", {}).setdefault("errors", [])
+    errors[:] = [e for e in errors if not (isinstance(e, dict) and e.get("scope") == LIFECYCLE_SCOPE)]
+    if status.get("status") == "end_of_life":
+        errors.append(
+            info_warning(
+                LIFECYCLE_SCOPE,
+                "/core/firmware/status",
+                f"Release series end of life: OPNsense {series}. {status_text(status)}. "
+                "No more security fixes are released for this series.",
+            )
+        )
+
+
 def build_snapshot(raw: dict, inventory: InventoryIndex | None = None) -> dict[str, Any]:
     """Build the positioned topology snapshot from raw collector output.
     ``raw["config_xml"]`` is never read: it does not belong in a snapshot."""
@@ -2001,7 +2081,7 @@ def build_snapshot(raw: dict, inventory: InventoryIndex | None = None) -> dict[s
         by_status[node["status"]] = by_status.get(node["status"], 0) + 1
     findings = _dicts(_dict(builder.audit).get("findings"))
     counts = client_counts(builder.clients)
-    return {
+    snapshot: dict[str, Any] = {
         "schema": SCHEMA_VERSION,
         "provider": PROVIDER,
         "generated_at": datetime.now(UTC).isoformat(timespec="seconds"),
@@ -2026,6 +2106,8 @@ def build_snapshot(raw: dict, inventory: InventoryIndex | None = None) -> dict[s
             "gateways": len(builder.gateways),
             "version": version,
             "update_pending": builder.update_pending() if builder.firmware else None,
+            "series": builder.series(),
+            "major_upgrade": builder.major_upgrade() or None,
             "vulnerable_packages": len({_text(f.get("package")) for f in findings})
             if builder.audit_completed()
             else None,
@@ -2060,3 +2142,5 @@ def build_snapshot(raw: dict, inventory: InventoryIndex | None = None) -> dict[s
         **({"certificates": certificates} if certificates is not None else {}),
         **({DIRECTORY_KEY: builder.user_directory} if builder.user_directory is not None else {}),
     }
+    apply_series_status(snapshot, builder.series_status())
+    return snapshot

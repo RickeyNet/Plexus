@@ -9,7 +9,7 @@ import {
   useSaveSoftwareAdvisory,
 } from '@/api/software';
 
-import { parseVersionList } from './helpers';
+import { parseVersionList, severitySourceLabel } from './helpers';
 
 interface Props {
   advisory: SoftwareAdvisory | null;
@@ -25,6 +25,10 @@ export function AdvisoryModal({ advisory, platforms, severities, onClose }: Prop
   const [advisoryId, setAdvisoryId] = useState(advisory?.advisory_id ?? '');
   const [title, setTitle] = useState(advisory?.title ?? '');
   const [severity, setSeverity] = useState(advisory?.severity ?? 'high');
+  // A severity chosen here is the administrator's: CVE enrichment keeps it.
+  const [severityTouched, setSeverityTouched] = useState(false);
+  const [automaticSeverity, setAutomaticSeverity] = useState(false);
+  const adminSeverity = advisory?.severity_source === 'admin';
   const [cvss, setCvss] = useState(advisory?.cvss == null ? '' : String(advisory.cvss));
   const [platform, setPlatform] = useState(advisory?.platform ?? '');
   const [productMatch, setProductMatch] = useState(advisory?.product_match ?? '');
@@ -74,6 +78,13 @@ export function AdvisoryModal({ advisory, platforms, severities, onClose }: Prop
           published: published.trim(),
           summary: summary.trim(),
           enabled,
+          ...(automaticSeverity
+            ? { severity_source: 'default' as const }
+            : severityTouched
+              ? { severity_source: 'admin' as const }
+              : isEdit
+                ? {}
+                : { severity_source: 'default' as const }),
         },
       });
       onClose();
@@ -122,13 +133,42 @@ export function AdvisoryModal({ advisory, platforms, severities, onClose }: Prop
           </div>
           <div className="form-group">
             <label className="form-label" htmlFor={`${formId}-severity`}>Severity</label>
-            <select id={`${formId}-severity`} className="form-select" value={severity} onChange={(e) => setSeverity(e.target.value)}>
+            <select
+              id={`${formId}-severity`}
+              className="form-select"
+              value={severity}
+              onChange={(e) => {
+                setSeverity(e.target.value);
+                setSeverityTouched(true);
+                setAutomaticSeverity(false);
+              }}
+            >
               {severities.map((s) => (
                 <option key={s} value={s}>
                   {s}
                 </option>
               ))}
             </select>
+            <div className="text-muted" style={{ fontSize: '0.82em', marginTop: '0.25rem' }}>
+              {severityTouched
+                ? 'Set by you: CVE enrichment keeps it.'
+                : isEdit
+                  ? severitySourceLabel(advisory.severity_source, advisory.cvss_source)
+                  : 'Left as is, CVE enrichment may set it from the CVSS score.'}
+            </div>
+            {isEdit && (adminSeverity || severityTouched) && (
+              <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.85em', marginTop: '0.3rem' }}>
+                <input
+                  type="checkbox"
+                  checked={automaticSeverity}
+                  onChange={(e) => {
+                    setAutomaticSeverity(e.target.checked);
+                    if (e.target.checked) setSeverityTouched(false);
+                  }}
+                />
+                Let CVE enrichment set the severity
+              </label>
+            )}
           </div>
         </div>
         <div className="form-group">

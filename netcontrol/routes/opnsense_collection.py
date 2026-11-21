@@ -35,6 +35,13 @@ is stored:
     that follows every stored collection matches the advisories to the
     tracked firewall and raises ``software_alerts`` the normal way.
 
+  - ``note_software_lifecycle``: the end-of-life status of the firewall's
+    release series is evaluated again with the administrator's
+    end-of-life entries (an entry for ``opnsense`` and the series overrides
+    the built-in estimate the snapshot was built with), so the "Series
+    status" row and the end-of-life warning say what the software tracker
+    says.
+
   - ``sync_clients``: the ARP and NDP tables go into MAC tracking as the
     ``arp_table`` of the firewall's inventory host (matched as for the
     config backup; skipped with a warning when there is none), which also
@@ -112,6 +119,7 @@ from netcontrol.integrations.opnsense.normalize import (
     DEVICE_NODE_PREFIX,
     PROVIDER,
     SECTION_HEALTH,
+    apply_series_status,
     arp_entries,
     audit_advisories,
     client_counts,
@@ -121,6 +129,7 @@ from netcontrol.integrations.opnsense.normalize import (
 )
 from netcontrol.integrations.opnsense.rules import parse_rule_stats
 from netcontrol.integrations.pathtrace.opnsense_routes import LiveInterface, capture_text
+from netcontrol.integrations.software.lifecycle import WARN_DAYS_SETTING, evaluate, warn_days_setting
 from netcontrol.integrations.software.versions import canonical_version, snapshot_device_key, snapshot_devices
 from netcontrol.routes.device_config import store_device_config
 from netcontrol.routes.dhcp_adapters import DHCP_PROVIDER_OPNSENSE
@@ -279,11 +288,9 @@ async def sync_audit_advisories(raw: dict, snapshot: dict, org_ref: int) -> dict
     current = {a["advisory_id"] for a in found}
     upserted = withdrawn = 0
     for advisory in found:
-        existing = await db.get_software_advisory(advisory["advisory_id"])
-        if existing:
-            # An administrator's severity and enabled switch are kept.
-            advisory["severity"] = existing.get("severity") or advisory["severity"]
-        # Merged into the firewalls already on the advisory.
+        # Merged into the firewalls already on the advisory. The upsert keeps
+        # an administrator's severity, the enabled switch, and the severity,
+        # CVSS score and KEV flag CVE enrichment set (the audit has none).
         await db.upsert_software_advisory({**advisory, "device_keys": [device_key]}, merge_lists=True)
         upserted += 1
     for existing in await db.list_software_advisories():
@@ -312,6 +319,28 @@ async def sync_audit_advisories(raw: dict, snapshot: dict, org_ref: int) -> dict
         await db.upsert_software_advisory({**existing, "affected_versions": versions})
         withdrawn += 1
     return {"upserted": upserted, "withdrawn": withdrawn}
+
+
+async def note_software_lifecycle(snapshot: dict) -> dict[str, Any] | None:
+    """Evaluate the firewall's release series with the administrator's
+    end-of-life entries and the warning window of the software settings,
+    and put the result into the snapshot (``apply_series_status``).
+    ``None`` when the firewall reported no version."""
+    summary = snapshot.get("summary") or {}
+    version = canonical_version(summary.get("version"))
+    if not version:
+        return None
+    settings = await db.get_software_settings()
+    status = evaluate(
+        PROVIDER,
+        version,
+        datetime.now(UTC).date(),
+        await db.list_software_eol_entries(),
+        reported=summary.get("major_upgrade") or "",
+        warn_days=warn_days_setting(settings.get(WARN_DAYS_SETTING)),
+    )
+    apply_series_status(snapshot, status)
+    return status
 
 
 def _lease_server_name(snapshot: dict, raw: dict) -> str:
@@ -520,6 +549,10 @@ async def after_collection(raw: dict, snapshot: dict, org_ref: int) -> None:
         await sync_audit_advisories(raw, snapshot, org_ref)
     except Exception as exc:  # noqa: BLE001 - the snapshot is stored anyway
         LOGGER.warning("opnsense: audit advisories not synced: %s", type(exc).__name__)
+    try:
+        await note_software_lifecycle(snapshot)
+    except Exception as exc:  # noqa: BLE001 - the snapshot is stored anyway
+        LOGGER.warning("opnsense: software end of life not evaluated: %s", type(exc).__name__)
     try:
         await sync_clients(raw, snapshot)
     except Exception as exc:  # noqa: BLE001 - the snapshot is stored anyway

@@ -134,6 +134,9 @@ _IOS_XE_RELEASE = re.compile(r"^(1[6-9]|[2-9]\d)\.\d+\.\d+")
 
 # Rows of a snapshot node's detail sections that carry its version.
 VERSION_ROW_KEYS = ("Firmware", "Software", "Socket version", "Version")
+# Rows that name a newer major release the device reports as available
+# (an OPNsense firewall's ``upgrade_major_version``).
+MAJOR_UPGRADE_ROW_KEYS = ("Major upgrade available",)
 
 _VERSION_RE = re.compile(r"\d[\w.()\-]*")
 _TOKEN_RE = re.compile(r"\d+|[A-Za-z]+")
@@ -290,12 +293,12 @@ def classify_host(device_type: Any, model: Any, raw_version: Any) -> tuple[str, 
     return platform, version
 
 
-def _version_row(node: dict) -> str:
+def _version_row(node: dict, keys: tuple[str, ...] = VERSION_ROW_KEYS) -> str:
     for section in node.get("sections") or []:
         if section.get("kind") != "kv":
             continue
         for row in section.get("rows") or []:
-            if isinstance(row, list) and len(row) >= 2 and row[0] in VERSION_ROW_KEYS and str(row[1]).strip():
+            if isinstance(row, list) and len(row) >= 2 and row[0] in keys and str(row[1]).strip():
                 return str(row[1]).strip()
     return ""
 
@@ -338,7 +341,8 @@ def snapshot_devices(snapshot: dict, provider: str) -> list[dict[str, Any]]:
     the FTDs of a Cisco FMC their software and the FMC its own version, the
     firewalls of a Palo Alto Panorama their PAN-OS and Panorama its own, the
     appliances of an Appgate SDP collective their appliance version, an
-    OPNsense firewall its OPNsense version; all
+    OPNsense firewall its OPNsense version (and the newer major release it
+    reports as available, ``major_upgrade``); all
     are read from the detail sections the snapshot already holds, so
     snapshots collected before the tracker existed are covered. Nodes
     without a version (a Cato IPsec site, a PoP, a users node) are skipped.
@@ -373,6 +377,7 @@ def snapshot_devices(snapshot: dict, provider: str) -> list[dict[str, Any]]:
                 "platform": platform,
                 "version": version,
                 "raw_version": raw_version,
+                "major_upgrade": canonical_version(_version_row(node, MAJOR_UPGRADE_ROW_KEYS)),
                 "host_id": inventory.get("host_id") if inventory else None,
             }
         )

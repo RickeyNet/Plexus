@@ -1,7 +1,8 @@
 """Software tools: versions per device and the advisories that affect them.
 
 Every tracked device is returned whatever collected it (inventory, Meraki,
-Cato, cloud accounts, firewall managers); rows name their ``source``. A
+Cato, cloud accounts, firewall managers); rows name their ``source`` and the
+end-of-life status of the release series they run (``lifecycle``). A
 platform with devices but no advisory to check them against is reported as a
 gap, not left out.
 """
@@ -17,6 +18,7 @@ from netcontrol.mcp.auth import McpContext
 from netcontrol.mcp.dispatch import no_data, page_args
 from netcontrol.mcp.registry import Tool, register
 from netcontrol.mcp.tools._common import PAGING, db_time, parse_time, schema
+from netcontrol.routes.software_eol import device_statuses
 
 SOURCE = "software versions"
 MAX_AFFECTED_HOSTS = 100
@@ -29,6 +31,7 @@ async def list_software_versions(_ctx: McpContext, args: dict[str, Any]) -> dict
     version = str(args.get("version") or "").strip().lower()
     changed_since = parse_time(args.get("changed_since"), "changed_since")
     open_alerts = await db.count_open_alerts_by_device()
+    lifecycle = await device_statuses(await db.list_software_versions())
     rows = []
     for device in await db.list_software_versions(search=str(args.get("host") or "")):
         if vendor and vendor not in f"{device.get('platform')} {device.get('source')}".lower():
@@ -53,11 +56,20 @@ async def list_software_versions(_ctx: McpContext, args: dict[str, Any]) -> dict
                 "host_id": device.get("host_id"),
                 "open_advisories": int(alerts.get("count", 0)),
                 "worst_severity": alerts.get("worst") if alerts else None,
+                "lifecycle": _lifecycle(lifecycle.get(device["device_key"])),
                 "last_seen": device.get("last_seen"),
                 "source": device.get("source"),
             }
         )
     return page_args(rows, args)
+
+
+def _lifecycle(status: dict | None) -> dict[str, Any] | None:
+    """The end-of-life fields an assistant needs: the series, its status
+    (supported, ending, end_of_life, unknown), the date and how it is known."""
+    if not status:
+        return None
+    return {key: status.get(key) for key in ("series", "status", "date", "days", "source", "estimate", "basis")}
 
 
 async def list_advisories(_ctx: McpContext, args: dict[str, Any]) -> dict[str, Any]:
@@ -68,6 +80,7 @@ async def list_advisories(_ctx: McpContext, args: dict[str, Any]) -> dict[str, A
     severity = str(args.get("severity") or "").strip().lower()
     cve = str(args.get("cve") or "").strip().lower()
     host = str(args.get("host") or "").strip().lower()
+    exploited_only = args.get("known_exploited") is True
 
     affected: dict[str, list[dict[str, Any]]] = {}
     for alert in await db.list_software_alerts(limit=10_000):
@@ -81,6 +94,8 @@ async def list_advisories(_ctx: McpContext, args: dict[str, Any]) -> dict[str, A
             continue
         if cve and cve not in [str(c).lower() for c in advisory.get("cves") or []]:
             continue
+        if exploited_only and not advisory.get("known_exploited"):
+            continue
         if host and not any(host in str(h.get("name") or "").lower() for h in hosts):
             continue
         rows.append(
@@ -88,7 +103,14 @@ async def list_advisories(_ctx: McpContext, args: dict[str, Any]) -> dict[str, A
                 "id": advisory["advisory_id"],
                 "title": advisory.get("title"),
                 "severity": advisory.get("severity"),
+                # default, enriched (from NVD / CISA KEV), vendor or admin.
+                "severity_source": advisory.get("severity_source") or "default",
                 "cvss": advisory.get("cvss"),
+                "cvss_from_nvd": advisory.get("cvss_source") == "nvd",
+                "known_exploited": bool(advisory.get("known_exploited")),
+                "kev_date_added": advisory.get("kev_date_added") or None,
+                "kev_due_date": advisory.get("kev_due_date") or None,
+                "kev_ransomware": advisory.get("kev_ransomware") or None,
                 "cves": advisory.get("cves") or [],
                 "platform": advisory.get("platform"),
                 "affected_versions": advisory.get("affected_versions") or [],
@@ -118,7 +140,9 @@ register(
         description=(
             "Lists the software version of every tracked device from every source (inventory, Meraki, "
             "Cato, cloud accounts, firewall managers): platform, version, the previous version and when "
-            "it changed, and how many open advisories affect it. 'vendor' matches part of the platform "
+            "it changed, how many open advisories affect it and the end-of-life status of its release series "
+            "(lifecycle: supported, ending, end_of_life or unknown, with the date and whether it is an "
+            "administrator entry, an estimate or reported by the device). 'vendor' matches part of the platform "
             "or source, 'version' part of the version, 'host' part of the name, model, serial or site. "
             "changed_since lists only devices whose version changed after that time."
         ),
@@ -140,8 +164,10 @@ register(
         name="list_advisories",
         description=(
             "Lists security advisories and CVEs Plexus checks versions against, each with the devices it "
-            "currently affects and the versions that fix it. Filter by severity, CVE id, or part of an "
-            "affected device's name. platforms_without_advisories names platforms that have devices but "
+            "currently affects and the versions that fix it, the CVSS score, and whether a CVE is in the "
+            "CISA Known Exploited Vulnerabilities catalogue (known_exploited, with the date added and the "
+            "remediation due date). Filter by severity, CVE id, known_exploited, or part of an affected "
+            "device's name. platforms_without_advisories names platforms that have devices but "
             "no advisory source, so their absence from the list is not a clean bill of health."
         ),
         category="software",
@@ -149,6 +175,10 @@ register(
             {
                 "severity": {"type": "string", "enum": ["critical", "high", "medium", "low", "info"]},
                 "cve": {"type": "string", "maxLength": 40},
+                "known_exploited": {
+                    "type": "boolean",
+                    "description": "true: only advisories with a CVE in the CISA KEV catalogue.",
+                },
                 "host": {"type": "string", "maxLength": 255},
                 **PAGING,
             }
