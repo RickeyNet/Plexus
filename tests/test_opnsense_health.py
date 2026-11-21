@@ -576,4 +576,5 @@ async def test_the_collection_notes_the_inventory_host(firewall_source):
     assert host is not None and int(host["id"]) == host_id
     assert snapshot["summary"][health_poll.SUMMARY_KEY] == host_id
     rows = _section(snapshot, "Health")["rows"]
-    assert rows[-2][0] == "History" and "fw-edge-1.example.com" in rows[-2][1] and rows[-1][0] == "Source"
+    assert rows[-2][0] == "History" and rows[-1][0] == "Source"
+    assert rows[-2][1].endswith("stored with the monitoring poll of fw-edge-1.example.com")

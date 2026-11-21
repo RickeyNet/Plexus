@@ -63,10 +63,9 @@ from netcontrol.sso import (
     clean_display_name,
     clean_username,
     group_values,
-    guard_provider_url,
-    http_client,
     is_allowed_url,
     log_safe,
+    provider_request,
 )
 
 LOGIN_PATH = "/api/auth/saml/login"
@@ -206,14 +205,20 @@ def parse_idp_metadata(xml_text: str | bytes, entity_id: str = "") -> IdpMetadat
 
 async def fetch_metadata(url: str, ca_cert_file: str = "", transport: httpx.AsyncBaseTransport | None = None) -> str:
     """The IdP metadata document at ``url`` (``https``; redirects are not
-    followed). The address goes through the outbound SSRF guard first, like
+    followed). The address passes the outbound SSRF guard and the request
+    goes to the address the guard approved (``sso.provider_request``), like
     every other URL an admin has Plexus fetch."""
     if not is_allowed_url(url):
         raise SamlError("provider", "the IdP metadata URL must be an https URL")
-    await guard_provider_url(url, SamlError)
     try:
-        async with http_client(transport, ca_cert_file, SamlError) as client:
-            resp = await client.get(url, headers={"Accept": "application/samlmetadata+xml, application/xml, text/xml"})
+        resp = await provider_request(
+            "GET",
+            url,
+            ca_cert_file=ca_cert_file,
+            transport=transport,
+            error=SamlError,
+            headers={"Accept": "application/samlmetadata+xml, application/xml, text/xml"},
+        )
     except httpx.HTTPError as exc:
         raise SamlError("provider", f"IdP metadata request failed ({type(exc).__name__})") from exc
     if resp.status_code != 200:

@@ -530,7 +530,7 @@ _migrate_legacy_session_key()
 
 
 # Generated keys are 64 hex characters; anything much shorter is not a key.
-_MIN_SECRET_KEY_LENGTH = 32
+_MIN_SESSION_KEY_CHARS = 32
 
 
 def _load_or_create_secret_key() -> str:
@@ -542,7 +542,7 @@ def _load_or_create_secret_key() -> str:
     if os.path.isfile(SECRET_KEY_FILE):
         with open(SECRET_KEY_FILE) as f:
             stored = f.read().strip()
-        if len(stored) >= _MIN_SECRET_KEY_LENGTH:
+        if len(stored) >= _MIN_SESSION_KEY_CHARS:
             return stored
         # An empty or truncated file (a write cut short, a file emptied by
         # hand) would sign every session and CSRF token with a key anyone can
@@ -550,7 +550,7 @@ def _load_or_create_secret_key() -> str:
         LOGGER.warning(
             "session key file %s holds fewer than %d characters; generating a new key (existing sessions end)",
             SECRET_KEY_FILE,
-            _MIN_SECRET_KEY_LENGTH,
+            _MIN_SESSION_KEY_CHARS,
         )
         target = SECRET_KEY_FILE + ".new"
         if os.path.exists(target):

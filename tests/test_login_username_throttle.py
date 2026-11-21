@@ -25,7 +25,9 @@ from netcontrol.bounded_map import BoundedDict
 
 
 def _fast_hash(password: str, salt: str = "") -> str:
-    return hashlib.sha256(f"{salt}:{password}".encode()).hexdigest()
+    """The stand-in for the real password hasher: one PBKDF2 round, so the
+    tests do not pay for the production work factor."""
+    return hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), 1).hex()
 
 
 class _Req:

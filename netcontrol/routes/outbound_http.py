@@ -125,6 +125,7 @@ async def send_request(
     url: str,
     *,
     content: bytes | str | None = None,
+    data: dict[str, Any] | None = None,
     json: Any = None,
     headers: dict[str, str] | None = None,
     verify: Any = True,
@@ -136,6 +137,7 @@ async def send_request(
 
     Raises ``OutboundRequestError`` when the target is rejected and the
     ``httpx`` error on a transport failure. The caller judges the status.
+    ``data`` is a form body (``application/x-www-form-urlencoded``).
     ``transport`` replaces the network layer (tests pass an
     ``httpx.MockTransport``); nothing is pinned then, as nothing connects.
     A request sent through an environment proxy is not pinned either."""
@@ -146,4 +148,4 @@ async def send_request(
     async with httpx.AsyncClient(
         timeout=timeout_s, verify=verify, follow_redirects=False, transport=transport
     ) as client:
-        return await client.request(method.upper(), url, content=content, json=json, headers=headers)
+        return await client.request(method.upper(), url, content=content, data=data, json=json, headers=headers)

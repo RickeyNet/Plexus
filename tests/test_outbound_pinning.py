@@ -10,6 +10,7 @@ import socket
 
 import httpx
 import pytest
+from netcontrol import saml, sso
 from netcontrol.routes import net_guard, outbound_http
 from netcontrol.routes.outbound_http import OutboundRequestError, PinnedTransport, send_request
 
@@ -187,3 +188,44 @@ def test_environment_proxy_detection(monkeypatch):
     assert outbound_http._env_proxy_applies("https://hooks.example.com/") is True
     assert outbound_http._env_proxy_applies("https://skip.example.com/") is False
     assert outbound_http._env_proxy_applies("http://hooks.example.com/") is False
+
+
+# ── Identity providers (SAML metadata import, every OIDC request) ────────────
+
+
+@pytest.mark.asyncio
+async def test_an_identity_provider_request_goes_to_the_checked_address(monkeypatch, network):
+    resolver = _rebinding_resolver(["192.0.2.20", "169.254.169.254"])
+    monkeypatch.setattr(net_guard, "_getaddrinfo", resolver)
+
+    await sso.provider_request("POST", "https://idp.example.com/token", data={"grant_type": "authorization_code"})
+
+    sent = network[0].requests[0]
+    assert sent.url.host == "192.0.2.20" and sent.url.path == "/token"
+    assert sent.headers["host"] == "idp.example.com"
+    assert sent.extensions["sni_hostname"] == "idp.example.com"
+    assert sent.headers["content-type"] == "application/x-www-form-urlencoded"
+    assert network[0].kwargs["verify"] is True
+    assert resolver.calls["n"] == 1
+
+
+@pytest.mark.asyncio
+async def test_saml_metadata_import_is_pinned(monkeypatch, network):
+    resolver = _rebinding_resolver(["192.0.2.21", "169.254.169.254"])
+    monkeypatch.setattr(net_guard, "_getaddrinfo", resolver)
+
+    # The stand-in network answers 204, which the import refuses after sending.
+    with pytest.raises(saml.SamlError, match="HTTP 204"):
+        await saml.fetch_metadata("https://idp.example.com/metadata")
+
+    assert [r.url.host for r in network[0].requests] == ["192.0.2.21"]
+    assert resolver.calls["n"] == 1
+
+
+@pytest.mark.asyncio
+async def test_a_refused_identity_provider_address_is_not_sent(monkeypatch, network):
+    monkeypatch.setattr(net_guard, "_getaddrinfo", _rebinding_resolver(["169.254.169.254"]))
+    with pytest.raises(sso.SsoError, match="not allowed") as refused:
+        await sso.provider_request("GET", "https://idp.example.com/userinfo", code="claims")
+    assert refused.value.code == "claims"
+    assert network == []

@@ -214,13 +214,14 @@ def _candidate_image_dirs() -> list[str]:
     return ordered
 
 
-def _safe_image_path_in(directory: str, filename: str) -> str | None:
-    """Resolve filename under directory, or None if it would escape that root."""
+def _safe_path_in(directory: str, filename: str) -> str | None:
+    """The path of the file named filename directly under directory, or None
+    when it would not be inside that directory."""
     safe_name = os.path.basename(filename)
     root = os.path.realpath(directory)
     fpath = os.path.realpath(os.path.join(directory, safe_name))
     prefix = root if root.endswith(os.sep) else root + os.sep
-    if fpath != root and not fpath.startswith(prefix):
+    if not fpath.startswith(prefix):
         return None
     return fpath
 
@@ -228,7 +229,7 @@ def _safe_image_path_in(directory: str, filename: str) -> str | None:
 def _find_existing_image_path(filename: str) -> str | None:
     """Return the first candidate directory that actually holds filename, else None."""
     for directory in _candidate_image_dirs():
-        fpath = _safe_image_path_in(directory, filename)
+        fpath = _safe_path_in(directory, filename)
         if fpath and os.path.isfile(fpath):
             return fpath
     return None
@@ -3597,7 +3598,9 @@ async def _device_prestage(campaign_id, dev, credentials, image_map, options):
                 clean = re.sub(r"[^\w\-.]", "_", hostname)
                 ts = datetime.now().strftime("%Y%m%d_%H%M%S")
                 # The campaign id names the owner (see _backup_campaign_id).
-                backup_file = os.path.join(BACKUPS_DIR, f"backup_{clean}_{ts}_campaign{campaign_id}.txt")
+                backup_file = _safe_path_in(BACKUPS_DIR, f"backup_{clean}_{ts}_campaign{int(campaign_id)}.txt")
+                if backup_file is None:
+                    raise ValueError("backup file name is not inside the backups directory")
                 with open(backup_file, "w") as f:
                     f.write(config)
                 await _emit(campaign_id, dev_id, "success", f"Config backed up to {backup_file}", host=ip)

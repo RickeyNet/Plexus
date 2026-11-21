@@ -11,11 +11,42 @@ middleware must not clobber it (it uses setdefault).
 from __future__ import annotations
 
 import asyncio
-import re
+from html.parser import HTMLParser
 
 import pytest
 
 import pg_raw
+
+
+class _Scripts(HTMLParser):
+    """The scripts of a page as a browser reads them: ``srcs`` of the
+    external ones, ``inline`` the text of each executable one without a
+    ``src``. A data block (``type="application/json"``) is not executed and
+    is left out."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.srcs: list[str] = []
+        self.inline: list[str] = []
+        self._open = False
+
+    def handle_starttag(self, tag, attrs):
+        if tag != "script":
+            return
+        found = dict(attrs)
+        if found.get("src") is not None:
+            self.srcs.append(found["src"])
+        elif (found.get("type") or "text/javascript") in ("text/javascript", "module"):
+            self._open = True
+            self.inline.append("")
+
+    def handle_data(self, data):
+        if self._open:
+            self.inline[-1] += data
+
+    def handle_endtag(self, tag):
+        if tag == "script":
+            self._open = False
 
 
 @pytest.fixture
@@ -125,11 +156,12 @@ def test_embed_page_loads_echarts_from_the_app_under_its_csp(client, theme):
     assert resp.status_code == 200
     assert resp.headers["Content-Security-Policy"] == graph_export.EMBED_CSP
     html = resp.text
-    srcs = re.findall(r'<script src="([^"]+)"', html)
-    assert srcs == [graph_export.ECHARTS_SCRIPT_SRC] == ["/vendor/echarts.min.js"]
+    scripts = _Scripts()
+    scripts.feed(html)
+    assert scripts.srcs == [graph_export.ECHARTS_SCRIPT_SRC] == ["/vendor/echarts.min.js"]
     assert "cdn.jsdelivr.net" not in html
     # Every inline executable script is the one the CSP hash allows, whatever the theme.
-    inline = re.findall(r"<script>(.*?)</script>", html, flags=re.S)
+    inline = scripts.inline
     assert inline == [graph_export.EMBED_BOOTSTRAP_SCRIPT]
     assert script_hash_source(inline[0]) in resp.headers["Content-Security-Policy"]
     assert f'data-theme="{"dark" if theme == "dark" else ""}"' in html

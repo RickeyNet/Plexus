@@ -137,6 +137,11 @@ def test_tags_are_compared_without_the_severity_digit():
     assert sr.normalize_tag("ROUTING-BGP-5-ADJCHANGE") == "ROUTING-BGP-ADJCHANGE"
     assert sr.normalize_tag("ASA-6-113015") == "ASA-113015"
     assert sr.normalize_tag("UI_COMMIT_COMPLETED") == "UI_COMMIT_COMPLETED"
+    # Not FACILITY-<0..7>-MNEMONIC: kept whole.
+    for tag in ("LINK-8-UPDOWN", "-3-UPDOWN", "LINK-3-", "LINK-3-UP DOWN", "LINK-33-UPDOWN", "3-UPDOWN", "A-B"):
+        assert sr.normalize_tag(tag) == tag
+    # Only the last severity digit is dropped.
+    assert sr.normalize_tag("A-1-B-2-C") == "A-1-B-C"
 
 
 # ── Built-in rules against samples of each device family ─────────────────────

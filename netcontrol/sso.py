@@ -26,7 +26,7 @@ from urllib.parse import urlsplit
 
 import httpx
 
-from netcontrol.routes.outbound_http import OutboundRequestError, guard_url
+from netcontrol.routes.outbound_http import OutboundRequestError, send_request
 
 # Codes a sign-in failure may put in ``/login?sso_error=``. The login page
 # maps each to a fixed sentence; nothing else from the provider is echoed.
@@ -87,19 +87,6 @@ def is_allowed_url(url: str) -> bool:
     return parts.scheme == "http" and parts.hostname.lower() in _LOOPBACK_HOSTS
 
 
-async def guard_provider_url(url: str, error: type[SsoError] = SsoError, code: str = "provider") -> None:
-    """The outbound SSRF guard for an identity provider address, the one
-    webhooks and notification channels use (``net_guard``): link-local
-    addresses such as the cloud instance-metadata endpoint are always
-    refused, private and loopback ranges when ``APP_SSRF_BLOCK_PRIVATE`` is
-    on. It covers the URL an admin typed and every endpoint a provider
-    document names. Raises ``error(code)``."""
-    try:
-        await guard_url(url)
-    except OutboundRequestError as exc:
-        raise error(code, f"the identity provider address is not allowed ({exc})") from exc
-
-
 def safe_next(value: str | None) -> str:
     """A same-site path to return to after sign-in, or ``/``.
 
@@ -148,20 +135,46 @@ def group_values(value: Any) -> list[str]:
     return []
 
 
-def http_client(
-    transport: httpx.AsyncBaseTransport | None,
+async def provider_request(
+    method: str,
+    url: str,
+    *,
     ca_cert_file: str = "",
+    transport: httpx.AsyncBaseTransport | None = None,
     error: type[SsoError] = SsoError,
-) -> httpx.AsyncClient:
-    """The client used to talk to an identity provider: TLS verified (with
-    ``ca_cert_file`` for a private CA), redirects not followed, 10 s
-    timeout. ``transport`` replaces the network in tests."""
-    if transport is not None:
-        return httpx.AsyncClient(transport=transport, timeout=HTTP_TIMEOUT_SECONDS, follow_redirects=False)
+    code: str = "provider",
+    data: dict[str, Any] | None = None,
+    headers: dict[str, str] | None = None,
+) -> httpx.Response:
+    """One request to an identity provider, sent by the shared outbound
+    sender (``outbound_http.send_request``), like webhooks and notification
+    channels: the address passes the SSRF guard (``net_guard``: link-local
+    addresses such as the cloud instance-metadata endpoint are always
+    refused, private and loopback ranges when ``APP_SSRF_BLOCK_PRIVATE`` is
+    on) and the connection goes to the address the guard approved, so a
+    second DNS answer cannot send it elsewhere. This covers the URL an admin
+    typed and every endpoint a provider document names.
+
+    TLS is verified (with ``ca_cert_file`` for a private CA), redirects are
+    not followed, 10 s timeout. ``transport`` replaces the network in tests.
+    Raises ``error(code)`` for a refused address, ``error("provider")`` for
+    a CA file that does not load, and the ``httpx`` error on a transport
+    failure."""
     verify: ssl.SSLContext | bool = True
-    if ca_cert_file:
+    if ca_cert_file and transport is None:
         try:
             verify = ssl.create_default_context(cafile=ca_cert_file)
         except (OSError, ssl.SSLError) as exc:
             raise error("provider", "the CA certificate file could not be loaded") from exc
-    return httpx.AsyncClient(verify=verify, timeout=HTTP_TIMEOUT_SECONDS, follow_redirects=False)
+    try:
+        return await send_request(
+            method,
+            url,
+            data=data,
+            headers=headers,
+            verify=verify,
+            timeout_s=HTTP_TIMEOUT_SECONDS,
+            transport=transport,
+        )
+    except OutboundRequestError as exc:
+        raise error(code, f"the identity provider address is not allowed ({exc})") from exc

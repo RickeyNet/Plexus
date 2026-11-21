@@ -57,10 +57,9 @@ from netcontrol.sso import (
     clean_display_name,
     clean_username,
     group_values,
-    guard_provider_url,
-    http_client,
     is_allowed_url,
     log_safe,
+    provider_request,
     safe_next,
 )
 
@@ -213,18 +212,30 @@ class OidcClient:
 
     # ── HTTP ──
 
-    def _http(self, ca_cert_file: str) -> httpx.AsyncClient:
-        return http_client(self._transport, ca_cert_file, OidcError)
-
-    async def _send(self, what: str, code: str, ca_cert_file: str, method: str, url: str, **kwargs) -> dict:
-        # Every request, not only discovery: the token, JWKS and userinfo
-        # addresses come from the provider's own document.
-        await guard_provider_url(url, OidcError, code)
+    async def _send(
+        self,
+        what: str,
+        code: str,
+        ca_cert_file: str,
+        method: str,
+        url: str,
+        *,
+        data: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> dict:
+        # Guarded and pinned on every request, not only discovery: the token,
+        # JWKS and userinfo addresses come from the provider's own document.
         try:
-            async with self._http(ca_cert_file) as client:
-                resp = await client.request(method, url, **kwargs)
-        except OidcError:
-            raise
+            resp = await provider_request(
+                method,
+                url,
+                ca_cert_file=ca_cert_file,
+                transport=self._transport,
+                error=OidcError,
+                code=code,
+                data=data,
+                headers=headers,
+            )
         except httpx.HTTPError as exc:
             raise OidcError(code, f"{what} request failed ({type(exc).__name__})") from exc
         if len(resp.content) > MAX_RESPONSE_BYTES:

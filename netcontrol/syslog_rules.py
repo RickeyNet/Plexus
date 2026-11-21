@@ -162,8 +162,11 @@ _RFC5424 = re.compile(r"^\d{1,2} \S+ \S+ (\S+) \S+ (\S+) ")
 # RFC 3164: [TIMESTAMP] [HOSTNAME] PROGRAM[PID]: MSG.
 _BSD_TIMESTAMP = re.compile(r"^[A-Z][a-z]{2} [ \d]?\d \d{2}:\d{2}:\d{2} ")
 _PROGRAM_NAME = r"([A-Za-z][\w.\-/]*)(?:\[\d+\])?: "
-_PROGRAM = re.compile(_PROGRAM_NAME)
-_HOST_PROGRAM = re.compile(r"\S+ " + _PROGRAM_NAME)
+# Anchored: both are only ever matched at the start of a message, and without
+# the anchor ``\S+`` could be retried from every position of a long word.
+_PROGRAM = re.compile("^" + _PROGRAM_NAME)
+_HOST_PROGRAM = re.compile(r"^\S+ " + _PROGRAM_NAME)
+_MNEMONIC = re.compile(r"[A-Za-z0-9_]+")
 
 
 def _strip_sd(rest: str) -> str:
@@ -193,9 +196,18 @@ def normalize_tag(tag: str) -> str:
     """The key a tag is matched by: ``%LINK-3-UPDOWN`` -> ``LINK-UPDOWN``
     (the severity digit dropped, upper case); a Junos tag unchanged."""
     tag = tag.strip().lstrip("%").strip()
-    m = re.fullmatch(r"(.+?)-[0-7]-([A-Za-z0-9_]+)", tag)
-    if m:
-        return f"{m.group(1)}-{m.group(2)}".upper()
+    # FACILITY-<severity>-MNEMONIC, split on the last hyphen: a regular
+    # expression over the facility backtracks on text a device sends.
+    head, _, mnemonic = tag.rpartition("-")
+    facility = head[:-2]
+    if (
+        facility
+        and "\n" not in facility
+        and head[-2] == "-"
+        and head[-1] in "01234567"
+        and _MNEMONIC.fullmatch(mnemonic)
+    ):
+        return f"{facility}-{mnemonic}".upper()
     return tag.upper()
 
 
