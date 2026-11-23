@@ -16,11 +16,13 @@ import {
 } from '@/api/monitoring';
 import { formatBackendDateTime } from '@/lib/datetime';
 import { statusTone, type Tone } from '@/lib/severity';
+import { CatoAlertsPanel } from './CatoAlertsPanel';
 import { CatoEgressPanel } from './CatoEgressPanel';
 import { CatoSharedHostPanel } from './CatoSharedHostPanel';
 import { MerakiAlertsPanel } from './MerakiAlertsPanel';
 import { AVAILABILITY_TABLE_MAX_HEIGHT, countTone, formatUptime, formatUptimePct } from './helpers';
 import { TopologyAvailabilityPanel } from './TopologyAvailabilityPanel';
+import { VendorAlertsPanel } from './VendorAlertsPanel';
 
 type SubTab = 'hosts' | 'outages' | 'transitions';
 
@@ -196,6 +198,9 @@ export function AvailabilityTab() {
 
       <TopologyAvailabilityPanel days={days} />
       <MerakiAlertsPanel />
+      <CatoAlertsPanel />
+      <VendorAlertsPanel provider="aws" />
+      <VendorAlertsPanel provider="azure" />
       <CatoEgressPanel />
       <CatoSharedHostPanel />
     </div>

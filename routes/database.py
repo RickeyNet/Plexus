@@ -41,6 +41,7 @@ Tables:
     alert_suppressions     - time-windowed alert suppression entries
     report_artifacts       - persisted report outputs (CSV/SVG/etc) by run
     meraki_alerts          - Meraki alerts from the assurance poll and the webhook receiver
+    vendor_alerts          - alerts of vendor alert feeds (the Cato events feed), with vendor_alert_feeds (migration 0132)
     mcp_tokens             - bearer tokens for the read-only AI access endpoint (/mcp)
     tags                   - admin-managed tags (name unique ignoring case, palette color)
     tag_assignments        - tags on hosts, groups and IPAM prefixes by (object_type, object_key)
@@ -3016,6 +3017,7 @@ from routes.db.topology_availability import *  # noqa: E402,F403
 from routes.db.topology_traffic import *  # noqa: E402,F403
 from routes.db.users import *  # noqa: E402,F403
 from routes.db.validation_rules import *  # noqa: E402,F403
+from routes.db.vendor_alerts import *  # noqa: E402,F403
 from routes.db.vendor_status import *  # noqa: E402,F403
 from routes.db.virtualization import *  # noqa: E402,F403
 from routes.db.webhooks import *  # noqa: E402,F403

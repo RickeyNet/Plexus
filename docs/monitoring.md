@@ -10,7 +10,7 @@ pages.
 Related guides: [SLA monitoring](sla-monitoring.md),
 [Alert notification channels](alert-notification-channels.md),
 [Vendor monitoring coverage](vendor-monitoring-coverage.md),
-[Meraki alerts](meraki-alerts.md), [Software versions](software-versions.md),
+[Meraki alerts](meraki-alerts.md), [Cato alerts](cato-alerts.md), [Software versions](software-versions.md),
 [NetFlow / sFlow / IPFIX](flow-collector.md) and
 [Graph templates](graph-templates.md).
 

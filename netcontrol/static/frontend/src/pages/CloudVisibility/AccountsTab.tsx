@@ -11,6 +11,7 @@ import {
   useUpdateCloudAccount,
   useUpdateCloudDiscoverySyncConfig,
 } from '@/api/cloud';
+import { useAuthStatus } from '@/api/auth';
 import { Badge, StatusBadge } from '@/components/Badge';
 import { BusyButton } from '@/components/BusyButton';
 import { Callout } from '@/components/Callout';
@@ -18,6 +19,7 @@ import { DeleteButton } from '@/components/DeleteButton';
 import { EmptyState } from '@/components/EmptyState';
 import { LoadingState } from '@/components/LoadingState';
 import { Modal } from '@/components/Modal';
+import { VendorAlertsSettings } from '@/pages/Topology/VendorAlertsSettings';
 import { ANY_CLOUD_TERMS, capitalize, cloudProviderTerms } from '@/lib/cloudProviderTerms';
 import { formatBackendDateTime } from '@/lib/datetime';
 import { usePendingKeys } from '@/lib/usePendingKeys';
@@ -174,6 +176,7 @@ export function AccountsTab({
   // An account was just added: show whether discovery is scheduled.
   const [justAdded, setJustAdded] = useState(false);
 
+  const isAdmin = useAuthStatus().data?.role === 'admin';
   const discover = useDiscoverCloudAccount();
   const deleteAcct = useDeleteCloudAccount();
   const discovering = usePendingKeys<number>();
@@ -289,6 +292,14 @@ export function AccountsTab({
       )}
 
       {justAdded && <DiscoveryScheduleNote onDismiss={() => setJustAdded(false)} />}
+
+      {/* Near-real-time alerts of the AWS and Azure accounts (docs/cloud-alerts.md). */}
+      {isAdmin && (
+        <div className="stack stack-sm">
+          <VendorAlertsSettings provider="aws" />
+          <VendorAlertsSettings provider="azure" />
+        </div>
+      )}
 
       {loadError}
 

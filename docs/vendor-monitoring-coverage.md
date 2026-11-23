@@ -308,7 +308,7 @@ Monitoring > Security (`GET /api/monitoring/security-events`).
 | Palo Alto (Panorama, PAN-OS) | None | No | Gap. Candidates: threat logs over the PAN-OS XML API (`type=log&log-type=threat`) or syslog. |
 | Fortinet FortiOS | None | No | Gap. Candidates: IPS / UTM logs over syslog or the FortiOS REST log API. |
 | Cisco Meraki | None | No | Gap. Candidates: the security events of MX appliances (`organizations/{id}/appliance/security/events`). |
-| Cato Networks | None | No | Gap. Candidates: the IPS events of the Cato events feed (`eventsFeed`). |
+| Cato Networks | IPS events (sub-type `IPS`) of the events feed, read by the same poll as the Cato alert feed (every 60 s) | Yes | `docs/cato-alerts.md#ips-events`. Stored per site with the site's inventory host (Socket serial) and its own mute (a site mute covers its IPS events, not the whole account). Severity from `risk_level` (High critical, Medium warning, Low info), else the rule's `severity`; blocked when `action` is block / prevent / drop / deny / reject; the signature is `signature_id` (a non-numeric id is grouped by a stable number derived from it). An account's sites with no inventory host share one notification per signature while it stays active. Can be turned off (`security_events` setting). Not checked against a live account: the `action` and `risk_level` values. |
 | AWS | None | No | Gap. Candidates: GuardDuty and Network Firewall alert logs; AWS Inspector / Security Hub findings are the software item below. |
 | Azure | None | No | Gap. Candidates: Azure Firewall IDPS logs and Defender for Cloud alerts. |
 | GCP, Appgate SDP, Juniper, Arista | None | No | Gap: no IDS / IPS alert source read. |
@@ -337,11 +337,15 @@ Monitoring > Security (`GET /api/monitoring/security-events`).
    well) as path trace destinations
    and egress check targets, so a Cato egress address is checked against
    their security groups too.
-8. Vendor alert feeds for the other priority vendors: Cato (events feed),
-   AWS (EventBridge / SNS / Health) and Azure (Monitor action groups /
-   Resource Health). Near-real-time alert ingestion exists for Meraki
-   only; everything else is seen at its next collection.
-9. The Cato Shared Hosts check for AWS and GCP hosts (route to the system
+6. Vendor alert feeds: Meraki, Cato (events feed), AWS (CloudWatch alarms,
+   AWS Health, EC2 status) and Azure (Azure Monitor alerts, Resource
+   Health) are ingested between collections. Remaining: signals AWS only
+   sends through EventBridge (VPN tunnel state, Direct Connect),
+   CloudWatch log alarms, the sovereign clouds (AWS GovCloud and China,
+   Azure Government and China), GCP, and the other vendors, which are seen
+   at their next collection. The Meraki feed still keeps its own table
+   beside the vendor-neutral `vendor_alerts` store.
+7. The Cato Shared Hosts check for AWS and GCP hosts (route to the system
    range, the vSocket's source/destination check or IP forwarding, the
    security groups or firewall rules for the tunnel); Azure only today.
 10. Security events (IDS / IPS alerts) from the other vendors into the

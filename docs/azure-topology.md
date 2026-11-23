@@ -245,6 +245,13 @@ See [Virtualization](virtualization.md#cloud-instances-as-virtual-machines).
 
 Each collection also records the state of what it reports, shown under **Monitoring > Availability > Integrations and cloud** with uptime, outages and alerts: the virtual machines drawn on the map, virtual network gateways, firewalls, NAT gateways and ExpressRoute circuits (devices), gateway connections (VPN connections: Connected is up, NotConnected is down), ExpressRoute connections (circuits), VNet peerings and gateway attachments (links), and the load balancers, application gateways and private endpoints listed in the VNet details as services: an application gateway by its operational state (Running up, Stopped down), a private endpoint by the worst of its provisioning state and its connection (Approved up, Pending unknown, Rejected or Disconnected down), a load balancer by its provisioning state (Succeeded up, Failed down; see [Cloud managed services](meraki-topology.md#cloud-managed-services)). VNets and local network gateways are left out. The state mapping, alerting and retention are described in [Meraki in the Topology Map](meraki-topology.md#availability-tracking).
 
+### Alerts between discoveries
+
+Fired Azure Monitor alerts and Resource Health availability (a resource
+`Unavailable` or `Degraded`) are read every five minutes with the same
+credentials (the Reader or Monitoring Reader role covers both) and raised as
+alerts on the entity they name. See [AWS and Azure Alerts](cloud-alerts.md).
+
 ## API reference
 
 | Method | Path | Notes for Azure |

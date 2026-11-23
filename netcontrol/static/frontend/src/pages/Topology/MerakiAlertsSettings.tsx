@@ -14,6 +14,8 @@ import { FieldError } from '@/components/FieldError';
 import { QueryError } from '@/components/QueryError';
 import { formatBackendDateTime } from '@/lib/datetime';
 
+import { AlertFeedPollSettings } from './AlertFeedPollSettings';
+
 const SECRET_MIN = 16;
 
 /** A random shared secret (32 URL-safe characters) for the Meraki HTTP server. */
@@ -36,23 +38,11 @@ export function MerakiAlertsSettings() {
   const data = settings.data ?? null;
   const config = data?.config ?? null;
 
-  const [pollEnabled, setPollEnabled] = useState(true);
-  const [seconds, setSeconds] = useState(60);
   const [secret, setSecret] = useState('');
   const [secretError, setSecretError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
-  const [prevConfig, setPrevConfig] = useState(config);
-  // Re-seed the editable fields when the stored settings load or change.
-  if (config !== prevConfig) {
-    setPrevConfig(config);
-    setPollEnabled(Boolean(config?.poll_enabled));
-    setSeconds(config?.interval_seconds ?? 60);
-  }
 
-  const minSeconds = data?.min_interval_seconds ?? 30;
-  const maxSeconds = data?.max_interval_seconds ?? 3600;
   const receiverUrl = `${window.location.origin}${data?.webhook_path ?? '/api/webhooks/meraki'}`;
-  const pollDirty = config !== null && (pollEnabled !== config.poll_enabled || seconds !== config.interval_seconds);
 
   async function update(body: MerakiAlertSettingsUpdate): Promise<boolean> {
     setSaveError(null);
@@ -84,13 +74,6 @@ export function MerakiAlertsSettings() {
     if (ok) await update({ clear_webhook_secret: true });
   }
 
-  function toggleSource(id: number, polled: boolean) {
-    const excluded = new Set(config?.excluded_sources ?? []);
-    if (polled) excluded.delete(id);
-    else excluded.add(id);
-    void update({ excluded_sources: [...excluded] });
-  }
-
   if (settings.error && !data) return <QueryError what="the Meraki alert settings" query={settings} />;
 
   return (
@@ -107,76 +90,22 @@ export function MerakiAlertsSettings() {
       <div className="stack stack-sm" style={{ marginTop: '0.75rem' }}>
         {saveError && <Callout tone="danger">{saveError}</Callout>}
 
-        <div style={{ display: 'flex', gap: '1rem', alignItems: 'center', flexWrap: 'wrap' }}>
-          <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', margin: 0 }}>
-            <input type="checkbox" checked={pollEnabled} disabled={!config} onChange={(e) => setPollEnabled(e.target.checked)} />
-            Poll assurance alerts
-          </label>
-          <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', margin: 0 }}>
-            Every
-            <input
-              className="form-input"
-              type="number"
-              style={{ width: '6rem' }}
-              min={minSeconds}
-              max={maxSeconds}
-              value={seconds}
-              disabled={!config}
-              onChange={(e) => setSeconds(parseInt(e.target.value, 10) || minSeconds)}
-            />
-            seconds
-          </label>
-          <BusyButton
-            className="btn btn-secondary btn-sm"
-            busy={save.isPending}
-            disabled={!pollDirty}
-            onClick={() => void update({ poll_enabled: pollEnabled, interval_seconds: seconds })}
-          >
-            Save
-          </BusyButton>
-          <BusyButton className="btn btn-secondary btn-sm" busy={poll.isPending} busyLabel="Polling…" onClick={() => poll.mutate()}>
-            Poll Now
-          </BusyButton>
-        </div>
-        <div className="text-muted" style={{ fontSize: '0.85em' }}>
-          One API call per organization per poll ({minSeconds} to {maxSeconds} seconds), outbound only. Last poll:{' '}
-          {formatBackendDateTime(data?.status.last_poll_at || null)}
-          {data?.status.last_poll_error ? ` (${data.status.last_poll_error})` : ''}.
-        </div>
-
-        {(data?.sources.length ?? 0) > 0 && (
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th>Poll</th>
-                <th>Organization</th>
-                <th>Last success</th>
-                <th>Last error</th>
-              </tr>
-            </thead>
-            <tbody>
-              {data?.sources.map((s) => (
-                <tr key={s.id}>
-                  <td>
-                    <input
-                      type="checkbox"
-                      aria-label={`Poll Meraki alerts of ${s.name}`}
-                      checked={!s.excluded}
-                      disabled={save.isPending}
-                      onChange={(e) => toggleSource(s.id, e.target.checked)}
-                    />
-                  </td>
-                  <td>
-                    {s.name}
-                    {!s.has_api_key && <span className="text-muted" style={{ fontSize: '0.85em' }}> no API key</span>}
-                  </td>
-                  <td style={{ whiteSpace: 'nowrap' }}>{formatBackendDateTime(s.last_ok_at || null)}</td>
-                  <td>{s.last_error || '-'}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
+        <AlertFeedPollSettings
+          config={config}
+          minSeconds={data?.min_interval_seconds ?? 30}
+          maxSeconds={data?.max_interval_seconds ?? 3600}
+          lastPollAt={data?.status.last_poll_at ?? ''}
+          lastPollError={data?.status.last_poll_error ?? ''}
+          sources={data?.sources ?? []}
+          saving={save.isPending}
+          polling={poll.isPending}
+          onUpdate={update}
+          onPoll={() => poll.mutate()}
+          pollLabel="Poll assurance alerts"
+          costNote="One API call per organization per poll"
+          sourceHeading="Organization"
+          vendor="Meraki"
+        />
 
         <h4 style={{ margin: '0.5rem 0 0' }}>Webhook receiver</h4>
         <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>

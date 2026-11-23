@@ -566,6 +566,16 @@ terminated offline. vCPUs and memory are not collected. See
 
 Each collection also records the state of what it reports, shown under **Monitoring > Availability > Integrations and cloud** with uptime, outages and alerts: the instances drawn on the map, the transit, VPN, NAT and Direct Connect gateways and the Direct Connect connections (devices), site-to-site VPN connections (up when a tunnel is UP), Direct Connect connections, virtual interfaces and gateway associations (circuits), VPC peerings, transit gateway and VPN gateway attachments (links), and the services listed in the VPC details (RDS / Aurora instances, clusters and proxies, load balancers, VPC endpoints, EFS, ElastiCache, OpenSearch, MSK, Redshift and Redshift Serverless) as services, by their state: for example a load balancer `active` is up, `active_impaired` degraded, `provisioning` unknown and `failed` down; a database `available` or `backing-up` is up and `stopped` down (see [Cloud managed services](meraki-topology.md#cloud-managed-services)). VPCs, customer gateways and Classic Load Balancers (they report no state) are left out. The state mapping, alerting and retention are described in [Meraki in the Topology Map](meraki-topology.md#availability-tracking).
 
+### Alerts between discoveries
+
+CloudWatch alarms in `ALARM` state, AWS Health issues and scheduled changes,
+and impaired EC2 status checks and scheduled events are read every five
+minutes with the same credentials (IAM actions `cloudwatch:DescribeAlarms`,
+`ec2:DescribeInstanceStatus`, `health:DescribeEvents`,
+`health:DescribeAffectedEntities`; AWS Health needs a Business support plan
+or higher) and raised as alerts on the entity they name. See
+[AWS and Azure Alerts](cloud-alerts.md).
+
 ## API reference
 
 | Method | Path | Notes for AWS |

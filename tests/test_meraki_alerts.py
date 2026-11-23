@@ -44,7 +44,7 @@ def notifications(monkeypatch):
     async def _capture(event: dict) -> None:
         events.append(event)
 
-    monkeypatch.setattr(routes.notification_channels, "on_alert_created", _capture)
+    # Both feeds deliver through topology_availability.deliver_alert.
     monkeypatch.setattr(tracking.notification_channels, "on_alert_created", _capture)
     return events
 

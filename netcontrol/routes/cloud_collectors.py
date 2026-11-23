@@ -1565,6 +1565,23 @@ AZURE_OPTIONAL_SECTIONS: dict[str, tuple[str, tuple[str, ...]]] = {
 _AZURE_POLICY_DEPTH_MAX = 5
 
 
+def build_azure_credential(auth: dict):
+    """The ``azure-identity`` credential of an Azure account's auth config:
+    its service principal (tenant, client id and secret) when all three
+    are set, else ``DefaultAzureCredential`` (managed identity, environment,
+    Azure CLI; never an interactive browser sign-in). Raises
+    ``ImportError`` without ``azure-identity``. Shared by the discovery and
+    the Azure alert feed (``netcontrol.routes.azure_alerts``)."""
+    from azure.identity import ClientSecretCredential, DefaultAzureCredential
+
+    tenant_id = str(auth.get("tenant_id") or "").strip()
+    client_id = str(auth.get("client_id") or "").strip()
+    client_secret = str(auth.get("client_secret") or "").strip()
+    if tenant_id and client_id and client_secret:
+        return ClientSecretCredential(tenant_id=tenant_id, client_id=client_id, client_secret=client_secret)
+    return DefaultAzureCredential(exclude_interactive_browser_credential=True)
+
+
 def _collect_azure(account: dict, progress: ProgressCallback | None = None) -> tuple[list[dict], list[dict]]:
     """Discover one Azure subscription with the Network API.
 
@@ -1592,17 +1609,9 @@ def _collect_azure(account: dict, progress: ProgressCallback | None = None) -> t
             "Azure subscription_id is required", user_message="Azure subscription_id is required"
         )
 
-    tenant_id = str(auth.get("tenant_id") or "").strip()
-    client_id = str(auth.get("client_id") or "").strip()
-    client_secret = str(auth.get("client_secret") or "").strip()
-
     _report(progress, phase="azure login")
     try:
-        credential: ClientSecretCredential | DefaultAzureCredential
-        if tenant_id and client_id and client_secret:
-            credential = ClientSecretCredential(tenant_id=tenant_id, client_id=client_id, client_secret=client_secret)
-        else:
-            credential = DefaultAzureCredential(exclude_interactive_browser_credential=True)
+        credential: ClientSecretCredential | DefaultAzureCredential = build_azure_credential(auth)
         network_client = NetworkManagementClient(credential, subscription_id)
     except Exception as exc:
         raise CloudCollectorAuthError(

@@ -195,6 +195,26 @@ async def _meraki_alert_already_raised(t: dict) -> bool:
         return False
 
 
+async def _vendor_alert_already_raised(t: dict) -> bool:
+    """An entity going down or degraded whose condition an open vendor feed
+    alert (``netcontrol.routes.vendor_alerts``, e.g. the Cato events feed)
+    already notified: the same condition is not notified twice. Any failure
+    means "not raised"."""
+    if t.get("new_state") not in ("down", "degraded"):
+        return False
+    try:
+        return await db.vendor_alert_covers_entity(
+            str(t["provider"]),
+            int(t["org_ref"]),
+            str(t.get("entity_type") or ""),
+            str(t.get("entity_id") or ""),
+            str(t.get("site") or ""),
+        )
+    except Exception as exc:  # noqa: BLE001 - fall back to alerting
+        LOGGER.debug("topology availability: vendor alert lookup failed: %s", type(exc).__name__)
+        return False
+
+
 async def deliver_alert(
     *,
     host_id: Any,
@@ -246,9 +266,12 @@ async def deliver_alert(
 
 async def _raise_alert(t: dict) -> str:
     """Raise the alert of one transition. Returns how: ``monitoring``,
-    ``notification`` or ``meraki`` (already raised by the Meraki alerts)."""
+    ``notification``, ``meraki`` (already raised by the Meraki alerts) or
+    ``vendor_alert`` (already raised by a vendor alert feed)."""
     if await _meraki_alert_already_raised(t):
         return "meraki"
+    if await _vendor_alert_already_raised(t):
+        return "vendor_alert"
     return await deliver_alert(
         host_id=t.get("host_id"),
         name=t["name"],
@@ -484,8 +507,9 @@ async def mute_entities(mute: dict) -> int:
     """After ``mute`` was created: acknowledge as ``muted`` the open alerts of
     every entity of its source the mutes now cover (the tracker's ``topo:``
     alerts, the security event alerts of a muted device's source and, for
-    Meraki, the open Meraki alerts of those devices and networks). Returns
-    how many monitoring alerts were acknowledged."""
+    Meraki, the open Meraki alerts of those devices and networks; the open
+    vendor feed alerts of the entities and sites they cover). Returns how
+    many monitoring alerts were acknowledged."""
     provider, org_ref = str(mute["provider"]), int(mute["org_ref"])
     index = await db.load_topology_mute_index(provider, org_ref)
     acknowledged = 0
@@ -511,6 +535,10 @@ async def mute_entities(mute: dict) -> int:
                 key = str(alert["alert_key"])
                 acknowledged += await db.resolve_monitoring_alerts(meraki_alerts.dedup_key(key), MUTED_BY)
                 await db.set_meraki_alert_raised(key, str(alert.get("severity") or ""), MUTED_BY, alert.get("host_id"))
+    # Imported here: vendor_alerts imports this module.
+    from netcontrol.routes import vendor_alerts
+
+    acknowledged += await vendor_alerts.mute_covered(provider, org_ref, index)
     return acknowledged
 
 

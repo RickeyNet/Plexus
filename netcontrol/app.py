@@ -379,6 +379,11 @@ from netcontrol.routes.upgrades import (
     ws_router as upgrades_ws_router,
 )
 from netcontrol.routes.validation_rules import router as validation_rules_router
+from netcontrol.routes.vendor_alerts import (
+    admin_router as vendor_alerts_admin_router,
+    load_settings as load_vendor_alert_settings,
+    router as vendor_alerts_router,
+)
 from netcontrol.routes.virtualization import (
     admin_router as virtualization_admin_router,
     router as virtualization_router,
@@ -1227,6 +1232,7 @@ async def _load_persisted_security_settings():
     meraki_alerts_config = await db.get_auth_setting("meraki_alerts")
     state.MERAKI_ALERTS_CONFIG = state._sanitize_meraki_alerts_config(meraki_alerts_config)
     await load_meraki_alert_status()
+    await load_vendor_alert_settings()
     feature_visibility = await db.get_auth_setting("feature_visibility")
     if isinstance(feature_visibility, dict):
         state.FEATURE_VISIBILITY_HIDDEN = state._sanitize_feature_visibility(feature_visibility.get("hidden") or [])
@@ -1602,6 +1608,22 @@ async def _meraki_alert_poll_loop() -> None:
             LOGGER.warning("Meraki alert poll loop failed: %s", type(exc).__name__)
 
 
+async def _vendor_alert_poll_loop() -> None:
+    """Poll the vendor alert feeds (the Cato events feed) on their own short
+    intervals (``netcontrol.routes.vendor_alerts``); one app worker polls a
+    source at a time (a lease on its feed row)."""
+    from netcontrol.routes.vendor_alerts import TICK_SECONDS, run_due_cycles
+
+    while True:
+        await asyncio.sleep(TICK_SECONDS)
+        try:
+            await run_due_cycles()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            LOGGER.warning("Vendor alert poll loop failed: %s", type(exc).__name__)
+
+
 async def _cloud_traffic_metric_sync_loop() -> None:
     """Periodically pull cloud traffic metrics for all enabled accounts."""
     while True:
@@ -1760,6 +1782,7 @@ async def lifespan(app: FastAPI):
             _cloud_discovery_sync_loop,
             _source_collection_sync_loop,
             _meraki_alert_poll_loop,
+            _vendor_alert_poll_loop,
             federation_sync_loop,
             _ipam_sync_loop,
             _dhcp_sync_loop,
@@ -2794,6 +2817,16 @@ app.include_router(
     dependencies=[Depends(require_admin)],
 )
 app.include_router(meraki_webhook_router)
+# Vendor alert feeds (the Cato events feed): the list follows monitoring
+# access; settings and Poll Now are admin-only.
+app.include_router(
+    vendor_alerts_router,
+    dependencies=[Depends(require_auth), Depends(require_feature_method("monitoring"))],
+)
+app.include_router(
+    vendor_alerts_admin_router,
+    dependencies=[Depends(require_admin)],
+)
 # Security events (IDS alerts of OPNsense firewalls): monitoring access.
 app.include_router(
     security_events_router,

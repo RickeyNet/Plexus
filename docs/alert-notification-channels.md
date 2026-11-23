@@ -54,7 +54,9 @@ token is the ChatOps bot's, stored with the bot.
 Meraki alerts (alert type `meraki_alert`, from the assurance-alert poll and
 the Meraki webhook receiver) go through the same channels: on the matching
 inventory host as a monitoring alert, otherwise straight to the default
-channel set. See [meraki-alerts.md](meraki-alerts.md).
+channel set. See [meraki-alerts.md](meraki-alerts.md). Cato alerts from the
+events feed (alert type `vendor_alert`) are delivered the same way; see
+[cato-alerts.md](cato-alerts.md).
 
 ### Routing
 

@@ -97,7 +97,8 @@ below. Admins and the API token pass every feature check.
 | `monitoring` | `GET/POST /api/availability/topology/mutes`, `DELETE /api/availability/topology/mutes/{mute_id}` (mute and unmute an integration entity or site; the writes need `monitoring.write`, like acknowledging an alert; audited as `topology.muted` / `topology.unmuted`) | monitoring |
 | `monitoring` | `/api/metrics/*` | metrics_engine |
 | `monitoring` | `GET /api/monitoring/meraki-alerts` (the Meraki alert list) | meraki_alerts |
-| `monitoring` | `GET /api/monitoring/security-events` (the security event list: OPNsense IDS alerts; read only, bounded: `hours` 1 to 8760, `limit` 1 to 500, `offset` up to 100,000, `q` up to 200 characters; object scope: a scoped caller sees the events of its readable hosts only, never a host-less device's, and `host_id` out of scope answers `404`) | security_events |
+| `monitoring` | `GET /api/monitoring/vendor-alerts` (the vendor alert feed list: Cato events feed, AWS and Azure alerts; read only; object scope: a scoped caller sees the alerts raised on its readable hosts only) | vendor_alerts |
+| `monitoring` | `GET /api/monitoring/security-events` (the security event list: OPNsense IDS alerts and Cato IPS events; read only, bounded: `hours` 1 to 8760, `limit` 1 to 500, `offset` up to 100,000, `q` up to 200 characters; object scope: a scoped caller sees the events of its readable hosts only, never a host-less device's, and `host_id` out of scope answers `404`) | security_events |
 | `upgrades` | `/api/upgrades/*` | upgrades |
 | `upgrades` | `POST /api/upgrades/campaigns/{campaign_id}/devices/{device_id}/logic-reset-confirm` (record that the manual Logic Reset of an APC Smart-UPS Ultra was done; write scope on the campaign like the device cancel, `409` while a step runs; audited as `upgrades` / `logic_reset_confirm`) | upgrades |
 | `inventory` | `POST /api/tags`, `GET/PUT /api/hosts/{host_id}/custom-data`, `GET/PUT /api/inventory/{group_id}/custom-data`, `POST /api/hosts/bulk-tags` | custom_fields (inventory_router) |
@@ -147,6 +148,7 @@ below. Admins and the API token pass every feature check.
 | `/api/metrics/admin/*` | metrics_engine_admin |
 | `GET/PUT /api/admin/metrics/receivers/config`, `POST /api/admin/metrics/receivers/start`, `POST /api/admin/metrics/receivers/stop`, `GET/PUT/DELETE /api/admin/metrics/receivers/tls`, `POST /api/admin/metrics/receivers/tls/generate` (syslog / trap receiver settings and the syslog TLS server certificate and client CA; writes audited as `system` / `event_receivers.*`, `syslog_tls.*`; the TLS private key is write-only and encrypted at rest) | metrics_engine_admin |
 | `/api/monitoring/meraki-alerts/settings` (GET/PUT; the webhook secret is write-only), `POST /api/monitoring/meraki-alerts/poll` | meraki_alerts_admin |
+| `/api/monitoring/vendor-alerts/{provider}/settings` (GET/PUT; the Cato events feed, AWS and Azure alert feed settings and per-account status; PUT audited as `vendor_alerts.settings_updated`), `POST /api/monitoring/vendor-alerts/{provider}/poll` (audited as `vendor_alerts.polled`) | vendor_alerts_admin |
 
 ### WebSocket (self-authenticated)
 

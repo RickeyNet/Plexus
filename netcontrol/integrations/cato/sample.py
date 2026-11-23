@@ -1128,3 +1128,111 @@ def build_sample_raw() -> dict[str, Any]:
         "stats": {"requests": 0, "retries": 0, "rate_limited": 0},
         "options": dict(DEFAULT_OPTIONS),
     }
+
+
+# ── Events feed (``eventsFeed``) answers ─────────────────────────────────────
+# Invented records in the shape of ``EventRecord`` (``time``, ``fieldsMap``
+# keyed by ``EventFieldName``), for ``netcontrol.integrations.cato.events_feed``
+# and the vendor alert feed tests. The sites and Sockets are the demo
+# account's above.
+
+EVENTS_ACCOUNT_ID = "4100"
+EVENT_TIME = "2026-11-20T08:00:00Z"
+
+
+def feed_event(sub_type: str, *, event_type: str = "Connectivity", at: str = EVENT_TIME, **fields: Any) -> dict:
+    """One ``fieldsMap`` of the demo account (Branch-Madison unless
+    ``src_site_id`` / ``src_site_name`` say otherwise)."""
+    record = {
+        "event_type": event_type,
+        "event_sub_type": sub_type,
+        "event_message": f"{sub_type} (demo)",
+        "event_id": f"ev:{sub_type}:{at}:{fields.get('src_site_id', '1002')}:{fields.get('socket_interface', '')}",
+        "src_site_id": "1002",
+        "src_site_name": "Branch-Madison",
+        "src_is_site_or_vpn": "Site",
+        "socket_serial": "X1500-0003-CCCC",
+        "pop_name": "New York",
+        "time": at,
+    }
+    record.update({k: v for k, v in fields.items() if v is not None})
+    return {k: v for k, v in record.items() if v != ""}
+
+
+def site_disconnected(at: str = EVENT_TIME, **fields: Any) -> dict:
+    """Branch-Denver lost its connection to Cato (no interface named)."""
+    return feed_event(
+        "Disconnected",
+        at=at,
+        src_site_id="1003",
+        src_site_name="Branch-Denver",
+        socket_serial="X1500-0004-DDDD",
+        pop_name="",
+        **fields,
+    )
+
+
+def site_connected(at: str = "2026-11-20T08:20:00Z", **fields: Any) -> dict:
+    return feed_event(
+        "Connected",
+        at=at,
+        src_site_id="1003",
+        src_site_name="Branch-Denver",
+        socket_serial="X1500-0004-DDDD",
+        **fields,
+    )
+
+
+def link_disconnected(at: str = EVENT_TIME, **fields: Any) -> dict:
+    """One WAN link of Branch-Madison went down."""
+    return feed_event("Disconnected", at=at, socket_interface="WAN 02", link_type="Cato", ISP_name="Example Cable", **fields)
+
+
+def ips_event(at: str = EVENT_TIME, **fields: Any) -> dict:
+    """An IPS block at Branch-Madison."""
+    base = {
+        "event_type": "Security",
+        "threat_name": "Demo exploit attempt",
+        "threat_type": "Exploit",
+        "signature_id": "1900001",
+        "risk_level": "High",
+        "action": "Block",
+        "src_ip": "192.0.2.115",
+        "src_port": "51514",
+        "dest_ip": "203.0.113.50",
+        "dest_port": "443",
+        "ip_protocol": "TCP",
+        "application_name": "HTTPS",
+    }
+    base.update(fields)
+    return feed_event("IPS", at=at, **base)
+
+
+def user_connected(at: str = EVENT_TIME) -> dict:
+    """A remote (SDP) user connecting: not a site event."""
+    return feed_event(
+        "Connected",
+        at=at,
+        src_site_id="9001",
+        src_site_name="Lee Park",
+        src_is_site_or_vpn="VPN User",
+        vpn_user_email="lee.park@example.com",
+        socket_serial="",
+    )
+
+
+def feed_page(records: list[dict], *, marker: str = "marker-2", error: str = "") -> dict:
+    """The ``data`` of one ``eventsFeed`` answer holding ``records``."""
+    return {
+        "eventsFeed": {
+            "marker": marker,
+            "fetchedCount": len(records),
+            "accounts": [
+                {
+                    "id": EVENTS_ACCOUNT_ID,
+                    "errorString": error or None,
+                    "records": [{"time": r.get("time", EVENT_TIME), "fieldsMap": r} for r in records],
+                }
+            ],
+        }
+    }

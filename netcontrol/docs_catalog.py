@@ -125,6 +125,8 @@ PAGES: list[tuple[str, list[tuple[str, str]]]] = [
             ("Hardware-Lifecycle", "docs/hardware-lifecycle.md"),
             ("Alert-Notification-Channels", "docs/alert-notification-channels.md"),
             ("Meraki-Alerts", "docs/meraki-alerts.md"),
+            ("Cato-Alerts", "docs/cato-alerts.md"),
+            ("Cloud-Alerts", "docs/cloud-alerts.md"),
             ("Meraki-Compliance", "docs/meraki-compliance.md"),
             ("Flow-Collector", "docs/flow-collector.md"),
             ("Vendor-Monitoring-Coverage", "docs/vendor-monitoring-coverage.md"),

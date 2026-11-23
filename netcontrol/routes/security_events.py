@@ -4,8 +4,9 @@ security_events.py -- Security events: storage, alerting and the event list.
 A vendor-neutral store (``routes.db.security_events``, migration 0126) of
 the security events integrations read from a device: today the intrusion
 detection (Suricata) alerts of an OPNsense firewall
-(``netcontrol.routes.opnsense_ids``). ``record_events`` stores one read
-and raises the alerts:
+(``netcontrol.routes.opnsense_ids``) and the IPS events of the Cato events
+feed (``netcontrol.routes.vendor_alerts.record_security``, per site).
+``record_events`` stores one read and raises the alerts:
 
   - **Stored.** Every event, once (its ``event_key`` is unique per source
     and kind), with the source, the inventory host when the device is one,
@@ -205,11 +206,15 @@ async def record_events(
     host: dict | None,
     source_name: str,
     now: datetime | None = None,
+    muted: bool | None = None,
 ) -> dict[str, Any]:
     """Store one read's events of source ``(provider, org_ref)`` and raise
     their alerts (see the module docstring). ``host``: the inventory host
-    the device is, or ``None``. Returns ``stored`` (the new events),
-    ``alerted``, ``muted`` and ``repeated`` (alerts not notified again)."""
+    the device is, or ``None``. ``muted``: whether a mute covers these
+    events, when the caller knows (a source of many sites, such as a Cato
+    account, mutes per site); ``None`` checks the source's devices
+    (``source_muted``). Returns ``stored`` (the new events), ``alerted``,
+    ``muted`` and ``repeated`` (alerts not notified again)."""
     moment = now or datetime.now(UTC)
     outcome: dict[str, Any] = {"stored": [], "alerted": 0, "muted": 0, "repeated": 0}
     if not events:
@@ -237,7 +242,7 @@ async def record_events(
         groups = alert_groups(new, moment)[:ALERTS_PER_READ]
         if not groups:
             return outcome
-        if await source_muted(provider, org_ref):
+        if muted if muted is not None else await source_muted(provider, org_ref):
             outcome["muted"] = len(groups)
             return outcome
         device = (host or {}).get("hostname") or source_name or f"{provider} {org_ref}"

@@ -1088,6 +1088,7 @@ async def _run_retention_cleanup_throttled() -> None:
             int(state.MONITORING_CONFIG.get("sla_retention_days", state.MONITORING_DEFAULTS["sla_retention_days"])),
         )
         await db.purge_meraki_alerts(retention_days)
+        await db.purge_vendor_alerts(retention_days)
         await db.purge_security_events(retention_days)
     except Exception as exc:
         LOGGER.warning("monitoring: retention cleanup failed: %s", redact_value(_exc_text(exc)))

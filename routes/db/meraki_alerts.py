@@ -25,6 +25,7 @@ from typing import Any
 import routes.database as _dbcore
 from routes.database import rows_to_list
 from routes.db.inventory import group_ids_condition
+from routes.db.vendor_alerts import SEVERITY_RANK as _RANK, merge_alert_events as _merge_events
 
 __all__ = [
     "apply_meraki_alert_events",
@@ -57,7 +58,6 @@ _FIELDS = (
     "meraki_alert_id",
 )
 _ALERTING = ("warning", "critical")
-_RANK = {"": 0, "info": 1, "warning": 2, "critical": 3}
 
 
 def _now() -> str:
@@ -83,24 +83,6 @@ def _merge_via(stored: str, source: str) -> str:
     if source and source not in vias:
         vias.append(source)
     return ",".join(sorted(vias))
-
-
-def _worse(a: str, b: str) -> str:
-    return a if _RANK.get(a, 0) >= _RANK.get(b, 0) else b
-
-
-def _merge_events(events: list[dict]) -> list[dict]:
-    """One event per key and state, the worst severity kept: two assurance
-    alerts of one condition on one device are one Plexus alert."""
-    merged: dict[tuple[str, str], dict] = {}
-    for event in events:
-        slot = (str(event["key"]), str(event.get("state") or "open"))
-        if slot in merged:
-            kept = merged[slot]
-            kept["severity"] = _worse(str(event.get("severity") or ""), str(kept.get("severity") or ""))
-        else:
-            merged[slot] = dict(event)
-    return list(merged.values())
 
 
 async def list_meraki_alerts(

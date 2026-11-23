@@ -646,3 +646,77 @@ def build_sample() -> tuple[list[dict], list[dict]]:
         ),
     ]
     return resources, connections
+
+
+# ── Alert feed answers (``azure.alerts``, ``routes.azure_alerts``) ──────────
+# Invented ARM answers for the Azure alert feed tests: the all-zero
+# subscription GUID and made-up resource names.
+
+ALERT_SUBSCRIPTION = "00000000-0000-0000-0000-000000000000"
+ALERT_VM_ID = (
+    f"/subscriptions/{ALERT_SUBSCRIPTION}/resourceGroups/rg-app/providers/Microsoft.Compute/virtualMachines/app-vm-01"
+)
+ALERT_GATEWAY_ID = (
+    f"/subscriptions/{ALERT_SUBSCRIPTION}/resourceGroups/rg-hub/providers/Microsoft.Network/"
+    "virtualNetworkGateways/hub-vpn-gw"
+)
+
+
+def monitor_alert(
+    alert_id: str = "11111111-0000-0000-0000-000000000001",
+    *,
+    rule: str = "app-vm-cpu",
+    severity: str = "Sev1",
+    condition: str = "Fired",
+    state: str = "New",
+    target: str = ALERT_VM_ID,
+    service: str = "Platform",
+) -> dict:
+    """A ``value`` entry of Alerts Management ``Alerts_GetAll``."""
+    return {
+        "id": f"/subscriptions/{ALERT_SUBSCRIPTION}/providers/Microsoft.AlertsManagement/alerts/{alert_id}",
+        "type": "Microsoft.AlertsManagement/alerts",
+        "name": rule,
+        "properties": {
+            "essentials": {
+                "severity": severity,
+                "signalType": "Metric",
+                "alertState": state,
+                "monitorCondition": condition,
+                "monitorService": service,
+                "targetResource": target,
+                "targetResourceName": target.rsplit("/", 1)[-1],
+                "targetResourceGroup": "rg-app",
+                "targetResourceType": "virtualmachines",
+                "alertRule": f"/subscriptions/{ALERT_SUBSCRIPTION}/resourceGroups/rg-app/providers/"
+                f"microsoft.insights/metricalerts/{rule}",
+                "startDateTime": "2026-11-20T08:00:00.1234567Z",
+                "lastModifiedDateTime": "2026-11-20T08:05:00Z",
+                "description": "Percentage CPU above 90",
+            }
+        },
+    }
+
+
+def availability_status(resource_id: str = ALERT_VM_ID, state: str = "Unavailable") -> dict:
+    """A ``value`` entry of Resource Health ``AvailabilityStatuses_ListBySubscriptionId``."""
+    return {
+        "id": f"{resource_id}/providers/Microsoft.ResourceHealth/availabilityStatuses/current",
+        "name": "current",
+        "type": "Microsoft.ResourceHealth/AvailabilityStatuses",
+        "properties": {
+            "availabilityState": state,
+            "title": f"{state}",
+            "summary": "The virtual machine is stopping because of a host failure." if state != "Available" else "",
+            "reasonType": "Unplanned" if state != "Available" else "",
+            "occuredTime": "2026-11-20T08:10:00Z",
+            "reportedTime": "2026-11-20T08:12:00Z",
+        },
+    }
+
+
+def arm_page(items: list[dict], next_link: str = "") -> dict:
+    page: dict = {"value": list(items)}
+    if next_link:
+        page["nextLink"] = next_link
+    return page

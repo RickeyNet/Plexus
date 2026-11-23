@@ -59,10 +59,10 @@ from netcontrol.integrations.meraki.client import DEFAULT_BASE_URL, MerakiApiErr
 from netcontrol.integrations.meraki.enrich import load_inventory_index
 from netcontrol.integrations.meraki.normalize import InventoryIndex
 from netcontrol.object_scope import readable_host_ids, scoped
-from netcontrol.routes import notification_channels
 from netcontrol.routes.meraki_topology import PROVIDER_MERAKI, _is_demo
 from netcontrol.routes.shared import _audit, _corr_id, _session_user, admin_session, read_bounded_body
-from netcontrol.routes.topology_availability import _mute_index, finish_removal
+from netcontrol.routes.topology_availability import _mute_index, deliver_alert, finish_removal
+from netcontrol.routes.vendor_alerts import backoff_delay, clear_monitoring_alerts
 from netcontrol.telemetry import configure_logging
 
 router = APIRouter()
@@ -262,50 +262,22 @@ async def _raise_alert(row: dict, index: InventoryIndex) -> tuple[str, int | Non
         # The hourly topology availability tracker already notified it.
         return "topology", None
     host = await _host_for(row, index, tracked)
-    message = _message(row)
-    metric = f"meraki {row.get('category') or 'alert'}"
     name = str(row.get("device_name") or serial or row.get("network_name") or row.get("org_name") or "")
-    if host:
-        await db.create_monitoring_alert(
-            host_id=int(host["id"]),
-            poll_id=None,
-            alert_type=ALERT_TYPE,
-            metric=metric,
-            message=message,
-            severity=severity,
-            dedup_key=dedup_key(key),
-            hostname=str(host.get("hostname") or name),
-        )
-        return "monitoring", int(host["id"])
-    await notification_channels.on_alert_created(
-        {
-            "alert_id": dedup_key(key),
-            "host_id": None,
-            "hostname": name,
-            "poll_id": None,
-            "rule_id": None,
-            "alert_type": ALERT_TYPE,
-            "metric": metric,
-            "message": message,
-            "severity": severity,
-            "value": None,
-            "threshold": None,
-            "dedup_key": dedup_key(key),
-            "channel_ids": "",
-            "timestamp": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        }
+    # The shared delivery: a monitoring alert on the host, else the channels.
+    via = await deliver_alert(
+        host_id=int(host["id"]) if host else None,
+        name=str(host.get("hostname") or name) if host else name,
+        alert_type=ALERT_TYPE,
+        metric=f"meraki {row.get('category') or 'alert'}",
+        message=_message(row),
+        severity=severity,
+        dedup_key=dedup_key(key),
     )
-    return "notification", None
+    return via, (int(host["id"]) if host and via == "monitoring" else None)
 
 
 async def _clear(rows: list[dict]) -> int:
-    cleared = 0
-    for row in rows:
-        try:
-            cleared += await db.resolve_monitoring_alerts(dedup_key(str(row["alert_key"])))
-        except Exception as exc:  # noqa: BLE001
-            LOGGER.warning("meraki alerts: clearing an alert failed: %s", type(exc).__name__)
-    return cleared
+    return await clear_monitoring_alerts([dedup_key(str(row["alert_key"])) for row in rows])
 
 
 async def ingest(events: list[dict], *, poll_scope: tuple[int, set[str]] | None = None) -> dict[str, Any]:
@@ -455,7 +427,7 @@ def _back_off(org_ref: int, exc: Exception) -> float:
     status = getattr(exc, "status_code", None)
     cap = _MAX_BACKOFF_AUTH if status in (401, 403, 404) or str(exc) == "no API key" else _MAX_BACKOFF_OTHER
     interval = int(_config().get("interval_seconds") or 60)
-    delay = float(min(cap, interval * 2 ** int(min(entry["failures"], 10))))
+    delay = backoff_delay(int(entry["failures"]), interval, cap)
     entry["next_at"] = time.monotonic() + delay
     return delay
 

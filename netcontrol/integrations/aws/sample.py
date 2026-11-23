@@ -957,3 +957,129 @@ def build_sample() -> tuple[list[dict], list[dict]]:
         _conn(f"vpc:{edge}", f"sg:{sg_sql[0]}", "security_boundary", "enforced"),
     ]
     return resources, connections
+
+
+# ── Alert feed answers (``aws.alerts``, ``routes.aws_alerts``) ──────────────
+# Invented answers in the shape boto3 returns them, for the AWS alert feed
+# tests: AWS's documentation account id, made-up instance ids and names.
+
+ALERT_ACCOUNT = "123456789012"
+ALERT_INSTANCE = "i-0aaaa1111bbbb2222"
+ALERT_OTHER_INSTANCE = "i-0cccc3333dddd4444"
+_ALERT_TIME = "2026-11-20T08:00:00+00:00"
+
+
+def metric_alarm(
+    name: str = "web-cpu-high",
+    *,
+    state: str = "ALARM",
+    instance: str = ALERT_INSTANCE,
+    description: str = "CPU above 90% for 15 minutes",
+    region: str = _R1,
+) -> dict:
+    """A ``MetricAlarms`` entry of ``DescribeAlarms``."""
+    return {
+        "AlarmName": name,
+        "AlarmArn": f"arn:aws:cloudwatch:{region}:{ALERT_ACCOUNT}:alarm:{name}",
+        "AlarmDescription": description,
+        "StateValue": state,
+        "StateReason": "Threshold Crossed: 3 datapoints were greater than the threshold (90.0).",
+        "StateTransitionedTimestamp": _ALERT_TIME,
+        "StateUpdatedTimestamp": _ALERT_TIME,
+        "Namespace": "AWS/EC2",
+        "MetricName": "CPUUtilization",
+        "Dimensions": [{"Name": "InstanceId", "Value": instance}],
+    }
+
+
+def composite_alarm(name: str = "critical-checkout-down", *, state: str = "ALARM") -> dict:
+    """A ``CompositeAlarms`` entry of ``DescribeAlarms``."""
+    return {
+        "AlarmName": name,
+        "AlarmArn": f"arn:aws:cloudwatch:{_R1}:{ALERT_ACCOUNT}:alarm:{name}",
+        "AlarmRule": 'ALARM("web-cpu-high") AND ALARM("web-5xx")',
+        "StateValue": state,
+        "StateReason": "arn:aws:cloudwatch:...:alarm:web-5xx transitioned to ALARM",
+        "StateTransitionedTimestamp": _ALERT_TIME,
+    }
+
+
+def describe_alarms(metric: list[dict] | None = None, composite: list[dict] | None = None, token: str = "") -> dict:
+    answer: dict = {"MetricAlarms": list(metric or []), "CompositeAlarms": list(composite or [])}
+    if token:
+        answer["NextToken"] = token
+    return answer
+
+
+def health_event(
+    code: str = "AWS_EC2_INSTANCE_RETIREMENT_SCHEDULED",
+    *,
+    category: str = "scheduledChange",
+    status: str = "upcoming",
+    region: str = _R1,
+    scope: str = "ACCOUNT_SPECIFIC",
+    suffix: str = "ABC123",
+) -> dict:
+    """An ``events`` entry of Health ``DescribeEvents``."""
+    service = code.split("_")[1] if code.count("_") > 1 else "EC2"
+    return {
+        "arn": f"arn:aws:health:{region}::event/{service}/{code}/{code}_{suffix}",
+        "service": service,
+        "eventTypeCode": code,
+        "eventTypeCategory": category,
+        "region": region,
+        "startTime": _ALERT_TIME,
+        "lastUpdatedTime": _ALERT_TIME,
+        "statusCode": status,
+        "eventScopeCode": scope,
+    }
+
+
+def health_entity(event: dict, value: str = ALERT_INSTANCE, status: str = "IMPAIRED") -> dict:
+    """An ``entities`` entry of Health ``DescribeAffectedEntities``."""
+    return {
+        "eventArn": event["arn"],
+        "entityValue": value,
+        "entityArn": f"arn:aws:health:{event['region']}:{ALERT_ACCOUNT}:entity/{value}",
+        "awsAccountId": ALERT_ACCOUNT,
+        "statusCode": status,
+    }
+
+
+def instance_status(
+    instance: str = ALERT_INSTANCE,
+    *,
+    system: str = "ok",
+    status: str = "ok",
+    ebs: str = "ok",
+    events: list[dict] | None = None,
+) -> dict:
+    """An ``InstanceStatuses`` entry of ``DescribeInstanceStatus``."""
+
+    def summary(value: str) -> dict:
+        detail: dict = {"Name": "reachability", "Status": "failed" if value == "impaired" else "passed"}
+        if value == "impaired":
+            detail["ImpairedSince"] = _ALERT_TIME
+        return {"Status": value, "Details": [detail]}
+
+    return {
+        "InstanceId": instance,
+        "AvailabilityZone": f"{_R1}a",
+        "InstanceState": {"Code": 16, "Name": "running"},
+        "SystemStatus": summary(system),
+        "InstanceStatus": summary(status),
+        "AttachedEbsStatus": summary(ebs),
+        "Events": list(events or []),
+    }
+
+
+def scheduled_event(
+    code: str = "system-reboot", *, done: bool = False, event_id: str = "instance-event-0abc1234"
+) -> dict:
+    return {
+        "InstanceEventId": event_id,
+        "Code": code,
+        "Description": ("[Completed] " if done else "") + "Scheduled reboot for host maintenance",
+        "NotBefore": "2026-11-25T02:00:00+00:00",
+        "NotAfter": "2026-11-25T04:00:00+00:00",
+    }
