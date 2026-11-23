@@ -23,8 +23,10 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime
 from typing import Any
 
+from netcontrol.integrations.link_metrics import DEFAULT_LOOKBACK_SECONDS, aligned_windows
 from netcontrol.integrations.meraki.client import MerakiApiError, MerakiClient
 from netcontrol.integrations.meraki.normalize import _device_kind
 from netcontrol.secret_keys import should_mask
@@ -47,6 +49,10 @@ DEFAULT_OPTIONS: dict[str, Any] = {
     # Clients seen in the last day (MAC, IP, VLAN, port): the MAC/ARP view.
     # One paginated call per network.
     "include_clients": True,
+    # The loss and latency of every MX uplink in five-minute windows since
+    # the last stored sample (``devices/uplinksLossAndLatency``): one
+    # organization call per window, at most 72. See ``_uplink_loss_latency``.
+    "include_uplink_metrics": True,
     # Attach data Plexus already collected over SNMP/SSH for inventory hosts
     # that match a Meraki device or one of its LLDP/CDP neighbors.
     "inventory_enrich": True,
@@ -64,12 +70,15 @@ _BOOL_OPTIONS = (
     "include_firewall",
     "include_wireless",
     "include_clients",
+    "include_uplink_metrics",
     "inventory_enrich",
     "ssh_enrich",
 )
 
 _NOT_APPLICABLE_STATUSES = {400, 404}
 _CLIENT_TIMESPAN_SECONDS = 86400
+# The uplink loss and latency API answers up to 2 minutes ago at the latest.
+_LOSS_LATENCY_DELAY_SECONDS = 120
 _MAX_RECORDED_ERRORS = 200
 
 ProgressCallback = Callable[[dict[str, Any]], None]
@@ -178,14 +187,88 @@ class _Collection:
         await asyncio.gather(*(_one(target, key, aw) for target, key, aw in jobs))
 
 
+def _api_time(moment: datetime) -> str:
+    return moment.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+async def _uplink_loss_latency(
+    col: _Collection, org_path: str, lookback_seconds: int, now: datetime
+) -> list[dict[str, Any]] | None:
+    """The uplink loss and latency of every MX of the organization, one call
+    per five-minute window over ``lookback_seconds`` (``link_metrics``).
+
+    ``GET /organizations/{organizationId}/devices/uplinksLossAndLatency``
+    (Dashboard API v1, operation ``getOrganizationDevicesUplinksLossAndLatency``;
+    OAuth scope ``dashboard:general:telemetry:read``, any key with read
+    access to the organization): "the uplink loss and latency for every MX
+    in the organization from at latest 2 minutes ago". ``t0`` may be up to
+    60 days back, ``t1`` at most 5 minutes after ``t0`` and at latest 2
+    minutes ago, so a window is the longest span one call returns. Each row
+    is one MX uplink (``serial``, ``networkId``, ``uplink``: ``wan1`` /
+    ``wan2`` / ``wan3`` / ``cellular``) towards one monitored destination
+    (``ip``, the dashboard's default unless changed), with a ``timeSeries`` of points
+    (``ts``, ``lossPercent``: packet loss in percent, ``latencyMs``:
+    latency in milliseconds). The reference does not state the spacing of
+    the points; ``normalize.uplink_metric_samples`` averages a window's
+    points, whatever their number.
+
+    Returns ``[{"t0", "t1", "rows"}]``, newest window first, or ``None``
+    when nothing was read (refused, failed, or 400/404: no MX). The newest
+    window is asked first: a refused key costs one call, not one per
+    window. A failed later window is recorded and only its window is lost.
+    """
+    windows = aligned_windows(now, lookback_seconds, delay_seconds=_LOSS_LATENCY_DELAY_SECONDS)
+    path = f"{org_path}/devices/uplinksLossAndLatency"
+    col.total += len(windows)
+    col.report()
+
+    async def read(start: datetime, end: datetime) -> dict[str, Any]:
+        try:
+            rows = await col.client.get(path, params={"t0": _api_time(start), "t1": _api_time(end)})
+        finally:
+            col.done += 1
+            col.report()
+        return {
+            "t0": _api_time(start),
+            "t1": _api_time(end),
+            "rows": scrub_secrets([r for r in rows or [] if isinstance(r, dict)] if isinstance(rows, list) else []),
+        }
+
+    try:
+        first = await read(*windows[0])
+    except MerakiApiError as exc:
+        if exc.status_code not in _NOT_APPLICABLE_STATUSES:
+            col._record_error("uplink metrics", path, exc)
+        col.done += len(windows) - 1
+        col.report()
+        return None
+    found = [first]
+    results = await asyncio.gather(*(read(*w) for w in windows[1:]), return_exceptions=True)
+    for result in results:
+        if isinstance(result, MerakiApiError):
+            if result.status_code not in _NOT_APPLICABLE_STATUSES:
+                col._record_error("uplink metrics", path, result)
+        elif isinstance(result, BaseException):
+            raise result
+        else:
+            found.append(result)
+    return found
+
+
 async def collect_organization(
     client: MerakiClient,
     org_id: str,
     options: dict[str, Any] | None = None,
     progress: ProgressCallback | None = None,
+    *,
+    metrics_lookback_seconds: int = DEFAULT_LOOKBACK_SECONDS,
+    now: datetime | None = None,
 ) -> dict[str, Any]:
     """Collect one organization. Raises ``MerakiApiError`` only if the core
-    inventory (organization / networks / devices) cannot be read."""
+    inventory (organization / networks / devices) cannot be read.
+    ``metrics_lookback_seconds``: how far back the uplink loss and latency
+    are read (the time since the newest sample stored, see
+    ``topology_availability.metrics_lookback_seconds``)."""
     opts = sanitize_options(options)
     col = _Collection(client, progress)
     org_path = f"organizations/{org_id}"
@@ -251,6 +334,13 @@ async def collect_organization(
             )
         )
     await col.run(org_jobs)
+
+    # ── Phase 2b: uplink loss and latency history ───────────────────────────
+    if opts["include_uplink_metrics"]:
+        col.phase = "uplink metrics"
+        history = await _uplink_loss_latency(col, org_path, metrics_lookback_seconds, now or datetime.now(UTC))
+        if history is not None:
+            org_data["uplink_loss_latency"] = history
 
     # ── Phase 3: per-network configuration ─────────────────────────────────
     col.phase = "networks"

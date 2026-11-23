@@ -15,9 +15,11 @@ targets, with the same metrics and the same met / warn / breach rule
   - ``latency``, ``jitter``, ``packet_loss``: the mean of what the vendor
     reported for the entity over the window, from the raw samples and the
     daily rollups (``get_topology_entity_metric_values``). Only entities
-    whose vendor reports the measurement have data (an OPNsense gateway
-    today: dpinger RTT, RTT deviation as jitter, loss); every other entity
-    is ``no_data``.
+    whose vendor reports the measurement have data (an OPNsense gateway:
+    dpinger RTT, RTT deviation as jitter, loss; a Meraki uplink: loss and
+    latency, no jitter; a Cato WAN link: RTT, jitter and loss, see
+    ``netcontrol.integrations.link_metrics``); every other entity is
+    ``no_data``.
 
 The result of every (target, entity) is stored with a history of changes
 (``topology_sla_target_status``). A status that gets worse than it was

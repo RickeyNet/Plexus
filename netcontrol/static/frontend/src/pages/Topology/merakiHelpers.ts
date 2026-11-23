@@ -26,6 +26,7 @@ export const FALLBACK_OPTIONS: MerakiBuildOptions = {
   include_firewall: true,
   include_wireless: true,
   include_clients: true,
+  include_uplink_metrics: true,
   inventory_enrich: true,
   ssh_enrich: false,
   max_concurrency: 5,
@@ -42,6 +43,7 @@ export const FALLBACK_CATO_OPTIONS: CatoBuildOptions = {
   include_policies: true,
   include_site_config: true,
   include_client_reports: true,
+  include_link_metrics: true,
   inventory_enrich: true,
 };
 
@@ -85,6 +87,11 @@ export const CATO_OPTION_TOGGLES: {
     key: "include_client_reports",
     label: "Client connection reports",
     hint: "The latest Client Connectivity Policy event of each remote user's device in the last 7 days, from Cato's events: the Split Tunnel configuration (Disabled, Admin Defined, User Defined), Office Mode and Managed Networks the Cato Client reported applying. Settles a Split Tunnel rule whose source network (any managed or unmanaged network) the configuration cannot decide. Read with the remote users; the API key needs the View permission for events.",
+  },
+  {
+    key: "include_link_metrics",
+    label: "WAN link RTT, jitter and loss",
+    hint: "Each Socket WAN link's round trip time to the Cato Cloud, jitter and packet loss in five-minute buckets since the last collection (up to 6 hours), from Cato's accountMetrics: one query per 50 sites. Stored for the link in Monitoring > Availability, where SLA targets evaluate them.",
   },
   {
     key: "inventory_enrich",
@@ -439,6 +446,11 @@ export const OPTION_TOGGLES: { key: ToggleKey; label: string; hint: string }[] =
       hint: "Clients seen in the last day with MAC, IP, VLAN and port - the MAC/ARP tab. One paginated API call per network.",
     },
     {
+      key: "include_uplink_metrics",
+      label: "Uplink loss and latency",
+      hint: "Each MX uplink's packet loss and latency in five-minute windows since the last collection (up to 6 hours): one organization API call per window. Stored for the uplink in Monitoring > Availability, where SLA targets evaluate them. Meraki reports no jitter.",
+    },
+    {
       key: "inventory_enrich",
       label: "Correlate with Plexus inventory",
       hint: "Attach SNMP/SSH data Plexus already holds for matching devices and neighbors.",
@@ -483,6 +495,7 @@ const PHASE_LABELS: Record<string, string> = {
   starting: "Starting",
   inventory: "Reading organization inventory",
   organization: "Collecting organization-wide status",
+  "uplink metrics": "Reading uplink loss and latency",
   networks: "Collecting network configuration",
   devices: "Collecting device details",
   stacks: "Collecting switch stack routing",
@@ -493,6 +506,7 @@ const PHASE_LABELS: Record<string, string> = {
   "cato routing": "Reading BGP peers",
   "cato site config": "Reading site configuration and account DHCP / DNS",
   "cato client reports": "Reading Client connectivity reports",
+  "cato link metrics": "Reading WAN link RTT, jitter and loss",
   "cato firewall": "Reading the WAN and internet firewall rules",
   "cato split tunnel": "Reading the Split Tunnel policy",
   "cato policies": "Reading the other policies",

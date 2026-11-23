@@ -603,6 +603,11 @@ class _Builder:
     # ── WAN uplinks and VPN ────────────────────────────────────────────────
 
     def build_uplinks(self) -> None:
+        # Imported here: link_metrics reaches this module through traffic.
+        from netcontrol.integrations.link_metrics import latest_text
+        from netcontrol.integrations.meraki.uplink_metrics import uplink_metric_samples
+
+        history = uplink_metric_samples(self.org_data.get("uplink_loss_latency"))
         for serial, row in self.uplinks_by_serial.items():
             node_id = f"d:{serial}"
             node = self.nodes.get(node_id)
@@ -614,6 +619,7 @@ class _Builder:
                     continue
                 iface = str(uplink.get("interface") or "wan")
                 wan_id = f"w:{serial}:{iface}"
+                samples = history.get((str(serial), iface)) or []
                 address = uplink.get("publicIp") or uplink.get("ip") or ""
                 wan_sections: list[dict] = []
                 _add(
@@ -632,6 +638,7 @@ class _Builder:
                             ("IP assigned by", uplink.get("ipAssignedBy")),
                             ("Provider", uplink.get("provider")),
                             ("Signal type", uplink.get("signalType")),
+                            ("Loss / latency", latest_text(samples)),
                         ],
                     ),
                 )
@@ -648,7 +655,10 @@ class _Builder:
                     "parent": node_id,
                     "sections": wan_sections,
                 }
-                self._add_edge(wan_id, node_id, "uplink", a_port="", b_port=iface, status=raw_status)
+                edge = self._add_edge(wan_id, node_id, "uplink", a_port="", b_port=iface, status=raw_status)
+                if edge is not None and samples:
+                    # Stored bucket by bucket by availability tracking.
+                    edge["metric_samples"] = samples
 
     def build_vpn(self) -> None:
         peers_cfg = {}

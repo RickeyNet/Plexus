@@ -22,8 +22,10 @@ state already in the node vocabulary) or certificate (the snapshot's
 ``certificates``: an OPNsense firewall's certificates and CAs that are
 tracked, see ``certificate_entity_states``), with that status mapped
 to ``up`` / ``degraded`` / ``down`` / ``unknown``, and the latency / jitter /
-loss / traffic rate reported for it (``metrics``, see ``METRIC_KEYS``). Pure: no
-database, no network.
+loss / traffic rate reported for it (``metrics``, see ``METRIC_KEYS``) or,
+for a Meraki uplink or a Cato WAN link, the bucketed loss / latency / jitter
+history its vendor returned (``metric_samples``, see
+``netcontrol.integrations.link_metrics``). Pure: no database, no network.
 
 What is left out, because it is no entity whose availability means anything:
 WAN address nodes (their uplink edge is tracked instead), external CDP/LLDP
@@ -44,6 +46,7 @@ from typing import Any
 from netcontrol.integrations.aws.normalize import _LINK_LABELS as _AWS_LINK_LABELS
 from netcontrol.integrations.azure.normalize import _LINK_LABELS as _AZURE_LINK_LABELS
 from netcontrol.integrations.gcp.normalize import _LINK_LABELS as _GCP_LINK_LABELS
+from netcontrol.integrations.link_metrics import edge_samples
 from netcontrol.integrations.meraki.normalize import _STATUS_RANK, _UPLINK_STATUS
 
 STATES = ("up", "degraded", "down", "unknown")
@@ -80,6 +83,8 @@ EDGE_STATES: dict[str, str] = {
 }
 
 # Measurements a normaliser may put on an edge or node as ``metrics``
+# or, bucketed, as ``metric_samples`` (a Meraki uplink's loss and latency, a
+# Cato WAN link's RTT, jitter and loss: ``link_metrics``)
 # (an OPNsense gateway's dpinger loss, RTT and RTT deviation; the traffic
 # rate of a tunnel in bits per second, received / sent by the device,
 # ``netcontrol.integrations.traffic``), and the metric name each is stored
@@ -183,6 +188,10 @@ class EntityState:
     host_id: int | None = None
     meta: dict[str, Any] = field(default_factory=dict)
     metrics: dict[str, float] = field(default_factory=dict)
+    # Bucketed history the vendor returned for the entity (a Meraki uplink's
+    # or a Cato WAN link's loss / latency / jitter), each stored at its own
+    # time (``netcontrol.integrations.link_metrics``).
+    metric_samples: list[dict[str, Any]] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -198,6 +207,7 @@ class EntityState:
             "host_id": self.host_id,
             "meta": dict(self.meta),
             "metrics": dict(self.metrics),
+            "metric_samples": [dict(s) for s in self.metric_samples],
         }
 
 
@@ -312,7 +322,9 @@ def clean_entity_types(provider: str, snapshot: dict | None) -> frozenset[str]:
       error, else none (its errors do not say which entity type they feed).
       A warning marked ``info`` (an OPNsense firmware update, audit finding
       or CARP problem) reports what the device said, not a failed call: it
-      does not count.
+      does not count. Nor does one marked ``measurement`` (a refused Cato
+      ``accountMetrics`` query): it leaves links without a measurement and
+      feeds no entity.
     """
     if not snapshot:
         return frozenset()
@@ -321,7 +333,7 @@ def clean_entity_types(provider: str, snapshot: dict | None) -> frozenset[str]:
     errors = [
         e
         for e in (snapshot.get("collection") or {}).get("errors") or []
-        if e and not (isinstance(e, dict) and e.get("info"))
+        if e and not (isinstance(e, dict) and (e.get("info") or e.get("measurement")))
     ]
     if _text(provider).lower() == "meraki":
         if any(isinstance(e, dict) and _text(e.get("scope")) == "org" for e in errors):
@@ -529,6 +541,7 @@ def extract_entity_states(provider: str, org_ref: int, snapshot: dict | None) ->
                 model=label,
                 meta=meta,
                 metrics=entity_metrics(edge),
+                metric_samples=edge_samples(edge),
             )
         )
 

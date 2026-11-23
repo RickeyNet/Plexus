@@ -142,6 +142,58 @@ def _switch_acl(idx: int) -> dict[str, Any]:
     }
 
 
+# The windows of the sample uplink loss and latency: twelve five-minute
+# windows ending here (``collector._uplink_loss_latency``).
+SAMPLE_METRICS_END = "2026-01-01T00:00:00Z"
+_SAMPLE_WINDOWS = 12
+_SAMPLE_PROBE_IP = "192.0.2.8"
+
+
+def _stamp(minutes_before_end: int) -> str:
+    """``SAMPLE_METRICS_END`` minus ``minutes_before_end`` minutes."""
+    if minutes_before_end <= 0:
+        return SAMPLE_METRICS_END
+    hours, minutes = divmod(24 * 60 - minutes_before_end, 60)
+    return f"2025-12-31T{hours:02d}:{minutes:02d}:00Z"
+
+
+def uplink_loss_latency(uplinks: list[dict]) -> list[dict[str, Any]]:
+    """The ``uplinksLossAndLatency`` answers of the sample uplinks that are
+    up, newest window first, in the API's shape: one row per uplink and
+    destination with a point a minute. ``wan2`` of the branches loses a
+    few packets now and then; a failed uplink reports full loss and no
+    latency."""
+    windows = []
+    for index in range(_SAMPLE_WINDOWS):
+        end = index * 5
+        rows = []
+        for entry in uplinks:
+            for n, uplink in enumerate(entry.get("uplinks") or []):
+                if uplink.get("status") not in ("active", "ready", "failed"):
+                    continue
+                failed = uplink.get("status") == "failed"
+                base = 12.0 + int(str(entry["networkId"])[-2:]) + 9.0 * n
+                points = [
+                    {
+                        "ts": _stamp(end + 4 - minute),
+                        "lossPercent": 100.0 if failed else (2.0 if n and (index + minute) % 4 == 0 else 0.0),
+                        "latencyMs": None if failed else round(base + (index * 3 + minute) % 5 * 0.7, 1),
+                    }
+                    for minute in range(5)
+                ]
+                rows.append(
+                    {
+                        "networkId": entry["networkId"],
+                        "serial": entry["serial"],
+                        "uplink": uplink.get("interface"),
+                        "ip": _SAMPLE_PROBE_IP,
+                        "timeSeries": points,
+                    }
+                )
+        windows.append({"t0": _stamp(end + 5), "t1": _stamp(end), "rows": rows})
+    return windows
+
+
 def build_sample_raw(branches: int = 10) -> dict[str, Any]:
     """Two VPN hubs plus ``branches`` spoke sites."""
     branches = max(1, min(int(branches), len(_BRANCH_CITIES)))
@@ -507,6 +559,7 @@ def build_sample_raw(branches: int = 10) -> dict[str, Any]:
         "org": {
             "device_statuses": statuses,
             "uplink_statuses": uplinks,
+            "uplink_loss_latency": uplink_loss_latency(uplinks),
             "vpn_statuses": vpn_statuses,
             "third_party_vpn_peers": {
                 "peers": [

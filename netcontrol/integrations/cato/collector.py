@@ -65,6 +65,10 @@ What is read:
                                 account's DHCP and DNS configuration, read
                                 by ``site_config.collect_site_config``
                                 (several queries per site)
+  - ``accountMetrics``          the RTT, jitter and loss of every Socket WAN
+                                link in five-minute buckets since the last
+                                stored sample, read by
+                                ``link_metrics.collect_link_metrics``
 
 Failure policy: the site list is required; everything else is best-effort and
 a failure is recorded in ``errors`` and surfaced in the map's collection
@@ -84,7 +88,9 @@ from typing import Any, NamedTuple
 
 from netcontrol.integrations.cato.client import CatoApiError, CatoClient, error_entry, note_entry
 from netcontrol.integrations.cato.client_reports import collect_client_reports
+from netcontrol.integrations.cato.link_metrics import SITES_PER_QUERY, collect_link_metrics
 from netcontrol.integrations.cato.site_config import collect_site_config, planned_calls
+from netcontrol.integrations.link_metrics import DEFAULT_LOOKBACK_SECONDS
 from netcontrol.integrations.meraki.collector import scrub_secrets
 from netcontrol.telemetry import configure_logging
 
@@ -115,6 +121,10 @@ DEFAULT_OPTIONS: dict[str, Any] = {
     # user device (last 7 days, Cato's ``events``), the Split Tunnel
     # configuration the Client reports applying. See ``client_reports``.
     "include_client_reports": True,
+    # The RTT, jitter and loss of every Socket WAN link in five-minute
+    # buckets since the last stored sample (``accountMetrics``): one query
+    # per 50 sites. See ``link_metrics``.
+    "include_link_metrics": True,
     # Attach data Plexus already collected over SNMP/SSH for inventory hosts
     # that match a Socket.
     "inventory_enrich": True,
@@ -127,6 +137,7 @@ _BOOL_OPTIONS = (
     "include_policies",
     "include_site_config",
     "include_client_reports",
+    "include_link_metrics",
     "inventory_enrich",
 )
 
@@ -1176,9 +1187,12 @@ async def collect_account(
     account_id: str,
     options: dict[str, Any] | None = None,
     progress: ProgressCallback | None = None,
+    *,
+    metrics_lookback_seconds: int = DEFAULT_LOOKBACK_SECONDS,
 ) -> dict[str, Any]:
     """Collect one account. Raises ``CatoApiError`` only if the site list
-    cannot be read."""
+    cannot be read. ``metrics_lookback_seconds``: how far back the links'
+    RTT, jitter and loss are read (``link_metrics``)."""
     opts = sanitize_options(options)
     errors: list[dict[str, Any]] = []
     policies = [spec for spec in POLICIES if opts[spec.option]]
@@ -1372,6 +1386,16 @@ async def collect_account(
             errors.append(error_entry("account", f"policy.{field}.policyList", exc))
         done += 1
 
+    # None: not collected, so the WAN links carry no measurement.
+    link_metrics: dict[str, Any] | None = None
+    if opts["include_link_metrics"] and sites:
+        chunks = -(-len(sites) // SITES_PER_QUERY)
+        total += chunks
+        report("cato link metrics")
+        site_ids = [str(s["id"]) for s in sites]
+        link_metrics = await collect_link_metrics(client, account_id, site_ids, metrics_lookback_seconds, errors)
+        done += chunks
+
     # None: not collected, so a rule naming a group stays unresolved.
     objects: dict[str, list[dict] | None] = {key: None for key, _path in _OBJECTS}
     if opts["include_policies"]:
@@ -1432,6 +1456,7 @@ async def collect_account(
         "global_ip_ranges": global_ip_ranges,
         **objects,
         "site_config": site_config,
+        "link_metrics": link_metrics,
         "errors": errors,
         "stats": dict(client.stats),
         "options": opts,

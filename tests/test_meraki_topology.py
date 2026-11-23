@@ -1229,7 +1229,7 @@ def test_api_topology_html_export_leaves_configs_out_without_backup_access(monke
 def test_api_build_job_runs_collector_and_stores_snapshot(api, monkeypatch):
     import netcontrol.routes.meraki_topology as routes_module
 
-    async def _fake_collect(_client, org_id, _options, progress):
+    async def _fake_collect(_client, org_id, _options, progress, **_kwargs):
         assert org_id == "sample"
         progress({"phase": "inventory"})
         return build_sample_raw(branches=2)

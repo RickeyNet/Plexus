@@ -29,7 +29,11 @@ worse tier replaces the open alert of the tier before it, and a renewal
 (a better tier) acknowledges the open expiry alerts. The latency, jitter and loss a
 vendor reports for an entity (``EntityState.metrics``) are stored as a time
 series with daily rollups (``record_topology_entity_metrics``) for the SLA
-targets of topology entities (``netcontrol.routes.topology_sla``). An entity seen for the first time
+targets of topology entities (``netcontrol.routes.topology_sla``); the
+bucketed history a Meraki uplink or a Cato WAN link carries
+(``EntityState.metric_samples``) is stored bucket by bucket at each
+bucket's own time, only the buckets after the newest one stored
+(``netcontrol.integrations.link_metrics``). An entity seen for the first time
 is a baseline and raises nothing. Best-effort throughout: a failure is
 logged and never fails the collection.
 """
@@ -51,6 +55,7 @@ from netcontrol.integrations.availability import (
     clean_entity_types,
     extract_entity_states,
 )
+from netcontrol.integrations.link_metrics import SAMPLE_KEYS, lookback_since, new_samples
 from netcontrol.routes import notification_channels
 from netcontrol.telemetry import configure_logging
 
@@ -365,15 +370,54 @@ async def _mute_index(provider: str | None = None, org_ref: int | None = None) -
         return None
 
 
+async def _history_samples(provider: str, org_ref: int, entities: list[dict]) -> list[dict]:
+    """The buckets of the vendor history on the snapshot
+    (``EntityState.metric_samples``) that start at or after the newest
+    sample stored for their entity (``link_metrics.new_samples``), each as
+    a sample with its own ``sampled_at``."""
+    history = [e for e in entities if e.get("metric_samples")]
+    if not history:
+        return []
+    newest = await db.latest_topology_entity_metric_times(provider, org_ref)
+    return [
+        {
+            "entity_type": e["entity_type"],
+            "entity_id": e["entity_id"],
+            "sampled_at": s["at"],
+            "metrics": {key: s.get(key) for key in SAMPLE_KEYS},
+        }
+        for e in history
+        for s in new_samples(e["metric_samples"], newest.get((str(e["entity_type"]), str(e["entity_id"]))))
+    ]
+
+
+async def metrics_lookback_seconds(provider: str, org_ref: int, now: datetime | None = None) -> int:
+    """How far back a collection of ``provider`` reads its links' bucketed
+    loss / latency / jitter history (``link_metrics.lookback_since``): the
+    time since the newest uplink sample stored for the source, at most
+    ``link_metrics.MAX_LOOKBACK_SECONDS``; one hour when none is stored or
+    the store cannot be read. Never raises."""
+    try:
+        stored = await db.latest_topology_entity_metric_times(provider, org_ref, "uplink")
+    except Exception as exc:  # noqa: BLE001 - read the default span instead
+        LOGGER.warning(
+            "topology availability: %s org %s newest sample not read: %s", provider, org_ref, type(exc).__name__
+        )
+        stored = {}
+    return lookback_since(max(stored.values()) if stored else None, now)
+
+
 async def _record_metrics(provider: str, org_ref: int, entities: list[dict], now: str | None) -> int:
     """Store the latency / jitter / loss and traffic rates the snapshot
     reported for its entities (``EntityState.metrics``; a rate was put on
-    the snapshot when it was stored, ``integrations.traffic``). Never
-    raises."""
-    samples = [e for e in entities if e.get("metrics")]
-    if not samples:
-        return 0
+    the snapshot when it was stored, ``integrations.traffic``), and the new
+    buckets of a vendor's history (``EntityState.metric_samples``, each at
+    its own time). Never raises."""
     try:
+        samples = [e for e in entities if e.get("metrics")]
+        samples += await _history_samples(provider, org_ref, entities)
+        if not samples:
+            return 0
         return await db.record_topology_entity_metrics(provider, org_ref, samples, now=now)
     except Exception as exc:  # noqa: BLE001 - the collection is already stored
         LOGGER.warning(

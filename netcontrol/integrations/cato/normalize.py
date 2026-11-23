@@ -115,7 +115,9 @@ from typing import Any
 from netcontrol.integrations.cato import network_rules
 from netcontrol.integrations.cato.client_reports import NOT_COLLECTED, ClientReports, describe
 from netcontrol.integrations.cato.collector import POLICIES, POLICY_LISTS, PolicySpec
+from netcontrol.integrations.cato.link_metrics import LinkMetrics
 from netcontrol.integrations.cato.site_config import account_config_sections, site_config_sections
+from netcontrol.integrations.link_metrics import latest_text
 from netcontrol.integrations.meraki.forwarding import (
     ANY,
     canonical,
@@ -1802,6 +1804,8 @@ class _Builder:
         self.client_reports = ClientReports(raw.get("client_reports"))
         # The address book, built once the sites are (``_address_book``).
         self._book: AddressBook | None = None
+        # The WAN links' RTT, jitter and loss history (``accountMetrics``).
+        self.link_metrics = LinkMetrics(raw.get("link_metrics"))
 
     # ── Graph primitives ───────────────────────────────────────────────────
 
@@ -2127,7 +2131,8 @@ class _Builder:
             # The site's configuration as Cato keeps it (ranges with DHCP,
             # hosts, Socket settings...), when it was collected.
             node["sections"].extend(site_config_sections(self.raw.get("site_config"), site_id, serial=serial))
-            self._wan_links(node, ident, interfaces)
+            # accountMetrics groups an HA pair's Sockets: filed under the primary.
+            self._wan_links(node, ident, interfaces, measured=device is primary)
 
             pops = sorted({_text(i.get("popName")) for i in interfaces if i.get("connected") and i.get("popName")})
             if not pops and connected:
@@ -2147,7 +2152,7 @@ class _Builder:
             members.append(node)
         return members
 
-    def _wan_links(self, node: dict, ident: str, interfaces: list[dict]) -> None:
+    def _wan_links(self, node: dict, ident: str, interfaces: list[dict], *, measured: bool = False) -> None:
         for index, iface in enumerate(interfaces):
             connected = bool(iface.get("connected"))
             address = _text(iface.get("tunnelRemoteIP"))
@@ -2157,6 +2162,7 @@ class _Builder:
             remote = _obj(iface.get("tunnelRemoteIPInfo"))
             info = _obj(iface.get("info"))
             wan_id = f"w:{ident}:{_text(iface.get('id')) or index}"
+            samples = self.link_metrics.for_interface(node["site"], iface) if measured else []
             wan = self._node(
                 wan_id,
                 "wan",
@@ -2183,10 +2189,14 @@ class _Builder:
                         ("Upstream", _mbps(info.get("upstreamBandwidth"))),
                         ("Downstream", _mbps(info.get("downstreamBandwidth"))),
                         ("Tunnel uptime (s)", iface.get("tunnelUptime")),
+                        ("Loss / RTT / jitter", latest_text(samples)),
                     ],
                 ),
             )
-            self._edge(wan_id, node["id"], "uplink", b_port=name, status="active" if connected else "failed")
+            edge = self._edge(wan_id, node["id"], "uplink", b_port=name, status="active" if connected else "failed")
+            if edge is not None and samples:
+                # Stored bucket by bucket by availability tracking.
+                edge["metric_samples"] = samples
 
     def _tunnel(self, node: dict, site_name: str, pops: list[str], connected: bool) -> None:
         """Join a site's device to the PoP(s) it is connected to. A device

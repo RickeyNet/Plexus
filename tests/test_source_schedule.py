@@ -198,7 +198,7 @@ async def test_the_real_build_path_records_a_failure_without_stopping_the_pass(m
 
 
 def test_a_manual_build_resets_the_clock(api, monkeypatch):  # noqa: F811
-    async def _fake_collect(_client, _org_id, _options, _progress):
+    async def _fake_collect(_client, _org_id, _options, _progress, **_kwargs):
         return build_sample_raw(branches=2)
 
     monkeypatch.setattr(topology, "collect_organization", _fake_collect)

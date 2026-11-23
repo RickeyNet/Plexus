@@ -13,7 +13,8 @@ import { entityMetricCharts, formatTraffic } from './topologyMetrics';
 /**
  * What the vendor measures of one tracked entity over the period: the
  * window means and a chart per measurement it has samples of (an OPNsense
- * gateway's latency, jitter and loss; a tunnel's traffic in / out).
+ * gateway's latency, jitter and loss; a Meraki uplink's loss and latency;
+ * a Cato WAN link's RTT, jitter and loss; a tunnel's traffic in / out).
  */
 export function TopologyEntityMetricsModal({
   entity,

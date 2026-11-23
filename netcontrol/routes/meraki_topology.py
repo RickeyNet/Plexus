@@ -216,6 +216,7 @@ from netcontrol.routes.cloud_collectors import skipped_note
 from netcontrol.routes.cloud_visibility import discovery_progress
 from netcontrol.routes.opnsense_filterlog import attach_trace_evidence
 from netcontrol.routes.shared import _audit, _corr_id, _session_user, admin_session, supervise_task
+from netcontrol.routes.topology_availability import metrics_lookback_seconds
 from netcontrol.routes.topology_traffic import record_collection_traffic
 from netcontrol.secret_fields import compared_tls_verify, refuse_secret_reuse, url_origin
 from netcontrol.telemetry import configure_logging, redact_value
@@ -1402,8 +1403,10 @@ async def _collect_cato(org: dict, api_key: str, options: dict, progress) -> dic
     account = str(org.get("org_id") or "").strip()
     if not account:
         raise ValueError("Set the Cato account ID on this entry")
+    # The WAN links' RTT, jitter and loss since the newest sample stored.
+    lookback = await metrics_lookback_seconds(PROVIDER_CATO, org["id"])
     async with CatoClient(api_key, base_url=org.get("base_url") or CATO_BASE_URL) as client:
-        raw = await collect_account(client, account, options, progress)
+        raw = await collect_account(client, account, options, progress, metrics_lookback_seconds=lookback)
     raw["account"]["name"] = org["name"]
     return raw
 
@@ -1504,7 +1507,11 @@ async def _run_build(job_id: str, org: dict, user: str) -> None:
                 requests_per_second=options["requests_per_second"],
             ) as client:
                 org_id = await _resolve_org_id(client, org)
-                raw = await collect_organization(client, org_id, options, progress)
+                # The uplinks' loss and latency since the newest sample stored.
+                lookback = await metrics_lookback_seconds(PROVIDER_MERAKI, org_ref)
+                raw = await collect_organization(
+                    client, org_id, options, progress, metrics_lookback_seconds=lookback
+                )
 
         progress({"phase": "building map"})
         inventory = await load_inventory_index() if options["inventory_enrich"] else None

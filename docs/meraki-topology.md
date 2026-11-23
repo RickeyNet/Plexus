@@ -342,6 +342,7 @@ security advisories. See [software-versions.md](software-versions.md).
 | LAN links and ports | Network link-layer topology, per-device LLDP/CDP |
 | Non-Meraki neighbors (core switches, ISP routers) | LLDP/CDP |
 | WAN uplinks (IP, gateway, DNS, status) | Organization uplink statuses |
+| Uplink loss and latency, five-minute windows (option *Uplink loss and latency*) | Organization uplinks loss and latency (see [below](#uplink-loss-and-latency)) |
 | AutoVPN mode, hubs, peers, reachability, exported subnets | Appliance VPN statuses and site-to-site VPN settings |
 | Non-Meraki VPN peers and their subnets | Third-party VPN peers (shared secrets are never collected) |
 | VLANs, appliance ports, static routes, BGP | Appliance network settings |
@@ -592,6 +593,42 @@ VNets, the FMC, Panorama, Appgate collective and Cato PoP and backbone nodes
 managed by) and Meraki networks (their status is only the worst of their
 devices').
 
+### Uplink loss and latency
+
+With the **Uplink loss and latency** option (`include_uplink_metrics`, on by
+default) each collection reads the packet loss and latency of every MX uplink
+from `GET /organizations/{organizationId}/devices/uplinksLossAndLatency`
+(Dashboard API v1; OAuth scope `dashboard:general:telemetry:read`, any API
+key that can read the organization). Meraki returns, per MX uplink (`wan1`,
+`wan2`, `wan3`, `cellular`) and monitored destination (a public address by default, unless
+changed on the dashboard), a time series of `lossPercent` (percent) and
+`latencyMs` (milliseconds). One call covers at most 5 minutes (`t1` at most
+5 minutes after `t0`, at the latest 2 minutes ago, up to 60 days back), so:
+
+- the collection reads the five-minute windows (on whole five minutes,
+  ending at least 2 minutes before it starts) since the newest sample
+  stored for the source's uplinks: one organization call per window, 12 for
+  an hourly collection, at most 72 (6 hours); the first collection, or one
+  after the raw samples were purged, reads the last hour;
+- each uplink gets one sample per window: the mean loss and the mean
+  latency of the window's points, over every destination it probes (a
+  point with every probe lost has no latency and only counts for loss);
+- the samples are stored by availability tracking at the window's end
+  time, each window once, and kept in the daily rollups like an OPNsense
+  gateway's measurements; SLA targets of the uplinks evaluate `latency` and
+  `packet_loss` on the server. Meraki reports no jitter and Plexus does not
+  derive one: a jitter target is *no data* for a Meraki uplink.
+
+The newest window also shows in the WAN address's details (*Loss /
+latency*), and the history in **Monitoring > Availability > Integrations
+and cloud** (the chart button of the uplink). A refused or failed call is
+one collection warning (scope *uplink metrics*) and the rest of the
+collection is kept; a refused first window costs one call, not one per
+window. A source collected less often than every 6 hours keeps a gap
+before each read. The spacing of Meraki's points is not documented; the
+windows are averaged whatever their number. Not checked against a live
+organization.
+
 ### Cloud managed services
 
 The managed services AWS, Azure and GCP discovery lists in a network's
@@ -742,7 +779,7 @@ everything:
 |---|---|
 | Meraki devices | was stored at all (a collection that cannot list the networks and devices fails and stores nothing) |
 | Meraki uplinks and tunnels | had no failed organization-wide call |
-| Cato, FMC, Panorama, Appgate | finished with no collection warnings and no site marked not collected |
+| Cato, FMC, Panorama, Appgate | finished with no collection warnings and no site marked not collected (a Cato link measurement that was refused does not count) |
 | OPNsense | finished with no collection warnings other than informational ones (a pending firmware update, audit findings, config.xml not stored, a CARP VIP in `INIT` or a CARP demotion) |
 | AWS, Azure, GCP | finished with no warnings and drew no *not collected* network (a peered VPC or VNet outside the collected accounts and regions). A cloud that always has such a peering never removes on its own: its gone entities stay `unknown` until the retention cleanup |
 

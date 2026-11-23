@@ -51,6 +51,7 @@ import {
 } from "./helpers";
 import { CollectionProgressCard } from "./CollectionProgressCard";
 import { InventoryCollectModal } from "./InventoryCollectModal";
+import { CatoAlertsSettings } from "./CatoAlertsSettings";
 import { MerakiAlertsSettings } from "./MerakiAlertsSettings";
 import { addSourceOptions, CLOUD_ACCOUNTS_PATH } from "./addSourceOptions";
 import {
@@ -398,6 +399,7 @@ export function SourcesModal({
       <div className="stack stack-sm">
         {isAdmin && <SourceScheduleBar />}
         {isAdmin && <MerakiAlertsSettings />}
+        {isAdmin && <CatoAlertsSettings />}
 
         <div className="toolbar" style={{ justifyContent: "flex-end" }}>
           {canWrite && (

@@ -403,6 +403,7 @@ both hold, or that sits inside a VPC, is listed under **Overlapping Ranges**
 | Network ranges and LAN interface subnets | `entityLookup` (`siteRange`, `networkInterface`) | Network ranges |
 | WAN and Internet firewall rules | `policy.wanFirewall`, `policy.internetFirewall` | Firewall rules |
 | Split Tunnel policy (Access > Split Tunnel Policy), which needs the SDP Split Tunnel permission | `policy.splitTunnel` | Remote users |
+| RTT, jitter and loss of every Socket WAN link, five-minute buckets (see [below](#wan-link-rtt-jitter-and-loss)) | `accountMetrics` | WAN link RTT, jitter and loss |
 | Latest Client Connectivity Policy event of each user device, last 7 days (Split Tunnel configuration applied, Office Mode, Trusted Networks, public IP, PoP), which needs the View permission for events | `events` (`event_sub_type` *Client Connectivity Policy*) | Client connection reports (with Remote users) |
 | Global IP range objects the rules name (Networking > IP Ranges) | `object.globalIpRangeList` | Firewall rules, Remote users or All other policies |
 | WAN network rules (bandwidth priority, routing, transport; the INTERNET rules' source, destination, application, exceptions, route and allocated IPs are evaluated by path tracing) | `policy.wanNetwork` | All other policies |
@@ -566,6 +567,47 @@ deep: what a vSocket does with the tunnel past its LAN interface is Cato's.
 ## Availability tracking
 
 Each collection also records the state of what it reports, shown under **Monitoring > Availability > Integrations and cloud** with uptime, outages and alerts: Sockets and IPsec sites (devices), sites (from their connectivity status: connected is up, degraded is degraded, disconnected is down), Socket WAN uplinks and the Socket and IPsec site tunnels. Remote users, PoPs and the Cato Cloud are left out. The state mapping, alerting and retention are described in [Meraki in the Topology Map](meraki-topology.md#availability-tracking).
+
+Between collections, the account's events feed raises site and link disconnects (and HA, Socket fail-over and last-mile quality events) within about a minute, and stores its IPS events as security events: see [Cato alerts](cato-alerts.md). A site or link down is not notified twice by the two.
+
+### WAN link RTT, jitter and loss
+
+With the **WAN link RTT, jitter and loss** option (`include_link_metrics`,
+on by default) each collection reads the history of every Socket WAN link
+from Cato's `accountMetrics` query (`groupDevices: true`, which Cato
+requires for a query over several sites, `groupInterfaces: false`, one
+entry per link) with the labels `rtt` (round trip time from the site to the
+Cato Cloud, ms), `jitterUpstream` / `jitterDownstream` (ms) and
+`lostUpstreamPcnt` / `lostDownstreamPcnt` (percent of packets lost):
+
+- the time frame is the time since the newest sample stored for the
+  account's links (`last.PT<minutes>M`; the last hour at first, at most 6
+  hours) plus 5 minutes, in five-minute buckets (granularity = time frame /
+  buckets); the newest 5 minutes are dropped, since Cato has its data
+  "typically within 5 minutes";
+- one query per 50 sites (Cato allows at most 100,000 items per query,
+  counted as sites x labels x buckets, and 15 `accountMetrics` queries a
+  minute per account);
+- each link gets one sample per bucket: latency the RTT, jitter the worse
+  of the upstream and downstream jitter, loss the worse of the upstream and
+  downstream loss (Cato's values, nothing derived). A bucket with no RTT
+  (no traffic measured) gives no sample;
+- the samples are stored by availability tracking at the bucket's end
+  time, each bucket once (a bucket that overlaps one already stored is left
+  out), kept in the daily rollups, and evaluated by the SLA targets of the
+  uplinks (`latency`, `jitter`, `packet_loss`) on the server.
+
+A link is matched by site and by the interface id `accountMetrics` gives
+(`interfaceInfo.id`), else by the link's name. Cato groups the two Sockets
+of an HA site into one, so their measurements are filed under the primary
+Socket's links (the secondary's links have none). IPsec sites (no Socket)
+get no measurement. The newest bucket shows in the WAN link's details
+(*Loss / RTT / jitter*), the history in **Monitoring > Availability >
+Integrations and cloud**. A refused query is one collection warning: Plexus
+retries once without `interfaceInfo` (links matched by name) and stops at a
+second refusal. That warning does not stop the removal of sites and links
+the account no longer has (it says nothing about what exists). Not checked against a live account; the interface ids are
+taken to be those `accountSnapshot` returns.
 
 ## API reference
 

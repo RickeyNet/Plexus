@@ -112,13 +112,28 @@ pass, with the same metrics and the same met / warn / breach rule:
   availability page computes it (degraded counts as available, unknown time
   is left out);
 - `latency`, `jitter`, `packet_loss`: the mean of what the vendor reported
-  for the entity in the window. Only some entities report them; today these
-  are **OPNsense gateways** (dpinger RTT, RTT deviation as jitter, and loss;
-  a gateway with 100 % loss reports loss only). Every other entity is *no
-  data* for these metrics.
+  for the entity in the window. Only some entities report them:
+  - **OPNsense gateways**: dpinger RTT, RTT deviation as jitter, and loss
+    (a gateway with 100 % loss reports loss only), one sample per
+    collection;
+  - **Meraki uplinks**: loss and latency, one sample per uplink and
+    five-minute window (the mean of the window's points over every
+    destination the MX probes), read at each collection for the windows
+    since the newest stored sample. Meraki reports no jitter, so a jitter
+    target is *no data* for them (Plexus does not derive one);
+  - **Cato WAN links**: RTT as latency, jitter and loss, one sample per
+    Socket link and five-minute bucket of `accountMetrics`, read the same
+    way; jitter and loss are the worse of Cato's upstream and downstream
+    values.
+
+  Every other entity is *no data* for these metrics. See
+  [Meraki](meraki-topology.md#uplink-loss-and-latency) and
+  [Cato](cato-topology.md#wan-link-rtt-jitter-and-loss) for what is read.
 
 Each collection stores one raw sample per entity that reported a value
-(`topology_entity_metrics`, kept for `retention_days`) and adds it to that
+(`topology_entity_metrics`, kept for `retention_days`; for a Meraki uplink
+or a Cato WAN link one per five-minute bucket, at the bucket's end time,
+each bucket once) and adds it to that
 entity's row of the day (`topology_entity_metric_daily`: count, sum, sum of
 squares, min, max; kept for `sla_retention_days`, default 400), so a window
 longer than the raw retention is read from the daily rows (whole UTC days;

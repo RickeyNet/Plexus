@@ -57,6 +57,7 @@ __all__ = [
     "topology_uptime",
     "TOPOLOGY_SLA_STATUS_COLUMNS",
     "record_topology_entity_metrics",
+    "latest_topology_entity_metric_times",
     "get_topology_entity_metric_values",
     "get_topology_entity_metric_history",
     "purge_topology_entity_metrics",
@@ -942,9 +943,11 @@ async def record_topology_entity_metrics(
     """Store one collection's measurements: ``samples`` are ``{"entity_type",
     "entity_id", "metrics": {"latency_ms", "jitter_ms", "loss_pct",
     "in_bps", "out_bps"}}`` (``METRIC_KEYS``; a missing or non-numeric value
-    is skipped). Returns the raw rows written."""
+    is skipped), stored at ``now``, or at the sample's own ``sampled_at``
+    (UTC text) when it has one (a bucket of a vendor's history,
+    ``netcontrol.integrations.link_metrics``). Returns the raw rows
+    written."""
     now = now or _now()
-    day = now[:10]
     raw: list[tuple] = []
     daily: list[tuple] = []
     for sample in samples:
@@ -952,11 +955,13 @@ async def record_topology_entity_metrics(
         values = {key: _metric_value(metrics.get(key)) for key in METRIC_KEYS}
         if all(v is None for v in values.values()):
             continue
+        at = str(sample.get("sampled_at") or now)[:19].replace("T", " ")
+        day = at[:10]
         key = (str(provider), int(org_ref), str(sample["entity_type"]), str(sample["entity_id"]))
         raw.append(
             (
                 *key,
-                now,
+                at,
                 values["latency_ms"],
                 values["jitter_ms"],
                 values["loss_pct"],
@@ -996,6 +1001,36 @@ async def record_topology_entity_metrics(
     finally:
         await db.close()
     return len(raw)
+
+
+async def latest_topology_entity_metric_times(
+    provider: str, org_ref: int, entity_type: str | None = None
+) -> dict[tuple[str, str], str]:
+    """``{(entity_type, entity_id): sampled_at}``: the newest raw sample with
+    a latency, jitter or loss of every entity of one source (of
+    ``entity_type`` only, when given). A collection that reads a vendor's
+    bucketed history stores only the buckets after it."""
+    clauses = [
+        "provider = ?",
+        "org_ref = ?",
+        "(latency_ms IS NOT NULL OR jitter_ms IS NOT NULL OR loss_pct IS NOT NULL)",
+    ]
+    params: list[Any] = [str(provider), int(org_ref)]
+    if entity_type:
+        clauses.append("entity_type = ?")
+        params.append(str(entity_type))
+    db = await _dbcore.get_db(read_only=True)
+    try:
+        cursor = await db.execute(
+            f"""SELECT entity_type, entity_id, MAX(sampled_at) AS newest FROM topology_entity_metrics
+                WHERE {" AND ".join(clauses)}
+                GROUP BY entity_type, entity_id""",
+            tuple(params),
+        )
+        rows = rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+    return {(str(r["entity_type"]), str(r["entity_id"])): str(r["newest"]) for r in rows if r.get("newest")}
 
 
 def _metric_window(days: int, now: str | None) -> tuple[str, str, str]:

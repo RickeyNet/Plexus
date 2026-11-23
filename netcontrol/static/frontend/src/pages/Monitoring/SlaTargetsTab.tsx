@@ -320,7 +320,7 @@ function SlaTargetFormModal({ target, isCreate, onClose }: { target: SlaTarget |
                 ))}
               </select>
               <div className="text-muted" style={{ fontSize: '0.8em', marginTop: '0.25rem' }}>
-                Uptime works for every tracked entity. Latency, jitter and packet loss need an integration that reports them (OPNsense gateways); others show no data.
+                Uptime works for every tracked entity. Latency, jitter and packet loss need an integration that reports them (OPNsense gateways, Meraki uplinks: loss and latency, Cato WAN links); others show no data.
               </div>
             </div>
           </>

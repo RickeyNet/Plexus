@@ -15,6 +15,7 @@ export interface MerakiBuildOptions {
   include_firewall: boolean;
   include_wireless: boolean;
   include_clients: boolean;
+  include_uplink_metrics: boolean;
   inventory_enrich: boolean;
   ssh_enrich: boolean;
   max_concurrency: number;
@@ -64,6 +65,7 @@ export interface CatoBuildOptions {
   include_policies: boolean;
   include_site_config: boolean;
   include_client_reports: boolean;
+  include_link_metrics: boolean;
   inventory_enrich: boolean;
 }
 

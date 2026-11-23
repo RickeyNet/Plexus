@@ -903,6 +903,68 @@ def _objects() -> dict[str, Any]:
     }
 
 
+# When the sample ``accountMetrics`` answer was read (the snapshot's time).
+SAMPLE_METRICS_READ_AT = "2026-10-01T13:00:00Z"
+_SAMPLE_BUCKET_MS = 300_000
+# 11:55 UTC on 2026-10-01: the first of 13 five-minute buckets.
+_SAMPLE_FIRST_BUCKET_MS = 1_790_855_700_000
+
+
+def _metric_series(label: str, units: str, values: list[float]) -> dict:
+    return {
+        "label": label,
+        "units": units,
+        "data": [[_SAMPLE_FIRST_BUCKET_MS + n * _SAMPLE_BUCKET_MS, v] for n, v in enumerate(values)],
+    }
+
+
+def _metric_interface(ident: str, name: str, rtt: float, *, lossy: bool = False, idle: bool = False) -> dict:
+    """One link of the sample ``accountMetrics`` answer: 13 buckets (the
+    last one not settled yet); an idle link measures nothing (0)."""
+    count = 13
+    rtts = [0.0 if idle else round(rtt + (n % 4) * 0.8, 1) for n in range(count)]
+    up = [0.0 if idle else round(0.6 + (n % 3) * 0.2, 1) for n in range(count)]
+    down = [0.0 if idle else round(1.1 + (n % 2) * 0.3, 1) for n in range(count)]
+    lost = [1.5 if lossy and n % 5 == 0 else 0.0 for n in range(count)]
+    return {
+        "name": name,
+        "interfaceInfo": {"id": ident, "name": name},
+        "timeseries": [
+            _metric_series("rtt", "ms", rtts),
+            _metric_series("jitterUpstream", "ms", up),
+            _metric_series("jitterDownstream", "ms", down),
+            _metric_series("lostUpstreamPcnt", "percent", [0.0] * count),
+            _metric_series("lostDownstreamPcnt", "percent", lost),
+        ],
+    }
+
+
+def sample_link_metrics() -> dict[str, Any]:
+    """What ``link_metrics.collect_link_metrics`` returns for the sample
+    sites: the HA data center (both Sockets grouped by Cato) and the
+    Madison branch, whose second link is not connected."""
+    return {
+        "granularity": 300,
+        "read_at": SAMPLE_METRICS_READ_AT,
+        "sites": [
+            {
+                "id": "1001",
+                "interfaces": [
+                    _metric_interface("1", "WAN 01", 11.0),
+                    _metric_interface("2", "WAN 02", 17.5, lossy=True),
+                ],
+            },
+            {
+                "id": "1002",
+                "interfaces": [
+                    _metric_interface("1", "WAN 01", 24.0),
+                    _metric_interface("2", "WAN 02", 0.0, idle=True),
+                ],
+            },
+        ],
+    }
+
+
 def build_sample_raw() -> dict[str, Any]:
     """A small account: an HA data center, two Socket branches (one down), an
     IPsec site and a few remote users, across two PoPs, and the account's
@@ -1079,6 +1141,8 @@ def build_sample_raw() -> dict[str, Any]:
         "split_tunnel": _split_tunnel(),
         # The sites' configuration and the account's DHCP and DNS settings.
         "site_config": build_sample_site_config(),
+        # The WAN links' RTT, jitter and loss (``accountMetrics``).
+        "link_metrics": sample_link_metrics(),
         # The account's global IP range objects (Networking > IP Ranges), as
         # ``object.globalIpRangeList`` returns them.
         "global_ip_ranges": [

@@ -183,6 +183,7 @@ async def test_collect_account_falls_back_and_stays_best_effort():
                 "include_firewall": False,
                 "include_policies": False,
                 "include_site_config": False,
+                "include_link_metrics": False,
                 "include_client_reports": False,
             },
             progress.append,
@@ -238,6 +239,7 @@ async def test_collect_account_keeps_the_wan_links_when_the_full_query_is_refuse
                 "include_firewall": False,
                 "include_policies": False,
                 "include_site_config": False,
+                "include_link_metrics": False,
             },
         )
 
@@ -286,6 +288,7 @@ async def test_collect_account_falls_back_to_the_basic_user_query():
                 "include_firewall": False,
                 "include_policies": False,
                 "include_site_config": False,
+                "include_link_metrics": False,
                 "include_client_reports": False,
             },
         )
@@ -415,7 +418,13 @@ async def test_collect_account_reads_the_wan_and_internet_firewall_policies():
         raw = await collect_account(
             client,
             "42",
-            {"include_users": False, "include_ranges": False, "include_policies": False, "include_site_config": False},
+            {
+                "include_users": False,
+                "include_ranges": False,
+                "include_policies": False,
+                "include_site_config": False,
+                "include_link_metrics": False,
+            },
             progress.append,
         )
 
@@ -453,7 +462,13 @@ async def test_collect_account_falls_back_to_the_reduced_firewall_queries():
         raw = await collect_account(
             client,
             "42",
-            {"include_users": False, "include_ranges": False, "include_policies": False, "include_site_config": False},
+            {
+                "include_users": False,
+                "include_ranges": False,
+                "include_policies": False,
+                "include_site_config": False,
+                "include_link_metrics": False,
+            },
         )
 
     assert seen == [
@@ -517,6 +532,7 @@ _USERS_ONLY = {
     "include_firewall": False,
     "include_policies": False,
     "include_site_config": False,
+    "include_link_metrics": False,
     "include_client_reports": False,
 }
 
@@ -703,6 +719,7 @@ async def test_collect_account_reads_the_bgp_peers_site_by_site_with_the_ranges(
                 "include_firewall": False,
                 "include_policies": False,
                 "include_site_config": False,
+                "include_link_metrics": False,
             },
             progress.append,
         )
@@ -744,6 +761,7 @@ async def test_collect_account_falls_back_to_the_reduced_bgp_peer_query():
                 "include_firewall": False,
                 "include_policies": False,
                 "include_site_config": False,
+                "include_link_metrics": False,
             },
         )
 
@@ -771,6 +789,7 @@ async def test_collect_account_leaves_the_bgp_peers_uncollected_when_cato_refuse
                 "include_firewall": False,
                 "include_policies": False,
                 "include_site_config": False,
+                "include_link_metrics": False,
             },
         )
 
@@ -795,6 +814,7 @@ async def test_collect_account_asks_for_no_bgp_peers_without_the_ranges():
                 "include_firewall": False,
                 "include_policies": False,
                 "include_site_config": False,
+                "include_link_metrics": False,
             },
         )
     assert seen == ["plexusSites"] and raw["bgp_peers"] is None
@@ -1241,6 +1261,7 @@ def test_api_cato_account_crud_keeps_the_key_write_only(api):
         "include_policies": True,
         "include_site_config": True,
         "include_client_reports": True,
+        "include_link_metrics": True,
         "inventory_enrich": True,
     }
     assert listing["cato_default_options"]["include_policies"] is True
@@ -1321,7 +1342,7 @@ def test_api_cato_sample_is_merged_into_the_topology(api):
 def test_api_cato_build_job_runs_the_cato_collector(api, monkeypatch):
     import netcontrol.routes.meraki_topology as routes_module
 
-    async def _fake_collect(_client, account_id, options, progress):
+    async def _fake_collect(_client, account_id, options, progress, **_kwargs):
         assert account_id == "4242" and options["include_ranges"] is True
         progress({"phase": "cato sites"})
         return build_sample_raw()
@@ -1347,7 +1368,7 @@ def test_api_cato_build_job_runs_the_cato_collector(api, monkeypatch):
 def test_api_collection_warnings_are_listed_for_the_sources_dialog(api, monkeypatch):
     import netcontrol.routes.meraki_topology as routes_module
 
-    async def _fake_collect(_client, _account_id, _options, _progress):
+    async def _fake_collect(_client, _account_id, _options, _progress, **_kwargs):
         raw = build_sample_raw()
         raw["errors"] = [
             {"scope": "account", "path": "accountSnapshot.users", "status": 403, "message": "Permission denied"}
@@ -2252,6 +2273,7 @@ _POLICIES_ONLY = {
     "include_ranges": False,
     "include_firewall": False,
     "include_site_config": False,
+    "include_link_metrics": False,
 }
 
 
