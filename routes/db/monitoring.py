@@ -39,6 +39,7 @@ __all__ = [
     "delete_old_monitoring_alerts",
     "resolve_monitoring_alerts",
     "resolve_stale_monitoring_alerts",
+    "list_open_monitoring_alert_keys",
     "create_route_snapshot",
     "get_route_snapshots",
     "get_latest_route_snapshot",
@@ -578,6 +579,21 @@ async def resolve_monitoring_alerts(
             )
         await db.commit()
         return cursor.rowcount or 0
+    finally:
+        await db.close()
+
+
+async def list_open_monitoring_alert_keys(host_id: int, metric: str) -> list[str]:
+    """The dedup keys of a host's open alerts of one metric: the alerts a
+    source that raises one alert per item (a module) may have to clear."""
+    db = await _dbcore.get_db(read_only=True)
+    try:
+        cursor = await db.execute(
+            """SELECT DISTINCT dedup_key FROM monitoring_alerts
+               WHERE host_id = ? AND metric = ? AND acknowledged = 0""",
+            (int(host_id), metric),
+        )
+        return [str(r["dedup_key"]) for r in rows_to_list(await cursor.fetchall()) if r["dedup_key"]]
     finally:
         await db.close()
 

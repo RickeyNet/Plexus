@@ -13,7 +13,8 @@ whose source is an inventory host to ``process_syslog_batch`` here, which
   configuration change (``SYS-5-CONFIG_I`` and its equivalents), debounced
   and rate limited per host, and
 - schedules an immediate monitoring re-poll of a host that logged an
-  interface going down or a reload / restart
+  interface going down, a module (line card, supervisor, stack member)
+  going down or back online, or a reload / restart
   (``netcontrol.monitoring_repoll``).
 
 ``process_recollect_batch`` gets every syslog message, from inventory hosts
@@ -93,9 +94,9 @@ COALESCE_SECONDS = 5.0
 # The most host / rule / instance counters kept in memory.
 COUNTERS_MAX = 10000
 
-# Re-poll: after an interface-down or restart message, after a reload
-# message (the device is still up when it logs one), and at most once per
-# host in this many seconds.
+# Re-poll: after an interface-down, module (down or online again) or
+# restart message, after a reload message (the device is still up when it
+# logs one), and at most once per host in this many seconds.
 REPOLL_DELAY_SECONDS = 5.0
 RELOAD_REPOLL_DELAY_SECONDS = 30.0
 REPOLL_MIN_INTERVAL_SECONDS = 60.0
@@ -445,6 +446,92 @@ _AOSS_INTERNAL_PSU = r"\bInternal power supply (\S+) is\b"
 _ARISTA_PSU = r"\b(PowerSupply\d+)"
 _ARISTA_FAN = r"\b(Fan\d+(?:/\d+)?)"
 
+# Modules: the slot of an IOS XE card or SPA ("... in slot R1", "... from
+# chassis 2 slot 1" on StackWise Virtual: "2/1", "... in subslot 6/0"), an
+# NX-OS module, supervisor or fabric module (Xbar) number, a classic stack
+# member's switch number and the jnxFruName of a Junos FRU.
+_IOSXE_SLOT = r"\b(?:in|from) (?:chassis (\d+) )?(?:sub)?slot ([^\s,]+)"
+_NXOS_MODULE = r"\b(?:Module|Supervisor) (\d+)"
+_NXOS_XBAR = r"\b(Xbar \d+)"
+_JUNOS_FRU_NAME = r"\bjnxFruName ([^,)]+)"
+# JUNIPER-MIB jnxFruType of the FRUs that are modules: FPC (3), SFM (4),
+# control board (5), routing engine (6), SIB (9), PIC (11), line card
+# chassis (14), FEB (15), switch fabric board (19), adapter card (20). Power
+# entry modules, fans and power supplies have their own rules.
+_JUNOS_MODULE_FRU = r" \([^)]*\bjnxFruType (?:3|4|5|6|9|11|14|15|19|20)\b"
+
+# A module (line card, supervisor, SPA / sub-module, fabric module, stack
+# member) that failed, went offline, lost power or was removed: the module
+# rule raises on these, and the re-poll trigger acts on them and on
+# MODULE_UP.
+MODULE_DOWN: tuple[Matcher, ...] = (
+    # IOS XE (Catalyst 9400 / 9600 and StackWise Virtual, ASR 1000, ISR
+    # 4000), System Message Guide for Catalyst Series Switches 17.3.x:
+    # "Card (rp) offline in slot R1", "Card (cc) removed from chassis 2 slot
+    # 1". INSCARD (inserted) is no fault.
+    _m("IOSXE_OIR-OFFLINECARD", "IOSXE_OIR-REMCARD", instance=_IOSXE_SLOT),
+    # SPAs and line card sub-modules: "SPA removed from subslot 6/0,
+    # interfaces disabled", "SPA (C9600-LC-48TX) offline in subslot 6/0",
+    # "Card removed from subslot 0/1, interfaces disabled". A SPA an
+    # operator stops (hw-module subslot ... stop) logs IOSXE_OIR
+    # SOFT_STOPSPA instead and is not counted.
+    _m("IOSXE_OIR-REMSPA", "SPA_OIR-OFFLINECARD", "SPA_OIR-REMCARD", instance=_IOSXE_SLOT),
+    # Catalyst 3750 / 2975 stack (Catalyst 3750 ... 2960 Switch System
+    # Message Guide): "Switch 2 has been REMOVED from the stack."
+    _m("STACKMGR-SWITCH_REMOVED", instance=r"\bSwitch (\d+) has been removed from the stack\b"),
+    # Catalyst 6500 (Cisco TechNote "Line Cards Power Down due to
+    # Communication Failures"): "power to module in slot 2 set off (Module
+    # Failed SCP dnld)"; the facility names the processor (C6KPWR-SP).
+    _m(prefixes=("C6KPWR-",), text=r"\bpower to module in slot \d+ set off\b", instance=r"\bmodule in slot (\d+)"),
+    # NX-OS (Nexus 9000 System Messages Reference): "Initialization of
+    # module 3 (Serial number: X) failed", "Re-initializing module 3 ...
+    # failed", "Module 3 not responding... resetting", "Module 3 removed
+    # (Serial number X)", "Module 3 powered down (...)", "Module 3 failed
+    # to power up (...)", "... can not be powered up due to insufficient
+    # power", "Giving up after multiple attempts were made to bring up the
+    # Module 3".
+    _m(
+        "MODULE-MOD_FAIL",
+        "MODULE-MOD_FAILURE",
+        "MODULE-MOD_NOT_ALIVE",
+        "PLATFORM-MOD_REMOVE",
+        "PLATFORM-MOD_PWRDN",
+        "PLATFORM-MOD_PWRFAIL",
+        "PLATFORM-MOD_PWRFAIL_MULTI",
+        "PLATFORM-MOD_PWRDENY",
+        "PLATFORM-MOD_BRINGUP_MULTI_LIMIT",
+        instance=_NXOS_MODULE,
+    ),
+    # NX-OS fabric modules: "Xbar 2 removed (...)", "Xbar 2 powered down
+    # (...)", "Xbar 2 failed to power up (...)".
+    _m("PLATFORM-XBAR_REMOVE", "PLATFORM-XBAR_PWRDN", "PLATFORM-XBAR_PWRFAIL", instance=_NXOS_XBAR),
+    # Junos (JUNIPER-MIB jnxFruRemoval, jnxFruPowerOff, jnxFruFailed,
+    # jnxFruOffline): "SNMP trap generated: FRU power off (jnxFruContentsIndex
+    # 7, ..., jnxFruName FPC: ... @ 0/*/*, jnxFruType 3, jnxFruSlot 0,
+    # jnxFruOfflineReason 2, ...)". An operator's power off, CLI command or
+    # offline button (jnxFruOfflineReason 5, 7, 8) is not counted.
+    _m(
+        prefixes=("CHASSISD_SNMP_TRAP",),
+        text=r"\bFRU (?:removal|power off|failed|offline)" + _JUNOS_MODULE_FRU,
+        exclude=r"\bjnxFruOfflineReason [578]\b",
+        instance=_JUNOS_FRU_NAME,
+    ),
+)
+# The same module online again: clears the module rule, and re-polls.
+MODULE_UP: tuple[Matcher, ...] = (
+    # IOS XE: "Card (cc) online in slot 1", "SPA (C9600-LC-24C) online in
+    # subslot 1/0".
+    _m("IOSXE_OIR-ONLINECARD", "SPA_OIR-ONLINECARD", instance=_IOSXE_SLOT),
+    # Catalyst 3750 / 2975 stack: "Switch 2 is READY."
+    _m("STACKMGR-SWITCH_READY", instance=r"\bSwitch (\d+) is ready\b"),
+    # NX-OS: "Module 3 is online (Serial number: X)", "Supervisor 2 is
+    # standby", "Supervisor 1 is active (...)", "Xbar 2 is online (...)".
+    _m("MODULE-MOD_OK", "MODULE-ACTIVE_SUP_OK", "MODULE-STANDBY_SUP_OK", instance=_NXOS_MODULE),
+    _m("MODULE-XBAR_OK", instance=_NXOS_XBAR),
+    # Junos jnxFruOnline: "SNMP trap generated: FRU online (...)".
+    _m(prefixes=("CHASSISD_SNMP_TRAP",), text=r"\bFRU online" + _JUNOS_MODULE_FRU, instance=_JUNOS_FRU_NAME),
+)
+
 BUILTIN_RULES: tuple[BuiltinRule, ...] = (
     BuiltinRule(
         key="link_flap",
@@ -661,6 +748,26 @@ BUILTIN_RULES: tuple[BuiltinRule, ...] = (
         auto_resolve_minutes=1440,
     ),
     BuiltinRule(
+        key="module",
+        name="Module down",
+        description=(
+            "A line card, supervisor, SPA, fabric module or stack member failed, went offline, lost power or was "
+            "removed; resolved when it is online again, or after 24 hours."
+        ),
+        families=(
+            "Cisco IOS XE (Catalyst 9400 / 9600, StackWise Virtual, ASR 1000, ISR 4000)",
+            "Cisco Catalyst 3750 / 2975 stacks (classic IOS)",
+            "Cisco Catalyst 6500 (classic IOS)",
+            "Cisco NX-OS",
+            "Juniper Junos",
+        ),
+        severity="critical",
+        raise_on=MODULE_DOWN,
+        clear_on=MODULE_UP,
+        # The Catalyst 6500 power-off has no documented recovery message.
+        auto_resolve_minutes=1440,
+    ),
+    BuiltinRule(
         key="auth_failure",
         name="Repeated login failures",
         description=(
@@ -865,10 +972,13 @@ def is_config_change(parsed: ParsedSyslog) -> bool:
 
 
 def repoll_reason(parsed: ParsedSyslog) -> str:
-    """``interface_down``, ``reload``, ``restart`` or "" for a message that
-    does not trigger a re-poll."""
+    """``interface_down``, ``module`` (a module down or online again),
+    ``reload``, ``restart`` or "" for a message that does not trigger a
+    re-poll."""
     if _first(INTERFACE_DOWN, parsed) is not None:
         return "interface_down"
+    if _first(MODULE_DOWN, parsed) is not None or _first(MODULE_UP, parsed) is not None:
+        return "module"
     if _first(RELOAD, parsed) is not None:
         return "reload"
     if _first(RESTART, parsed) is not None:
@@ -886,7 +996,9 @@ _TAG_OWNERS: tuple[tuple[str, tuple[Matcher, ...]], ...] = (
 
 def tag_owner(tag: str) -> str:
     """The built-in rule (its key) or trigger (``config_change``, ``repoll``)
-    that has a message form with ``tag``, or "". A message with such a tag
+    that has a message form with ``tag``, or "" (a module message is owned by
+    the ``module`` rule, which shares its forms with the re-poll trigger). A
+    message with such a tag
     that nothing acted on did not meet the text pattern of that form: the
     opposite event (``LINK-UPDOWN`` ... ``to up``), or wording the pattern
     does not cover."""

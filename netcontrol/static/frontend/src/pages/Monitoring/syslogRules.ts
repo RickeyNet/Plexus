@@ -35,6 +35,7 @@ export const SYSLOG_BUILTIN_METRICS: { value: string; label: string }[] = [
   { value: 'syslog_bgp_neighbor', label: 'Syslog: BGP neighbor down' },
   { value: 'syslog_power_supply', label: 'Syslog: Power supply fault' },
   { value: 'syslog_fan', label: 'Syslog: Fan fault' },
+  { value: 'syslog_module', label: 'Syslog: Module down' },
   { value: 'syslog_auth_failure', label: 'Syslog: Repeated login failures' },
 ];
 
@@ -59,6 +60,7 @@ export function autoResolveLabel(minutes: number): string {
 /** What a repoll reason from the test endpoint means. */
 export function repollLabel(reason: string): string {
   if (reason === 'interface_down') return 'Re-poll in 5 s (interface down)';
+  if (reason === 'module') return 'Re-poll in 5 s (module down or back online)';
   if (reason === 'reload') return 'Re-poll in 30 s (reload)';
   if (reason === 'restart') return 'Re-poll in 5 s (restart)';
   return '';

@@ -27,6 +27,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 import netcontrol.routes.state as state
+from netcontrol import health_checks, snmp_health
 from netcontrol.drivers import supports_cli
 from netcontrol.integrations.apc import snmp as apc_snmp
 from netcontrol.integrations.availability import ENTITY_TYPES as TOPOLOGY_ENTITY_TYPES
@@ -274,6 +275,25 @@ async def _poll_host_monitoring(host: dict, cred: dict, snmp_cfg: dict) -> dict:
                 return await _in_turn(
                     lambda: _snmp_walk(host["ip_address"], 5.0, snmp_cfg, oid, return_errors=True, engine=snmp_engine)
                 )
+
+            async def _walk_table(oid: str, cap: int = health_checks.WALK_MAX_ROWS) -> tuple[dict, bool]:
+                """A walk and whether it ran to its end: a table cut short by
+                a timeout, or by the row cap (the walk stops there without an
+                error), must not read as rows that left it. ``cap``: the
+                health walks' cap, or a reader's own (hardware components)."""
+                if snmp_engine is None:
+                    rows, error = await _snmp_walk(
+                        host["ip_address"], 5.0, snmp_cfg, oid, max_rows=cap, return_errors=True
+                    )
+                else:
+                    errors_before = len(snmp_errors)
+                    rows = await _in_turn(
+                        lambda: _snmp_walk(
+                            host["ip_address"], 5.0, snmp_cfg, oid, max_rows=cap, return_errors=True, engine=snmp_engine
+                        )
+                    )
+                    error = snmp_errors[-1] if len(snmp_errors) > errors_before else None
+                return rows, health_checks.walk_complete(rows, error, cap)
 
             async def _get(oids: tuple[str, ...]) -> dict:
                 return await _in_turn(
@@ -578,6 +598,15 @@ async def _poll_host_monitoring(host: dict, cred: dict, snmp_cfg: dict) -> dict:
 
             result["if_details"] = if_details
 
+            # State-based health (netcontrol/health_checks.py): hardware
+            # modules, power supplies, fans, temperature, BGP peers and OSPF
+            # neighbors, one walk of each status table the device type has,
+            # names only for the items down. Not asked of a device that
+            # answered none of the walks above: it would only wait out more
+            # timeouts.
+            if uptime_vals or if_oper:
+                result.update(await health_checks.read_health(host["id"], device_type, _get, _walk_table))
+
             # An APC UPS: its battery, output and identity (PowerNet-MIB).
             if device_type == apc_snmp.STATUS_KIND:
                 result["ups"] = await apc_snmp.read_ups_status(_get, _walk)
@@ -786,6 +815,8 @@ def _metric_value_from_poll(res: dict, metric: str) -> float | None:
         "if_up": float(res.get("if_up_count", 0)),
         "uptime": float(res.get("uptime_seconds") or 0),
     }
+    if metric in health_checks.METRICS:
+        return health_checks.metric_value(res, metric)
     if metric in apc_snmp.UPS_METRICS:
         return apc_snmp.ups_metric_value(res.get("ups"), metric)
     if metric in opnsense_health.FIREWALL_METRICS:
@@ -933,11 +964,24 @@ async def _evaluate_alerts_for_poll(
     for metric in opnsense_health.firewall_cleared_alerts(firewall_health, firewall_checks):
         await db.resolve_monitoring_alerts(opnsense_health.alert_dedup_key(host_id, metric))
 
+    # State-based health checks (modules, power supplies, fans, temperature,
+    # BGP peers, OSPF neighbors): one alert per item that is down, each
+    # cleared when its item reads OK, is disabled by an operator or left the
+    # table. A poll that read no table of a check clears nothing (and costs
+    # no query).
+    for check in health_checks.CHECKS:
+        check_status = res.get(check.result_key) or {}
+        built_in_checks.extend(snmp_health.alert_checks(check, host_id, check_status))
+        if check_status:
+            open_keys = await db.list_open_monitoring_alert_keys(host_id, check.metric)
+            for key in snmp_health.cleared_keys(check, host_id, check_status, open_keys):
+                await db.resolve_monitoring_alerts(key)
+
     # Fire built-in checks with dedup + suppression
     for chk in built_in_checks:
         if await _suppressed(chk["metric"]):
             continue
-        dedup_key = f"{host_id}:{chk['metric']}:{chk['alert_type']}"
+        dedup_key = chk.get("dedup_key") or f"{host_id}:{chk['metric']}:{chk['alert_type']}"
         await db.create_monitoring_alert(
             host_id=host_id,
             poll_id=poll_id,
@@ -2566,7 +2610,8 @@ async def topology_availability_summary_api(
     """Uptime of the devices, sites, uplinks, tunnels, VPN connections,
     circuits, peerings and links that integrations collect. Each entity also
     carries the window means of the latency, jitter and loss its vendor
-    reports (``null`` when none: only OPNsense gateways today), of its
+    reports (``null`` when none: OPNsense gateways, Meraki uplinks and Cato
+    WAN links report them), of its
     traffic in / out in bits per second (``avg_in_bps`` / ``avg_out_bps``,
     ``null`` when none: OPNsense tunnels and OpenVPN servers today) and
     ``sla_status``, the worst latest status of the SLA targets that apply

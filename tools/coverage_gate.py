@@ -23,6 +23,22 @@ DEFAULT_RULES = {
     # Floor from tests/test_monitoring.py (alert eval, suppression,
     # availability, escalation). Raise as endpoint/poller tests land.
     "netcontrol/routes/monitoring.py": 20.0,
+    # Hardware module health in the poll: classification, the bounded read
+    # and per-module raise/clear. Measured by tests/test_module_health.py
+    # and tests/test_environment_health.py (100%).
+    "netcontrol/module_health.py": 95.0,
+    # The poll's other state-based SNMP health checks on the same shape:
+    # the shared table reader and raise/clear (snmp_health), power supplies,
+    # fans and temperature per vendor (environment_health), BGP peers and
+    # OSPF neighbors (routing_health), the per-device-type plan and the
+    # empty-table memory (health_checks). Measured by
+    # tests/test_environment_health.py, tests/test_routing_health.py and
+    # tests/test_health_checks.py (99-100%); do not lower them to land a
+    # change.
+    "netcontrol/snmp_health.py": 95.0,
+    "netcontrol/environment_health.py": 95.0,
+    "netcontrol/routing_health.py": 95.0,
+    "netcontrol/health_checks.py": 95.0,
     # Floor from tests/test_jobs.py (param coercion, queue ordering,
     # dependency gating, event writer). The runner itself is untested.
     "netcontrol/routes/jobs.py": 25.0,

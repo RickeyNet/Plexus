@@ -49,6 +49,10 @@ _RELATED: tuple[tuple[str, re.Pattern[str]], ...] = tuple(
         ("bgp_neighbor", r"\bBGP\w*"),
         ("fan", r"\bFAN(?:S|FAIL|OK|MOD|TRAY)?\b|\bBLOWER\b"),
         ("power_supply", r"\bPOWER ?SUPPL\w*|\bPSU?\b|\bPEM\w*|\bPWR\w*"),
+        (
+            "module",
+            r"\bMODULES?\b|\bMOD\b|\bLINE ?CARDS?\b|\bOIR\b|\bSPA\b|\bSTACKMGR\b|\bSUP(?:ERVISOR\w*)?\b|\bXBAR\b|\bFRU\b",
+        ),
         ("link_flap", r"\bLINK\b|\bLINEPROTO\b|\bUPDOWN\b|\bETHPORT\b|\bIF DOWN\b|\bPORT STATE\b"),
         ("auth_failure", r"\bLOGIN\w*|\bAUTH\w*|\bFAILED PASSWORD\b|\bSSHD?\b.*\bFAIL\w*"),
         ("config_change", r"\bCONFIG\w*|\bCOMMIT\w*"),

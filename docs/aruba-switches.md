@@ -122,5 +122,12 @@ so advisories for the three platforms are entered by hand or imported
 - AOS-CX and Instant On have no vendor CPU/memory OID set; a switch that
   does not answer HOST-RESOURCES-MIB shows no CPU or memory. A vendor OID
   override (Monitoring, vendor OIDs) can name others.
+- The monitoring poll reads power supplies, fans and temperature over
+  SNMP: AOS-Switch from HP-ICF-CHASSIS `hpicfSensorTable`, AOS-CX from
+  ARUBAWIRED-POWERSUPPLY-MIB and ARUBAWIRED-FAN-MIB (its temperature
+  sensor state is a free string the MIB does not enumerate, so it is not
+  read), and BGP peers and OSPF neighbors from BGP4-MIB and OSPF-MIB.
+  Instant On is not read for its environment. Not run against a switch
+  (see `docs/monitoring.md#power-supplies-fans-and-temperature`).
 - HP Comware switches (`hp_comware`) have no driver: they are sent the
   Cisco IOS commands.

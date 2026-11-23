@@ -123,6 +123,11 @@ hand or imported (`docs/software-versions.md`). See
 - No vendor CPU / memory OID set is built in. A switch that does not answer
   HOST-RESOURCES-MIB shows no CPU or memory until a vendor OID override
   (Monitoring, vendor OIDs) names the OIDs of its private MIB.
+- The monitoring poll reads a managed switch's power supplies, fans and
+  temperature sensors from NETGEAR-BOXSERVICES-PRIVATE-MIB, and the BGP
+  peers and OSPF neighbors of any of the three from BGP4-MIB and OSPF-MIB
+  (see `docs/monitoring.md#power-supplies-fans-and-temperature`). Smart
+  switches and access points are not read for their environment.
 - The path trace reads a managed switch's configuration and route table
   with the Cisco IOS reader, which was not written for them: treat its
   result for a Netgear hop as unverified.

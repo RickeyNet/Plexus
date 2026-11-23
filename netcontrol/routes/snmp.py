@@ -920,6 +920,22 @@ def _snmp_str(raw_value) -> str:
     return s
 
 
+def snmp_int(raw_value: Any) -> int | None:
+    """An SNMP value as an integer; None for a missing value, a pysnmp
+    sentinel (NoSuchInstance ...) or anything that is not a whole number."""
+    text = _snmp_str(raw_value) if raw_value is not None else ""
+    try:
+        return int(text)
+    except TypeError, ValueError:
+        return None
+
+
+def oid_sort_key(oid: str) -> tuple[int, ...]:
+    """An OID (or an OID suffix such as a table index) as numbers, so rows
+    sort in MIB order (``1.10`` after ``1.9``)."""
+    return tuple(int(part) for part in oid.split(".") if part.isdigit())
+
+
 # ── SNMP trap decoding ───────────────────────────────────────────────────────
 
 SNMP_TRAP_OID = "1.3.6.1.6.3.1.1.4.1.0"  # snmpTrapOID.0

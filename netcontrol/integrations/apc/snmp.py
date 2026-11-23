@@ -41,7 +41,14 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from netcontrol.integrations.apc.firmware import DEVICE_TYPE, ups_version
-from netcontrol.routes.snmp import APC_UPS_MODEL_OID, APC_UPS_SERIAL_OID, _snmp_str, parse_apc_nmc_sys_descr
+from netcontrol.routes.snmp import (
+    APC_UPS_MODEL_OID,
+    APC_UPS_SERIAL_OID,
+    _snmp_str,
+    oid_sort_key as _oid_key,
+    parse_apc_nmc_sys_descr,
+    snmp_int as _int,
+)
 
 # The kind of the vendor status row (``host_vendor_status.kind``).
 STATUS_KIND = DEVICE_TYPE
@@ -200,14 +207,6 @@ def alert_dedup_key(host_id: int, metric: str) -> str:
     return f"{host_id}:{metric}:{alert_type(metric)}"
 
 
-def _int(raw: Any) -> int | None:
-    text = _snmp_str(raw) if raw is not None else ""
-    try:
-        return int(text)
-    except TypeError, ValueError:
-        return None
-
-
 def _precise(tenths: Any, whole: Any) -> float | None:
     """A reading from its high-precision object (tenths), else its plain one."""
     value = _int(tenths)
@@ -235,10 +234,6 @@ def _battery_temperature(values: dict[str, Any]) -> float | None:
     if whole is None or whole == _TEMPERATURE_NOT_PRESENT:
         return None
     return float(whole)
-
-
-def _oid_key(oid: str) -> tuple[int, ...]:
-    return tuple(int(part) for part in oid.split(".") if part.isdigit())
 
 
 def _probe_temperature(rows: dict | None) -> float | None:

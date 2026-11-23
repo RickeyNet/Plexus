@@ -40,7 +40,7 @@ with a limit of 90 seconds per host. A poll has three independent parts:
 
 | Part | When it runs | What it reads |
 |---|---|---|
-| SNMP | The host's effective SNMP settings are enabled: its own SNMP profile, else its group's profile, else the group's legacy profile, else the global SNMP settings | CPU, memory, uptime, interface status, speed, traffic and error counters |
+| SNMP | The host's effective SNMP settings are enabled: its own SNMP profile, else its group's profile, else the group's legacy profile, else the global SNMP settings | CPU, memory, uptime, interface status, speed, traffic and error counters, and the state of the hardware modules, power supplies, fans, temperature sensors, BGP peers and OSPF neighbors (see [Hardware module health](#hardware-module-health), [Power supplies, fans and temperature](#power-supplies-fans-and-temperature) and [BGP peers and OSPF neighbors](#bgp-peers-and-ospf-neighbors)) |
 | SSH | A service credential is set | VPN tunnels (`show crypto isakmp sa`, or `show vpn-sessiondb summary` on an ASA) and the route table |
 | ICMP | When the server can ping and ICMP is not switched off | Response time and packet loss (3 pings, 2 second timeout) |
 
@@ -76,9 +76,159 @@ dashboard panels and graph templates:
 | `vpn_tunnels_up`, `vpn_tunnels_down` | VPN tunnels |
 | `route_count` | Routes in the global table |
 | `if_in_errors`, `if_out_errors`, `if_in_discards`, `if_out_discards` | Interface counters, with `_rate` versions per second |
+| `module_down` | Hardware modules down (only when the poll read the module table) |
+| `power_supply_down`, `fan_down`, `temperature_alarm` | Power supplies down, fans down, temperature sensors in alarm (each only when the poll read a table for it) |
+| `bgp_peer_down`, `ospf_neighbor_down` | BGP peers down, OSPF neighbors down (each only when the poll read the table) |
 
 Interface traffic is stored separately per interface and shown on the
 device detail page.
+
+### Hardware module health
+
+The SNMP part of the poll also reads the operational state of a chassis's
+modules (line cards, supervisors, sub-modules), so a module that failed,
+or never came back after a reload, raises an alert even when its syslog
+message was lost:
+
+| Platform | Read |
+|---|---|
+| Cisco IOS, IOS XE, NX-OS, IOS XR | `cefcModuleOperStatus` (CISCO-ENTITY-FRU-CONTROL-MIB), names and models from ENTITY-MIB |
+| Juniper Junos | `jnxFruState` (JUNIPER-MIB `jnxFruTable`), the FRUs that are modules (FPC, PIC, routing engine, control and fabric boards); not fans or power supplies |
+
+Any other platform is not asked. A healthy chassis costs one SNMP walk per
+poll; the names are read only for the modules that are down.
+
+A module that is not working (Cisco: failed, missing, mismatched,
+diagnostics failed, powered down, power denied, out of service for
+temperature, firmware mismatch or download failure; Juniper: offline)
+raises one `module_down` alert of its own, critical, with a message such
+as `Slot 3 (LC-48X-EXAMPLE) is failed`, so a second module failing is a
+new alert and a new notification. A module that is booting, in self test,
+syncing, upgrading or in another passing state neither raises an alert nor
+resolves an open one. A module an operator disabled or took offline is not
+an alert. The alert is resolved (`auto-resolved`) at the first poll that
+reads the module OK, disabled by an operator, or no longer in the table. A
+poll that read no module table (SNMP off or timed out, a device without
+the MIB) raises and resolves nothing; an empty module table resolves the
+open module alerts at the third empty poll in a row (see
+[Cost of the health reads](#cost-of-the-health-reads)).
+
+Not covered: a module that leaves the table without ever reading not OK,
+stack members (CISCO-STACKWISE-MIB) and supervisor redundancy
+(CISCO-RF-MIB). Per platform, see
+[Hardware module health](vendor-monitoring-coverage.md#hardware-module-health).
+
+### Power supplies, fans and temperature
+
+The SNMP part of the poll reads the state of the power supplies, fans and
+temperature sensors, so a failed supply or fan, or a hot sensor, raises an
+alert without a syslog message or a trap:
+
+| Platform | Power supplies | Fans | Temperature |
+|---|---|---|---|
+| Cisco IOS, IOS XE, NX-OS, IOS XR, ASA, FTD | `ciscoEnvMonSupplyState` (CISCO-ENVMON-MIB), else `cefcFRUPowerOperStatus` (CISCO-ENTITY-FRU-CONTROL-MIB) of the entities of class power supply | `ciscoEnvMonFanState`, else `cefcFanTrayOperStatus` | `ciscoEnvMonTemperatureState`, else the thresholds of the celsius sensors (CISCO-ENTITY-SENSOR-MIB `entSensorThresholdEvaluation`) |
+| Juniper Junos | `jnxFruState` of the power FRUs (JUNIPER-MIB `jnxFruTable`, the same walk as the modules) | `jnxFruState` of the fan FRUs | Not read |
+| Arista EOS | `entStateOper` (ENTITY-STATE-MIB) of the power supply entities | `aristaFanStateOper` (ARISTA-ENTITY-SENSOR-MIB) | `entStateAlarm` (ENTITY-STATE-MIB) of the celsius sensors |
+| PAN-OS | `entStateOper` of the power supply entities | `entStateOper` of the fan entities | `entStateAlarm` of the celsius sensors |
+| Fortinet FortiOS | `fgHwSensorEntAlarmStatus` (FORTINET-FORTIGATE-MIB) of the sensors named as a supply | the same, sensors named as a fan | the same, sensors named as a temperature |
+| HPE Aruba AOS-Switch | `hpicfSensorStatus` (HP-ICF-CHASSIS) of the power supply sensors | the same, fan sensors | the same, temperature sensors |
+| HPE Aruba AOS-CX | `arubaWiredPSUStateEnum` (ARUBAWIRED-POWERSUPPLY-MIB) | `arubaWiredFanStateEnum` (ARUBAWIRED-FAN-MIB) | Not read |
+| Netgear managed switches (`netgear_prosafe`) | `boxServicesPowSupplyItemState` (NETGEAR-BOXSERVICES-PRIVATE-MIB) | `boxServicesFanItemState` | `boxServicesTempSensorState` |
+
+Any other platform is not asked. One alert per supply, fan or fan tray, or
+sensor: `power_supply_down` (critical, as the power supply syslog rule),
+`fan_down` (warning, as the fan syslog rule) and `temperature_alarm`
+(warning or critical, as the device's sensor state or crossed threshold
+says; warning where the device gives no severity, as on FortiOS). The
+alert is resolved at the first poll that reads the item OK, turned off or
+locked by an operator, or no longer in the table. An empty bay (not
+present, empty) is not an item. A state on its way somewhere (unknown,
+testing, initializing, a sensor that does not work) neither raises nor
+resolves. A poll that read no table raises and resolves nothing; a table
+read empty counts as "no items" only after three polls in a row (see
+[Cost of the health reads](#cost-of-the-health-reads)).
+
+Limits: a supply pulled from its bay leaves the table (its alert resolves);
+FortiOS sensors are told apart by their names, as the MIB gives no type;
+Juniper and AOS-CX temperatures are not read (no per-sensor state in the
+MIB); Aruba Instant On and Netgear smart switches are not read. OPNsense
+temperature is read over its API (see
+[OPNsense firewall metrics](#opnsense-firewall-metrics)). Per platform, see
+[Power supplies, fans and temperature](vendor-monitoring-coverage.md#power-supplies-fans-and-temperature).
+
+### BGP peers and OSPF neighbors
+
+The SNMP part of the poll reads the state of the BGP peers and OSPF
+neighbors of every SNMP-polled host except a UPS: the standard BGP4-MIB
+and OSPF-MIB, and where the vendor has a peer table that also lists IPv6
+peers, that table first:
+
+| Platform | BGP | OSPF |
+|---|---|---|
+| Cisco | `cbgpPeer2State` (CISCO-BGP4-MIB), else `bgpPeerState` (BGP4-MIB) | `ospfNbrState` (OSPF-MIB) |
+| Juniper Junos | `jnxBgpM2PeerState` (BGP4-V2-MIB-JUNIPER), else `bgpPeerState` | `ospfNbrState` |
+| Arista EOS | `aristaBgp4V2PeerState` (ARISTA-BGP4V2-MIB), else `bgpPeerState` | `ospfNbrState` |
+| Any other SNMP platform | `bgpPeerState` | `ospfNbrState` |
+
+One critical alert per peer (`bgp_peer_down`) or neighbor
+(`ospf_neighbor_down`), as the BGP and OSPF syslog rules, with a message
+such as `BGP peer 192.0.2.1 (AS 64500) is active`.
+
+- **BGP.** A peer not established is down. A peer an operator stopped
+  (`neighbor ... shutdown`) is not an alert and resolves one. A peer that
+  has never been established is not alerted: neither the device's
+  established-transitions counter nor Plexus has seen it up, as for a peer
+  configured ahead of its turn-up or a decommissioned one left in the
+  configuration. Once a peer has been up it alerts until it is established
+  again, shut down, or removed from the configuration. A suppression on
+  `bgp_peer_down` silences a whole host.
+- **OSPF.** Full and 2-way are healthy: two routers on a broadcast segment
+  that are neither designated router nor backup stay in 2-way by design,
+  and the neighbor table does not say the network type, so 2-way counts as
+  healthy on every link. Any other state (down, attempt, init, exchange
+  start, exchange, loading) raises an alert when a neighbor is in it at two
+  polls in a row. A neighbor whose adjacency drops leaves the table, so a
+  neighbor Plexus has seen healthy that is gone from the table is down too
+  (`gone from the neighbor table`, also after two polls). It is remembered
+  for 24 hours after it was last seen healthy; then its alert resolves.
+
+Limits: OSPFv3 neighbors, and BGP peers in Cisco VRFs that only an SNMP
+context shows, are not read. Plexus's memory of the peers and neighbors it
+has seen up is lost on a restart: a neighbor that is gone at that moment
+has its alert resolved at the next poll.
+
+### Cost of the health reads
+
+Each table is one walk of its state column per poll; names and details are
+read with GETs only for the items that are not OK (and, where a table mixes
+kinds, the class or type of those items). Per poll and host, in walks:
+Cisco IOS and IOS XE 6 (modules, supplies, fans, temperature, BGP, OSPF),
+Juniper 3, Arista 5, PAN-OS 4, FortiOS and AOS-Switch 3, AOS-CX 4, Netgear
+5, any other SNMP platform 2. The reads run at the same time. A health
+walk may return up to 5,000 rows; one that reaches that is treated as cut
+short.
+
+Empty tables are handled the same way for every check:
+
+- A walk cut short (a timeout, the row limit) is "not read": it raises
+  and resolves nothing, and does not count as empty.
+- A table read to its end with no row is "not read" too until it has been
+  empty at three polls in a row (a device polled just after a reload may
+  answer a hardware table empty before it fills it, so the next poll
+  reads it again). From the third, it is "no items": the open alerts of
+  its check on the host resolve, nothing is raised, and no metric sample
+  is written.
+- A table that has never had rows on the host, once empty at three polls
+  in a row, is not walked again for an hour: a missing MIB (NX-OS: the
+  CISCO-ENVMON-MIB tables, then read from the FRU and sensor tables)
+  costs one walk an hour, and a table that starts answering (a first BGP
+  peer) is read within the hour. A table that has had rows is walked at
+  every poll.
+- The OSPF neighbor table is read as it is: when the host's last neighbor
+  leaves it, the empty table goes through the two-poll and gone rules at
+  once.
+
+The memory is kept in the server process; a restart starts it over.
 
 ### OPNsense firewall metrics
 
@@ -141,6 +291,9 @@ Alerts come from these sources:
 | CPU or memory at or above the threshold in **Settings > Monitoring** (default 90%) | `cpu`, `memory` | Warning, critical at 95% or more |
 | Interfaces down but not admin down | `interface_down` | Warning |
 | VPN tunnels down | `vpn_down` | Warning |
+| A hardware module not working (one alert per module) | `module_down` | Critical; see [Hardware module health](#hardware-module-health) |
+| A power supply or fan down, a temperature sensor in alarm (one alert per item) | `power_supply_down`, `fan_down`, `temperature_alarm` | Critical; warning; the device's; see [Power supplies, fans and temperature](#power-supplies-fans-and-temperature) |
+| A BGP peer or OSPF neighbor down (one alert per peer or neighbor) | `bgp_peer_down`, `ospf_neighbor_down` | Critical; see [BGP peers and OSPF neighbors](#bgp-peers-and-ospf-neighbors) |
 | Route table changed between full reads | `route_churn` | Warning, critical for a change of 10 routes or more |
 | Alert rules | the rule's metric | the rule's severity |
 | SLA targets (of hosts, and of integration entities such as OPNsense gateways) | `sla_<metric>` | see [SLA monitoring](sla-monitoring.md) |
@@ -151,7 +304,7 @@ While an alert is unacknowledged, the same condition on the same host only
 raises its count and **Last seen**; a notification is sent only for a new
 alert. After you acknowledge it, the next occurrence opens a new alert.
 There is no **Resolve** button: an alert stays open until someone
-acknowledges it. Meraki alerts, Cato egress and shared host findings and integration
+acknowledges it. Hardware module alerts, Meraki alerts, Cato egress and shared host findings and integration
 entities acknowledge their own alerts as `auto-resolved` when the condition
 clears.
 
@@ -181,6 +334,7 @@ use acknowledge and suppressions.
 | Memory % | Memory use |
 | Interfaces Down | Interfaces down but not admin down |
 | VPN Tunnels Down | VPN tunnels down |
+| Hardware Modules Down | Hardware modules down (Cisco and Juniper) |
 | Route Count | Routes in the global table |
 | Uptime (seconds) | Device uptime |
 | Firewall disk used %, temperature, state table entries, state table %, load average | The [OPNsense firewall metrics](#opnsense-firewall-metrics) |

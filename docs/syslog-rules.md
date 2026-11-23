@@ -11,9 +11,9 @@ acts on it:
   changed (`%SYS-5-CONFIG_I` and its equivalents) starts a configuration
   backup and drift check of that host, instead of waiting for the backup
   schedule.
-- **Faster down detection**: an interface-down, reload or restart message
-  starts a monitoring poll of that host within seconds, instead of waiting
-  for the next poll.
+- **Faster down detection**: an interface-down, module down or back
+  online, reload or restart message starts a monitoring poll of that host
+  within seconds, instead of waiting for the next poll.
 
 An OPNsense firewall's messages also act when it is no inventory host: a
 gateway alarm, CARP transition, VPN tunnel up / down or configuration save
@@ -88,6 +88,7 @@ severity; the patterns, threshold and auto-resolve time are fixed.
 | BGP neighbor down (`syslog_bgp_neighbor`) | `BGP-5-ADJCHANGE` / IOS XR `ROUTING-BGP-5-ADJCHANGE` / FortiOS `FGT-0103020300` (BGP neighbor status changed) `neighbor X Down`, `BGP-5-NBR_RESET`, EOS `BGP-5-ADJCHANGE` `old state Established ... new state` other than Established, Junos `RPD_BGP_NEIGHBOR_STATE_CHANGED` `from Established to` another state, PAN-OS `routed-BGP-peer-left-established`, AOS-CX `AOSCX-2902` `<peer>: Peer down. ...`, AOS-Switch `AOSS-03073` `BGP: Peer down` (one alert per switch: the message names no peer) | `neighbor X Up`, EOS `new state Established`, Junos `to Established`, PAN-OS `routed-BGP-peer-enter-established`, AOS-CX `AOSCX-2901` `<peer>: Peer up. ...`, AOS-Switch `AOSS-03072` `BGP: Peer up` | Every match, per neighbor | Clear message only | critical | Cisco IOS / IOS XE, IOS XR, NX-OS, Arista EOS, Juniper Junos, Fortinet FortiOS, Palo Alto PAN-OS, HPE Aruba AOS-CX, AOS-Switch |
 | Power supply fault (`syslog_power_supply`) | IOS XE `IOSXE_PEM-3-PEMFAIL`, Catalyst 9000 `PLATFORM_FEP-1-FRU_PS_SIGNAL_FAULTY`, Catalyst 3750-X / 3560-X `PLATFORM_ENV-1-FRU_PS_SIGNAL_FAULTY`, NX-OS `PLATFORM-2-PS_FAIL`, EOS `PWRMGMT-3-PSU_STATUS_FAILED` and `PWRMGMT-4-INPUT_POWER_LOSS`, Junos `CHASSISD_SNMP_TRAP*` `Power Supply failed`, FortiOS `FGT-0100022105` (Power supply failed) and `FGT-0100022114` (Power supply failed warning), PAN-OS `ps-failure` `Alarm on Power Supply #<n>`, AOS-CX `AOSCX-304` `PSU <name> faulted`, AOS-Switch `AOSS-00071` `Power Supply failure: Supply: <Main or RPS>- ...` and `AOSS-02797` `Internal power supply <bay> is faulted` | `IOSXE_PEM-6-PEMOK`, `PLATFORM_FEP-6-FRU_PS_SIGNAL_OK`, `PLATFORM-2-PS_OK`, EOS `PWRMGMT-3-PSU_STATUS_OK`, Junos `Power Supply OK`, FortiOS `FGT-0100022104` (Power supply restored) and `FGT-0100022115` (Power supply restored notification), AOS-Switch `Power Supply OK: ...` and `Internal power supply <bay> is ok`; PAN-OS and AOS-CX by time only | Every match, per power supply (FortiOS and 3750-X: per device) | 24 h | critical | Cisco IOS XE (ASR 1000, ISR 4000, Catalyst 9000), Catalyst 3750-X / 3560-X, NX-OS, Arista EOS, Juniper Junos, Fortinet FortiOS, Palo Alto PAN-OS, HPE Aruba AOS-CX, AOS-Switch |
 | Fan fault (`syslog_fan`) | IOS XE `IOSXE_PEM-3-FANFAIL`, Catalyst 2960 / 3560 / 3750 `HARDWARE-2-FAN_ERROR`, Catalyst 3750-X / 3560-X `PLATFORM_ENV-1-FAN` and `PLATFORM_ENV-1-FRU_PS_FAN_FAILED`, ISR G2 `ENVMON-3-FAN_FAIL` (older ISRs `FAN_FAILED`), NX-OS `PLATFORM-2-FANMOD_FAN_FAIL`, EOS `ENVMON-3-FANFAILED`, Junos `CHASSISD_SNMP_TRAP*` `Fan/Blower failed`, PAN-OS `fan-failure` `Alarm on Fan Tray #<n>`, FortiOS `FGT-0100022108` (Fan anomaly), AOS-CX `AOSCX-214` `...: Fan <name> faulted, reason: ...`, AOS-Switch `AOSS-00070` `Fan failure: Fan: <n> ...` | `IOSXE_PEM-6-FANOK`, ISR G2 `ENVMON-3-FAN_OK`, `PLATFORM-2-FANMOD_FAN_OK`, EOS `ENVMON-3-FANOK`, Junos `Fan/Blower OK`, FortiOS `FGT-0100022151` (Fan normal), AOS-Switch `Fan OK: Fan: <n> ...`; the classic Catalyst, PAN-OS and AOS-CX forms by time only | Every match, per fan (FortiOS: per device) | 24 h | warning | Cisco IOS XE (ASR 1000, ISR 4000), Catalyst 2960 / 3560 / 3750 (classic IOS), ISR G2, NX-OS, Arista EOS, Juniper Junos, Fortinet FortiOS, Palo Alto PAN-OS, HPE Aruba AOS-CX, AOS-Switch |
+| Module down (`syslog_module`) | IOS XE `IOSXE_OIR-6-OFFLINECARD` `Card (<type>) offline in slot <slot>` and `IOSXE_OIR-6-REMCARD` `Card (<type>) removed from [chassis <n> ]slot <slot>`, SPAs and line card sub-modules `IOSXE_OIR-6-REMSPA` `SPA removed from subslot <s/b>, interfaces disabled`, `SPA_OIR-6-OFFLINECARD` `SPA (<type>) offline in subslot <s/b>` and `SPA_OIR-6-REMCARD` `Card removed from subslot <s/b>, interfaces disabled`, Catalyst 3750 / 2975 stack `STACKMGR-4-SWITCH_REMOVED` `Switch <n> has been REMOVED from the stack`, Catalyst 6500 `C6KPWR-SP-4-DISABLED` `power to module in slot <n> set off (<reason>)`, NX-OS `MODULE-2-MOD_FAIL`, `MODULE-2-MOD_FAILURE`, `MODULE-2-MOD_NOT_ALIVE`, `PLATFORM-2-MOD_REMOVE`, `PLATFORM-2-MOD_PWRDN`, `PLATFORM-2-MOD_PWRFAIL`, `PLATFORM-3-MOD_PWRFAIL_MULTI`, `PLATFORM-2-MOD_PWRDENY`, `PLATFORM-3-MOD_BRINGUP_MULTI_LIMIT` and, for fabric modules, `PLATFORM-2-XBAR_REMOVE`, `PLATFORM-5-XBAR_PWRDN`, `PLATFORM-3-XBAR_PWRFAIL`, Junos `CHASSISD_SNMP_TRAP*` `FRU removal` / `FRU power off` / `FRU failed` / `FRU offline` of an FPC, PIC, routing engine, control board, SIB, SFM, FEB, switch fabric board, line card chassis or adapter card (not when `jnxFruOfflineReason` is 5, 7 or 8: powered off in the configuration, by a CLI command or the offline button) | IOS XE `IOSXE_OIR-6-ONLINECARD` and `SPA_OIR-6-ONLINECARD` `... online in [chassis <n> ]slot / subslot ...`, stack `STACKMGR-5-SWITCH_READY` `Switch <n> is READY`, NX-OS `MODULE-5-MOD_OK` `Module <n> is online`, `MODULE-5-ACTIVE_SUP_OK` / `STANDBY_SUP_OK` `Supervisor <n> is active / standby`, `MODULE-5-XBAR_OK` `Xbar <n> is online`, Junos `FRU online`; the Catalyst 6500 form by time only | Every match, per slot / subslot (IOS XE `<chassis>/<slot>` on StackWise Virtual), stack member, NX-OS module or `Xbar <n>`, Junos `jnxFruName` | 24 h | critical | Cisco IOS XE (Catalyst 9400 / 9600, StackWise Virtual, ASR 1000, ISR 4000), Catalyst 3750 / 2975 stacks (classic IOS), Catalyst 6500 (classic IOS), NX-OS, Juniper Junos |
 | Repeated login failures (`syslog_auth_failure`) | `SEC_LOGIN-4-LOGIN_FAILED`, IOS XR `SECURITY-LOGIN-4-AUTHEN_FAILED`, NX-OS `AUTHPRIV-3-SYSTEM_MSG` with `Authentication failed`, ASA `113005`, `113015`, `605004`, `611102`, Junos `SSHD_LOGIN_FAILED`, `LOGIN_FAILED`, program `sshd` `Failed password for ...` / `Failed keyboard-interactive/pam for ...` (Arista EOS and other OpenSSH hosts), OPNsense program `audit` `user ... could not authenticate for ...` (web GUI, and SSH through the firewall's authentication), FortiOS `FGT-0100032002` (Admin login failed), PAN-OS `auth-fail` (not the ones about the authentication server: `Time clock does not match ...`, `Wrong realm ...`, `Server certificate: ...`, `KDC Spoofing ...`), AOS-CX `AOSCX-5210` and `AOSCX-5216` (SSH login failed), AOS-Switch `AOSS-00419` (invalid user name / password) and `AOSS-03345` (SSH login failed) | Time only | 5 within 5 min, per device (from any source) | 30 min | warning | Cisco IOS / IOS XE, IOS XR, NX-OS, ASA, Arista EOS, Juniper Junos, OPNsense, Fortinet FortiOS, Palo Alto PAN-OS, HPE Aruba AOS-CX, AOS-Switch |
 
 A single interface down is not an alert: access ports go down all day. An
@@ -99,6 +100,22 @@ OSPF and BGP neighbor alerts are critical because a lost
 adjacency changes where traffic goes; they stay open until the neighbor
 is back (or someone acknowledges the alert), since a time-out would hide
 a neighbor that is still down.
+
+A module down alert is critical: a line card or stack member takes all its
+ports with it. A module inserted or booting (`IOSXE_OIR-6-INSCARD`,
+`INSSPA`, NX-OS `MOD_DETECT`, `MOD_PWRUP`, stack `SWITCH_ADDED`, Junos `FRU
+insertion` / `FRU power on`) raises nothing, nor does a SPA an operator
+stops (`IOSXE_OIR-6-SOFT_STOPSPA`) or a Junos FRU taken offline from the
+configuration, the CLI or its button. A module usually logs several of the
+forms at once (offline, then removed); they are one alert per instance. An
+IOS XE line card logs both its slot (`Card (cc) offline in slot 3`) and its
+sub-module (`SPA ... offline in subslot 3/0`), so it opens two alerts, and
+both resolve when it is back online. The rule resolves after 24 hours
+without a new match because the Catalyst 6500 power-off has no recovery
+message; the SNMP poll's module check
+([Hardware module health](monitoring.md#hardware-module-health), which
+the re-poll runs within seconds) keeps reporting a module that is still
+down.
 
 ## Custom rules
 
@@ -154,8 +171,8 @@ messages received in the last 24 hours (or up to 7 days):
   and its newest message as a sample. **Create rule** on a row starts a
   new custom rule from that group.
 - **Related**: a hint that an unmatched group looks like the subject of a
-  built-in rule or trigger (an OSPF, BGP, link, power supply, fan, login,
-  configuration or reload message), from keywords in its tag (or program
+  built-in rule or trigger (an OSPF, BGP, link, power supply, fan, module,
+  login, configuration or reload message), from keywords in its tag (or program
   and sample). A related group is worth a look: it may be a form of the
   message the built-in rule misses. The hint is a keyword guess, not a
   match; most unmatched messages are routine and need no rule.
@@ -237,6 +254,7 @@ The configuration change trigger does not depend on monitoring being on.
 | Message | Re-poll after |
 |---|---|
 | An interface going down (every form in the Interface flapping row above, from the first one) | 5 s |
+| A module down or back online (every raise and clear form in the Module down row above) | 5 s |
 | Reload: `SYS-5-RELOAD`, ASA `199001`, NX-OS `PLATFORM-2-PFM_SYSTEM_RESET`, Junos `UI_REBOOT_EVENT`, FortiOS `FGT-0100032138` (Device rebooted) and `FGT-0100032200` (Device shutdown), AOS-Switch `AOSS-00063` (SYSTEM went down), AOS-CX `AOSCX-706` (Initiating system reboot) and `AOSCX-707` (Initiating chassis thermal reboot) | 30 s (the device logs it before it goes down) |
 | Restart: `SYS-5-RESTART`, `SYS-6-BOOTTIME`, ASA `199002`, Junos `SNMPD_TRAP_COLD_START`, FortiOS `FGT-0100032009` (FortiGate started), AOS-Switch `AOSS-00066` (System Booted) and `AOSS-00064` (the crash reason of a switch that went down), AOS-CX `AOSCX-1206` (Module rebooted) and `AOSCX-1236` (Module unexpected reboot) | 5 s |
 
@@ -297,7 +315,7 @@ firewall: [OPNsense in the Topology Map](opnsense-topology.md#syslog).
 
 The receiver settings (Settings > Syslog & Traps, admin) have a switch for
 each of the four behaviours: **Raise alerts from syslog rules**, **Back up
-the config on a change message**, **Re-poll on link down or reload** and
+the config on a change message**, **Re-poll on link down, module down or reload** and
 **Re-collect OPNsense on a state change**. Each is on by default; turning
 one off stops that behaviour only, and messages are still stored. A fifth
 switch, **Act on UDP messages**, stops all four for messages that arrived
@@ -444,8 +462,9 @@ Send syslog to the Plexus server's address on the syslog receiver's port
 (UDP 1514 unless Settings > Syslog & Traps says otherwise; for TCP and TLS
 see [Device configuration for TCP and TLS](#device-configuration-for-tcp-and-tls)). The examples use
 `192.0.2.10` for Plexus. Interface and neighbor messages are level 3 to 5,
-login failures level 4 to 6, so send at least `informational` for every
-rule to see its messages.
+login failures level 4 to 6 and module messages level 2 to 6 (IOS XE logs
+a card or SPA going offline at level 6), so send at least `informational`
+for every rule to see its messages.
 
 ```text
 ! Cisco IOS / IOS XE
@@ -566,6 +585,53 @@ with `logging source-interface` on Cisco IOS.
   troubleshooting guide and the Cisco IOS system message guides could not
   be retrieved). Write a custom **Tag** rule for the power supply message
   your routers log.
+- **Module down**: the forms come from the Cisco System Message Guide for
+  Catalyst Series Switches (IOS XE 17.3.x and 16.12.x: `IOSXE_OIR`,
+  `SPA_OIR`), the Cisco TechNote "Troubleshoot Hardware Failure on
+  Catalyst 9600" (sample `IOSXE_OIR` / `SPA_OIR` lines), the Catalyst
+  3750, 3560, 3550, 2975, 2970 and 2960 Switch System Message Guide
+  (`STACKMGR`), the Cisco TechNote "Line Cards Power Down due to
+  Communication Failures Troubleshooting Guide" (Catalyst 6500
+  `C6KPWR`), the Nexus 9000 System Messages Reference (`MODULE`,
+  `PLATFORM`) and JUNIPER-MIB (the `jnxFru*` traps chassisd logs as
+  `CHASSISD_SNMP_TRAP*`). Not built in:
+  - **Catalyst 9000 stacks (IOS XE)**: the IOS XE system message guides
+    (16.12.x, 17.3.x) do not list `STACKMGR`. Cisco community logs show IOS
+    XE stacks logging `STACKMGR-4-SWITCH_REMOVED` with the classic text
+    after a prefix (`Switch 1 R0/0: stack_mgr: Switch 3 has been removed
+    from the stack.`), which the classic form matches, but no Cisco
+    reference confirms it or the IOS XE wording of `SWITCH_READY`. A
+    member that never logs `SWITCH_READY` resolves after 24 hours.
+  - **Catalyst 6500**: the TechNote shows `C6KPWR-SP-4-DISABLED` with a
+    fault reason; no reference gives the reason text of a module an
+    operator powered off (`no power enable module`), so that is counted
+    too, and no reference gives a recovery message (the classic `OIR`
+    `REMCARD` / `INSCARD` forms appear only in community logs), so the
+    alert resolves after 24 hours.
+  - **Catalyst 4500** (`C4K_CHASSIS`, `C4K_IOSMODPORTMAN`): no reference
+    giving the module removed / failed message text was retrieved.
+  - **NX-OS**: `PLATFORM-2-MOD_PWRDN` does not say why a module was
+    powered down; one powered off from the CLI also logs
+    `PLATFORM-2-PFM_MODULE_POWER_OFF` (not counted) and may log
+    `MOD_PWRDN` after it, which raises the alert. Diagnostic and software
+    failures that may leave the module online (`MODULE-2-MOD_DIAG_FAIL`,
+    `MOD_SOMEPORTS_FAILED`, `MOD_MAJORSWFAIL`, `XBAR_DIAG_FAIL`) and the
+    fabric module forms that name it in lower case (`MODULE-2-XBAR_FAIL`,
+    `XBAR_FAILURE`: `Initialization of xbar <n> failed`, an instance that
+    `Xbar <n> is online` would not resolve) are not built in.
+  - **Juniper Junos**: the trap names and varbinds come from JUNIPER-MIB;
+    the Junos System Log Messages Reference entries for chassisd's own
+    FRU messages (`CHASSISD_FRU_OFFLINE_NOTICE`, `CHASSISD_FRU_ONLINE` and
+    similar) could not be retrieved, so only the trap forms are built in.
+  - **Cisco IOS XR, Arista EOS, HPE Aruba AOS-CX and AOS-Switch, Fortinet
+    FortiOS, Palo Alto PAN-OS**: no module, line card or stack member
+    message form was confirmed in a reference (the IOS XR system error
+    message reference, the Arista EOS System Message Guide and the HPE
+    Aruba event log references could not be retrieved, and no FortiOS or
+    PAN-OS log reference entry for a module or slot event was found). AOS-CX `AOSCX-1206` /
+    `AOSCX-1236` (Module rebooted) stay restart re-poll triggers. Write a
+    custom **Tag** rule for the module messages your devices log; the
+    polled module check covers Cisco and Juniper over SNMP.
 - **Netgear and APC** send syslog in their own formats; no built-in rule
   or trigger matches them. Custom rules work on them.
 - API-polled platforms (Cato, AWS, Azure, GCP, Meraki, Cisco FMC,

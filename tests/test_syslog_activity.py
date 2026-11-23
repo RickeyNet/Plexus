@@ -395,6 +395,12 @@ async def test_the_window(fresh_rules):
         ("IOSXE_PEM-PEMCHASFSERR", "", "", "power_supply"),
         ("IOSXE_PEM-FANFAIL_X", "", "", "fan"),
         ("ENVMON-FAN_FAIL", "", "", "fan"),
+        ("IOSXE_OIR-SOFT_RELOADSPA", "", "", "module"),
+        ("MODULE-MOD_MAJORSWFAIL", "", "", "module"),
+        ("STACKMGR-STACK_LINK_CHANGE", "", "", "module"),
+        ("PLATFORM-SUP_SPROM_ERROR", "", "", "module"),
+        # MOD as its own word only: a mode change is no module.
+        ("PNP-PNP_MODE_CHANGE_OK", "", "", ""),
         ("SEC_LOGIN-LOGIN_SUCCESS", "", "", "auth_failure"),
         ("AAA-AUTHEN_FAIL", "", "", "auth_failure"),
         ("", "sshd", "sshd[12]: Failed password for ops from 198.51.100.7 port 4022 ssh2", "auth_failure"),

@@ -220,6 +220,12 @@ function CreateSuppressionModal({ isOpen, onClose }: { isOpen: boolean; onClose:
             <option value="memory">Memory</option>
             <option value="interface_down">Interfaces Down</option>
             <option value="vpn_down">VPN Down</option>
+            <option value="module_down">Hardware Module Down</option>
+            <option value="power_supply_down">Power Supply Down</option>
+            <option value="fan_down">Fan Down</option>
+            <option value="temperature_alarm">Temperature Alarm</option>
+            <option value="bgp_peer_down">BGP Peer Down</option>
+            <option value="ospf_neighbor_down">OSPF Neighbor Down</option>
             <option value="route_churn">Route Churn</option>
             <option value="ups_on_battery">UPS On Battery</option>
             <option value="ups_battery">UPS Battery</option>

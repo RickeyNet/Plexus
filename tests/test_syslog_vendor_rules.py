@@ -560,6 +560,93 @@ SAMPLES = [
     ),
     (aoss("00070", "chassis", "Fan failure: Fan: 2  Failures: 1"), "fan", "raise", "2"),
     (aoss("00070", "chassis", "Fan OK: Fan: 2  Failures: 1"), "fan", "clear", "2"),
+    # module: Catalyst 3750 / 2975 stack member, removed and ready again.
+    ("%STACKMGR-4-SWITCH_REMOVED: Switch 2 has been REMOVED from the stack.", "module", "raise", "2"),
+    ("%STACKMGR-5-SWITCH_READY: Switch 2 is READY.", "module", "clear", "2"),
+    # The same mnemonic as an IOS XE stack writes it (the reporting switch first).
+    (
+        "%STACKMGR-4-SWITCH_REMOVED: Switch 1 R0/0: stack_mgr: Switch 3 has been removed from the stack.",
+        "module",
+        "raise",
+        "3",
+    ),
+    # Catalyst 6500: the processor in the facility, standalone and VSS.
+    (
+        "%C6KPWR-SP-4-DISABLED: power to module in slot 2 set off (Module Failed SCP dnld)",
+        "module",
+        "raise",
+        "2",
+    ),
+    (
+        "%C6KPWR-SW1_SP-4-DISABLED: power to module in slot 4 set off (Module not responding to Keep Alive polling)",
+        "module",
+        "raise",
+        "4",
+    ),
+    # NX-OS: the other module forms, supervisors and fabric modules (Xbar).
+    (
+        "%MODULE-2-MOD_FAILURE: Re-initializing module 4 (Serial number: EXA0000X4) failed. Received lc_failed "
+        "from sap 0x1 failure reason 0x2",
+        "module",
+        "raise",
+        "4",
+    ),
+    (
+        "%MODULE-2-MOD_NOT_ALIVE: Module 4 not responding... resetting (Serial number: EXA0000X4)",
+        "module",
+        "raise",
+        "4",
+    ),
+    ("%PLATFORM-2-MOD_PWRFAIL: Module 4 failed to power up (Serial number EXA0000X4)", "module", "raise", "4"),
+    (
+        "%PLATFORM-3-MOD_PWRFAIL_MULTI: Module 4 failed to power up multiple times (Serial number EXA0000X4)",
+        "module",
+        "raise",
+        "4",
+    ),
+    (
+        "%PLATFORM-2-MOD_PWRDENY: Module 4 can not be powered up due to insufficient power (Serial number EXA0000X4)",
+        "module",
+        "raise",
+        "4",
+    ),
+    (
+        "%PLATFORM-3-MOD_BRINGUP_MULTI_LIMIT: Giving up after multiple attempts were made to bring up the Module 4, "
+        "(Serial number EXA0000X4)",
+        "module",
+        "raise",
+        "4",
+    ),
+    ("%MODULE-5-STANDBY_SUP_OK: Supervisor 28 is standby", "module", "clear", "28"),
+    ("%MODULE-5-ACTIVE_SUP_OK: Supervisor 27 is active (Serial number: EXA0000X7)", "module", "clear", "27"),
+    ("%PLATFORM-2-XBAR_REMOVE: Xbar 22 removed (Serial number EXA0000X2)", "module", "raise", "Xbar 22"),
+    ("%PLATFORM-5-XBAR_PWRDN: Xbar 22 powered down (Serial number EXA0000X2)", "module", "raise", "Xbar 22"),
+    ("%PLATFORM-3-XBAR_PWRFAIL: Xbar 22 failed to power up (Serial number EXA0000X2)", "module", "raise", "Xbar 22"),
+    ("%MODULE-5-XBAR_OK: Xbar 22 is online (Serial number: EXA0000X2)", "module", "clear", "Xbar 22"),
+    # Junos: the other FRU traps of a module (a PIC, a routing engine).
+    (
+        "chassisd[1500]: CHASSISD_SNMP_TRAP7: SNMP trap generated: FRU removal (jnxFruContentsIndex 8, "
+        "jnxFruL1Index 2, jnxFruL2Index 1, jnxFruL3Index 0, jnxFruName PIC: Example-PIC @ 1/0/*, jnxFruType 11, "
+        "jnxFruSlot 1)",
+        "module",
+        "raise",
+        "PIC: Example-PIC @ 1/0/*",
+    ),
+    (
+        "chassisd[1500]: CHASSISD_SNMP_TRAP7: SNMP trap generated: FRU failed (jnxFruContentsIndex 9, "
+        "jnxFruL1Index 1, jnxFruL2Index 0, jnxFruL3Index 0, jnxFruName Routing Engine 1, jnxFruType 6, jnxFruSlot 1)",
+        "module",
+        "raise",
+        "Routing Engine 1",
+    ),
+    (
+        "chassisd[1500]: CHASSISD_SNMP_TRAP10: SNMP trap generated: Fru Offline (jnxFruContentsIndex 8, "
+        "jnxFruL1Index 2, jnxFruL2Index 1, jnxFruL3Index 0, jnxFruName PIC: Example-PIC @ 1/0/*, jnxFruType 11, "
+        "jnxFruSlot 1, jnxFruOfflineReason 3, jnxFruLastPowerOff 1000, jnxFruLastPowerOn 900)",
+        "module",
+        "raise",
+        "PIC: Example-PIC @ 1/0/*",
+    ),
     # auth_failure.
     (FGT_LOGIN_FAILED, "auth_failure", "raise", ""),
     (
@@ -670,6 +757,20 @@ def test_each_vendor_form_matches_its_rule(message, key, action, instance):
         aoscx(402, "LOG_INFO", "Interface port_admin set to down for 1/1/7 interface"),
         aoss("02796", "chassis", "Internal power supply 2 removed. Total fault count: 1."),
         aoss("03079", "bgp", "BGP: Peer deleted"),
+        # A stack member added (not yet ready), a module powered back on, a
+        # fan tray FRU (the fan rule's), a diagnostic failure on a module
+        # that may stay online, and an AOS-CX module reboot (a restart).
+        "%STACKMGR-4-SWITCH_ADDED: Switch 2 has been ADDED to the stack.",
+        "%C6KPWR-SP-4-ENABLED: power to module in slot 2 set on",
+        "%PLATFORM-5-XBAR_PWRUP: Xbar 22 powered up (Serial number EXA0000X2)",
+        "%MODULE-2-MOD_DIAG_FAIL: Module 4 (Serial number: EXA0000X4) reported failure on ports 1/1 (Ethernet) due "
+        "to example in device 0x1 (device error 0x2)",
+        "chassisd[1500]: CHASSISD_SNMP_TRAP7: SNMP trap generated: FRU failed (jnxFruContentsIndex 4, "
+        "jnxFruL1Index 1, jnxFruL2Index 0, jnxFruL3Index 0, jnxFruName Fan Tray 0, jnxFruType 13, jnxFruSlot 0)",
+        "chassisd[1500]: CHASSISD_SNMP_TRAP10: SNMP trap generated: FRU power off (jnxFruContentsIndex 7, "
+        "jnxFruL1Index 2, jnxFruL2Index 0, jnxFruL3Index 0, jnxFruName FPC: Example 3D @ 1/*/*, jnxFruType 3, "
+        "jnxFruSlot 1, jnxFruOfflineReason 5, jnxFruLastPowerOff 1000, jnxFruLastPowerOn 900)",
+        aoscx(1206, "LOG_INFO", "Module rebooted. Reason: Reboot requested by user, Boot-ID: 1a2b", daemon="hpe-x"),
     ],
 )
 def test_near_misses_raise_nothing(message):
@@ -690,6 +791,11 @@ def test_the_families_name_the_new_vendors():
         sr.BUILTIN_BY_KEY["fan"].families
     )
     assert "Arista EOS" in sr.BUILTIN_BY_KEY["auth_failure"].families
+    module = sr.BUILTIN_BY_KEY["module"]
+    assert {"Cisco NX-OS", "Juniper Junos"} <= set(module.families)
+    assert any(f.startswith("Cisco IOS XE") for f in module.families)
+    # One form (Catalyst 6500) has no documented recovery message.
+    assert (module.severity, module.auto_resolve_minutes) == ("critical", 1440)
 
 
 @pytest.mark.parametrize(
@@ -728,6 +834,15 @@ def test_the_families_name_the_new_vendors():
         ("FGT-0100022108", "fan"),
         ("AOSCX-214", "fan"),
         ("AOSS-00070", "fan"),
+        ("IOSXE_OIR-ONLINECARD", "module"),
+        ("SPA_OIR-OFFLINECARD", "module"),
+        ("STACKMGR-SWITCH_READY", "module"),
+        ("C6KPWR-SP-DISABLED", "module"),
+        ("PLATFORM-MOD_PWRDN", "module"),
+        ("MODULE-XBAR_OK", "module"),
+        # The power supply rule's Junos trap prefix comes first.
+        ("CHASSISD_SNMP_TRAP7", "power_supply"),
+        ("IOSXE_OIR-INSCARD", ""),
         ("PAN-TRAFFIC", ""),
         ("AOSCX-403", ""),
     ],
@@ -832,6 +947,17 @@ def test_vendor_messages_that_are_no_configuration_change(message):
             aoscx(1236, "LOG_CRIT", "Module unexpected reboot. Reason : Kernel panic, Boot-ID : 3c4d", daemon="hpe-x"),
             "restart",
         ),
+        ("%STACKMGR-4-SWITCH_REMOVED: Switch 2 has been REMOVED from the stack.", "module"),
+        ("%STACKMGR-5-SWITCH_READY: Switch 2 is READY.", "module"),
+        ("%C6KPWR-SP-4-DISABLED: power to module in slot 2 set off (Module Failed SCP dnld)", "module"),
+        ("%MODULE-5-XBAR_OK: Xbar 22 is online (Serial number: EXA0000X2)", "module"),
+        (
+            "chassisd[1500]: CHASSISD_SNMP_TRAP7: SNMP trap generated: FRU online (jnxFruContentsIndex 7, "
+            "jnxFruL1Index 2, jnxFruL2Index 0, jnxFruL3Index 0, jnxFruName FPC: Example 3D @ 1/*/*, jnxFruType 3, "
+            "jnxFruSlot 1)",
+            "module",
+        ),
+        ("%STACKMGR-4-SWITCH_ADDED: Switch 2 has been ADDED to the stack.", ""),
         (aoss("00076", "ports", "port 3 is now on-line"), ""),
         (aoscx(1235, "LOG_INFO", "Switch boot count is : 4", daemon="hpe-x"), ""),
     ],
@@ -928,6 +1054,10 @@ async def test_explain_message_shows_the_vendor_tag(engine):
     out = await sr.explain_message(aoss("00077", "ports", "port 5 is now off-line"))
     assert out["match_tag"] == "AOSS-00077" and out["program"] == "ports" and out["repoll"] == "interface_down"
     assert [m["key"] for m in out["matches"]] == ["link_flap"]
+    # A module message: the rule and the re-poll reason.
+    out = await sr.explain_message("%PLATFORM-2-MOD_REMOVE: Module 4 removed (Serial number EXA0000X4)")
+    assert out["repoll"] == "module"
+    assert [(m["key"], m["action"], m["instance"]) for m in out["matches"]] == [("module", "raise", "4")]
     # A custom Tag rule takes the vendor tag.
     out = await sr.explain_message(
         aoscx(403, "LOG_INFO", "Link status for interface 1/1/7 is up"),

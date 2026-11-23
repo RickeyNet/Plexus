@@ -253,6 +253,11 @@ def _pg_fresh_database(_pg_session_template):
     # /api/health serves one database probe to every caller for a short time;
     # a test must not get the result of the test before it.
     _state.HEALTH_PROBE.update(error="NotProbed", expires=0.0)
+    # The poll's SNMP health memory (tables a host answered empty, BGP peers
+    # and OSPF neighbors seen up) is keyed by host id.
+    from netcontrol import health_checks as _health_checks
+
+    _health_checks.forget_all()
     yield
 
 

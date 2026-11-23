@@ -68,6 +68,7 @@ describe('syslog rule labels', () => {
   it('names each re-poll reason', () => {
     expect(repollLabel('interface_down')).toContain('interface down');
     expect(repollLabel('reload')).toContain('30 s');
+    expect(repollLabel('module')).toBe('Re-poll in 5 s (module down or back online)');
     expect(repollLabel('')).toBe('');
   });
 
@@ -88,6 +89,7 @@ describe('syslog rule labels', () => {
       'syslog_bgp_neighbor',
       'syslog_power_supply',
       'syslog_fan',
+      'syslog_module',
       'syslog_auth_failure',
     ]);
   });

@@ -357,6 +357,35 @@ SAMPLES = [
         "raise",
         "Fan Tray 0 Fan 1",
     ),
+    # module: the raise and clear of one module name the same instance.
+    ("%IOSXE_OIR-6-OFFLINECARD: Card (rp) offline in slot R1", "module", "raise", "R1"),
+    ("%IOSXE_OIR-6-ONLINECARD: Card (rp) online in slot R1", "module", "clear", "R1"),
+    ("%IOSXE_OIR-6-REMCARD: Card (cc) removed from chassis 2 slot 3", "module", "raise", "2/3"),
+    ("%IOSXE_OIR-6-ONLINECARD: Card (cc) online in chassis 2 slot 3", "module", "clear", "2/3"),
+    ("%IOSXE_OIR-6-REMSPA: SPA removed from subslot 5/0, interfaces disabled", "module", "raise", "5/0"),
+    ("%SPA_OIR-6-OFFLINECARD: SPA (LC-EXAMPLE-48) offline in subslot 5/0", "module", "raise", "5/0"),
+    ("%SPA_OIR-6-REMCARD: Card removed from subslot 0/2, interfaces disabled", "module", "raise", "0/2"),
+    ("%SPA_OIR-6-ONLINECARD: SPA (LC-EXAMPLE-48) online in subslot 5/0", "module", "clear", "5/0"),
+    ("%MODULE-2-MOD_FAIL: Initialization of module 4 (Serial number: EXA0000X4) failed", "module", "raise", "4"),
+    ("%PLATFORM-2-MOD_REMOVE: Module 4 removed (Serial number EXA0000X4)", "module", "raise", "4"),
+    ("%PLATFORM-2-MOD_PWRDN: Module 4 powered down (Serial number EXA0000X4)", "module", "raise", "4"),
+    ("%MODULE-5-MOD_OK: Module 4 is online (Serial number: EXA0000X4)", "module", "clear", "4"),
+    (
+        "chassisd[1500]: CHASSISD_SNMP_TRAP10: SNMP trap generated: FRU power off (jnxFruContentsIndex 7, "
+        "jnxFruL1Index 2, jnxFruL2Index 0, jnxFruL3Index 0, jnxFruName FPC: Example 3D @ 1/*/*, jnxFruType 3, "
+        "jnxFruSlot 1, jnxFruOfflineReason 3, jnxFruLastPowerOff 1000, jnxFruLastPowerOn 900)",
+        "module",
+        "raise",
+        "FPC: Example 3D @ 1/*/*",
+    ),
+    (
+        "chassisd[1500]: CHASSISD_SNMP_TRAP7: SNMP trap generated: FRU online (jnxFruContentsIndex 7, "
+        "jnxFruL1Index 2, jnxFruL2Index 0, jnxFruL3Index 0, jnxFruName FPC: Example 3D @ 1/*/*, jnxFruType 3, "
+        "jnxFruSlot 1)",
+        "module",
+        "clear",
+        "FPC: Example 3D @ 1/*/*",
+    ),
     # auth_failure (no instance: failures from any source count together).
     (
         "%SEC_LOGIN-4-LOGIN_FAILED: Login failed [user: ops] [Source: 192.0.2.50] [localport: 22] "
@@ -419,6 +448,24 @@ def test_each_builtin_rule_matches_its_samples(message, key, action, instance):
         "%LINK-3-UPDOWN: Interface GigabitEthernet0/3, changed state to up",
         "%OSPF-5-ADJCHG: Process 1, Nbr 198.51.100.2 on Gi0/1 from EXSTART to EXCHANGE, Negotiation Done",
         "%SYS-5-CONFIG_I: Configured from console by ops on vty0 (192.0.2.50)",
+        # A module inserted, booting or stopped by an operator: no module down.
+        "%IOSXE_OIR-6-INSCARD: Card (cc) inserted in slot 3",
+        "%IOSXE_OIR-6-INSSPA: SPA inserted in subslot 3/0",
+        "%IOSXE_OIR-6-SOFT_STOPSPA: SPA(EXAMPLE-SPA) stopped in subslot 0/1, interfaces disabled",
+        "%PLATFORM-2-MOD_DETECT: Module 4 detected (Serial number EXA0000X4) Module-Type Example Model EX-LC",
+        "%PLATFORM-2-MOD_PWRUP: Module 4 powered up (Serial number EXA0000X4)",
+        "%PLATFORM-2-PFM_MODULE_POWER_OFF: Manual power-off of Module 4 from Command Line Interface",
+        "%MODULE-5-MOD_REINIT: Re-initializing module 4 (Serial number: EXA0000X4)",
+        # Junos: an FPC taken offline from the CLI, an FPC inserted, and a
+        # power entry module removed (the power supply rule's FRU).
+        "chassisd[1500]: CHASSISD_SNMP_TRAP10: SNMP trap generated: FRU offline (jnxFruContentsIndex 7, "
+        "jnxFruL1Index 2, jnxFruL2Index 0, jnxFruL3Index 0, jnxFruName FPC: Example 3D @ 1/*/*, jnxFruType 3, "
+        "jnxFruSlot 1, jnxFruOfflineReason 7, jnxFruLastPowerOff 1000, jnxFruLastPowerOn 900)",
+        "chassisd[1500]: CHASSISD_SNMP_TRAP7: SNMP trap generated: FRU insertion (jnxFruContentsIndex 7, "
+        "jnxFruL1Index 2, jnxFruL2Index 0, jnxFruL3Index 0, jnxFruName FPC: Example 3D @ 1/*/*, jnxFruType 3, "
+        "jnxFruSlot 1)",
+        "chassisd[1500]: CHASSISD_SNMP_TRAP7: SNMP trap generated: FRU removal (jnxFruContentsIndex 2, "
+        "jnxFruL1Index 1, jnxFruL2Index 0, jnxFruL3Index 0, jnxFruName PEM 1, jnxFruType 7, jnxFruSlot 1)",
     ],
 )
 def test_other_messages_raise_nothing(message):
@@ -467,6 +514,12 @@ def test_a_show_command_is_no_configuration_change():
         ("%SYS-6-BOOTTIME: Time taken to reboot after reload =  194 seconds", "restart"),
         ("%ASA-6-199002: Startup completed. Beginning operation.", "restart"),
         ("snmpd[900]: SNMPD_TRAP_COLD_START: trap_generate_cold: SNMP trap: cold start", "restart"),
+        # A module down and the same module online again.
+        ("%IOSXE_OIR-6-OFFLINECARD: Card (cc) offline in slot 3", "module"),
+        ("%IOSXE_OIR-6-ONLINECARD: Card (cc) online in slot 3", "module"),
+        ("%PLATFORM-2-MOD_REMOVE: Module 4 removed (Serial number EXA0000X4)", "module"),
+        ("%MODULE-5-MOD_OK: Module 4 is online (Serial number: EXA0000X4)", "module"),
+        ("%IOSXE_OIR-6-INSCARD: Card (cc) inserted in slot 3", ""),
         ("%LINK-3-UPDOWN: Interface GigabitEthernet0/1, changed state to up", ""),
     ],
 )
@@ -630,6 +683,23 @@ async def test_a_neighbor_down_raises_and_full_resolves_it(engine):
     assert set(await _open(host_id)) == {f"syslog:ospf_neighbor:{host_id}:198.51.100.3"}
     resolved = [a for a in await db.get_monitoring_alerts(host_id, acknowledged=True)]
     assert [a["acknowledged_by"] for a in resolved] == ["auto-resolved"]
+
+
+async def test_a_module_down_raises_repolls_and_online_resolves_it(engine):
+    _clock, repolls, _changes = engine
+    _gid, host_id = await _host()
+    down = "%IOSXE_OIR-6-OFFLINECARD: Card (cc) offline in slot 3"
+    up = "%IOSXE_OIR-6-ONLINECARD: Card (cc) online in slot 3"
+    assert (await sr.process_syslog_batch([(host_id, down)]))["raised"] == 1
+    key = f"syslog:module:{host_id}:3"
+    alert = (await _open(host_id))[key]
+    assert (alert["metric"], alert["severity"]) == ("syslog_module", "critical")
+    assert alert["message"].startswith("Module down on 3: IOSXE_OIR-6-OFFLINECARD")
+    # Down and back online both re-poll the host within seconds.
+    assert repolls == [(host_id, sr.REPOLL_DELAY_SECONDS, sr.REPOLL_MIN_INTERVAL_SECONDS)]
+    out = await sr.process_syslog_batch([(host_id, up)])
+    assert out["resolved"] == 1 and out["repolls"] == 1
+    assert await _open(host_id) == {}
 
 
 async def test_a_suppressed_rule_is_not_raised(engine):

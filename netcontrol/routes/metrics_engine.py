@@ -31,7 +31,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 import netcontrol.routes.state as state
-from netcontrol import listener_sources, syslog_rules, syslog_stream, syslog_tls
+from netcontrol import health_checks, listener_sources, syslog_rules, syslog_stream, syslog_tls
 from netcontrol.bounded_map import BoundedDict
 from netcontrol.integrations.apc.snmp import UPS_METRICS, ups_metric_samples
 from netcontrol.integrations.apc.traps import handle_apc_trap, parse_apc_trap
@@ -680,6 +680,9 @@ async def emit_metric_samples_from_poll(poll_result: dict) -> int:
     rows.append((host_id, "vpn_tunnels_up", "{}", float(poll_result.get("vpn_tunnels_up", 0))))
     rows.append((host_id, "vpn_tunnels_down", "{}", float(poll_result.get("vpn_tunnels_down", 0))))
     rows.append((host_id, "route_count", "{}", float(poll_result.get("route_count", 0))))
+    # The SNMP health checks (modules, power supplies, fans, temperature, BGP
+    # peers, OSPF neighbors): items down, for each table the poll read.
+    rows.extend(health_checks.metric_sample_rows(poll_result))
     # A UPS: battery, runtime, load and the output / battery state codes.
     rows.extend(ups_metric_samples(host_id, poll_result.get("ups") or {}))
     # An OPNsense firewall read over its API: disks, temperature, state table, load.
@@ -714,6 +717,7 @@ _DOWNSAMPLE_METRICS = [
     "if_out_errors_rate",
     "if_in_discards_rate",
     "if_out_discards_rate",
+    *health_checks.METRICS,
     *UPS_METRICS,
     *FIREWALL_METRICS,
 ]
