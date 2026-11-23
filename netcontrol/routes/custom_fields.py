@@ -77,7 +77,7 @@ from netcontrol.object_scope import (
     scope_exempt,
     scoped,
 )
-from netcontrol.routes.shared import _audit, _corr_id, _session_user, caller_features
+from netcontrol.routes.shared import _audit, _corr_id, _session_user, admin_session, caller_features
 
 LOGGER = logging.getLogger("plexus.custom_fields")
 
@@ -86,24 +86,11 @@ admin_router = APIRouter()
 inventory_router = APIRouter()
 ipam_router = APIRouter()
 
-_require_admin = None
-
 BULK_TAGS_MAX_HOSTS = 5000
 _MAX_CHOICES = 200
 _LIST_MAX = 500
 
 RawValue = bool | int | float | str | None
-
-
-def init_custom_fields(require_admin) -> None:
-    global _require_admin
-    _require_admin = require_admin
-
-
-async def _require_admin_dep(request: Request):
-    if _require_admin is None:
-        raise HTTPException(status_code=500, detail="Authorization subsystem not initialized")
-    return await _require_admin(request)
 
 
 # ── Request bodies ───────────────────────────────────────────────────────────
@@ -628,7 +615,7 @@ async def get_prefix_data(
     return await _read_object("prefix", _prefix_key(subnet, vrf))
 
 
-@ipam_router.put("/api/ipam/prefix-custom-data", dependencies=[Depends(_require_admin_dep)])
+@ipam_router.put("/api/ipam/prefix-custom-data", dependencies=[Depends(admin_session)])
 @scoped("admin")
 async def put_prefix_data(
     body: ObjectDataPut,

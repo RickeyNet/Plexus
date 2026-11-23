@@ -76,7 +76,7 @@ from netcontrol.object_scope import (
 )
 from netcontrol.routes import background_jobs, notification_channels, software_cve
 from netcontrol.routes.meraki_topology import latest_snapshots
-from netcontrol.routes.shared import _audit, _corr_id, _session_user, supervise_task
+from netcontrol.routes.shared import _audit, _corr_id, _session_user, admin_session, supervise_task
 from netcontrol.routes.software_eol import device_statuses, router as eol_router, sync_lifecycle_advisories
 from netcontrol.telemetry import configure_logging
 
@@ -85,7 +85,6 @@ router = APIRouter()
 router.include_router(eol_router)
 LOGGER = configure_logging("plexus.software")
 
-_require_admin = None
 _JOB_KIND = "software-psirt-sync"
 _refresh_lock = asyncio.Lock()
 _psirt_running = False
@@ -114,17 +113,6 @@ _ADVISORY_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:\-]{0,119}$")
 # Alert severities the notification channels know.
 _NOTIFY_SEVERITY = {"critical": "critical", "high": "critical", "medium": "warning", "low": "info", "info": "info"}
 _MAX_IMPORT = 1000
-
-
-def init_software(require_admin):
-    global _require_admin
-    _require_admin = require_admin
-
-
-async def _require_admin_dep(request: Request):
-    if _require_admin is None:
-        raise HTTPException(status_code=500, detail="Software routes not initialised")
-    return await _require_admin(request)
 
 
 def _true(value: Any) -> bool:
@@ -894,13 +882,13 @@ async def acknowledge_alert_api(alert_id: int, request: Request):
     return {"ok": True}
 
 
-@router.get("/api/software/settings", dependencies=[Depends(_require_admin_dep)])
+@router.get("/api/software/settings", dependencies=[Depends(admin_session)])
 @scoped("admin")
 async def get_settings_api():
     return {"settings": _public_settings(await _settings())}
 
 
-@router.put("/api/software/settings", dependencies=[Depends(_require_admin_dep)])
+@router.put("/api/software/settings", dependencies=[Depends(admin_session)])
 @scoped("admin")
 async def update_settings_api(body: SettingsBody, request: Request):
     values: dict[str, str] = {}
@@ -968,7 +956,7 @@ async def update_settings_api(body: SettingsBody, request: Request):
     return {"settings": _public_settings(await _settings())}
 
 
-@router.post("/api/software/psirt/test", dependencies=[Depends(_require_admin_dep)])
+@router.post("/api/software/psirt/test", dependencies=[Depends(admin_session)])
 @scoped("admin")
 async def test_psirt_api():
     client_id, secret = await _psirt_credentials()
@@ -980,7 +968,7 @@ async def test_psirt_api():
     return {"ok": True, "message": "Signed in to Cisco PSIRT", "os_types": list(OS_TYPES)}
 
 
-@router.post("/api/software/psirt/sync", status_code=202, dependencies=[Depends(_require_admin_dep)])
+@router.post("/api/software/psirt/sync", status_code=202, dependencies=[Depends(admin_session)])
 @scoped("admin")
 async def start_psirt_sync_api(request: Request):
     await _psirt_credentials()
@@ -988,7 +976,7 @@ async def start_psirt_sync_api(request: Request):
     return {"job_id": job["job_id"], "status": "running"}
 
 
-@router.post("/api/software/cve-enrichment/run", status_code=202, dependencies=[Depends(_require_admin_dep)])
+@router.post("/api/software/cve-enrichment/run", status_code=202, dependencies=[Depends(admin_session)])
 @scoped("admin")
 async def start_cve_enrichment_api(request: Request):
     if not software_cve.public_settings(await _settings())["cve_enrichment_enabled"]:

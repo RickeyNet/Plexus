@@ -42,10 +42,9 @@ from netcontrol.routes.ipam_reconciliation import (
     run_reconciliation,
 )
 from netcontrol.routes.meraki_topology import ipam_subnets as topology_subnets
-from netcontrol.routes.shared import _audit, _corr_id, _get_session
+from netcontrol.routes.shared import _audit, _corr_id, _get_session, admin_session
 
 router = APIRouter()
-_require_admin = None
 
 # Most device interface addresses a subnet drill-down lists.
 SUBNET_INTERFACES_LIMIT = 1024
@@ -126,17 +125,6 @@ class IpamAllocateRequest(BaseModel):
     source_id: int | None = None
     push: bool = False
     ttl_seconds: int = 900
-
-
-def init_ipam(require_admin):
-    global _require_admin
-    _require_admin = require_admin
-
-
-async def _require_admin_dep(request: Request):
-    if _require_admin is None:
-        raise HTTPException(status_code=500, detail="Authorization subsystem not initialized")
-    return await _require_admin(request)
 
 
 def _serialize_source(row: dict) -> dict:
@@ -423,7 +411,7 @@ async def ipam_sources_api(
     return {"sources": [_serialize_source(row) for row in rows], "count": len(rows)}
 
 
-@router.post("/api/ipam/sources", status_code=201, dependencies=[Depends(_require_admin_dep)])
+@router.post("/api/ipam/sources", status_code=201, dependencies=[Depends(admin_session)])
 @scoped("admin")
 async def create_ipam_source_api(body: IpamSourceCreate, request: Request):
     try:
@@ -456,7 +444,7 @@ async def create_ipam_source_api(body: IpamSourceCreate, request: Request):
     return {"ok": True, "source": _serialize_source(source)}
 
 
-@router.put("/api/ipam/sources/{source_id}", dependencies=[Depends(_require_admin_dep)])
+@router.put("/api/ipam/sources/{source_id}", dependencies=[Depends(admin_session)])
 @scoped("admin")
 async def update_ipam_source_api(source_id: int, body: IpamSourceUpdate, request: Request):
     existing = await db.get_ipam_source(source_id)
@@ -493,7 +481,7 @@ async def update_ipam_source_api(source_id: int, body: IpamSourceUpdate, request
     return {"ok": True, "source": _serialize_source(updated)}
 
 
-@router.delete("/api/ipam/sources/{source_id}", dependencies=[Depends(_require_admin_dep)])
+@router.delete("/api/ipam/sources/{source_id}", dependencies=[Depends(admin_session)])
 @scoped("admin")
 async def delete_ipam_source_api(source_id: int, request: Request):
     existing = await db.get_ipam_source(source_id)
@@ -515,7 +503,7 @@ async def delete_ipam_source_api(source_id: int, request: Request):
     return {"ok": True}
 
 
-@router.post("/api/ipam/sources/{source_id}/validate", dependencies=[Depends(_require_admin_dep)])
+@router.post("/api/ipam/sources/{source_id}/validate", dependencies=[Depends(admin_session)])
 @scoped("admin")
 async def validate_ipam_source_api(source_id: int):
     source = await db.get_ipam_source(source_id)
@@ -533,7 +521,7 @@ async def validate_ipam_source_api(source_id: int):
     return {"ok": True, "summary": snapshot.get("summary") or {}}
 
 
-@router.post("/api/ipam/sources/{source_id}/sync", dependencies=[Depends(_require_admin_dep)])
+@router.post("/api/ipam/sources/{source_id}/sync", dependencies=[Depends(admin_session)])
 @scoped("admin")
 async def sync_ipam_source_api(source_id: int, request: Request):
     source = await db.get_ipam_source(source_id)
@@ -592,7 +580,7 @@ async def ipam_reservations_api(request: Request, subnet: str):
     return {"reservations": rows, "count": len(rows)}
 
 
-@router.post("/api/ipam/subnets/{subnet:path}/reservations", dependencies=[Depends(_require_admin_dep)])
+@router.post("/api/ipam/subnets/{subnet:path}/reservations", dependencies=[Depends(admin_session)])
 @scoped("admin")
 async def create_ipam_reservation_api(subnet: str, body: IpamReservationCreate, request: Request):
     session = _get_session(request) or {}
@@ -618,7 +606,7 @@ async def create_ipam_reservation_api(subnet: str, body: IpamReservationCreate, 
     return {"ok": True, "reservation": reservation}
 
 
-@router.delete("/api/ipam/reservations/{reservation_id}", dependencies=[Depends(_require_admin_dep)])
+@router.delete("/api/ipam/reservations/{reservation_id}", dependencies=[Depends(admin_session)])
 @scoped("admin")
 async def delete_ipam_reservation_api(reservation_id: int, request: Request):
     deleted = await db.delete_ipam_reservation(reservation_id)
@@ -641,7 +629,7 @@ async def get_ipam_sync_config_api():
     return {"config": dict(state.IPAM_SYNC_CONFIG)}
 
 
-@router.put("/api/ipam/sync-config", dependencies=[Depends(_require_admin_dep)])
+@router.put("/api/ipam/sync-config", dependencies=[Depends(admin_session)])
 @scoped("admin")
 async def update_ipam_sync_config_api(body: IpamSyncConfigUpdate, request: Request):
     updates = body.model_dump(exclude_none=True)
@@ -670,7 +658,7 @@ async def update_ipam_sync_config_api(body: IpamSyncConfigUpdate, request: Reque
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-@router.post("/api/ipam/prefixes", status_code=201, dependencies=[Depends(_require_admin_dep)])
+@router.post("/api/ipam/prefixes", status_code=201, dependencies=[Depends(admin_session)])
 @scoped("admin")
 async def create_ipam_prefix_api(body: IpamPrefixCreate, request: Request):
     """Define a subnet in the built-in Plexus IPAM source."""
@@ -712,7 +700,7 @@ async def create_ipam_prefix_api(body: IpamPrefixCreate, request: Request):
     return {"ok": True, "prefix": prefix}
 
 
-@router.delete("/api/ipam/prefixes/{prefix_id}", dependencies=[Depends(_require_admin_dep)])
+@router.delete("/api/ipam/prefixes/{prefix_id}", dependencies=[Depends(admin_session)])
 @scoped("admin")
 async def delete_ipam_prefix_api(prefix_id: int, request: Request):
     """Remove a locally-defined subnet prefix."""
@@ -733,7 +721,7 @@ async def delete_ipam_prefix_api(prefix_id: int, request: Request):
 @router.post(
     "/api/ipam/subnets/{subnet:path}/allocations",
     status_code=201,
-    dependencies=[Depends(_require_admin_dep)],
+    dependencies=[Depends(admin_session)],
 )
 @scoped("admin")
 async def create_ipam_allocation_api(subnet: str, body: IpamAllocationCreate, request: Request):
@@ -775,7 +763,7 @@ async def create_ipam_allocation_api(subnet: str, body: IpamAllocationCreate, re
     return {"ok": True, "allocation": alloc}
 
 
-@router.patch("/api/ipam/prefixes/{prefix_id}", dependencies=[Depends(_require_admin_dep)])
+@router.patch("/api/ipam/prefixes/{prefix_id}", dependencies=[Depends(admin_session)])
 @scoped("admin")
 async def set_ipam_prefix_tenant_api(prefix_id: int, body: IpamTenantSet, request: Request):
     """Set or clear the tenant of a prefix (of any source)."""
@@ -793,7 +781,7 @@ async def set_ipam_prefix_tenant_api(prefix_id: int, body: IpamTenantSet, reques
     return {"ok": True, "prefix": await db.get_ipam_prefix(prefix_id)}
 
 
-@router.patch("/api/ipam/allocations/{allocation_id}", dependencies=[Depends(_require_admin_dep)])
+@router.patch("/api/ipam/allocations/{allocation_id}", dependencies=[Depends(admin_session)])
 @scoped("admin")
 async def set_ipam_allocation_tenant_api(allocation_id: int, body: IpamTenantSet, request: Request):
     """Set or clear the tenant of an IP allocation (of any source)."""
@@ -811,7 +799,7 @@ async def set_ipam_allocation_tenant_api(allocation_id: int, body: IpamTenantSet
     return {"ok": True}
 
 
-@router.delete("/api/ipam/allocations/{allocation_id}", dependencies=[Depends(_require_admin_dep)])
+@router.delete("/api/ipam/allocations/{allocation_id}", dependencies=[Depends(admin_session)])
 @scoped("admin")
 async def delete_ipam_allocation_api(allocation_id: int, request: Request):
     """Remove a manually-defined IP allocation."""
@@ -836,7 +824,7 @@ async def delete_ipam_allocation_api(allocation_id: int, request: Request):
 
 @router.post(
     "/api/ipam/sources/{source_id}/reconcile",
-    dependencies=[Depends(_require_admin_dep)],
+    dependencies=[Depends(admin_session)],
 )
 @scoped("admin")
 async def reconcile_ipam_source_api(source_id: int, request: Request):
@@ -892,7 +880,7 @@ async def list_reconciliation_diffs_api(
 
 @router.post(
     "/api/ipam/reconciliation/diffs/{diff_id}/resolve",
-    dependencies=[Depends(_require_admin_dep)],
+    dependencies=[Depends(admin_session)],
 )
 @scoped("admin")
 async def resolve_reconciliation_diff_api(
@@ -933,7 +921,7 @@ async def resolve_reconciliation_diff_api(
 @router.post(
     "/api/ipam/allocate",
     status_code=201,
-    dependencies=[Depends(_require_admin_dep)],
+    dependencies=[Depends(admin_session)],
 )
 @scoped("admin")
 async def allocate_ip_api(body: IpamAllocateRequest, request: Request):
@@ -990,7 +978,7 @@ async def allocate_ip_api(body: IpamAllocateRequest, request: Request):
 
 @router.post(
     "/api/ipam/allocate/{allocation_id}/commit",
-    dependencies=[Depends(_require_admin_dep)],
+    dependencies=[Depends(admin_session)],
 )
 @scoped("admin")
 async def commit_allocation_api(allocation_id: int, request: Request):
@@ -1039,7 +1027,7 @@ async def commit_allocation_api(allocation_id: int, request: Request):
 
 @router.post(
     "/api/ipam/allocate/{allocation_id}/release",
-    dependencies=[Depends(_require_admin_dep)],
+    dependencies=[Depends(admin_session)],
 )
 @scoped("admin")
 async def release_allocation_api(allocation_id: int, request: Request):
@@ -1173,7 +1161,7 @@ async def list_subnet_utilization_api(
 @router.post(
     "/api/ipam/utilization/snapshot",
     status_code=201,
-    dependencies=[Depends(_require_admin_dep)],
+    dependencies=[Depends(admin_session)],
 )
 @scoped("admin")
 async def snapshot_utilization_api(

@@ -35,10 +35,9 @@ from netcontrol.routes.dhcp_adapters import (
     is_collection_fed,
     normalize_dhcp_provider,
 )
-from netcontrol.routes.shared import _audit, _corr_id, _get_session
+from netcontrol.routes.shared import _audit, _corr_id, _get_session, admin_session
 
 router = APIRouter()
-_require_admin = None
 
 # Scope-exhaustion threshold: alert when free/total drops below this.
 SCOPE_EXHAUSTION_PCT = 90.0
@@ -87,17 +86,6 @@ class DhcpServerUpdate(BaseModel):
     notes: str | None = None
     enabled: bool | None = None
     verify_tls: bool | None = None
-
-
-def init_dhcp(require_admin):
-    global _require_admin
-    _require_admin = require_admin
-
-
-async def _require_admin_dep(request: Request):
-    if _require_admin is None:
-        raise HTTPException(status_code=500, detail="Authorization subsystem not initialized")
-    return await _require_admin(request)
 
 
 def _scope_utilization_pct(scope: dict) -> float:
@@ -162,7 +150,7 @@ async def list_dhcp_servers_api(request: Request):
 async def create_dhcp_server_api(
     body: DhcpServerCreate,
     request: Request,
-    _admin=Depends(_require_admin_dep),
+    _admin=Depends(admin_session),
 ):
     session = _get_session(request)
     try:
@@ -210,7 +198,7 @@ async def update_dhcp_server_api(
     server_id: int,
     body: DhcpServerUpdate,
     request: Request,
-    _admin=Depends(_require_admin_dep),
+    _admin=Depends(admin_session),
 ):
     existing = await db.get_dhcp_server(server_id)
     if not existing:
@@ -242,7 +230,7 @@ async def update_dhcp_server_api(
 async def delete_dhcp_server_api(
     server_id: int,
     request: Request,
-    _admin=Depends(_require_admin_dep),
+    _admin=Depends(admin_session),
 ):
     existing = await db.get_dhcp_server(server_id)
     if not existing:
@@ -296,7 +284,7 @@ async def sync_dhcp_server(server_id: int, *, triggered_by: str = "manual") -> d
 async def sync_dhcp_server_api(
     server_id: int,
     request: Request,
-    _admin=Depends(_require_admin_dep),
+    _admin=Depends(admin_session),
 ):
     session = _get_session(request)
     result = await sync_dhcp_server(server_id, triggered_by="manual")

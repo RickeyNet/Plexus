@@ -168,7 +168,8 @@ export interface SamlConfig {
   /** PEM signing certificates (several during a rollover). */
   idp_certs: string[];
   idp_metadata_url: string;
-  /** Empty = derived from the request. */
+  /** Sent empty = the server fills it (and `acs_url`) from the address of
+   * the saving request and stores it. */
   sp_entity_id: string;
   acs_url: string;
   ca_cert_file: string;

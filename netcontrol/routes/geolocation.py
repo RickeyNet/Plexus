@@ -16,9 +16,10 @@ import os
 import re
 
 import routes.database as db
-from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
+from starlette.datastructures import UploadFile
 
 from netcontrol.object_scope import (
     filter_rows,
@@ -38,7 +39,7 @@ from netcontrol.organization import (
     clean_text,
     clean_time_zone,
 )
-from netcontrol.routes.shared import _audit, _corr_id, _get_session
+from netcontrol.routes.shared import FILE_UPLOAD_OPENAPI, _audit, _corr_id, _get_session, uploaded_file
 from netcontrol.telemetry import configure_logging
 
 LOGGER = configure_logging("plexus.geolocation")
@@ -335,15 +336,17 @@ def _remove_floor_image(filename: str | None) -> None:
         LOGGER.debug("geo: failed to remove floor image %s: %s", filename, exc)
 
 
-@router.post("/api/geo/floors/{floor_id}/image")
+@router.post("/api/geo/floors/{floor_id}/image", openapi_extra=FILE_UPLOAD_OPENAPI)
 @scoped("floor")
-async def upload_floor_image_api(
-    floor_id: int,
-    request: Request,
-    file: UploadFile = File(...),
-):
+async def upload_floor_image_api(floor_id: int, request: Request):
+    """Upload a floor plan image (multipart form field ``file``), read
+    only after the caller is checked (``shared.uploaded_file``)."""
     floor = await _require_floor(request, floor_id, write=True)
+    async with uploaded_file(request) as file:
+        return await _store_floor_image(request, floor_id, floor, file)
 
+
+async def _store_floor_image(request: Request, floor_id: int, floor: dict, file: UploadFile) -> dict:
     content_type = (file.content_type or "").split(";")[0].strip()
     if content_type not in _ALLOWED_CONTENT_TYPES:
         raise HTTPException(400, "Unsupported image type - use JPEG, PNG, GIF, WebP, or SVG")

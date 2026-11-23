@@ -15,6 +15,8 @@ from starlette.responses import JSONResponse
 from starlette.routing import Route
 from starlette.testclient import TestClient
 
+from mcp_helpers import CsrfClient, admin_client, user_client
+
 # ── A small app behind the middleware ────────────────────────────────────────
 
 
@@ -211,3 +213,94 @@ def test_app_refuses_oversized_unauthenticated_body_before_auth(monkeypatch):
     # A normal unauthenticated request is unaffected.
     resp = client.post("/api/inventory", json={"name": "x"})
     assert resp.status_code in (401, 403)
+
+
+# ── The upload routes: the caller is checked before the body is read ─────────
+
+
+def _streamed_post(client: TestClient, path: str, headers: dict[str, str] | None = None) -> tuple[int, int]:
+    """POST a multipart body in three chunks straight to the app, in the
+    client's loop: (status, body chunks the app took). A TestClient request
+    hands the app a body that is already read, so it cannot show this."""
+    taken: list[int] = []
+    sent: list[dict] = []
+
+    async def receive():
+        taken.append(1)
+        return {"type": "http.request", "body": b"x" * 65536, "more_body": len(taken) < 3}
+
+    async def send(message):
+        sent.append(message)
+
+    raw = {"host": "testserver", "content-type": "multipart/form-data; boundary=upload", **(headers or {})}
+    scope = {
+        "type": "http",
+        "http_version": "1.1",
+        "method": "POST",
+        "scheme": "http",
+        "path": path,
+        "raw_path": path.encode(),
+        "query_string": b"",
+        "root_path": "",
+        "server": ("testserver", 80),
+        "client": ("192.0.2.9", 50000),
+        "headers": [(name.encode(), value.encode()) for name, value in raw.items()],
+    }
+    client.portal.call(app_module.app, scope, receive, send)
+    return next(m["status"] for m in sent if m["type"] == "http.response.start"), len(taken)
+
+
+def _session_headers(user: CsrfClient) -> dict[str, str]:
+    cookies = "; ".join(f"{cookie.name}={cookie.value}" for cookie in user.raw.cookies.jar)
+    return {"cookie": cookies, "x-csrf-token": user._csrf}
+
+
+UPLOAD_PATHS = ("/api/upgrades/images", "/api/geo/floors/1/image")
+UPLOAD_FEATURES = ["upgrades", "upgrades.write", "floor-plan", "floor-plan.write"]
+
+
+def test_upload_routes_take_no_body_from_a_caller_they_refuse(monkeypatch, request):
+    """The two routes with a raised body limit answer a caller without a
+    session, without the feature or outside its object scope before they
+    read a byte of the upload."""
+    admin = admin_client(monkeypatch, request)
+    app = admin.raw
+    for path in UPLOAD_PATHS:
+        assert body_limit.BodyLimitMiddleware(None).limit_for(path) > body_limit.max_body_bytes_from_env(), path
+        assert _streamed_post(app, path) == (401, 0), path
+
+    no_feature = _session_headers(user_client(admin, "no-upload", features=["inventory"]))
+    for path in UPLOAD_PATHS:
+        assert _streamed_post(app, path, no_feature) == (403, 0), path
+
+    # Past the feature gate, the route's own check still comes first: a floor
+    # the caller cannot change, and the image catalogue for a scoped caller.
+    writer = _session_headers(user_client(admin, "uploader", features=UPLOAD_FEATURES))
+    assert _streamed_post(app, "/api/geo/floors/999999/image", writer) == (404, 0)
+
+    site = admin.post("/api/inventory", json={"name": "site-a"})
+    assert site.status_code in (200, 201), site.text
+    group = admin.post(
+        "/api/admin/access-groups",
+        json={
+            "name": "scoped uploads",
+            "feature_keys": UPLOAD_FEATURES,
+            "object_scope": "groups",
+            "inventory_scopes": [{"inventory_group_id": site.json()["id"], "can_write": True}],
+        },
+    )
+    assert group.status_code == 201, group.text
+    created = admin.post(
+        "/api/admin/users",
+        json={"username": "scoped-uploader", "password": "password123", "group_ids": [group.json()["id"]]},
+    )
+    assert created.status_code == 201, created.text
+    scoped_client = TestClient(app_module.app, raise_server_exceptions=False)
+    login = scoped_client.post("/api/auth/login", json={"username": "scoped-uploader", "password": "password123"})
+    assert login.status_code == 200, login.text
+    scoped = _session_headers(CsrfClient(scoped_client, login.json()["csrf_token"]))
+    assert _streamed_post(app, "/api/upgrades/images", scoped) == (403, 0)
+
+    # An admin's upload is read (and refused here: the body is no multipart form).
+    status, taken = _streamed_post(app, "/api/upgrades/images", _session_headers(admin))
+    assert status == 400 and taken >= 1

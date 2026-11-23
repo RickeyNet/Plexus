@@ -37,23 +37,10 @@ from netcontrol.bulk_import import (
     template_header,
 )
 from netcontrol.object_scope import request_scope, scope_exempt, scoped
-from netcontrol.routes.shared import _audit, _corr_id, _session_user
+from netcontrol.routes.shared import _audit, _corr_id, _session_user, admin_session
 
 router = APIRouter()
 ipam_router = APIRouter()
-
-_require_admin = None
-
-
-def init_bulk_import(require_admin) -> None:
-    global _require_admin
-    _require_admin = require_admin
-
-
-async def _require_admin_dep(request: Request):
-    if _require_admin is None:
-        raise HTTPException(status_code=500, detail="Authorization subsystem not initialized")
-    return await _require_admin(request)
 
 
 def _check_type(object_type: str, allowed: tuple[str, ...]) -> None:
@@ -198,7 +185,7 @@ async def ipam_template(object_type: str) -> Response:
     return await _template(object_type)
 
 
-@ipam_router.post("/api/import/ipam/{object_type}/preview", dependencies=[Depends(_require_admin_dep)])
+@ipam_router.post("/api/import/ipam/{object_type}/preview", dependencies=[Depends(admin_session)])
 @scoped("admin")
 async def ipam_preview(
     object_type: str,
@@ -213,7 +200,7 @@ async def ipam_preview(
     return await _preview(request, object_type, file, text, fmt, mode, match_key)
 
 
-@ipam_router.post("/api/import/ipam/{object_type}/commit", dependencies=[Depends(_require_admin_dep)])
+@ipam_router.post("/api/import/ipam/{object_type}/commit", dependencies=[Depends(admin_session)])
 @scoped("admin")
 async def ipam_commit(
     object_type: str,

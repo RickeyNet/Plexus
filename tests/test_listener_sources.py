@@ -19,6 +19,7 @@ from netcontrol import listener_sources as ls
 from netcontrol.routes import flow_collector
 
 from mcp_helpers import admin_client, user_client
+from test_flow_collector import receive
 
 HOST_IP = "192.0.2.40"
 ALIAS_IP = "198.51.100.40"
@@ -269,17 +270,21 @@ async def test_the_flow_collector_drops_unknown_exporters_and_shows_the_count(mo
     seen: list[str] = []
     monkeypatch.setattr(flow_collector, "parse_netflow_v5", lambda data, addr: seen.append(addr[0]) or [])
     proto = flow_collector._FlowCollectorProtocol(mode="netflow")
+    proto.connection_made(None)
     packet = b"\x00\x05" + bytes(22)
-    proto.datagram_received(packet, (STRANGER, 2055))
-    assert seen == []
-    proto.datagram_received(packet, (HOST_IP, 2055))
-    assert seen == [HOST_IP]
-    assert flow_collector._config_snapshot()["dropped_source"] == 1
-    assert (await flow_collector.api_flow_status())["dropped_source"] == 1
-    # An exporter that is not (yet) an inventory host: allowed by an extra network.
-    ls.apply_config(ls.sanitize_config({"extra_cidrs": ["203.0.113.0/24"]}))
-    proto.datagram_received(packet, (STRANGER, 2055))
-    assert seen == [HOST_IP, STRANGER]
+    try:
+        await receive(proto, packet, (STRANGER, 2055))
+        assert seen == []
+        await receive(proto, packet, (HOST_IP, 2055))
+        assert seen == [HOST_IP]
+        assert flow_collector._config_snapshot()["dropped_source"] == 1
+        assert (await flow_collector.api_flow_status())["dropped_source"] == 1
+        # An exporter that is not (yet) an inventory host: allowed by an extra network.
+        ls.apply_config(ls.sanitize_config({"extra_cidrs": ["203.0.113.0/24"]}))
+        await receive(proto, packet, (STRANGER, 2055))
+        assert seen == [HOST_IP, STRANGER]
+    finally:
+        await proto.close()
 
 
 def test_pending_exporter_stats_are_bounded(monkeypatch):

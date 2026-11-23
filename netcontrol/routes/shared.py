@@ -7,13 +7,16 @@ Provides audit logging, config capture/push/diff, and session helpers.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import difflib
 import os
 import re
 import time
+from collections.abc import AsyncIterator
 
 import routes.database as db
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
+from starlette.datastructures import UploadFile
 
 import netcontrol.routes.state as state
 from netcontrol.telemetry import configure_logging
@@ -112,6 +115,54 @@ async def read_bounded_body(request, max_bytes: int) -> bytes | None:
     return bytes(body)
 
 
+# The OpenAPI request body of a route that takes its file through
+# ``uploaded_file`` (pass as ``openapi_extra``): such a route declares no
+# ``File`` parameter for FastAPI to describe.
+FILE_UPLOAD_OPENAPI = {
+    "requestBody": {
+        "required": True,
+        "content": {
+            "multipart/form-data": {
+                "schema": {
+                    "type": "object",
+                    "required": ["file"],
+                    "properties": {"file": {"type": "string", "format": "binary"}},
+                }
+            }
+        },
+    }
+}
+# Form parts an upload request may carry besides its one file.
+_UPLOAD_FORM_MAX_FIELDS = 16
+
+
+@contextlib.asynccontextmanager
+async def uploaded_file(request: Request, field: str = "file") -> AsyncIterator[UploadFile]:
+    """The file part ``field`` of a multipart request, read when this is
+    entered and closed (its spooled copy deleted) on exit; 422 without one,
+    400 for a body that does not parse (as FastAPI answers for a ``File``
+    parameter).
+
+    FastAPI reads the body of a route that declares a ``File`` parameter
+    before any dependency or handler code runs, so such a route spools a
+    whole upload for a caller it then refuses. A route with a large body
+    limit declares no ``File`` parameter and calls this after its own
+    checks: a refused caller is answered before a byte is read."""
+    try:
+        form = await request.form(max_files=1, max_fields=_UPLOAD_FORM_MAX_FIELDS)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="There was an error parsing the body") from exc
+    try:
+        upload = form.get(field)
+        if not isinstance(upload, UploadFile):
+            raise HTTPException(status_code=422, detail=f"Send the file in the form field '{field}'")
+        yield upload
+    finally:
+        await form.close()
+
+
 def _request_scheme(request) -> str:
     """The scheme the browser used: ``X-Forwarded-Proto`` from a reverse
     proxy, else the request's own scheme (direct TLS termination)."""
@@ -165,9 +216,11 @@ def request_session(request) -> dict | None:
     return _get_session(request)
 
 
-async def admin_session(request) -> dict:
+async def admin_session(request: Request) -> dict:
     """The session of an admin caller (an admin user or the server API
-    token): 401 without a session, 403 for anyone else."""
+    token): 401 without a session, 403 for anyone else. Called by a handler
+    or used as the dependency of an admin-only route of a router mounted
+    behind ``require_auth``, which has checked the session itself."""
     session = request_session(request)
     if not session:
         raise HTTPException(status_code=401, detail="Not authenticated")

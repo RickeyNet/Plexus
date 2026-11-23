@@ -13,14 +13,25 @@ Covers:
 
 from __future__ import annotations
 
+import asyncio
 import socket
 import struct
+import threading
 
 import pytest
 import routes.database as db_module
+from netcontrol import listener_sources
 from netcontrol.routes import flow_collector
 
 # ── shared fixture helpers ──────────────────────────────────────────────────
+
+
+async def receive(proto: flow_collector._FlowCollectorProtocol, data: bytes, *addrs: tuple) -> None:
+    """Hand ``data`` to the listener once per source address, then wait until
+    the drain worker has decoded everything queued (no fixed sleep)."""
+    for addr in addrs:
+        proto.datagram_received(data, addr)
+    await proto.drain()
 
 
 async def _init_db():
@@ -529,8 +540,11 @@ async def test_collector_start_stop_idempotent():
         again = await flow_collector.start_flow_collector(netflow_port, sflow_port)
         assert again is False
 
+        protocols = (flow_collector._flow_protocol, flow_collector._sflow_protocol)
         stopped = await flow_collector.stop_flow_collector()
         assert stopped is True
+        for proto in protocols:
+            assert proto._drain_task.done() and proto._flush_task.done() and not proto._bg_tasks
         assert flow_collector._flow_transport is None
         assert flow_collector._sflow_transport is None
         assert flow_collector.FLOW_COLLECTOR_CONFIG["enabled"] is False
@@ -542,6 +556,193 @@ async def test_collector_start_stop_idempotent():
         # Belt-and-braces: never leak a socket out of the test.
         if flow_collector._flow_transport is not None or flow_collector._sflow_transport is not None:
             await flow_collector.stop_flow_collector()
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Decode queue: datagrams are decoded off the event loop
+# ═════════════════════════════════════════════════════════════════════════════
+
+EXPORTER_IP = "192.0.2.60"
+EXPORTER_HOST_ID = 4242
+NF5_PACKET = _build_nf5_packet(
+    [
+        {"src_ip": "198.51.100.1", "dst_ip": "203.0.113.9", "src_port": 5555, "dst_port": 443, "bytes": 2048},
+        {"src_ip": "198.51.100.2", "dst_ip": "203.0.113.9", "dst_port": 53, "protocol": 17, "packets": 3},
+    ]
+)
+
+
+@pytest.fixture
+def flushed(monkeypatch):
+    """An inventory of one exporter host, fresh listener counters and no
+    pending exporter stats; the rows the collector flushes are collected
+    here instead of written to the database."""
+    saved = dict(listener_sources.INVENTORY_ADDRESSES)
+    listener_sources.INVENTORY_ADDRESSES.clear()
+    listener_sources.INVENTORY_ADDRESSES[EXPORTER_IP] = EXPORTER_HOST_ID
+    monkeypatch.setattr(listener_sources, "_inventory_loaded_at", float("inf"))
+    for guard in listener_sources.GUARDS.values():
+        guard.reset()
+    flow_collector._pending_exporter_stats.clear()
+    rows: list[tuple] = []
+
+    async def fake_batch(batch):
+        rows.extend(batch)
+        return len(batch)
+
+    monkeypatch.setattr(flow_collector.db, "create_flow_records_batch", fake_batch)
+    yield rows
+    flow_collector._pending_exporter_stats.clear()
+    listener_sources.INVENTORY_ADDRESSES.clear()
+    listener_sources.INVENTORY_ADDRESSES.update(saved)
+    for guard in listener_sources.GUARDS.values():
+        guard.reset()
+
+
+@pytest.fixture
+async def proto(flushed):
+    """A NetFlow listener with its drain worker running (no socket)."""
+    p = flow_collector._FlowCollectorProtocol(mode="netflow")
+    p.connection_made(None)
+    yield p
+    await p.close()
+
+
+async def test_datagrams_are_decoded_on_a_thread_other_than_the_loop(proto, monkeypatch):
+    real = flow_collector.parse_netflow_v5
+    threads: list[int] = []
+
+    def spy(data, addr):
+        threads.append(threading.get_ident())
+        return real(data, addr)
+
+    monkeypatch.setattr(flow_collector, "parse_netflow_v5", spy)
+    proto.datagram_received(NF5_PACKET, (EXPORTER_IP, 2055))
+    assert threads == []  # queued, not decoded inline
+    await proto.drain()
+    assert len(threads) == 1 and threads[0] != threading.get_ident()
+    assert len(proto._buffer) == 2
+
+
+async def test_a_full_queue_drops_and_counts(proto, monkeypatch):
+    monkeypatch.setattr(flow_collector, "FLOW_DECODE_QUEUE_MAX", 3)
+    before = flow_collector._drop_counters()["dropped_queue"]
+    # No await between datagrams: the worker cannot take any off the queue.
+    await receive(proto, NF5_PACKET, *[(EXPORTER_IP, 2055)] * 5)
+    assert flow_collector._drop_counters()["dropped_queue"] == before + 2
+    assert (await flow_collector.api_flow_status())["dropped_queue"] == before + 2
+    assert flow_collector._config_snapshot()["dropped_queue"] == before + 2
+    assert len(proto._buffer) == 3 * 2
+
+
+async def test_the_queue_is_bounded_in_bytes(proto, monkeypatch):
+    monkeypatch.setattr(flow_collector, "FLOW_DECODE_QUEUE_MAX_BYTES", 2 * len(NF5_PACKET))
+    before = flow_collector._drop_counters()["dropped_queue"]
+    await receive(proto, NF5_PACKET, *[(EXPORTER_IP, 2055)] * 3)
+    assert flow_collector._drop_counters()["dropped_queue"] == before + 1
+    assert len(proto._buffer) == 2 * 2
+
+
+async def test_a_datagram_the_parser_fails_on_does_not_stop_the_others(proto, monkeypatch):
+    real = flow_collector.parse_netflow_v5
+    calls = 0
+
+    def flaky(data, addr):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise ValueError("bad datagram")
+        return real(data, addr)
+
+    monkeypatch.setattr(flow_collector, "parse_netflow_v5", flaky)
+    await receive(proto, NF5_PACKET, *[(EXPORTER_IP, 2055)] * 3)
+    assert calls == 3
+    assert len(proto._buffer) == 2 * 2
+    # The worker is still alive and decodes later datagrams.
+    await receive(proto, NF5_PACKET, (EXPORTER_IP, 2055))
+    assert len(proto._buffer) == 3 * 2
+    assert not proto._drain_task.done()
+
+
+async def test_rows_and_exporter_stats_of_a_v5_packet(flushed):
+    p = flow_collector._FlowCollectorProtocol(mode="netflow")
+    p.connection_made(None)
+    await receive(p, NF5_PACKET, (EXPORTER_IP, 2055))
+    # (exporter, host, type, src, dst, sport, dport, proto, bytes, packets,
+    # src_as, dst_as, in_if, out_if, tos, tcp_flags, start, end): the times
+    # are unix_secs 1_700_000_000 less (uptime - first) and (uptime - last).
+    start, end = "2023-11-14T22:11:40+00:00", "2023-11-14T22:13:19+00:00"
+    head = (EXPORTER_IP, EXPORTER_HOST_ID, "netflow_v5")
+    expected = [
+        (*head, "198.51.100.1", "203.0.113.9", 5555, 443, 6, 2048, 1, 0, 0, 1, 2, 0, 0, start, end),
+        (*head, "198.51.100.2", "203.0.113.9", 12345, 53, 17, 100, 3, 0, 0, 1, 2, 0, 0, start, end),
+    ]
+    assert p._buffer == expected
+    assert dict(flow_collector._pending_exporter_stats) == {
+        (EXPORTER_IP, "netflow_v5"): {
+            "host_id": EXPORTER_HOST_ID,
+            "packets": 1,
+            "sampling_rate": 0,
+            "last_record_at": "2023-11-14T22:13:19+00:00",
+        }
+    }
+    await p.close()
+    assert flushed == expected
+
+
+async def test_sflow_packets_carry_their_sampling_rate(flushed):
+    p = flow_collector._FlowCollectorProtocol(mode="sflow")
+    p.connection_made(None)
+    await receive(p, _build_sflow_packet("198.51.100.5", "203.0.113.5", 40000, 53, 2048), (EXPORTER_IP, 6343))
+    assert flow_collector._pending_exporter_stats[(EXPORTER_IP, "sflow_v5")]["sampling_rate"] == 2048
+    assert len(p._buffer) == 1
+    await p.close()
+
+
+async def test_close_decodes_what_is_queued_and_leaves_no_task(flushed):
+    p = flow_collector._FlowCollectorProtocol(mode="netflow")
+    p.connection_made(None)
+    for _ in range(3):
+        p.datagram_received(NF5_PACKET, (EXPORTER_IP, 2055))
+    await p.close()
+    assert len(flushed) == 3 * 2
+    assert p._buffer == []
+    assert p._drain_task.done() and p._flush_task.done() and not p._bg_tasks
+    # connection_lost after close (the transport's callback) starts nothing.
+    p.connection_lost(None)
+    await p.close()
+    assert len(flushed) == 3 * 2
+
+
+async def test_connection_lost_alone_drains_and_stops_the_worker(flushed):
+    p = flow_collector._FlowCollectorProtocol(mode="netflow")
+    p.connection_made(None)
+    p.datagram_received(NF5_PACKET, (EXPORTER_IP, 2055))
+    p.connection_lost(OSError("socket gone"))
+    await p.close()
+    assert len(flushed) == 2
+    assert p._drain_task.done()
+
+
+async def test_stop_flow_collector_decodes_queued_datagrams(flushed):
+    await _init_db()
+    netflow_port = _pick_free_udp_port()
+    try:
+        assert await flow_collector.start_flow_collector(netflow_port)
+        listener_sources.INVENTORY_ADDRESSES[EXPORTER_IP] = EXPORTER_HOST_ID
+        p = flow_collector._flow_protocol
+        p.datagram_received(NF5_PACKET, (EXPORTER_IP, 2055))
+        assert await flow_collector.stop_flow_collector()
+    finally:
+        if flow_collector._flow_transport is not None:
+            await flow_collector.stop_flow_collector()
+    assert [row[3] for row in flushed] == ["198.51.100.1", "198.51.100.2"]
+    leftover = [
+        t
+        for t in asyncio.all_tasks()
+        if t is not asyncio.current_task() and getattr(t.get_coro(), "__qualname__", "").startswith("_FlowCollector")
+    ]
+    assert leftover == []
 
 
 # ═════════════════════════════════════════════════════════════════════════════

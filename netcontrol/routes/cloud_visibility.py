@@ -41,7 +41,7 @@ from netcontrol.routes.cloud_collectors import (
     get_provider_capabilities,
     with_skipped_note,
 )
-from netcontrol.routes.shared import _audit, _corr_id, _get_session
+from netcontrol.routes.shared import _audit, _corr_id, _get_session, admin_session
 from netcontrol.telemetry import configure_logging
 
 router = APIRouter()
@@ -51,7 +51,6 @@ LOGGER = configure_logging("plexus.cloud_visibility")
 # the event loop can't garbage-collect them mid-run.
 _BACKGROUND_PULL_TASKS: set[asyncio.Task] = set()
 
-_require_admin = None
 # An account id no account has (ids start at 1): what a caller limited to
 # selected inventory groups reads its cloud summaries and timelines for.
 _NO_ACCOUNT = 0
@@ -117,17 +116,6 @@ _PROVIDER_INFO = {
         "focus_constructs": ["VPC", "Cloud Router", "HA VPN", "Firewall Policies"],
     },
 }
-
-
-def init_cloud_visibility(require_admin):
-    global _require_admin
-    _require_admin = require_admin
-
-
-async def _require_admin_dep(request: Request):
-    if _require_admin is None:
-        raise HTTPException(status_code=500, detail="Authorization subsystem not initialized")
-    return await _require_admin(request)
 
 
 def _topology_changed() -> None:
@@ -1343,7 +1331,7 @@ async def cloud_accounts_api(
     return {"accounts": [_serialize_account(a) for a in accounts], "count": len(accounts)}
 
 
-@router.post("/api/cloud/accounts", status_code=201, dependencies=[Depends(_require_admin_dep)])
+@router.post("/api/cloud/accounts", status_code=201, dependencies=[Depends(admin_session)])
 @scoped("admin")
 async def create_cloud_account_api(body: CloudAccountCreate, request: Request):
     try:
@@ -1377,7 +1365,7 @@ async def create_cloud_account_api(body: CloudAccountCreate, request: Request):
     return {"ok": True, "account": _serialize_account(account)}
 
 
-@router.put("/api/cloud/accounts/{account_id}", dependencies=[Depends(_require_admin_dep)])
+@router.put("/api/cloud/accounts/{account_id}", dependencies=[Depends(admin_session)])
 @scoped("admin")
 async def update_cloud_account_api(account_id: int, body: CloudAccountUpdate, request: Request):
     existing = await db.get_cloud_account(account_id)
@@ -1416,7 +1404,7 @@ async def update_cloud_account_api(account_id: int, body: CloudAccountUpdate, re
     return {"ok": True, "account": _serialize_account(updated)}
 
 
-@router.delete("/api/cloud/accounts/{account_id}", dependencies=[Depends(_require_admin_dep)])
+@router.delete("/api/cloud/accounts/{account_id}", dependencies=[Depends(admin_session)])
 @scoped("admin")
 async def delete_cloud_account_api(account_id: int, request: Request):
     existing = await db.get_cloud_account(account_id)
@@ -1438,7 +1426,7 @@ async def delete_cloud_account_api(account_id: int, request: Request):
     return {"ok": True}
 
 
-@router.post("/api/cloud/accounts/{account_id}/validate", dependencies=[Depends(_require_admin_dep)])
+@router.post("/api/cloud/accounts/{account_id}/validate", dependencies=[Depends(admin_session)])
 @scoped("admin")
 async def validate_cloud_account_api(account_id: int, request: Request, body: CloudValidationRequest | None = None):
     account = await db.get_cloud_account(account_id)
@@ -1507,7 +1495,7 @@ async def validate_cloud_account_api(account_id: int, request: Request, body: Cl
     }
 
 
-@router.post("/api/cloud/accounts/{account_id}/flow-logs/ingest", dependencies=[Depends(_require_admin_dep)])
+@router.post("/api/cloud/accounts/{account_id}/flow-logs/ingest", dependencies=[Depends(admin_session)])
 @scoped("admin")
 async def ingest_cloud_flow_logs_api(account_id: int, request: Request, body: CloudFlowIngestRequest):
     account = await db.get_cloud_account(account_id)
@@ -1580,7 +1568,7 @@ async def ingest_cloud_flow_logs_api(account_id: int, request: Request, body: Cl
     }
 
 
-@router.post("/api/cloud/accounts/{account_id}/traffic-metrics/ingest", dependencies=[Depends(_require_admin_dep)])
+@router.post("/api/cloud/accounts/{account_id}/traffic-metrics/ingest", dependencies=[Depends(admin_session)])
 @scoped("admin")
 async def ingest_cloud_traffic_metrics_api(account_id: int, request: Request, body: CloudTrafficMetricIngestRequest):
     account = await db.get_cloud_account(account_id)
@@ -1663,7 +1651,7 @@ async def ingest_cloud_traffic_metrics_api(account_id: int, request: Request, bo
     }
 
 
-@router.get("/api/cloud/accounts/{account_id}/discover/progress", dependencies=[Depends(_require_admin_dep)])
+@router.get("/api/cloud/accounts/{account_id}/discover/progress", dependencies=[Depends(admin_session)])
 @scoped("admin")
 async def cloud_discovery_progress_api(account_id: int):
     """How far the running discovery of this account is, polled while the discover request is in flight."""
@@ -1671,7 +1659,7 @@ async def cloud_discovery_progress_api(account_id: int):
     return {"running": progress is not None, "progress": progress or {}}
 
 
-@router.post("/api/cloud/accounts/{account_id}/discover", dependencies=[Depends(_require_admin_dep)])
+@router.post("/api/cloud/accounts/{account_id}/discover", dependencies=[Depends(admin_session)])
 @scoped("admin")
 async def discover_cloud_account_api(account_id: int, request: Request, body: CloudDiscoveryRequest | None = None):
     with _tracked_discovery(account_id) as progress:
@@ -2178,7 +2166,7 @@ async def get_cloud_discovery_sync_config_api():
     return {"config": dict(state.CLOUD_DISCOVERY_SYNC_CONFIG)}
 
 
-@router.put("/api/cloud/discovery-sync/config", dependencies=[Depends(_require_admin_dep)])
+@router.put("/api/cloud/discovery-sync/config", dependencies=[Depends(admin_session)])
 @scoped("admin")
 async def update_cloud_discovery_sync_config_api(request: Request, body: CloudDiscoverySyncConfigUpdate):
     import netcontrol.routes.state as state
@@ -2214,7 +2202,7 @@ async def get_cloud_flow_sync_config_api(request: Request = None):  # type: igno
     return {"config": dict(state.CLOUD_FLOW_SYNC_CONFIG), "status": status}
 
 
-@router.put("/api/cloud/flow-sync/config", dependencies=[Depends(_require_admin_dep)])
+@router.put("/api/cloud/flow-sync/config", dependencies=[Depends(admin_session)])
 @scoped("admin")
 async def update_cloud_flow_sync_config_api(request: Request, body: CloudFlowSyncConfigUpdate):
     import netcontrol.routes.state as state
@@ -2242,7 +2230,7 @@ async def update_cloud_flow_sync_config_api(request: Request, body: CloudFlowSyn
     return {"ok": True, "config": sanitized}
 
 
-@router.post("/api/cloud/flow-sync/pull", dependencies=[Depends(_require_admin_dep)])
+@router.post("/api/cloud/flow-sync/pull", dependencies=[Depends(admin_session)])
 @scoped("admin")
 async def trigger_cloud_flow_sync_api(
     request: Request,
@@ -2327,7 +2315,7 @@ async def trigger_cloud_flow_sync_api(
     return {"ok": True, **result, "status": status}
 
 
-@router.get("/api/cloud/flow-sync/cursors", dependencies=[Depends(_require_admin_dep)])
+@router.get("/api/cloud/flow-sync/cursors", dependencies=[Depends(admin_session)])
 @scoped("admin")
 async def get_cloud_flow_sync_cursors_api():
     """Return per-account flow-log sync watermarks (operational internals; admin only)."""
@@ -2355,7 +2343,7 @@ async def get_cloud_traffic_sync_config_api(request: Request = None):  # type: i
     }
 
 
-@router.put("/api/cloud/traffic-sync/config", dependencies=[Depends(_require_admin_dep)])
+@router.put("/api/cloud/traffic-sync/config", dependencies=[Depends(admin_session)])
 @scoped("admin")
 async def update_cloud_traffic_sync_config_api(request: Request, body: CloudTrafficSyncConfigUpdate):
     import netcontrol.routes.state as state
@@ -2383,7 +2371,7 @@ async def update_cloud_traffic_sync_config_api(request: Request, body: CloudTraf
     return {"ok": True, "config": sanitized}
 
 
-@router.post("/api/cloud/traffic-sync/pull", dependencies=[Depends(_require_admin_dep)])
+@router.post("/api/cloud/traffic-sync/pull", dependencies=[Depends(admin_session)])
 @scoped("admin")
 async def trigger_cloud_traffic_sync_api(
     request: Request,
@@ -2468,7 +2456,7 @@ async def trigger_cloud_traffic_sync_api(
     return {"ok": True, **result, "status": status}
 
 
-@router.get("/api/cloud/traffic-sync/cursors", dependencies=[Depends(_require_admin_dep)])
+@router.get("/api/cloud/traffic-sync/cursors", dependencies=[Depends(admin_session)])
 @scoped("admin")
 async def get_cloud_traffic_sync_cursors_api():
     """Return per-account traffic-metric sync watermarks (operational internals; admin only)."""

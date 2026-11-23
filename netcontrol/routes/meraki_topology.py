@@ -215,7 +215,7 @@ from netcontrol.routes import background_jobs, state
 from netcontrol.routes.cloud_collectors import skipped_note
 from netcontrol.routes.cloud_visibility import discovery_progress
 from netcontrol.routes.opnsense_filterlog import attach_trace_evidence
-from netcontrol.routes.shared import _audit, _corr_id, _session_user, supervise_task
+from netcontrol.routes.shared import _audit, _corr_id, _session_user, admin_session, supervise_task
 from netcontrol.routes.topology_traffic import record_collection_traffic
 from netcontrol.secret_fields import compared_tls_verify, refuse_secret_reuse, url_origin
 from netcontrol.telemetry import configure_logging, redact_value
@@ -278,7 +278,6 @@ PROVIDER_AWS = "aws"
 PROVIDER_AZURE = "azure"
 PROVIDER_GCP = "gcp"
 
-_require_admin = None
 # (request, feature key) -> whether the caller has that feature.
 _has_feature: Callable[[Request, str], Awaitable[bool]] | None = None
 # Who may read configuration backups, and so find them in the HTML export.
@@ -574,16 +573,9 @@ async def cloud_availability_changed(provider: str) -> None:
         await _availability_changed(cloud.provider, cloud.org_ref, snapshot, ref)
 
 
-def init_meraki_topology(require_admin, has_feature=None):
-    global _require_admin, _has_feature
-    _require_admin = require_admin
+def init_meraki_topology(has_feature):
+    global _has_feature
     _has_feature = has_feature
-
-
-async def _require_admin_dep(request: Request):
-    if _require_admin is None:
-        raise HTTPException(status_code=500, detail="Authorization subsystem not initialized")
-    return await _require_admin(request)
 
 
 class MerakiOrgCreate(BaseModel):
@@ -1016,7 +1008,7 @@ async def list_meraki_orgs_api(request: Request):
     }
 
 
-@router.post("/api/sources", status_code=201, dependencies=[Depends(_require_admin_dep)])
+@router.post("/api/sources", status_code=201, dependencies=[Depends(admin_session)])
 @scoped("admin")
 async def create_meraki_org_api(body: MerakiOrgCreate, request: Request):
     user = _session_user(request)
@@ -1060,14 +1052,14 @@ def _schedule_payload() -> dict[str, Any]:
 
 
 # Registered before ``/api/sources/{org_ref}``, which would otherwise match.
-@router.get("/api/sources/schedule", dependencies=[Depends(_require_admin_dep)])
+@router.get("/api/sources/schedule", dependencies=[Depends(admin_session)])
 @scoped("admin")
 async def get_source_schedule_api():
     """The schedule of source collection: on or off, and the default interval."""
     return _schedule_payload()
 
 
-@router.put("/api/sources/schedule", dependencies=[Depends(_require_admin_dep)])
+@router.put("/api/sources/schedule", dependencies=[Depends(admin_session)])
 @scoped("admin")
 async def update_source_schedule_api(body: SourceScheduleUpdate, request: Request):
     current = dict(state.SOURCE_COLLECTION_SYNC_CONFIG)
@@ -1088,7 +1080,7 @@ async def update_source_schedule_api(body: SourceScheduleUpdate, request: Reques
     return _schedule_payload()
 
 
-@router.put("/api/sources/{org_ref}", dependencies=[Depends(_require_admin_dep)])
+@router.put("/api/sources/{org_ref}", dependencies=[Depends(admin_session)])
 @scoped("admin")
 async def update_meraki_org_api(org_ref: int, body: MerakiOrgUpdate, request: Request):
     current = await _get_org_or_404(org_ref)
@@ -1123,7 +1115,7 @@ async def update_meraki_org_api(org_ref: int, body: MerakiOrgUpdate, request: Re
     return {"ok": True, "org": _serialize_org(org)}
 
 
-@router.delete("/api/sources/{org_ref}", dependencies=[Depends(_require_admin_dep)])
+@router.delete("/api/sources/{org_ref}", dependencies=[Depends(admin_session)])
 @scoped("admin")
 async def delete_meraki_org_api(org_ref: int, request: Request):
     org = await _get_org_or_404(org_ref)
@@ -1141,7 +1133,7 @@ async def delete_meraki_org_api(org_ref: int, request: Request):
     return {"ok": True}
 
 
-@router.post("/api/sources/{org_ref}/validate", dependencies=[Depends(_require_admin_dep)])
+@router.post("/api/sources/{org_ref}/validate", dependencies=[Depends(admin_session)])
 @scoped("admin")
 async def validate_meraki_org_api(org_ref: int):
     """Check the stored credentials of a source: the organizations a Meraki

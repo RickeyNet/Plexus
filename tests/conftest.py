@@ -250,6 +250,9 @@ def _pg_fresh_database(_pg_session_template):
     _state.API_RATE_LIMIT_TRACKER.clear()
     # Failed sign-ins of one test must not delay the next test's logins.
     _state.LOGIN_USERNAME_FAILURES.clear()
+    # /api/health serves one database probe to every caller for a short time;
+    # a test must not get the result of the test before it.
+    _state.HEALTH_PROBE.update(error="NotProbed", expires=0.0)
     yield
 
 

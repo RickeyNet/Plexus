@@ -143,6 +143,78 @@ def test_degraded_health_keeps_503_without_the_details(token_protected_client, m
     assert full.json()["db"] == "error: ConnectionRefusedError"
 
 
+def test_health_callers_share_one_database_probe(token_protected_client, monkeypatch):
+    """Anonymous callers cannot make the app open a connection per request."""
+    from netcontrol.routes import state
+
+    real_probe = app_module._db_probe
+    probes = []
+
+    async def _counted():
+        probes.append(1)
+        await real_probe()
+
+    monkeypatch.setattr(app_module, "_db_probe", _counted)
+    # Longer than these calls can take on a slow runner.
+    monkeypatch.setattr(app_module, "_HEALTH_PROBE_TTL_SECONDS", 600.0)
+    for _ in range(5):
+        assert token_protected_client.get("/api/health").json() == {"ok": True, "status": "healthy"}
+    assert len(probes) == 1
+    # Past the window the next caller probes again, and a failure is shared too.
+    state.HEALTH_PROBE["expires"] = 0.0
+
+    async def _down():
+        probes.append(1)
+        raise ConnectionRefusedError("database down")
+
+    monkeypatch.setattr(app_module, "_db_probe", _down)
+    for _ in range(3):
+        assert token_protected_client.get("/api/health").status_code == 503
+    assert len(probes) == 2
+    # Liveness never touches the database.
+    assert token_protected_client.get("/api/health?probe=live").status_code == 200
+    assert len(probes) == 2
+
+
+@pytest.mark.asyncio
+async def test_a_health_caller_does_not_wait_for_a_running_probe(monkeypatch):
+    """While one probe runs, other callers get the result before it and open
+    no connection: not ready before the first probe has answered."""
+    import asyncio
+
+    from netcontrol.routes import state
+
+    started = asyncio.Event()
+    release = asyncio.Event()
+    probes = []
+
+    class _Conn:
+        async def execute(self, _sql):
+            return self
+
+        async def fetchone(self):
+            return (1,)
+
+        async def close(self):
+            return None
+
+    async def _slow(*args, **kwargs):
+        probes.append(1)
+        started.set()
+        await release.wait()
+        return _Conn()
+
+    monkeypatch.setattr(app_module.db, "get_db", _slow)
+    first = asyncio.create_task(app_module._db_probe_error())
+    await started.wait()
+    assert await app_module._db_probe_error() == "NotProbed"
+    release.set()
+    assert await first is None
+    assert await app_module._db_probe_error() is None
+    assert len(probes) == 1
+    assert state.HEALTH_PROBE["error"] is None
+
+
 @pytest.fixture
 def session_client(monkeypatch, request):
     """A client of the app in its usual mode (sessions, no token required)."""

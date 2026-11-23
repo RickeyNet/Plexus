@@ -658,6 +658,12 @@ def username_failures_expired(_key: str, entry: list[float], now: float) -> bool
 
 LOGIN_USERNAME_FAILURES: dict = BoundedDict(TRACKER_MAX_ENTRIES, username_failures_expired)
 
+# The last result of the database probe behind the public ``/api/health``
+# (``app._db_probe_error``): ``error`` is the exception class name of a failed
+# probe, ``None`` when the database answered; the result is served until
+# ``expires`` (``time.monotonic()``). Not ready until the first probe ran.
+HEALTH_PROBE: dict = {"error": "NotProbed", "expires": 0.0}
+
 LOGIN_RULES = dict(DEFAULT_LOGIN_RULES)
 AUTH_CONFIG = dict(AUTH_CONFIG_DEFAULTS)
 DISCOVERY_SYNC_CONFIG = dict(DISCOVERY_SYNC_DEFAULTS)

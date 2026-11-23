@@ -40,7 +40,7 @@ For a scoped user the inventory, config backup, config drift and intended config
 | Method | Endpoint         | Description                                          |
 |--------|------------------|------------------------------------------------------|
 | GET    | `/api/dashboard` | Stats for every holder of the `dashboard` feature; with `jobs` also recent jobs (a non-admin sees only their own); with `inventory` the inventory groups; with `monitoring` the monitoring summary, device health, open alerts and `topology`: entity counts by state (total, per provider, and `by_source`: one `{provider, org_ref, entity_type, up, degraded, down, unknown}` row per entity type of each source; the AWS, Azure and GCP accounts of one cloud share one `org_ref`) and the down / degraded integration entities, down first, newest first, at most 50 |
-| GET    | `/api/health`    | Service health: `{ok, status}` for anyone (200 healthy, 503 degraded); uptime, counters/timing metrics and the database probe result only with a session or the API token |
+| GET    | `/api/health`    | Service health: `{ok, status}` for anyone (200 healthy, 503 degraded); uptime, counters/timing metrics and the database probe result only with a session or the API token. Callers share one database probe: a result is kept 2 seconds |
 | GET    | `/api/version`   | Release number for anyone; the git SHA of the build only with a session or the API token |
 
 ### Inventory

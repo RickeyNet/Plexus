@@ -27,10 +27,11 @@ from pathlib import Path
 from typing import Annotated
 
 import routes.database as db
-from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from routes.crypto import decrypt
+from starlette.datastructures import UploadFile
 
 import netcontrol.routes.state as state
 from netcontrol.drivers import DriverCapabilityError, get_driver
@@ -52,6 +53,7 @@ from netcontrol.object_scope import (
 )
 from netcontrol.routes.device_config import store_device_config
 from netcontrol.routes.shared import (
+    FILE_UPLOAD_OPENAPI,
     _audit,
     _corr_id,
     _get_session,
@@ -61,6 +63,7 @@ from netcontrol.routes.shared import (
     require_owner_or_admin,
     resolve_state_root,
     service_credential,
+    uploaded_file,
     verify_ws_session,
 )
 from netcontrol.telemetry import configure_logging
@@ -934,11 +937,18 @@ async def _require_campaign_targets(request: Request, host_ids: list[int], ad_ho
 _MAX_IMAGE_UPLOAD_BYTES = int(os.getenv("PLEXUS_MAX_IMAGE_UPLOAD_MB", "2048")) * 1024 * 1024
 
 
-@router.post("/api/upgrades/images")
+@router.post("/api/upgrades/images", openapi_extra=FILE_UPLOAD_OPENAPI)
 @scoped("catalog")
-async def upload_image(request: Request, file: UploadFile = File(...)):
-    """Upload a software image file."""
+async def upload_image(request: Request):
+    """Upload a software image file (multipart form field ``file``). The
+    body can be 2 GB, so it is read only after the caller is checked
+    (``shared.uploaded_file``)."""
     await require_model_write(request)
+    async with uploaded_file(request) as file:
+        return await _store_uploaded_image(request, file)
+
+
+async def _store_uploaded_image(request: Request, file: UploadFile) -> dict:
     session = _get_session(request)
     user = session.get("user", "unknown") if session else "unknown"
 

@@ -172,6 +172,24 @@ caps what one packet can cost:
 - At most 1024 flow records are decoded from one packet; exporters send
   MTU-sized packets of a few dozen records.
 
+### Decode queue
+
+Packets are not decoded on the thread that serves the web UI and the API.
+An admitted packet waits in a queue of its listener (NetFlow or sFlow), and
+one background thread decodes the queued packets, 64 at a time. A flood of
+flow packets therefore slows flow collection, not the rest of Plexus.
+
+Each queue holds at most 4096 packets or 16 MB. A packet that arrives
+when its queue is full is dropped and counted in `dropped_queue` of
+`GET /api/flows/status` and `/api/admin/flows/config` (the count since
+Plexus started). A rising `dropped_queue` means exporters send more than
+the collector decodes: lower the export rate or the sampling ratio on the
+devices.
+
+When the collector stops (or its settings change the ports), the packets
+already queued are decoded and stored first. Packets that arrive while it
+is stopping are dropped and counted the same way.
+
 
 - Raw flow records: 48 hours (configurable via `retention_hours`).
 - Hourly aggregated summaries: 30 days (configurable via

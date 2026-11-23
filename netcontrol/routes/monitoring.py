@@ -1215,6 +1215,56 @@ async def _store_ups_status(h: dict, ups: dict) -> None:
         await db.update_host_serial(h["id"], serial)
 
 
+# host id -> the poll of that host now running, whichever sweep started it
+# (the scheduled cycle, a manual poll, a re-poll after a trap). A device gets
+# one monitoring session at a time: a sweep that reaches a host another sweep
+# is polling waits for that poll and takes its outcome. The future resolves to
+# ``(result, error)``, or to ``None`` when the poll was cancelled before it
+# had an outcome.
+_HOST_POLLS_RUNNING: dict[int, asyncio.Future] = {}
+
+
+async def _poll_target(
+    host: dict, cred: dict | None, snmp_cfg: dict, sem: asyncio.Semaphore, poll_timeout: float
+) -> tuple[dict, dict | None, Exception | None, bool]:
+    """Poll one host of a sweep, under the sweep's concurrency limit and the
+    per-device timeout: ``(host, result, error, joined)``.
+
+    The timeout is a hard ceiling: without it a host whose SNMP agent stalls
+    mid-walk, or whose SSH session connects but never returns a prompt, pins
+    a semaphore slot for good. A failure is returned, not raised, so the sweep
+    can name the device.
+
+    ``joined`` is true when another sweep was already polling this host and
+    its outcome is returned (``_HOST_POLLS_RUNNING``). That sweep stores the
+    result and records the failure; the caller must not do either again."""
+    host_id = int(host["id"])
+    loop = asyncio.get_running_loop()
+    async with sem:
+        # A future of another event loop is one a closed loop left behind.
+        while (running := _HOST_POLLS_RUNNING.get(host_id)) is not None and running.get_loop() is loop:
+            # Shielded: cancelling this sweep must not cancel the other's future.
+            shared = await asyncio.shield(running)
+            if shared is not None:
+                return host, shared[0], shared[1], True
+        done: asyncio.Future = loop.create_future()
+        _HOST_POLLS_RUNNING[host_id] = done
+        outcome: tuple[dict | None, Exception | None] | None = None
+        try:
+            try:
+                outcome = (await asyncio.wait_for(_poll_host_monitoring(host, cred, snmp_cfg), timeout=poll_timeout), None)
+            except TimeoutError:
+                # Bare TimeoutError stringifies to ''; say what happened.
+                outcome = (None, TimeoutError(f"poll exceeded {poll_timeout:.0f}s"))
+            except Exception as exc:  # noqa: BLE001 - recorded per host by the sweep
+                outcome = (None, exc)
+            return host, outcome[0], outcome[1], False
+        finally:
+            if _HOST_POLLS_RUNNING.get(host_id) is done:
+                del _HOST_POLLS_RUNNING[host_id]
+            done.set_result(outcome)
+
+
 async def _run_monitoring_poll_once(*, force: bool = False, host_ids: frozenset[int] | None = None) -> dict:
     """Run one monitoring poll cycle across all groups with SNMP enabled
     (``host_ids``: only those hosts, for a caller limited by object scope)."""
@@ -1252,22 +1302,7 @@ async def _run_monitoring_poll_once(*, force: bool = False, host_ids: frozenset[
             continue
         targets.append((h, cred, snmp_cfg))
 
-    async def _poll_one(h, c, s):
-        # Returns (host, result, error) so as_completed can attribute each
-        # result to its host; the per-device timeout/exception is captured
-        # rather than raised (see streaming poll for details).
-        async with sem:
-            try:
-                res = await asyncio.wait_for(_poll_host_monitoring(h, c, s), timeout=poll_timeout)
-                return h, res, None
-            except TimeoutError:
-                # Bare TimeoutError stringifies to '' - name it like the
-                # streaming poll does so the log says what happened.
-                return h, None, TimeoutError(f"poll exceeded {poll_timeout:.0f}s")
-            except Exception as exc:  # noqa: BLE001 - recorded per host below
-                return h, None, exc
-
-    tasks = [asyncio.create_task(_poll_one(h, c, s)) for h, c, s in targets]
+    tasks = [asyncio.create_task(_poll_target(h, c, s, sem, poll_timeout)) for h, c, s in targets]
 
     # Process each host as its poll completes rather than after the whole
     # batch finishes, so the per-host DB writes + alert/metric/baseline/churn
@@ -1275,7 +1310,7 @@ async def _run_monitoring_poll_once(*, force: bool = False, host_ids: frozenset[
     # as a serial tail once every device has been polled.
     for coro in asyncio.as_completed(tasks):
         try:
-            h, res, err = await coro
+            h, res, err, joined = await coro
         except Exception as exc:  # task crashed without host context
             errors += 1
             LOGGER.warning("monitoring: poll task crashed: %s", redact_value(_exc_text(exc)))
@@ -1283,14 +1318,18 @@ async def _run_monitoring_poll_once(*, force: bool = False, host_ids: frozenset[
 
         if err is not None:
             errors += 1
-            _poll_backoff_record(h["id"], ok=False)
-            LOGGER.warning(
-                "monitoring: poll exception for %s: %s", h.get("hostname", "?"), redact_value(_exc_text(err))
-            )
+            if not joined:
+                _poll_backoff_record(h["id"], ok=False)
+                LOGGER.warning(
+                    "monitoring: poll exception for %s: %s", h.get("hostname", "?"), redact_value(_exc_text(err))
+                )
             continue
 
-        _poll_backoff_record(h["id"], ok=True)
         hosts_polled += 1
+        if joined:
+            # Polled by another sweep, which stores the result.
+            continue
+        _poll_backoff_record(h["id"], ok=True)
         try:
             alerts_created += await _process_poll_result(h, res, alert_rules_cache, suppressions=suppressions_cache)
         except Exception as exc:  # one host's persistence must not abort the cycle
@@ -1322,8 +1361,8 @@ async def _run_monitoring_poll_once(*, force: bool = False, host_ids: frozenset[
 # (FLEET_POLL_RUNNING). The lock is only taken when it is free, never waited
 # on. The scheduled cycle does not take it: it runs one sweep at a time by
 # itself, and holding the lock for its whole sweep would refuse every Poll
-# Now pressed meanwhile. So at most two sweeps overlap (the scheduled one
-# and one manual), as before for a single user.
+# Now pressed meanwhile. So two sweeps can run at once (the scheduled one and
+# one manual), but never two polls of one device (_HOST_POLLS_RUNNING).
 _FLEET_POLL_LOCK = asyncio.Lock()
 FLEET_POLL_RUNNING = "A manual monitoring poll is already running. Try again when it finishes."
 
@@ -1867,30 +1906,14 @@ async def monitoring_poll_now_stream(request: Request):
 
         poll_timeout = float(state.MONITORING_CONFIG.get("per_host_timeout_seconds", 90))
 
-        async def _poll_one(h, cred, snmp_cfg):
-            async with sem:
-                # Hard ceiling per device. Without this a host whose SNMP agent
-                # stalls mid-walk or whose SSH session connects but never
-                # returns a prompt blocks forever, pinning a semaphore slot and
-                # freezing the progress bar. Return the host with the result (or
-                # the exception) so the caller can name a timed-out device.
-                try:
-                    res = await asyncio.wait_for(
-                        _poll_host_monitoring(h, cred, snmp_cfg),
-                        timeout=poll_timeout,
-                    )
-                    return h, res, None
-                except TimeoutError:
-                    return h, None, TimeoutError(f"poll exceeded {poll_timeout:.0f}s")
-                except Exception as exc:  # noqa: BLE001 - surfaced to client
-                    return h, None, exc
-
-        tasks = [asyncio.create_task(_poll_one(h, cred, snmp_cfg)) for h, cred, snmp_cfg in all_hosts]
+        tasks = [
+            asyncio.create_task(_poll_target(h, cred, snmp_cfg, sem, poll_timeout)) for h, cred, snmp_cfg in all_hosts
+        ]
 
         try:
             for coro in asyncio.as_completed(tasks):
                 try:
-                    h, res, err = await coro
+                    h, res, err, joined = await coro
                 except Exception as exc:  # task itself crashed (no host context)
                     errors += 1
                     completed += 1
@@ -1902,8 +1925,9 @@ async def monitoring_poll_now_stream(request: Request):
                     hostname = h.get("hostname", h.get("ip_address", "unknown"))
                     errors += 1
                     completed += 1
-                    _poll_backoff_record(h["id"], ok=False)
-                    LOGGER.warning("monitoring: poll failed for %s: %s", hostname, redact_value(_exc_text(err)))
+                    if not joined:
+                        _poll_backoff_record(h["id"], ok=False)
+                        LOGGER.warning("monitoring: poll failed for %s: %s", hostname, redact_value(_exc_text(err)))
                     detail = (
                         "Timed out - device unresponsive." if isinstance(err, TimeoutError) else "Poll failed for host."
                     )
@@ -1913,13 +1937,19 @@ async def monitoring_poll_now_stream(request: Request):
                 hostname = h.get("hostname", h.get("ip_address", "unknown"))
                 hosts_polled += 1
                 completed += 1
-                _poll_backoff_record(h["id"], ok=True)
-
-                try:
-                    host_alerts = await _process_poll_result(h, res, alert_rules_cache, suppressions=suppressions_cache)
-                except Exception as exc:  # one host's persistence must not kill the stream
-                    host_alerts = 0
-                    LOGGER.warning("monitoring: post-process error for %s: %s", hostname, redact_value(_exc_text(exc)))
+                host_alerts = 0
+                # A host another sweep polled is stored (and its alerts
+                # raised) by that sweep; this one only reports the reading.
+                if not joined:
+                    _poll_backoff_record(h["id"], ok=True)
+                    try:
+                        host_alerts = await _process_poll_result(
+                            h, res, alert_rules_cache, suppressions=suppressions_cache
+                        )
+                    except Exception as exc:  # one host's persistence must not kill the stream
+                        LOGGER.warning(
+                            "monitoring: post-process error for %s: %s", hostname, redact_value(_exc_text(exc))
+                        )
                 alerts_created += host_alerts
 
                 status_icon = "ok" if res["poll_status"] == "ok" else "error"

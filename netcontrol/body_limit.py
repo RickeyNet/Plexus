@@ -61,7 +61,11 @@ def max_body_bytes_from_env(name: str = "APP_MAX_REQUEST_BODY_MB", default_mb: i
 def default_path_limits() -> PathLimits:
     """The upload routes allowed a body larger than the default, each with
     its route's own file cap plus the multipart allowance. Mirrored by the
-    ``location`` blocks in ``deploy/nginx.conf``."""
+    ``location`` blocks in ``deploy/nginx.conf``.
+
+    A route listed here must not let FastAPI read its body (no ``File``,
+    ``Form`` or body parameter): it checks the caller first and then reads
+    the upload itself (``shared.uploaded_file``)."""
     # Imported here: the route modules are heavy, and app.py has loaded them
     # by the time the middleware is built.
     from netcontrol.routes.geolocation import _MAX_IMAGE_BYTES as floor_image_bytes

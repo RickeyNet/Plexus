@@ -60,8 +60,8 @@ from netcontrol.integrations.meraki.enrich import load_inventory_index
 from netcontrol.integrations.meraki.normalize import InventoryIndex
 from netcontrol.object_scope import readable_host_ids, scoped
 from netcontrol.routes import notification_channels
-from netcontrol.routes.meraki_topology import PROVIDER_MERAKI, _is_demo, _require_admin_dep
-from netcontrol.routes.shared import _audit, _corr_id, _session_user, read_bounded_body
+from netcontrol.routes.meraki_topology import PROVIDER_MERAKI, _is_demo
+from netcontrol.routes.shared import _audit, _corr_id, _session_user, admin_session, read_bounded_body
 from netcontrol.routes.topology_availability import _mute_index, finish_removal
 from netcontrol.telemetry import configure_logging
 
@@ -694,13 +694,13 @@ async def list_meraki_alerts_api(
     return {"alerts": rows}
 
 
-@admin_router.get("/api/monitoring/meraki-alerts/settings", dependencies=[Depends(_require_admin_dep)])
+@admin_router.get("/api/monitoring/meraki-alerts/settings", dependencies=[Depends(admin_session)])
 async def get_meraki_alert_settings_api():
     """The settings and status of both paths. The secret is never returned."""
     return await _settings_payload()
 
 
-@admin_router.put("/api/monitoring/meraki-alerts/settings", dependencies=[Depends(_require_admin_dep)])
+@admin_router.put("/api/monitoring/meraki-alerts/settings", dependencies=[Depends(admin_session)])
 async def update_meraki_alert_settings_api(body: MerakiAlertSettingsUpdate, request: Request):
     current = dict(_config())
     secret_change = "unchanged"
@@ -745,7 +745,7 @@ async def update_meraki_alert_settings_api(body: MerakiAlertSettingsUpdate, requ
     return await _settings_payload()
 
 
-@admin_router.post("/api/monitoring/meraki-alerts/poll", dependencies=[Depends(_require_admin_dep)])
+@admin_router.post("/api/monitoring/meraki-alerts/poll", dependencies=[Depends(admin_session)])
 async def poll_meraki_alerts_now_api(request: Request):
     """Poll every enabled Meraki source now, ignoring back-off."""
     result = await run_alert_poll_cycle("manual", force=True)

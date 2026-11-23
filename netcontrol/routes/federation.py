@@ -7,7 +7,7 @@ Provides:
   - Manual and automatic sync of aggregate data from peers
   - Federated overview endpoint aggregating metrics across all peers
 
-Object scope: every route is admin only (``require_admin``) and admins are
+Object scope: every route is admin only (``shared.admin_session``) and admins are
 unrestricted, so the routes are marked exempt.
 
 Outbound requests: every request to a peer goes through
@@ -34,7 +34,7 @@ from routes.crypto import decrypt, encrypt
 
 from netcontrol.object_scope import scope_exempt
 from netcontrol.routes.outbound_http import OutboundRequestError, guard_url, send_request
-from netcontrol.routes.shared import _audit, _corr_id, _get_session
+from netcontrol.routes.shared import _audit, _corr_id, _get_session, admin_session
 from netcontrol.routes.state import _env_flag
 from netcontrol.secret_fields import compared_tls_verify, refuse_secret_reuse, url_origin
 from netcontrol.telemetry import configure_logging
@@ -42,27 +42,11 @@ from netcontrol.telemetry import configure_logging
 router = APIRouter()
 LOGGER = configure_logging("plexus.federation")
 
-_require_admin = None
-
 # Background sync defaults
 _SYNC_INTERVAL_SECONDS = 300  # 5 minutes
 _HTTP_TIMEOUT_SECONDS = 30
 # Replaces the network layer of peer requests (tests); None in production.
 HTTP_TRANSPORT: httpx.AsyncBaseTransport | None = None
-
-
-# ── Late-binding init ────────────────────────────────────────────────────────
-
-
-def init_federation(require_admin):
-    global _require_admin
-    _require_admin = require_admin
-
-
-async def _require_admin_dep(request: Request):
-    if _require_admin is None:
-        raise HTTPException(status_code=500, detail="Authorization subsystem not initialized")
-    return await _require_admin(request)
 
 
 # ── Pydantic models ─────────────────────────────────────────────────────────
@@ -270,8 +254,8 @@ def _sync_status_from(data: dict) -> tuple[str, str]:
 
 
 @router.get("/api/federation/peers")
-@scope_exempt("admin only (require_admin): admins are unrestricted")
-async def list_peers(request: Request, _user=Depends(_require_admin_dep)):
+@scope_exempt("admin only (admin_session): admins are unrestricted")
+async def list_peers(request: Request, _user=Depends(admin_session)):
     """List all registered federation peers."""
     cur = await db.get_db(read_only=True)
     try:
@@ -283,11 +267,11 @@ async def list_peers(request: Request, _user=Depends(_require_admin_dep)):
 
 
 @router.post("/api/federation/peers", status_code=201)
-@scope_exempt("admin only (require_admin): admins are unrestricted")
+@scope_exempt("admin only (admin_session): admins are unrestricted")
 async def create_peer(
     body: PeerCreate,
     request: Request,
-    _user=Depends(_require_admin_dep),
+    _user=Depends(admin_session),
 ):
     """Register a new federation peer."""
     url = await _validate_url(body.url)
@@ -321,20 +305,20 @@ async def create_peer(
 
 
 @router.get("/api/federation/peers/{peer_id}")
-@scope_exempt("admin only (require_admin): admins are unrestricted")
-async def get_peer(peer_id: int, request: Request, _user=Depends(_require_admin_dep)):
+@scope_exempt("admin only (admin_session): admins are unrestricted")
+async def get_peer(peer_id: int, request: Request, _user=Depends(admin_session)):
     """Get a single federation peer."""
     peer = await _get_peer_or_404(peer_id)
     return _peer_row_to_dict(peer)
 
 
 @router.put("/api/federation/peers/{peer_id}")
-@scope_exempt("admin only (require_admin): admins are unrestricted")
+@scope_exempt("admin only (admin_session): admins are unrestricted")
 async def update_peer(
     peer_id: int,
     body: PeerUpdate,
     request: Request,
-    _user=Depends(_require_admin_dep),
+    _user=Depends(admin_session),
 ):
     """Update a federation peer."""
     existing = await _get_peer_or_404(peer_id)
@@ -401,8 +385,8 @@ async def update_peer(
 
 
 @router.delete("/api/federation/peers/{peer_id}")
-@scope_exempt("admin only (require_admin): admins are unrestricted")
-async def delete_peer(peer_id: int, request: Request, _user=Depends(_require_admin_dep)):
+@scope_exempt("admin only (admin_session): admins are unrestricted")
+async def delete_peer(peer_id: int, request: Request, _user=Depends(admin_session)):
     """Remove a federation peer and its cached snapshots."""
     await _get_peer_or_404(peer_id)
 
@@ -430,8 +414,8 @@ async def delete_peer(peer_id: int, request: Request, _user=Depends(_require_adm
 
 
 @router.post("/api/federation/peers/{peer_id}/test")
-@scope_exempt("admin only (require_admin): admins are unrestricted")
-async def test_peer(peer_id: int, request: Request, _user=Depends(_require_admin_dep)):
+@scope_exempt("admin only (admin_session): admins are unrestricted")
+async def test_peer(peer_id: int, request: Request, _user=Depends(admin_session)):
     """Test connectivity to a remote peer."""
     peer = await _get_peer_or_404(peer_id)
 
@@ -463,8 +447,8 @@ async def test_peer(peer_id: int, request: Request, _user=Depends(_require_admin
 
 
 @router.post("/api/federation/peers/{peer_id}/sync")
-@scope_exempt("admin only (require_admin): admins are unrestricted")
-async def sync_peer(peer_id: int, request: Request, _user=Depends(_require_admin_dep)):
+@scope_exempt("admin only (admin_session): admins are unrestricted")
+async def sync_peer(peer_id: int, request: Request, _user=Depends(admin_session)):
     """Manually trigger a full sync from a remote peer."""
     peer = await _get_peer_or_404(peer_id)
     now = datetime.now(UTC).isoformat()
@@ -533,8 +517,8 @@ async def sync_peer(peer_id: int, request: Request, _user=Depends(_require_admin
 
 
 @router.get("/api/federation/overview")
-@scope_exempt("admin only (require_admin): admins are unrestricted")
-async def federation_overview(request: Request, _user=Depends(_require_admin_dep)):
+@scope_exempt("admin only (admin_session): admins are unrestricted")
+async def federation_overview(request: Request, _user=Depends(admin_session)):
     """Aggregated overview across all federation peers."""
     cur = await db.get_db(read_only=True)
     try:

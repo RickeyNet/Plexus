@@ -328,6 +328,8 @@ Poll**, and the matching IPAM subnet when there is one.
   the admin run-now) runs, another one is refused with "A manual monitoring
   poll is already running. Try again when it finishes." (`409`). The
   scheduled cycle is not affected and does not block **Poll Now**.
+  A device is still polled by one of the two at a time: the poll that
+  reaches it second waits for the first and uses its reading.
 - **Known gaps:** the **Cooldown (min)** of a rule and of **Settings >
   Monitoring**, and a rule's **Escalate After** time, are saved but the
   poller does not read them: repeats are folded by the open alert and

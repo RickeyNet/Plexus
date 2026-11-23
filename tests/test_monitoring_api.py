@@ -605,3 +605,153 @@ async def test_poll_stream_started_after_another_reports_an_error_event(monkeypa
         chunks = [chunk async for chunk in response.body_iterator]
     assert len(chunks) == 1
     assert '"type": "error"' in chunks[0] and monitoring.FLEET_POLL_RUNNING in chunks[0]
+
+
+# ── One poll of a device at a time, whichever sweep reaches it ───────────────
+
+_POLLED_HOST = {"id": 7, "hostname": "edge-sw1", "ip_address": "192.0.2.10"}
+
+
+def _sweep_fakes(monkeypatch, poll) -> dict[str, list]:
+    """A one-host fleet polled by ``poll``; what the sweep stored and recorded."""
+    from netcontrol.routes import monitoring
+
+    seen: dict[str, list] = {"stored": [], "backoff": []}
+
+    async def targets():
+        return [(_POLLED_HOST, None, {})]
+
+    async def store(h, res, rules, suppressions=None):
+        seen["stored"].append(h["id"])
+        return 2
+
+    async def empty(*args, **kwargs):
+        return []
+
+    async def nothing(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(monitoring, "_HOST_POLLS_RUNNING", {})
+    monkeypatch.setattr(monitoring, "_build_poll_targets", targets)
+    monkeypatch.setattr(monitoring, "_poll_host_monitoring", poll)
+    monkeypatch.setattr(monitoring, "_process_poll_result", store)
+    monkeypatch.setattr(monitoring, "_poll_backoff_record", lambda host_id, ok: seen["backoff"].append((host_id, ok)))
+    monkeypatch.setattr(monitoring, "_poll_backoff_should_skip", lambda host_id: False)
+    monkeypatch.setattr(monitoring, "_run_retention_cleanup_throttled", nothing)
+    monkeypatch.setattr(monitoring, "_audit", nothing)
+    monkeypatch.setattr(monitoring.db, "get_alert_rules", empty)
+    monkeypatch.setattr(monitoring.db, "get_active_alert_suppressions", empty)
+    monkeypatch.setitem(monitoring.state.MONITORING_CONFIG, "enabled", True)
+    return seen
+
+
+async def test_a_device_is_polled_once_when_two_sweeps_reach_it(monkeypatch):
+    """The scheduled cycle does not take the manual poll lock, so two sweeps
+    can overlap: the second to reach a device waits for the first one's poll
+    and opens no session of its own."""
+    from netcontrol.routes import monitoring
+
+    started = asyncio.Event()
+    release = asyncio.Event()
+    polls: list[int] = []
+
+    async def slow_poll(h, cred, snmp_cfg):
+        polls.append(h["id"])
+        started.set()
+        await release.wait()
+        return {"poll_status": "ok"}
+
+    _sweep_fakes(monkeypatch, slow_poll)
+    sem = asyncio.Semaphore(4)
+    first = asyncio.create_task(monitoring._poll_target(_POLLED_HOST, None, {}, sem, 30))
+    await asyncio.wait_for(started.wait(), timeout=5)
+    second = asyncio.create_task(monitoring._poll_target(_POLLED_HOST, None, {}, sem, 30))
+    await asyncio.sleep(0)  # the second runs up to its wait on the first one's poll
+    release.set()
+    assert await first == (_POLLED_HOST, {"poll_status": "ok"}, None, False)
+    assert await second == (_POLLED_HOST, {"poll_status": "ok"}, None, True)
+    assert polls == [7]
+    assert monitoring._HOST_POLLS_RUNNING == {}
+
+    # A poll that is cancelled has no outcome to share: the waiting sweep
+    # polls the device itself.
+    started.clear()
+    release.clear()
+    first = asyncio.create_task(monitoring._poll_target(_POLLED_HOST, None, {}, sem, 30))
+    await asyncio.wait_for(started.wait(), timeout=5)
+    second = asyncio.create_task(monitoring._poll_target(_POLLED_HOST, None, {}, sem, 30))
+    await asyncio.sleep(0)
+    first.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await first
+    release.set()
+    assert await second == (_POLLED_HOST, {"poll_status": "ok"}, None, False)
+    assert polls == [7, 7, 7]
+    assert monitoring._HOST_POLLS_RUNNING == {}
+
+
+async def test_poll_target_reports_a_timeout_and_a_failure(monkeypatch):
+    from netcontrol.routes import monitoring
+
+    async def hang(h, cred, snmp_cfg):
+        await asyncio.sleep(3600)
+
+    _sweep_fakes(monkeypatch, hang)
+    host, result, error, joined = await monitoring._poll_target(_POLLED_HOST, None, {}, asyncio.Semaphore(1), 0.01)
+    assert (host, result, joined) == (_POLLED_HOST, None, False)
+    assert isinstance(error, TimeoutError) and str(error) == "poll exceeded 0s"
+
+    async def boom(h, cred, snmp_cfg):
+        raise RuntimeError("no route to host")
+
+    monkeypatch.setattr(monitoring, "_poll_host_monitoring", boom)
+    _, result, error, joined = await monitoring._poll_target(_POLLED_HOST, None, {}, asyncio.Semaphore(1), 30)
+    assert result is None and joined is False and str(error) == "no route to host"
+    assert monitoring._HOST_POLLS_RUNNING == {}
+
+
+async def test_a_sweep_does_not_store_a_reading_another_sweep_took(monkeypatch):
+    """Both kinds of sweep count a device another sweep is polling, and
+    leave storing its result, its alerts and its backoff to that sweep."""
+    from netcontrol.routes import monitoring
+
+    polls: list[int] = []
+
+    async def poll(h, cred, snmp_cfg):
+        polls.append(h["id"])
+        return {"poll_status": "ok"}
+
+    seen = _sweep_fakes(monkeypatch, poll)
+
+    async def no_hosts(request, *, write=False):
+        return None
+
+    monkeypatch.setattr(monitoring, "readable_host_ids", no_hosts)
+    monkeypatch.setattr(monitoring, "_get_session", lambda request: None)
+    monkeypatch.setattr(monitoring, "_FLEET_POLL_LOCK", asyncio.Lock())
+
+    def other_sweep_outcome(outcome) -> None:
+        running = asyncio.get_running_loop().create_future()
+        running.set_result(outcome)
+        monitoring._HOST_POLLS_RUNNING[7] = running
+
+    other_sweep_outcome(({"poll_status": "ok", "cpu_percent": 12}, None))
+    result = await monitoring._run_monitoring_poll_once(force=True)
+    assert (result["hosts_polled"], result["alerts_created"], result["errors"]) == (1, 0, 0)
+    chunks = [chunk async for chunk in (await monitoring.monitoring_poll_now_stream(object())).body_iterator]
+    done = next(chunk for chunk in chunks if '"type": "host_done"' in chunk)
+    assert '"cpu": 12' in done and '"alerts": 0' in done
+
+    other_sweep_outcome((None, RuntimeError("no route to host")))
+    result = await monitoring._run_monitoring_poll_once(force=True)
+    assert (result["hosts_polled"], result["errors"]) == (0, 1)
+    chunks = [chunk async for chunk in (await monitoring.monitoring_poll_now_stream(object())).body_iterator]
+    assert any('"type": "host_error"' in chunk for chunk in chunks)
+
+    assert polls == [] and seen == {"stored": [], "backoff": []}
+
+    # With no other sweep on the device, the sweep polls and stores it.
+    del monitoring._HOST_POLLS_RUNNING[7]
+    result = await monitoring._run_monitoring_poll_once(force=True)
+    assert (result["hosts_polled"], result["alerts_created"]) == (1, 2)
+    assert polls == [7] and seen == {"stored": [7], "backoff": [(7, True)]}

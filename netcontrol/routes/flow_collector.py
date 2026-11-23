@@ -19,6 +19,7 @@ import asyncio
 import json
 import socket
 import struct
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 
 import routes.database as db
@@ -67,6 +68,23 @@ _flow_aggregation_task: asyncio.Task | None = None
 _exporter_cache: dict[str, int] = listener_sources.INVENTORY_ADDRESSES
 # The source allowlist and per-exporter rate limit of both flow sockets.
 _flow_guard = listener_sources.guard("flow")
+
+# Admitted datagrams wait in a per-listener queue and are decoded off the
+# event loop, so a flood of flow packets cannot starve HTTP, WebSocket and
+# background work. A datagram that does not fit is dropped and counted.
+# Most datagrams one listener's queue holds while waiting to be decoded.
+FLOW_DECODE_QUEUE_MAX = 4096
+# Most datagram bytes one listener's queue holds (UDP datagrams reach 64 KB).
+FLOW_DECODE_QUEUE_MAX_BYTES = 16 * 1024 * 1024
+# Most datagrams decoded in one hand-off to the decode thread.
+FLOW_DECODE_BATCH_MAX = 64
+# Datagrams dropped because a decode queue was full, since Plexus started.
+_decode_queue_dropped = 0
+# One thread decodes for both listeners, one batch at a time: the parsers'
+# state (_nf9_templates, _sflow_sampling_rates) is only ever written from
+# this thread, and a flood cannot occupy the shared asyncio.to_thread pool
+# that SSH sessions, password hashing and other work use.
+_decode_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="flow-decode")
 
 
 # Well-known port to service name mapping
@@ -217,6 +235,8 @@ NF9_MAX_RECORDS_PER_PACKET = 1024
 # Template cache, bounded at both levels (the entry written longest ago is
 # evicted first; a data flowset rewrites the template it uses):
 # {exporter_ip: {template_id: raw field specs (4 bytes per field: type, length)}}
+# Read and written only by the parsers; the listeners run them on the single
+# decode thread (_decode_executor), so no lock is needed.
 _nf9_templates: BoundedDict = BoundedDict(NF9_MAX_EXPORTERS)
 
 
@@ -366,6 +386,7 @@ def parse_netflow_v9(data: bytes, addr: tuple) -> list[dict]:
 # Keyed {exporter_ip: {source_id: rate}} and bounded at both levels (least
 # recently seen evicted first): the keys come from unauthenticated packets,
 # and _latest_sflow_sampling_rate scans one exporter's entries per datagram.
+# Like _nf9_templates, only the decode thread touches it (_decode_batch).
 SFLOW_MAX_SOURCES_PER_EXPORTER = 1024
 _sflow_sampling_rates: BoundedDict = BoundedDict(NF9_MAX_EXPORTERS)
 
@@ -655,6 +676,34 @@ def _latest_sflow_sampling_rate(exporter_ip: str) -> int:
     return max(_sflow_sampling_rates.get(exporter_ip, {}).values(), default=0)
 
 
+def _decode_batch(mode: str, batch: list[tuple[bytes, tuple]]) -> list[tuple[tuple, list[dict], int]]:
+    """Decode queued datagrams of one listener; runs on the decode thread.
+
+    Returns ``(addr, records, sampling_rate)`` for each datagram that gave
+    records. A datagram the parser fails on is logged and skipped, so it
+    cannot cost the rest of the batch. The sFlow sampling rate is read here,
+    on the thread that writes it.
+    """
+    decoded: list[tuple[tuple, list[dict], int]] = []
+    for data, addr in batch:
+        try:
+            if mode == "sflow":
+                records = parse_sflow(data, addr)
+                sampling_rate = _latest_sflow_sampling_rate(addr[0])
+            elif struct.unpack("!H", data[:2])[0] == 5:
+                records = parse_netflow_v5(data, addr)
+                sampling_rate = 0
+            else:
+                records = parse_netflow_v9(data, addr)
+                sampling_rate = 0
+        except Exception as exc:
+            LOGGER.debug("flow_collector: decode of a datagram from %s failed: %s", addr[0], type(exc).__name__)
+            continue
+        if records:
+            decoded.append((addr, records, sampling_rate))
+    return decoded
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 # UDP Flow Receiver Protocol
 # ═════════════════════════════════════════════════════════════════════════════
@@ -668,12 +717,22 @@ class _FlowCollectorProtocol(asyncio.DatagramProtocol):
     `mode="netflow"` parses v5/v9/IPFIX off the version byte; `mode="sflow"`
     routes everything through parse_sflow(). Both modes share the same
     buffer/flush path so flow_records end up in one table.
+
+    The event loop only admits a datagram (source allowlist, rate limit,
+    length and version) and queues it. A drain worker hands the queue to
+    the decode thread in batches and stores the records it returns.
     """
 
     def __init__(self, mode: str = "netflow"):
         self.mode = mode
         self._buffer: list[tuple] = []
         self._flush_task: asyncio.Task | None = None
+        # (datagram, source address) waiting to be decoded; bounded in count
+        # (FLOW_DECODE_QUEUE_MAX) and in bytes (FLOW_DECODE_QUEUE_MAX_BYTES).
+        self._queue: asyncio.Queue[tuple[bytes, tuple]] = asyncio.Queue()
+        self._queued_bytes = 0
+        self._drain_task: asyncio.Task | None = None
+        self._closing: asyncio.Task | None = None
         # Hold strong references to fire-and-forget tasks spawned from the hot
         # UDP path. The event loop only keeps a weak reference, so without this
         # a task can be garbage-collected before it runs, silently dropping an
@@ -683,67 +742,100 @@ class _FlowCollectorProtocol(asyncio.DatagramProtocol):
     def connection_made(self, transport):
         self.transport = transport
         self._flush_task = asyncio.create_task(self._periodic_flush())
+        self._drain_task = asyncio.create_task(self._drain_loop())
         LOGGER.info("flow_collector: UDP listener started (mode=%s)", self.mode)
 
     def datagram_received(self, data: bytes, addr: tuple):
+        global _decode_queue_dropped
         # An exporter that is not an inventory host address (nor in an
         # allowed network), or over its rate limit, is dropped unparsed.
         if not _flow_guard.admit(addr[0]):
             return
         if len(data) < 4:
             return
-
-        if self.mode == "sflow":
-            records = parse_sflow(data, addr)
-            sampling_rate = _latest_sflow_sampling_rate(addr[0])
-        else:
-            version = struct.unpack("!H", data[:2])[0]
-            if version == 5:
-                records = parse_netflow_v5(data, addr)
-            elif version in (9, 10):
-                records = parse_netflow_v9(data, addr)
-            else:
-                return  # Unknown format
-            sampling_rate = 0
-
-        if not records:
+        if self.mode != "sflow" and struct.unpack("!H", data[:2])[0] not in (5, 9, 10):
+            return  # Unknown format
+        if (
+            self._closing is not None
+            or self._queue.qsize() >= FLOW_DECODE_QUEUE_MAX
+            or self._queued_bytes + len(data) > FLOW_DECODE_QUEUE_MAX_BYTES
+        ):
+            _decode_queue_dropped += 1
             return
+        self._queued_bytes += len(data)
+        self._queue.put_nowait((data, addr))
 
-        exporter_ip = addr[0]
-        host_id = _exporter_cache.get(exporter_ip)
-        flow_type = records[0]["flow_type"]
-        last_record_at = records[-1].get("end_time")
+    async def drain(self) -> None:
+        """Wait until every queued datagram is decoded and its records are in
+        the buffer. Returns at once when the drain worker is not running."""
+        worker = self._drain_task
+        if worker is None or worker.done():
+            return
+        joined = asyncio.ensure_future(self._queue.join())
+        try:
+            await asyncio.wait({joined, worker}, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            joined.cancel()
 
-        for rec in records:
-            self._buffer.append(
-                (
-                    rec["exporter_ip"],
-                    host_id,
-                    rec["flow_type"],
-                    rec["src_ip"],
-                    rec["dst_ip"],
-                    rec["src_port"],
-                    rec["dst_port"],
-                    rec["protocol"],
-                    rec["bytes"],
-                    rec["packets"],
-                    rec["src_as"],
-                    rec["dst_as"],
-                    rec["input_if"],
-                    rec["output_if"],
-                    rec["tos"],
-                    rec["tcp_flags"],
-                    rec["start_time"],
-                    rec["end_time"],
+    async def _drain_loop(self) -> None:
+        """Take up to FLOW_DECODE_BATCH_MAX datagrams at a time, decode them
+        on the decode thread (one batch at a time) and store the records."""
+        loop = asyncio.get_running_loop()
+        while True:
+            batch = [await self._queue.get()]
+            while len(batch) < FLOW_DECODE_BATCH_MAX and not self._queue.empty():
+                batch.append(self._queue.get_nowait())
+            try:
+                decoded = await loop.run_in_executor(_decode_executor, _decode_batch, self.mode, batch)
+                self._store(decoded)
+            except Exception as exc:
+                LOGGER.warning("flow_collector: decoding %d datagrams failed: %s", len(batch), type(exc).__name__)
+            finally:
+                self._queued_bytes -= sum(len(data) for data, _addr in batch)
+                for _ in batch:
+                    self._queue.task_done()
+
+    def _store(self, decoded: list[tuple[tuple, list[dict], int]]) -> None:
+        """Buffer the decoded records and count each packet for its exporter
+        (on the event loop: the exporter cache and the pending stats are
+        only touched here)."""
+        for addr, records, sampling_rate in decoded:
+            exporter_ip = addr[0]
+            host_id = _exporter_cache.get(exporter_ip)
+            flow_type = records[0]["flow_type"]
+            last_record_at = records[-1].get("end_time")
+
+            for rec in records:
+                self._buffer.append(
+                    (
+                        rec["exporter_ip"],
+                        host_id,
+                        rec["flow_type"],
+                        rec["src_ip"],
+                        rec["dst_ip"],
+                        rec["src_port"],
+                        rec["dst_port"],
+                        rec["protocol"],
+                        rec["bytes"],
+                        rec["packets"],
+                        rec["src_as"],
+                        rec["dst_as"],
+                        rec["input_if"],
+                        rec["output_if"],
+                        rec["tos"],
+                        rec["tcp_flags"],
+                        rec["start_time"],
+                        rec["end_time"],
+                    )
                 )
-            )
 
-        # Per-exporter telemetry: count this packet (not per-record) so the
-        # number matches what the device actually sent over the wire. Pure
-        # in-memory accumulate — flushed to the DB on the periodic tick, so
-        # the hot UDP path never touches the writer lock.
-        _note_exporter_packet(exporter_ip, flow_type, host_id, last_record_at, sampling_rate)
+            # Per-exporter telemetry: count this packet (not per-record) so the
+            # number matches what the device actually sent over the wire. Pure
+            # in-memory accumulate — flushed to the DB on the periodic tick, so
+            # the hot UDP path never touches the writer lock.
+            _note_exporter_packet(exporter_ip, flow_type, host_id, last_record_at, sampling_rate)
 
+        # One flush task per batch: it takes the whole buffer when it runs.
         if len(self._buffer) >= FLOW_COLLECTOR_CONFIG.get("batch_size", 100):
             self._spawn(self._flush_buffer())
 
@@ -773,9 +865,39 @@ class _FlowCollectorProtocol(asyncio.DatagramProtocol):
             await self._flush_buffer()
             await _flush_exporter_stats()
 
+    async def close(self) -> None:
+        """Stop the listener's work: decode and store every datagram already
+        queued, stop the drain worker and the periodic flush, wait for
+        flushes in flight, then flush the buffer. Datagrams that arrive
+        while closing are dropped and counted. Safe to call more than once;
+        every call waits for the same close."""
+        if self._closing is None:
+            self._closing = asyncio.create_task(self._close())
+        await asyncio.shield(self._closing)
+
+    async def _close(self) -> None:
+        global _decode_queue_dropped
+        await self.drain()
+        tasks = [t for t in (self._drain_task, self._flush_task) if t is not None]
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        # Left only when the worker was not running (never connected, or
+        # cancelled from outside): nothing will decode these.
+        while not self._queue.empty():
+            data, _addr = self._queue.get_nowait()
+            self._queued_bytes -= len(data)
+            _decode_queue_dropped += 1
+        if self._bg_tasks:
+            await asyncio.gather(*list(self._bg_tasks), return_exceptions=True)
+        await self._flush_buffer()
+
     def connection_lost(self, exc):
-        if self._flush_task:
-            self._flush_task.cancel()
+        # A socket that closed without stop_flow_collector (an error) still
+        # gets its queue decoded and its buffer flushed; the task is held in
+        # self._closing, and stop_flow_collector waits for it.
+        if self._closing is None:
+            self._closing = asyncio.create_task(self._close())
         LOGGER.info("flow_collector: UDP listener stopped")
 
 
@@ -834,8 +956,8 @@ async def sync_exporter_hosts() -> int:
 
 
 # Pending per-exporter packet counters, keyed by (exporter_ip, flow_type).
-# Written synchronously from datagram_received (single-threaded on the event
-# loop, so no lock needed) and drained by _flush_exporter_stats. Bounded: with
+# Written by the drain worker on the event loop after a batch is decoded (one
+# thread, so no lock needed) and drained by _flush_exporter_stats. Bounded: with
 # the "any" source policy the keys follow whatever reaches the socket.
 _pending_exporter_stats: BoundedDict = BoundedDict(4 * NF9_MAX_EXPORTERS)
 
@@ -946,11 +1068,13 @@ async def stop_flow_collector() -> bool:
     if _flow_transport is None and _sflow_transport is None:
         return False
 
+    # Each socket is closed first so nothing more is queued; close() then
+    # decodes what is already queued and flushes the rows.
     if _sflow_transport is not None:
         try:
-            if _sflow_protocol:
-                await _sflow_protocol._flush_buffer()
             _sflow_transport.close()
+            if _sflow_protocol:
+                await _sflow_protocol.close()
         except Exception as exc:
             LOGGER.debug("flow_collector: sFlow transport close failed: %s", exc)
         _sflow_transport = None
@@ -958,9 +1082,9 @@ async def stop_flow_collector() -> bool:
 
     if _flow_transport is not None:
         try:
-            if _flow_protocol:
-                await _flow_protocol._flush_buffer()
             _flow_transport.close()
+            if _flow_protocol:
+                await _flow_protocol.close()
         except Exception as exc:
             LOGGER.debug("flow_collector: NetFlow transport close failed: %s", exc)
         _flow_transport = None
@@ -1135,9 +1259,14 @@ async def api_flow_status():
 
 
 def _drop_counters() -> dict[str, int]:
-    """Datagrams the listener allowlist and rate limit dropped since start."""
+    """Datagrams the listener allowlist and rate limit dropped, and those
+    dropped because a decode queue was full, since start."""
     stats = _flow_guard.stats()
-    return {"dropped_source": stats["dropped_source"], "dropped_rate": stats["dropped_rate"]}
+    return {
+        "dropped_source": stats["dropped_source"],
+        "dropped_rate": stats["dropped_rate"],
+        "dropped_queue": _decode_queue_dropped,
+    }
 
 
 @router.get("/api/flows/exporters")

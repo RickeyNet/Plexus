@@ -459,10 +459,8 @@ def test_federation_module_imports():
     """The federation module should import without errors."""
     from netcontrol.routes.federation import (
         federation_sync_loop,
-        init_federation,
         router,
     )
 
     assert router is not None
-    assert callable(init_federation)
     assert callable(federation_sync_loop)

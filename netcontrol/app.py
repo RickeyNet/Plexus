@@ -103,7 +103,6 @@ from netcontrol.routes.billing import (
     router as billing_router,
 )
 from netcontrol.routes.bulk_import import (
-    init_bulk_import,
     ipam_router as bulk_import_ipam_router,
     router as bulk_import_router,
 )
@@ -120,7 +119,6 @@ from netcontrol.routes.cloud_flow_pullers import pull_flow_logs_all_accounts
 from netcontrol.routes.cloud_metric_pullers import pull_traffic_metrics_all_accounts
 from netcontrol.routes.cloud_visibility import (
     build_cloud_sync_status,
-    init_cloud_visibility,
     persist_cloud_flow_sync_status,
     persist_cloud_traffic_sync_status,
     router as cloud_visibility_router,
@@ -159,7 +157,6 @@ from netcontrol.routes.config_drift import (
 from netcontrol.routes.credentials import CredentialCreate, CredentialUpdate, router as credentials_router
 from netcontrol.routes.custom_fields import (
     admin_router as custom_fields_admin_router,
-    init_custom_fields,
     inventory_router as custom_fields_inventory_router,
     ipam_router as custom_fields_ipam_router,
     router as custom_fields_router,
@@ -186,7 +183,7 @@ from netcontrol.routes.device_model import (
     inventory_router as device_model_inventory_router,
     router as device_model_router,
 )
-from netcontrol.routes.dhcp import init_dhcp, router as dhcp_router, sync_dhcp_server
+from netcontrol.routes.dhcp import router as dhcp_router, sync_dhcp_server
 from netcontrol.routes.dhcp_adapters import DhcpAdapterError, collect_dhcp_snapshot, is_collection_fed
 from netcontrol.routes.dynamic_groups import router as dynamic_groups_router
 from netcontrol.routes.export_templates import (
@@ -195,7 +192,6 @@ from netcontrol.routes.export_templates import (
 )
 from netcontrol.routes.federation import (
     federation_sync_loop,
-    init_federation,
     router as federation_router,
 )
 from netcontrol.routes.flow_collector import (
@@ -244,7 +240,7 @@ from netcontrol.routes.inventory import (
     router as inventory_router,
 )
 from netcontrol.routes.inventory_collection import router as inventory_collection_router
-from netcontrol.routes.ipam import init_ipam, router as ipam_router
+from netcontrol.routes.ipam import router as ipam_router
 from netcontrol.routes.ipam_adapters import IpamAdapterError, collect_ipam_snapshot
 from netcontrol.routes.ipam_model import admin_router as ipam_model_admin_router, router as ipam_model_router
 from netcontrol.routes.jobs import (
@@ -360,7 +356,7 @@ from netcontrol.routes.snmp import (
     _snmp_get,
     _snmp_walk,
 )
-from netcontrol.routes.software import _software_refresh_loop, init_software, router as software_router
+from netcontrol.routes.software import _software_refresh_loop, router as software_router
 from netcontrol.routes.source_import import router as source_import_router
 from netcontrol.routes.sync import admin_router as sync_admin_router, router as sync_router
 from netcontrol.routes.syslog_rules import router as syslog_rules_router
@@ -2350,6 +2346,47 @@ def _health_body(body: dict, full: bool) -> dict:
     return body if full else {"ok": body["ok"], "status": body["status"]}
 
 
+# The readiness probe is public, so its database query is shared: every
+# caller within the TTL gets one probe's result, and a caller that arrives
+# while a probe runs gets the result before it. No request rate on
+# /api/health can then hold more than one database connection. The timeout
+# keeps a probe under the health callers' 4s urlopen timeout.
+_HEALTH_PROBE_TTL_SECONDS = 2.0
+_HEALTH_PROBE_TIMEOUT_SECONDS = 3.0
+
+
+async def _db_probe() -> None:
+    """One query on a read-only connection, so the probe can't block behind
+    (or interfere with) a long write."""
+    conn = await db.get_db(read_only=True)
+    try:
+        cursor = await conn.execute("SELECT 1")
+        await cursor.fetchone()
+    finally:
+        await conn.close()
+
+
+async def _db_probe_error() -> str | None:
+    """The exception class name of a failed database probe, ``None`` when the
+    database answers (``state.HEALTH_PROBE``)."""
+    probe = state.HEALTH_PROBE
+    now = time.monotonic()
+    if now < probe["expires"]:
+        return probe["error"]
+    # Taken before the first await, so one caller probes at a time. A probe
+    # that never reports back (its request was cancelled) frees the next one
+    # when this runs out.
+    probe["expires"] = now + _HEALTH_PROBE_TIMEOUT_SECONDS + _HEALTH_PROBE_TTL_SECONDS
+    error = None
+    try:
+        await asyncio.wait_for(_db_probe(), timeout=_HEALTH_PROBE_TIMEOUT_SECONDS)
+    except Exception as exc:
+        error = type(exc).__name__
+        LOGGER.error("health: database probe failed: %s", error)
+    probe.update(error=error, expires=time.monotonic() + _HEALTH_PROBE_TTL_SECONDS)
+    return error
+
+
 @app.get("/api/health")
 async def health(request: Request, probe: str = ""):
     # Unauthenticated callers (load balancers, the container healthchecks)
@@ -2371,25 +2408,13 @@ async def health(request: Request, probe: str = ""):
     # deploy/upgrade.sh) urlopen()s this path and treats non-2xx as
     # unhealthy, so an unreachable or wedged database must become a 503
     # here rather than reporting healthy while every real request fails.
-    # Bounded under the callers' 4s urlopen timeout; read-only so the
-    # probe can't block behind (or interfere with) a long write.
-    async def _db_probe():
-        conn = await db.get_db(read_only=True)
-        try:
-            cursor = await conn.execute("SELECT 1")
-            await cursor.fetchone()
-        finally:
-            await conn.close()
-
-    try:
-        await asyncio.wait_for(_db_probe(), timeout=3.0)
-        body["db"] = "ok"
-    except Exception as exc:
-        LOGGER.error("health: database probe failed: %s", type(exc).__name__)
+    error = await _db_probe_error()
+    if error is not None:
         body["ok"] = False
         body["status"] = "degraded"
-        body["db"] = f"error: {type(exc).__name__}"
+        body["db"] = f"error: {error}"
         return JSONResponse(status_code=503, content=_health_body(body, full))
+    body["db"] = "ok"
     return _health_body(body, full)
 
 
@@ -2477,14 +2502,7 @@ init_jobs(require_auth, require_feature, verify_session_token, _get_user_feature
 init_config_drift(verify_session_token, _get_user_features)
 init_compliance(require_auth, require_feature, require_admin)
 init_deployments(verify_session_token, _get_user_features)
-init_cloud_visibility(require_admin)
-init_meraki_topology(require_admin, _has_feature)
-init_ipam(require_admin)
-init_custom_fields(require_admin)
-init_bulk_import(require_admin)
-init_software(require_admin)
-init_dhcp(require_admin)
-init_federation(require_admin)
+init_meraki_topology(_has_feature)
 init_upgrades(verify_session_token, _get_user_features)
 
 # Jobs
