@@ -2,7 +2,24 @@ import { describe, expect, it } from 'vitest';
 
 import type { TopologyInstanceRef, TopologyNode } from '@/api/topology';
 
-import { DEVICE_ROLES, merakiNodeShape, nodeIconUrl, nodeKindIconUrl, nodeKindLabel, nodeSearchText, nodeTitle } from './helpers';
+import {
+  DEVICE_ROLES,
+  carriedPositions,
+  formerNodeIds,
+  integrationProblem,
+  isIntegrationHost,
+  isIntegrationNode,
+  merakiNodeShape,
+  nodeColor,
+  nodeIconUrl,
+  nodeKindIconUrl,
+  nodeKindLabel,
+  nodeSearchText,
+  nodeShapeOf,
+  nodeTitle,
+  withBorder,
+  type TopoThemeColors,
+} from './helpers';
 
 const INSTANCE: TopologyInstanceRef = {
   provider: 'aws',
@@ -203,6 +220,92 @@ describe('a source device that is an inventory host', () => {
   it('is drawn with its own role, or the one its device type implies, first', () => {
     expect(nodeIconUrl({ ...HOST, device_category: 'router' })).toBe('/static/img/topo/router.svg');
     expect(nodeIconUrl({ ...HOST, device_type: 'cisco_asa' })).toBe('/static/img/topo/firewall.svg');
+  });
+
+  const REF = { org_ref: 1, node_id: 'Q2BB', site_id: 'N_1', site_name: 'Branch Office', kind: 'switch', status: 'online' };
+  const SOURCE_HOST: TopologyNode = { ...HOST, group_name: 'Branch', meraki: REF };
+  /** The same switch before it was a host. */
+  const SOURCE_NODE: TopologyNode = {
+    ...SOURCE_HOST,
+    id: 'meraki:1:Q2BB',
+    device_type: 'meraki',
+    device_category: 'switch',
+    in_inventory: false,
+    source: 'meraki',
+    source_category: undefined,
+  };
+  /** A host a source only saw as a neighbor: no device of the source. */
+  const NEIGHBOR_HOST: TopologyNode = { ...SOURCE_HOST, source_category: undefined, meraki: { ...REF, kind: 'external' } };
+  const shade = (name: string) => ({
+    background: `${name}-bg`,
+    border: `${name}-border`,
+    highlight: { background: `${name}-hi`, border: `${name}-border` },
+    hover: { background: `${name}-hi`, border: `${name}-border` },
+  });
+  const TC = {
+    cisco: shade('cisco'),
+    juniper: shade('juniper'),
+    arista: shade('arista'),
+    fortinet: shade('fortinet'),
+    unknown: shade('unknown'),
+    meraki: shade('meraki'),
+    status: { danger: 'red', warning: 'amber' },
+  } as unknown as TopoThemeColors;
+
+  it('is an integration node, as it was before it was a host', () => {
+    expect(isIntegrationNode(SOURCE_NODE)).toBe(true);
+    expect(isIntegrationHost(SOURCE_NODE)).toBe(false);
+    expect(isIntegrationNode(SOURCE_HOST)).toBe(true);
+    expect(isIntegrationHost(SOURCE_HOST)).toBe(true);
+    expect(isIntegrationNode(NEIGHBOR_HOST)).toBe(false);
+  });
+
+  it('keeps the colour of its integration', () => {
+    expect(nodeColor(SOURCE_HOST, TC)).toEqual(nodeColor(SOURCE_NODE, TC));
+    expect(nodeColor(SOURCE_HOST, TC)).toBe(TC.meraki);
+    // A host of a vendor with a colour of its own keeps that one.
+    expect(nodeColor({ ...SOURCE_HOST, device_type: 'cisco_ftd' }, TC)).toBe(TC.cisco);
+    expect(nodeColor(NEIGHBOR_HOST, TC)).toBe(TC.unknown);
+  });
+
+  it('keeps the border of a problem its integration reports', () => {
+    const down: TopologyNode = { ...SOURCE_HOST, meraki: { ...REF, status: 'offline' } };
+    expect(integrationProblem(down)).toBe('offline');
+    expect(nodeColor(down, TC)).toEqual(withBorder(TC.meraki, 'red'));
+    expect(nodeColor({ ...down, meraki: { ...REF, status: 'alerting' } }, TC).border).toBe('amber');
+    expect(nodeColor({ ...down, device_type: 'cisco_ftd' }, TC)).toEqual(withBorder(TC.cisco, 'red'));
+    expect(integrationProblem(SOURCE_HOST)).toBe('');
+    // What a source says of a neighbor is not the host's health.
+    expect(integrationProblem({ ...NEIGHBOR_HOST, meraki: { ...NEIGHBOR_HOST.meraki!, status: 'offline' } })).toBe('');
+  });
+
+  it('keeps the shape of its integration when it has no icon and no shape of its own', () => {
+    const camera: TopologyNode = { ...SOURCE_HOST, source_category: 'camera', meraki: { ...REF, kind: 'camera' } };
+    expect(nodeIconUrl(camera)).toBeUndefined();
+    expect(nodeShapeOf(camera)).toBe('square');
+    expect(nodeShapeOf({ ...camera, device_type: 'cisco_ios' })).toBe('diamond');
+    expect(nodeShapeOf({ ...camera, source_category: undefined })).toBe('dot');
+    expect(nodeShapeOf({ ...SOURCE_NODE, meraki: { ...REF, kind: 'wan' } })).toBe('triangleDown');
+  });
+
+  it('names its integration, status and site in the tooltip, with its inventory details', () => {
+    const title = nodeTitle(SOURCE_HOST);
+    expect(title).toContain('\nMeraki switch · online\nType: icmp_only');
+    expect(title).toContain('\nGroup: Branch\nSite: Branch Office');
+    expect(nodeTitle(NEIGHBOR_HOST)).not.toContain('Meraki');
+  });
+
+  it('carries over the position pinned under the id it had before', () => {
+    const pinned = { x: 40, y: -20 };
+    expect(formerNodeIds(SOURCE_HOST)).toEqual(['meraki:1:Q2BB']);
+    expect(formerNodeIds(SOURCE_NODE)).toEqual([]);
+    expect(carriedPositions([SOURCE_HOST], { 'meraki:1:Q2BB': pinned })).toEqual({ '31': pinned });
+    // A position saved for the host itself wins; nothing is carried.
+    expect(carriedPositions([SOURCE_HOST], { 'meraki:1:Q2BB': pinned, '31': { x: 1, y: 2 } })).toEqual({});
+    expect(carriedPositions([SOURCE_HOST, HOST], {})).toEqual({});
+    // A further snapshot node collapsed into the host is one of its former ids too.
+    const both: TopologyNode = { ...SOURCE_HOST, also_refs: [{ org_ref: 7, node_id: 'aws:i-0123456789abcdef0' }] };
+    expect(carriedPositions([both], { 'meraki:7:aws:i-0123456789abcdef0': pinned })).toEqual({ '31': pinned });
   });
 });
 

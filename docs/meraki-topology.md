@@ -220,6 +220,13 @@ belong to no inventory group).
   the Meraki tabs (a tab both sources fill, such as **Interfaces**, shows the
   inventory data first and the Meraki data under it). This is what joins a
   Meraki site to the rest of the map.
+  A Meraki device that is added to the inventory keeps its look: its icon,
+  the integration colour, the red or amber border when the Dashboard reports
+  it offline or alerting, its place in its site and the position it was
+  pinned at. A host of a vendor with a colour of its own (a Cisco or Fortinet
+  driver, for example) keeps that colour, and a role set on the host decides
+  the icon. The tooltip shows what the source says of it (kind, status, site)
+  with the host's type and group.
   Matching is by serial number, then IP address (including interface
   aliases), then hostname for neighbors. A neighbor that matches nothing
   stays with its own site, even when another site reports a neighbor of the

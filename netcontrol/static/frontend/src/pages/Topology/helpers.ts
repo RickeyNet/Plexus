@@ -1,5 +1,5 @@
 import { CLOUD_ACCOUNT_PROVIDERS, ORG_PROVIDERS } from '@/api/meraki';
-import type { TopologyData, TopologyEdge, TopologyNode } from '@/api/topology';
+import type { TopologyData, TopologyEdge, TopologyNode, TopologyPositions } from '@/api/topology';
 import { LIGHT_THEMES } from '@/lib/appearance';
 import { cloudProviderTerms } from '@/lib/cloudProviderTerms';
 import { mixColors, themeColorReader, withAlpha } from '@/lib/themeColors';
@@ -198,6 +198,29 @@ const FIREWALL_DEVICE_TYPES = new Set([
 /** Devices Plexus has first-hand data for: inventory hosts and Meraki-managed devices. */
 export function isManagedNode(node: TopologyNode): boolean {
   return node.in_inventory || node.source === 'meraki';
+}
+
+/**
+ * An inventory host that is also a device of an integration (a Meraki switch
+ * added to the inventory): the backend names the role the integration gives it.
+ */
+export function isIntegrationHost(node: TopologyNode): boolean {
+  return node.in_inventory && !!node.source_category;
+}
+
+/**
+ * Nodes drawn as their integration draws them: its own nodes, and the
+ * inventory hosts that are its devices, which keep the look they had before
+ * they were hosts.
+ */
+export function isIntegrationNode(node: TopologyNode): boolean {
+  return node.source === 'meraki' || isIntegrationHost(node);
+}
+
+/** The problem an integration reports for its device, '' for none. */
+export function integrationProblem(node: TopologyNode): 'offline' | 'alerting' | '' {
+  const status = isIntegrationNode(node) ? node.meraki?.status : '';
+  return status === 'offline' || status === 'alerting' ? status : '';
 }
 
 /**
@@ -408,18 +431,46 @@ export function nodeShape(deviceType?: string | null): string {
   return 'dot';
 }
 
+/** The shape of a node drawn without an icon. */
+export function nodeShapeOf(node: TopologyNode): string {
+  if (node.source === 'meraki') return merakiNodeShape(node);
+  const own = nodeShape(node.device_type);
+  // A host with no shape of its own (added as ICMP-only) keeps its integration's.
+  return own === 'dot' && isIntegrationHost(node) ? merakiNodeShape(node) : own;
+}
+
+/** `color` with another border, when highlighted and hovered too. */
+export function withBorder(color: VendorColor, border: string): VendorColor {
+  return {
+    ...color,
+    border,
+    highlight: { ...color.highlight, border },
+    hover: { ...color.hover, border },
+  };
+}
+
+/** The colour of the vendor a device type belongs to, for the vendors that have one. */
+function vendorColor(deviceType: string | null | undefined, tc: TopoThemeColors): VendorColor | undefined {
+  const map: Record<string, VendorColor> = {
+    cisco_ios: tc.cisco,
+    cisco_asa: tc.cisco,
+    cisco_ftd: tc.cisco,
+    juniper_junos: tc.juniper,
+    arista_eos: tc.arista,
+    fortinet: tc.fortinet,
+  };
+  return deviceType ? map[deviceType] : undefined;
+}
+
 export function nodeColor(node: TopologyNode, tc: TopoThemeColors): VendorColor {
-  if (node.source === 'meraki') {
-    // Meraki reports device health; surface a problem as the node border.
-    const meraki = node.meraki?.status;
-    const border = meraki === 'offline' ? tc.status.danger : meraki === 'alerting' ? tc.status.warning : '';
-    if (!border) return tc.meraki;
-    return {
-      ...tc.meraki,
-      border,
-      highlight: { ...tc.meraki.highlight, border },
-      hover: { ...tc.meraki.hover, border },
-    };
+  if (isIntegrationNode(node)) {
+    // A host of a vendor with a colour keeps it; any other (one added as
+    // ICMP-only) keeps its integration's.
+    const base = vendorColor(node.device_type, tc) ?? tc.meraki;
+    // The integration reports device health; surface a problem as the node border.
+    const problem = integrationProblem(node);
+    const border = problem === 'offline' ? tc.status.danger : problem === 'alerting' ? tc.status.warning : '';
+    return border ? withBorder(base, border) : base;
   }
   if (!node.in_inventory) {
     return {
@@ -429,15 +480,7 @@ export function nodeColor(node: TopologyNode, tc: TopoThemeColors): VendorColor 
       hover: { background: tc.externalHighlightBg, border: tc.externalHighlightBorder },
     };
   }
-  const map: Record<string, VendorColor> = {
-    cisco_ios: tc.cisco,
-    cisco_asa: tc.cisco,
-    cisco_ftd: tc.cisco,
-    juniper_junos: tc.juniper,
-    arista_eos: tc.arista,
-    fortinet: tc.fortinet,
-  };
-  return (node.device_type && map[node.device_type]) || tc.unknown;
+  return vendorColor(node.device_type, tc) ?? tc.unknown;
 }
 
 export function edgeProtocolColor(protocol: string | null | undefined, tc: TopoThemeColors): EdgeColor {
@@ -640,7 +683,11 @@ export function nodeTitle(node: TopologyNode): string {
     return `${node.label}\n${node.ip || ''}\n${providerLabel(node.meraki?.provider)} ${nodeKindLabel(node.meraki?.kind) || 'device'} · ${node.meraki?.status ?? 'unknown'}${modelInfo}${site}${instanceInfo}${vpcInfo}\nDrag to move · Right-click to unpin`;
   }
   const vpcInfo = instance?.vpc ? `\nVPC: ${instance.vpc}` : '';
-  return `${node.label}\n${node.ip || ''}\nType: ${node.device_type ?? ''}${categoryInfo}${modelInfo}${node.group_name ? '\nGroup: ' + node.group_name : ''}${node.in_inventory ? '' : '\n(External)'}${ipamInfo}${instanceInfo}${vpcInfo}\nDrag to move · Right-click to unpin`;
+  // A host that is an integration's device: what the integration says of it too.
+  const ref = isIntegrationHost(node) ? node.meraki : null;
+  const sourceInfo = ref ? `\n${providerLabel(ref.provider)} ${nodeKindLabel(ref.kind) || 'device'} · ${ref.status}` : '';
+  const siteInfo = ref?.site_name ? `\nSite: ${ref.site_name}` : '';
+  return `${node.label}\n${node.ip || ''}${sourceInfo}\nType: ${node.device_type ?? ''}${categoryInfo}${modelInfo}${node.group_name ? '\nGroup: ' + node.group_name : ''}${siteInfo}${node.in_inventory ? '' : '\n(External)'}${ipamInfo}${instanceInfo}${vpcInfo}\nDrag to move · Right-click to unpin`;
 }
 
 // ── Source filter ────────────────────────────────────────────────────────
@@ -762,6 +809,31 @@ export function merakiNodeIndex(nodes: TopologyNode[]): Map<string, TopologyNode
     }
   }
   return index;
+}
+
+/**
+ * The map node ids an inventory host had while it was only an integration's
+ * node: the backend's `meraki_graph_id` of each of its snapshot references.
+ * A position pinned under one of them is the host's.
+ */
+export function formerNodeIds(node: TopologyNode): string[] {
+  if (!node.in_inventory) return [];
+  const refs = [...(node.meraki ? [node.meraki] : []), ...(node.also_refs ?? [])];
+  return refs.map((ref) => `meraki:${ref.org_ref}:${ref.node_id}`);
+}
+
+/**
+ * The positions hosts carry over from the ids they had before they were
+ * hosts, by host id: one for each host with none saved under its own id.
+ */
+export function carriedPositions(nodes: TopologyNode[], saved: TopologyPositions): TopologyPositions {
+  const carried: TopologyPositions = {};
+  for (const node of nodes) {
+    if (saved[String(node.id)]) continue;
+    const former = formerNodeIds(node).find((id) => saved[id]);
+    if (former) carried[String(node.id)] = saved[former];
+  }
+  return carried;
 }
 
 /** The message of a thrown value: an Error's message, anything else as text. */

@@ -47,10 +47,13 @@ import { searchTerms } from './merakiHelpers';
 import { exportJSON, exportPNG, exportSVG } from './exporters';
 import {
   abbreviateInterface,
+  carriedPositions,
   edgeProtocolColor,
   edgeStatusLinkColor,
   filterBySource,
+  formerNodeIds,
   getTopoThemeColors,
+  integrationProblem,
   mapProviders,
   providerLabel,
   isManagedNode,
@@ -61,19 +64,19 @@ import {
   mapPanelsCollide,
   merakiNodeIndex,
   merakiNodeKey,
-  merakiNodeShape,
   nodeColor,
   nodeIconUrl,
   nodeKindIconUrl,
   nodeKindLabel,
   nodeProvider,
   nodeSearchText,
-  nodeShape,
+  nodeShapeOf,
   nodeTitle,
   stpPortKey,
   stpStyle,
   utilColor,
   utilShadow,
+  withBorder,
   withoutEndDevices,
   type EdgeColor,
   type SourceFilter,
@@ -363,7 +366,11 @@ export function Topology() {
       destroyNetwork();
       return;
     }
-    renderGraph(data, positions, layout);
+    // A device added to the inventory comes back under its host id: it keeps
+    // the position it was pinned at under the id it had before.
+    Object.assign(savedPositionsRef.current, carriedPositions(data.nodes, savedPositionsRef.current));
+    // The live copy, not the query's: it has the nodes moved since the page opened.
+    renderGraph(data, savedPositionsRef.current, layout);
     return () => {
       // do not destroy here - destroy only on unmount
     };
@@ -597,7 +604,7 @@ export function Topology() {
       id: n.id as never,
       label: tidyPosRef.current ? tidyLabel(n.label) : n.label,
       title: nodeTitle(n),
-      shape: iconUrl ? 'circularImage' : n.source === 'meraki' ? merakiNodeShape(n) : nodeShape(n.device_type),
+      shape: iconUrl ? 'circularImage' : nodeShapeOf(n),
       image: iconUrl,
       color: overlay.color,
       size: isMerakiEndpointNode(n) ? 11 : isRemoteUserNode(n) ? 14 : isManagedNode(n) ? 25 : 18,
@@ -639,8 +646,7 @@ export function Topology() {
 
   function nodeOverlayProps(n: TopologyNode, tc: TopoThemeColors) {
     const baseColor = nodeColor(n, tc);
-    const merakiProblem = n.source === 'meraki' && ['offline', 'alerting'].includes(n.meraki?.status ?? '');
-    const baseBorder = merakiProblem ? 4 : isManagedNode(n) ? 2.5 : 1.5;
+    const baseBorder = integrationProblem(n) ? 4 : isManagedNode(n) ? 2.5 : 1.5;
     const pctRaw = n.ipam_utilization_pct;
     const hasIpamUtil = utilOverlay && pctRaw != null && !Number.isNaN(Number(pctRaw));
 
@@ -650,12 +656,7 @@ export function Topology() {
       const pct = Math.max(0, Math.min(100, Number(pctRaw)));
       const utilHex = utilColor(pct, tc.status).color;
       return {
-        color: {
-          ...baseColor,
-          border: utilHex,
-          highlight: { ...baseColor.highlight, border: utilHex },
-          hover: { ...baseColor.hover, border: utilHex },
-        },
+        color: withBorder(baseColor, utilHex),
         borderWidth: n.in_inventory ? 5 : 3,
         shadowColor: utilShadow(pct, tc.status),
         shadowSize: n.in_inventory ? 22 : 12,
@@ -667,12 +668,7 @@ export function Topology() {
       const badge = statusBadge(status, tc.status);
       if (badge) {
         return {
-          color: {
-            ...baseColor,
-            border: badge.color,
-            highlight: { ...baseColor.highlight, border: badge.color },
-            hover: { ...baseColor.hover, border: badge.color },
-          },
+          color: withBorder(baseColor, badge.color),
           borderWidth: n.in_inventory ? 5 : 3,
           shadowColor: badge.shadow,
           shadowSize: n.in_inventory ? 22 : 12,
@@ -1016,7 +1012,11 @@ export function Topology() {
       const nid = params.nodes[0];
       const key = String(nid);
       if (savedPositionsRef.current[key]) {
-        delete savedPositionsRef.current[key];
+        // With the ids the node had before it was a host, or the position
+        // pinned under one of them would be carried over again.
+        const raw = nodeMetaRef.current.get(nid)?.raw;
+        const cleared = [key, ...(raw ? formerNodeIds(raw) : []).filter((id) => savedPositionsRef.current[id])];
+        for (const id of cleared) delete savedPositionsRef.current[id];
         const home = tidyPosRef.current?.get(nid);
         if (home) {
           // Tidy layout: an unpinned node goes back to its place in the tree.
@@ -1025,7 +1025,7 @@ export function Topology() {
         } else {
           nodes.update({ id: nid, fixed: false, physics: true } as never);
         }
-        savePositions.mutate({ [key]: null });
+        savePositions.mutate(Object.fromEntries(cleared.map((id) => [id, null])));
         flash('Node unpinned');
       }
     });
@@ -2597,7 +2597,7 @@ export function Topology() {
                 const nodesDS = nodesDSRef.current;
                 nodesDS?.update({
                   id: hostId,
-                  shape: iconUrl ? 'circularImage' : nodeShape(updatedNode.device_type),
+                  shape: iconUrl ? 'circularImage' : nodeShapeOf(updatedNode),
                   image: iconUrl,
                 } as never);
                 flash(`Role updated to ${newCategory || '(auto)'}`);
