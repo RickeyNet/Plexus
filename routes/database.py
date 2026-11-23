@@ -633,7 +633,8 @@ CREATE TABLE IF NOT EXISTS config_backup_policies (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     name            TEXT    NOT NULL,
     group_id        INTEGER NOT NULL REFERENCES inventory_groups(id) ON DELETE CASCADE,
-    credential_id   INTEGER NOT NULL REFERENCES credentials(id) ON DELETE CASCADE,
+    -- NULL: the policy backs up API-read devices only (OPNsense)
+    credential_id   INTEGER REFERENCES credentials(id) ON DELETE CASCADE,
     enabled         INTEGER NOT NULL DEFAULT 1,
     interval_seconds INTEGER NOT NULL DEFAULT 86400,
     retention_days  INTEGER NOT NULL DEFAULT 30,
@@ -653,7 +654,11 @@ CREATE TABLE IF NOT EXISTS config_backups (
     status          TEXT    NOT NULL DEFAULT 'success',
     error_message   TEXT    DEFAULT '',
     captured_at     TEXT    NOT NULL DEFAULT (datetime('now')),
-    checked_at      TEXT
+    checked_at      TEXT,
+    -- OPNsense config.xml (migration 0133): config_text holds it masked,
+    -- these the raw file encrypted and a keyed digest of it ('' otherwise).
+    config_text_enc TEXT    NOT NULL DEFAULT '',
+    config_text_digest TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS compliance_profiles (

@@ -14,6 +14,12 @@ from pathlib import Path
 
 DEFAULT_RULES = {
     "netcontrol/app.py": 49.0,
+    # An OPNsense firewall's config.xml as a backup: the store both the
+    # collection and a backup policy use, and the policy's API download
+    # with its error messages. Measured by tests/test_config_backups_api.py
+    # and tests/test_opnsense_topology.py (95%); do not lower it to land a
+    # change.
+    "netcontrol/routes/opnsense_backup.py": 90.0,
     # Floor from tests/test_monitoring.py (alert eval, suppression,
     # availability, escalation). Raise as endpoint/poller tests land.
     "netcontrol/routes/monitoring.py": 20.0,
@@ -223,6 +229,11 @@ DEFAULT_RULES = {
     # (98%, 90%); do not lower them to land a change.
     "netcontrol/integrations/software/cve_enrichment.py": 95.0,
     "netcontrol/routes/software_cve.py": 85.0,
+    # OPNsense config backups encrypted at rest: sealing, the raw download
+    # and the conversion of plain-text rows. Measured by
+    # tests/test_opnsense_backup_encryption.py (96%); do not lower it to
+    # land a change.
+    "netcontrol/routes/opnsense_backup_encryption.py": 92.0,
 }
 
 

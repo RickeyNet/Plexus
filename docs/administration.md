@@ -176,6 +176,9 @@ to present it.
   tokens and the notification channel secrets are stored encrypted in the
   database (`auth_settings`, with the key in `netcontrol.key`). Rows saved
   by an older release are encrypted the first time the server starts.
+  OPNsense config backups are stored encrypted with the same key (the
+  masked text stays readable): without the original `netcontrol.key` their
+  raw `config.xml` cannot be downloaded. Back the key up with the database.
 - **External accounts.** An LDAP, RADIUS, TACACS+, OIDC or SAML sign-in
   creates its Plexus account on first use and records the provider on it.
   It signs in to an existing account only when that account was created by

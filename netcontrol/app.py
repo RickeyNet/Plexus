@@ -312,6 +312,9 @@ from netcontrol.routes.network_objects import (
     host_router as network_objects_host_router,
     router as network_objects_router,
 )
+from netcontrol.routes.opnsense_backup_encryption import (
+    encrypt_legacy_backups as encrypt_legacy_opnsense_backups,
+)
 from netcontrol.routes.opnsense_rules import router as opnsense_rules_router
 from netcontrol.routes.organization import (
     admin_router as organization_admin_router,
@@ -1456,6 +1459,22 @@ async def _interface_addresses_backfill() -> None:
         LOGGER.warning("interface address backfill failed: %s", type(exc).__name__)
 
 
+async def _opnsense_backup_encryption_backfill() -> None:
+    """At every start, encrypt the OPNsense config backups an older release
+    stored in plain text (migration 0133; see
+    ``netcontrol.routes.opnsense_backup_encryption.encrypt_legacy_backups``).
+    In the background, so a large table does not hold up startup; logs
+    counts only."""
+    try:
+        counts = await encrypt_legacy_opnsense_backups()
+        if counts["sealed"]:
+            LOGGER.info("Encrypted %s OPNsense config backup(s) stored in plain text", counts["sealed"])
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        LOGGER.warning("OPNsense config backup encryption pass failed: %s", type(exc).__name__)
+
+
 async def _record_sync_status(coro, what: str) -> None:
     """Await a status-recording DB write from a sync loop's error path.
 
@@ -1752,6 +1771,7 @@ async def lifespan(app: FastAPI):
             lab_runtime_ttl_loop,
             lab_drift_scheduler_loop,
             _interface_addresses_backfill,
+            _opnsense_backup_encryption_backfill,
             intended_config_loop,
             git_sources_loop,
             _lifecycle_check_loop,

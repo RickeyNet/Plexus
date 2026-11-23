@@ -7,9 +7,10 @@ is stored:
 
   - ``store_config_backup``: the ``config.xml`` the collection downloaded
     becomes a configuration backup of the inventory host that is this
-    firewall, through the one store path every capture uses
-    (``netcontrol.routes.device_config.store_device_config``: an unchanged
-    configuration writes no new row, it re-checks the newest one). The
+    firewall, through the store a backup policy run uses too
+    (``netcontrol.routes.opnsense_backup.store_firewall_backup``, over
+    ``device_config.store_device_config``: an unchanged configuration
+    writes no new row, it re-checks the newest one). The
     firewall is matched to its host the way the device import matches it
     (``netcontrol.integrations.inventory_import.importable_devices``: the
     host with its address, or the one the collection matched it to). When
@@ -131,15 +132,16 @@ from netcontrol.integrations.opnsense.rules import parse_rule_stats
 from netcontrol.integrations.pathtrace.opnsense_routes import LiveInterface, capture_text
 from netcontrol.integrations.software.lifecycle import WARN_DAYS_SETTING, evaluate, warn_days_setting
 from netcontrol.integrations.software.versions import canonical_version, snapshot_device_key, snapshot_devices
-from netcontrol.routes.device_config import store_device_config
 from netcontrol.routes.dhcp_adapters import DHCP_PROVIDER_OPNSENSE
 from netcontrol.routes.ipam_adapters import IPAM_PROVIDER_OPNSENSE
+from netcontrol.routes.opnsense_backup import store_firewall_backup
+from netcontrol.routes.opnsense_masking import BACKUP_CAPTURE_METHOD
 from netcontrol.routes.route_capture import store_route_snapshot
 from netcontrol.telemetry import configure_logging
 
 LOGGER = configure_logging("plexus.opnsense")
 
-CAPTURE_METHOD = "opnsense-api"
+CAPTURE_METHOD = BACKUP_CAPTURE_METHOD
 SECTION_CONFIG_BACKUP = "Config backup"
 NOT_IMPORTED_MESSAGE = (
     "config.xml was read but not stored: this firewall is not an inventory host yet. "
@@ -226,34 +228,24 @@ async def store_config_backup(raw: dict, snapshot: dict, *, org_ref: int | None 
             )
         return {"stored": False, "host_id": None}
     try:
-        stored = await store_device_config(
-            int(host["id"]),
-            config_xml,
-            "",
-            capture_method=CAPTURE_METHOD,
-            device_type=str(host.get("device_type") or ""),
-        )
+        backup = await store_firewall_backup(host, config_xml, capture_method=CAPTURE_METHOD, org_ref=org_ref)
     except Exception as exc:  # noqa: BLE001 - the snapshot is stored anyway
         LOGGER.warning("opnsense: config backup of host %s not stored: %s", host.get("id"), type(exc).__name__)
         _warn(snapshot, info_warning("config", "/" + PATH_CONFIG, "config.xml was not stored: see the server log"))
         return {"stored": False, "host_id": host.get("id")}
+    stored, rule_changes = backup.stored, backup.rule_changes
     rows: list[tuple[str, Any]] = [
         ("Result", "New backup stored" if stored.created else "Unchanged since the newest backup"),
         ("Inventory host", host.get("hostname") or host.get("ip_address")),
         ("Backup ID", stored.backup_id),
     ]
-    rule_changes = None
-    if stored.created:
-        try:
-            # Imported here: the alert module imports the monitoring routes.
-            from netcontrol.routes.opnsense_rule_alerts import alert_rule_changes, summary_text
+    if not backup.rules_checked:
+        rows.append(("Rule changes", "Not checked: see the server log"))
+    elif rule_changes is not None:
+        # Imported here: the alert module imports the monitoring routes.
+        from netcontrol.routes.opnsense_rule_alerts import summary_text
 
-            rule_changes = await alert_rule_changes(host, stored.backup_id, config_xml, org_ref=org_ref)
-            if rule_changes is not None:
-                rows.append(("Rule changes", summary_text(rule_changes)))
-        except Exception as exc:  # noqa: BLE001 - the backup is stored anyway
-            LOGGER.warning("opnsense: rule changes of host %s not checked: %s", host.get("id"), type(exc).__name__)
-            rows.append(("Rule changes", "Not checked: see the server log"))
+        rows.append(("Rule changes", summary_text(rule_changes)))
     rows.append(("Source", "config.xml over the OPNsense API"))
     if firewall is not None:
         _add(firewall["sections"], kv_section(SECTION_CONFIG_BACKUP, rows))

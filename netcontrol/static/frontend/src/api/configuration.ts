@@ -55,7 +55,8 @@ export interface ConfigBackupPolicy {
   name: string;
   group_id: number;
   group_name?: string | null;
-  credential_id: number;
+  /** null: no credential, the policy backs up API-read devices (OPNsense) only. */
+  credential_id: number | null;
   enabled: boolean;
   interval_seconds: number;
   retention_days: number;
@@ -116,7 +117,7 @@ export interface ConfigBackupSearchPayload {
 export interface BackupPolicyCreatePayload {
   name: string;
   group_id: number;
-  credential_id: number;
+  credential_id: number | null;
   interval_seconds: number;
   retention_days: number;
 }
@@ -124,7 +125,8 @@ export interface BackupPolicyCreatePayload {
 export interface BackupPolicyUpdatePayload {
   name?: string;
   enabled?: boolean;
-  credential_id?: number;
+  /** Left out: unchanged; null: cleared (API-read devices only). */
+  credential_id?: number | null;
   interval_seconds?: number;
   retention_days?: number;
 }

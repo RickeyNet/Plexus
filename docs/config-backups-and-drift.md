@@ -29,7 +29,8 @@ You only see the tabs your features allow.
 
 Before you start you need:
 
-- Devices in an inventory group. Plexus reads configurations over SSH.
+- Devices in an inventory group. Plexus reads configurations over SSH; an
+  OPNsense firewall is read over the API key of its OPNsense source.
 - A credential that can log in to those devices and read the running
   configuration. Restore and revert also need the rights to change the
   configuration.
@@ -54,6 +55,9 @@ by **Config Search**; views, diffs and restores use the plain form.
 ### Create a backup policy
 
 A policy backs up every host in one inventory group on a fixed interval.
+Devices are read over SSH with the policy's credential, except OPNsense
+firewalls, which are read over the API key of their OPNsense source (see
+[OPNsense firewalls](#opnsense-firewalls)).
 
 1. Open **Configuration > Backups**. **Policies** is selected.
 2. Click **New Policy**.
@@ -63,7 +67,7 @@ A policy backs up every host in one inventory group on a fixed interval.
    |---|---|
    | **Policy Name** | Required. |
    | **Inventory Group** | The group to back up. It cannot be changed later. |
-   | **Credential** | The SSH login. Admins also see **Service credentials**. |
+   | **Credential** | The SSH login. Admins also see **Service credentials**. **None (API-backed devices only, such as OPNsense)** backs up the group's OPNsense firewalls only; every other host gets an `error` backup that says the policy has no credential. |
    | **Interval (hours)** | 1 to 168. Default 24. |
    | **Retention (days)** | 1 to 365. Default 30. |
 
@@ -152,7 +156,7 @@ save it yourself if the result is what you want.
 |---|---|
 | Status `success` (green) | The configuration was read and stored. |
 | Status `error` (red) | The capture failed. The error text shows on the card. |
-| Method | Which feature took the backup: `scheduled`, `manual` (**Run Now**), `drift`, `restore`, `compliance`, `deployment`, `risk-analysis`, `topology`, `upgrade` or `opnsense-api` (an OPNsense firewall's config.xml, read by its topology collection; see [opnsense-topology.md](opnsense-topology.md#config-backup)). |
+| Method | Which feature took the backup: `scheduled`, `manual` (**Run Now**), `syslog` (a configuration change message), `drift`, `restore`, `compliance`, `deployment`, `risk-analysis`, `topology`, `upgrade` or `opnsense-api` (an OPNsense firewall's config.xml, read by its topology collection; see [opnsense-topology.md](opnsense-topology.md#config-backup)). A policy's backup of an OPNsense firewall has the policy's method (`scheduled`, `manual`, `syslog`). |
 | Summary strip | **Policies**, **Backups**, **Hosts** with a backup, **Last backup**. |
 
 ## Drift detection
@@ -219,7 +223,22 @@ the window before you move on.
 
 ### OPNsense firewalls
 
-A host with device type `opnsense` is never read over SSH. Its snapshot
+A host with device type `opnsense` is never read over SSH. A backup policy
+whose group holds one downloads its `config.xml` over the API key of the
+OPNsense source whose firewall that host is (Plexus knows the pair from the
+source's newest collection), with the privilege **Diagnostics:
+Configuration History**. This works with or without a policy credential and
+with the source's **Config backup** option on or off. The backup is stored
+with the policy and the run's method. When it fails, the host gets an
+`error` backup that says why: the host is not the firewall of any OPNsense
+source yet (collect the source and import the firewall first), the source
+has no API key, the firewall refused the download (the privilege is named),
+or the answer was not a `config.xml`. The source's own collection, with
+**Config backup** on, still stores a backup (method `opnsense-api`)
+whenever `config.xml` changed. See
+[OPNsense, Config backup](opnsense-topology.md#config-backup).
+
+Its drift snapshot
 is its newest config backup (stored by the OPNsense collection), and the
 scheduled drift check takes a new snapshot when a newer backup differs.
 Snapshots, baselines (a pasted one too) and drift diffs hold the
@@ -229,9 +248,22 @@ secrets, private keys, pre-shared keys, SNMP communities, RADIUS and LDAP
 secrets, TSIG keys and more) is shown as `[masked:1a2b3c4d]`: a changed
 secret is still drift, its value never appears. **Revert** and **Restore**
 are refused for these hosts. The backup view, compare and search mask the
-same values; the stored backup and its download stay as collected. The
-full list of masked elements is in
+same values. The full list of masked elements is in
 [OPNsense, Config drift and masked secrets](opnsense-topology.md#config-drift-and-masked-secrets).
+
+An OPNsense backup is stored encrypted: the backup row holds the masked
+`config.xml`, and the file as collected is kept only encrypted with the
+Plexus encryption key (`netcontrol.key`). **Download** and **Download
+All** (with `config-backups.write`) decrypt it and return the file exactly
+as collected. If the key is lost or replaced, the raw file cannot be
+decrypted: the download answers `409` and says so (in **Download All**
+the backup is left out and named in `NOT-INCLUDED.txt`), while the
+masked view, compare, search and drift keep working. Back up
+`netcontrol.key` with the database. Backups stored in plain text by an
+older release are converted when the server starts.
+
+Backups of other devices (read over SSH) are not encrypted: they are
+stored as captured, and a database dump holds their secrets.
 
 A new backup of an OPNsense firewall is also compared with the one before
 it for risky rule changes: a rule that became any-to-any or shadowed
@@ -263,8 +295,14 @@ backup no longer has the rule that way. See
 - **Deleting a policy** keeps its backups. Deleting the policy's inventory
   group or credential deletes the policy.
 - **Policy credentials.** A scheduled run checks that the person who made
-  the policy may still use the credential. If not, the policy is skipped.
-  The edit dialog warns when the saved credential is not one you can use.
+  the policy may still use the credential. If not, the policy's SSH hosts
+  are skipped and the run counts one error; its OPNsense firewalls are
+  still backed up. The edit dialog warns when the saved credential is not
+  one you can use. **Run Now** checks that you may use it.
+- **No credential.** A policy without a credential backs up OPNsense
+  firewalls only; each SSH host of its group gets an `error` backup on
+  every run. Choose **None** in the dialog, or send `"credential_id": null`
+  to the API, to clear a policy's credential.
 - **Drift needs snapshots.** The scheduled drift check compares each
   baselined host's newest snapshot with its baseline. It does not log in to
   devices. New drift is found only after a new snapshot is captured.
@@ -324,6 +362,15 @@ between 1 and 365; a value outside is moved to the nearest bound.
 ```json
 POST /api/config-backups/policies
 { "name": "Branch daily", "group_id": 4, "credential_id": 2, "interval_seconds": 86400, "retention_days": 30 }
+```
+
+`credential_id` is optional. Left out or `null`, the policy backs up
+OPNsense firewalls only. On `PUT`, leaving it out keeps the credential and
+`null` clears it:
+
+```json
+PUT /api/config-backups/policies/8
+{ "credential_id": null }
 ```
 
 ```json

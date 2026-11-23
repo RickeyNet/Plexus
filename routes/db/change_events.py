@@ -123,7 +123,7 @@ CHANGE_ACTIONS: tuple[str, ...] = ("create", "update", "delete")
 # job input (which can hold a secret under any key).
 _DROP_COLUMNS: dict[str, frozenset[str]] = {
     "credential": frozenset({"password", "secret"}),
-    "config_backup": frozenset({"config_text", "config_text_full"}),
+    "config_backup": frozenset({"config_text", "config_text_full", "config_text_enc", "config_text_digest"}),
     "job": frozenset({"parameters"}),
 }
 # JSON stored as text, decoded so subscribers (and the redaction walk) see

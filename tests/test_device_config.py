@@ -141,3 +141,37 @@ async def test_store_device_config_from_an_own_session(store):
     changed = await device_config.store_device_config(7, "hostname b", "", capture_method="upgrade")
     assert first.created and not again.created and changed.created
     assert [r["capture_method"] for r in store.rows] == ["topology", "upgrade"]
+
+
+_XML = (
+    '<?xml version="1.0"?>\n<opnsense>\n  <system><hostname>fw-a</hostname></system>\n'
+    "  <hasync><password>{}</password></hasync>\n</opnsense>\n"
+)
+
+
+@pytest.mark.asyncio
+async def test_opnsense_config_is_stored_masked_with_an_encrypted_copy(store):
+    from routes.crypto import decrypt
+
+    raw = _XML.format("invented-hasync-pass-1")
+    first = await device_config.store_device_config(7, raw, "", capture_method="scheduled", device_type="opnsense")
+    [row] = store.rows
+    assert "invented-hasync-pass-1" not in row["config_text"] and "[masked:" in row["config_text"]
+    assert first.config_text == row["config_text"] and decrypt(row["config_text_enc"]) == raw
+    assert row["config_text_digest"] and "invented-hasync-pass-1" not in row["config_text_digest"]
+    # Detected by content too: a caller that does not pass the device type.
+    again = await device_config.store_device_config(7, raw, "", capture_method="manual")
+    assert not again.created and store.checked == [first.backup_id]
+    # A changed secret is a new backup, though both masked texts look alike.
+    changed = await device_config.store_device_config(
+        7, _XML.format("invented-hasync-pass-2"), "", capture_method="scheduled", device_type="opnsense"
+    )
+    assert changed.created and len(store.rows) == 2
+
+
+@pytest.mark.asyncio
+async def test_opnsense_row_without_a_digest_is_never_unchanged(store):
+    raw = _XML.format("invented-hasync-pass-1")
+    await store.create_config_backup(policy_id=None, host_id=7, config_text=raw, config_text_full="")
+    stored = await device_config.store_device_config(7, raw, "", capture_method="opnsense-api", device_type="opnsense")
+    assert stored.created and len(store.rows) == 2

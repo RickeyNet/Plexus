@@ -17,9 +17,12 @@ module binds them to the install and the database:
     snapshot is the host's newest config backup (written by the OPNsense
     collection), normalized and masked.
 
-Raw backups stay stored unmasked (a restore needs them); every form that
-config drift stores (snapshots, baselines, drift events) is masked, and
-every endpoint that shows a backup's text masks it on the way out.
+A stored OPNsense backup holds this masked text, with the raw file kept
+only encrypted for the raw download (``opnsense_backup_encryption``); every
+form that config drift stores (snapshots, baselines, drift events) is
+masked, and every endpoint that shows a backup's text masks it on the way
+out as well (masking is idempotent), which also covers a backup stored in
+plain text by an older release and not converted yet.
 """
 
 from __future__ import annotations

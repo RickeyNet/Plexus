@@ -8,7 +8,10 @@ sees it as captured, and may download it. Any other reader (read-only
 ``config-backups``) gets the view, diff and search with the secrets masked by
 ``netcontrol.mcp.redact.redact_config_text`` (``secrets_masked: true``) and
 no raw download. A restore runs on the server and always uses the stored
-text. OPNsense config.xml is masked for everyone, as before.
+text. OPNsense config.xml is masked for everyone, as before: it is stored
+masked, with the raw file encrypted beside it
+(``netcontrol.routes.opnsense_backup_encryption``), which only the raw
+download decrypts.
 """
 
 from __future__ import annotations
@@ -39,6 +42,12 @@ from netcontrol.object_scope import (
 )
 from netcontrol.routes import opnsense_masking
 from netcontrol.routes.device_config import get_device_config
+from netcontrol.routes.opnsense_backup import backup_firewall
+from netcontrol.routes.opnsense_backup_encryption import (
+    KEY_MISMATCH_MESSAGE,
+    RawBackupUnavailable,
+    raw_backup_text,
+)
 from netcontrol.routes.shared import (
     _audit,
     _compute_config_diff,
@@ -63,7 +72,8 @@ _running_policies: set[int] = set()
 class ConfigBackupPolicyCreate(BaseModel):
     name: str
     group_id: int
-    credential_id: int
+    # None: the policy backs up API-read devices only (OPNsense firewalls).
+    credential_id: int | None = None
     interval_seconds: int = 86400
     retention_days: int = 30
 
@@ -71,6 +81,7 @@ class ConfigBackupPolicyCreate(BaseModel):
 class ConfigBackupPolicyUpdate(BaseModel):
     name: str | None = None
     enabled: bool | None = None
+    # Left out: unchanged; null: cleared (API-read devices only).
     credential_id: int | None = None
     interval_seconds: int | None = None
     retention_days: int | None = None
@@ -150,11 +161,14 @@ async def create_backup_policy(body: ConfigBackupPolicyCreate, request: Request)
     """Create a backup policy for an inventory group, as the requesting
     user: the group must exist (and be writable for a caller limited to
     selected inventory groups) and the user may use the credential (or it
-    is the service credential); the interval and retention are clamped to
-    their bounds. Audited. Returns the stored policy."""
+    is the service credential). Without a credential the policy backs up
+    the devices read over an API only (OPNsense firewalls). The interval
+    and retention are clamped to their bounds. Audited. Returns the stored
+    policy."""
     await require_group(request, body.group_id, write=True, not_found="Inventory group not found")
     session = _get_session(request)
-    await require_credential_access(body.credential_id, session=session, allow_service=True)
+    if body.credential_id is not None:
+        await require_credential_access(body.credential_id, session=session, allow_service=True)
     interval = max(
         state.CONFIG_BACKUP_POLICY_MIN_INTERVAL, min(state.CONFIG_BACKUP_POLICY_MAX_INTERVAL, body.interval_seconds)
     )
@@ -207,6 +221,8 @@ async def update_config_backup_policy(policy_id: int, body: ConfigBackupPolicyUp
             allow_service=True,
         )
         updates["credential_id"] = body.credential_id
+    elif "credential_id" in body.model_fields_set:
+        updates["credential_id"] = None  # an explicit null clears it
     if body.interval_seconds is not None:
         updates["interval_seconds"] = max(
             state.CONFIG_BACKUP_POLICY_MIN_INTERVAL, min(state.CONFIG_BACKUP_POLICY_MAX_INTERVAL, body.interval_seconds)
@@ -472,9 +488,11 @@ async def download_config_backups_bulk(
     Declared *before* ``/api/config-backups/{backup_id}`` so the literal
     ``download`` path segment doesn't get parsed as an integer ID.
 
-    The files are the raw captures (device secrets included): the caller
-    needs ``config-backups.write`` (or admin), and a caller limited to
-    inventory groups gets the devices of the groups it may change.
+    The files are the raw captures (device secrets included; an OPNsense
+    config.xml decrypted): the caller needs ``config-backups.write`` (or
+    admin), and a caller limited to inventory groups gets the devices of
+    the groups it may change. A backup whose encrypted copy cannot be
+    decrypted is left out and named in ``NOT-INCLUDED.txt``.
     """
     if not await _has_raw_feature(request):
         raise HTTPException(status_code=403, detail=_RAW_DOWNLOAD_DENIED)
@@ -488,12 +506,18 @@ async def download_config_backups_bulk(
 
     buf = io.BytesIO()
     used_names: set[str] = set()
+    undecryptable: list[int] = []
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         # The list endpoint omits config_text for performance - re-fetch each
         # row's text individually.  500-row cap on the query keeps this bounded.
         for row in successful:
             full = await db.get_config_backup(row["id"])
             if not full or not full.get("config_text"):
+                continue
+            try:
+                content = await raw_backup_text(full)
+            except RawBackupUnavailable:
+                undecryptable.append(int(full["id"]))
                 continue
             name = _backup_filename(full)
             # Disambiguate if two backups happen to render the same filename.
@@ -503,7 +527,10 @@ async def download_config_backups_bulk(
                 name = f"{base}_{counter}.{ext}"
                 counter += 1
             used_names.add(name)
-            zf.writestr(name, full["config_text"])
+            zf.writestr(name, content)
+        if undecryptable:
+            ids = ", ".join(str(i) for i in undecryptable)
+            zf.writestr("NOT-INCLUDED.txt", f"Backups not included: {ids}\n\n{KEY_MISMATCH_MESSAGE}\n")
 
     buf.seek(0)
     stamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
@@ -514,7 +541,7 @@ async def download_config_backups_bulk(
         "config-backups",
         "download.bulk",
         user=session["user"] if session else "",
-        detail=f"host_id={host_id} policy_id={policy_id} count={len(used_names)}",
+        detail=f"host_id={host_id} policy_id={policy_id} count={len(used_names)} undecryptable={len(undecryptable)}",
         correlation_id=_corr_id(request),
     )
     return Response(
@@ -528,13 +555,18 @@ async def download_config_backups_bulk(
 @scoped("backup")
 async def download_config_backup(backup_id: int, request: Request):
     """Return a single backup as a plain ``.txt`` attachment: the raw
-    capture, device secrets included, so the caller needs
-    ``config-backups.write`` (or admin) and write access to the device."""
+    capture, device secrets included (an OPNsense config.xml decrypted), so
+    the caller needs ``config-backups.write`` (or admin) and write access
+    to the device. 409 when the encrypted copy cannot be decrypted."""
     backup = await _require_backup(request, backup_id)
     if not await _sees_raw(request, backup.get("host_id")):
         raise HTTPException(status_code=403, detail=_RAW_DOWNLOAD_DENIED)
     if backup.get("status") != "success" or not backup.get("config_text"):
         raise HTTPException(status_code=400, detail="Backup does not contain a successful config capture")
+    try:
+        content = await raw_backup_text(backup)
+    except RawBackupUnavailable as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
 
     fname = _backup_filename(backup)
     session = _get_session(request)
@@ -546,7 +578,7 @@ async def download_config_backup(backup_id: int, request: Request):
         correlation_id=_corr_id(request),
     )
     return Response(
-        content=backup["config_text"],
+        content=content,
         media_type="text/plain; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="{fname}"'},
     )
@@ -558,7 +590,9 @@ async def get_config_backup_detail(backup_id: int, request: Request):
     """A backup with its text; an OPNsense config.xml with its secrets
     masked (``secrets_masked``) and its ``<revision>`` given apart. For a
     caller without ``config-backups.write`` every backup's secrets are
-    masked. The stored backup stays unmasked: a restore needs it."""
+    masked. An OPNsense backup is stored masked already; masking it again
+    changes nothing and covers one stored in plain text by an older
+    release."""
     backup = await _require_backup(request, backup_id)
     raw = str(backup.get("config_text") or "")
     masked = opnsense_masking.mask_record(backup, "config_text", "config_text_full")
@@ -609,11 +643,15 @@ async def run_config_backup_policy_now(policy_id: int, request: Request):
         if not policy:
             raise HTTPException(status_code=404, detail="Policy not found")
         hosts = await db.get_hosts_for_group(policy["group_id"])
-        cred = await require_credential_access(
-            policy["credential_id"],
-            session=_get_session(request),
-            allow_service=True,
-        )
+        # Without a credential only the OPNsense hosts are backed up (over
+        # their source's API); an SSH host gets an error row that says so.
+        cred = None
+        if policy.get("credential_id") is not None:
+            cred = await require_credential_access(
+                policy["credential_id"],
+                session=_get_session(request),
+                allow_service=True,
+            )
 
         backed_up = 0
         skipped = 0
@@ -736,15 +774,31 @@ async def restore_config_from_backup(body: ConfigBackupRestoreRequest, request: 
 _POLL_INTERVAL_SECONDS = 60
 
 
-async def backup_host(host: dict, cred: dict, *, policy_id: int, capture_method: str) -> bool | str:
+NO_CREDENTIAL_MESSAGE = (
+    "This backup policy has no credential: a device backed up over SSH needs one. "
+    "Choose a credential for the policy; without one it backs up API-read devices (OPNsense) only"
+)
+
+
+async def backup_host(host: dict, cred: dict | None, *, policy_id: int, capture_method: str) -> bool | str:
     """Back up one host of a backup policy. True when a new backup row was
     stored, ``"skipped"`` when the config is unchanged (no new row: the
     host's newest backup is marked re-checked instead), False when the
     capture failed (recorded as an error row). ``capture_method`` is stored
     on the row: ``scheduled``, ``manual``, ``syslog`` (a configuration
-    change message from the device)."""
+    change message from the device).
+
+    An OPNsense firewall is backed up over the API key of its OPNsense
+    source (``opnsense_backup.backup_firewall``: no SSH, ``cred`` unused);
+    any other host over SSH with ``cred``, and with none (a policy without
+    a credential) it gets an error row that says so."""
     try:
-        stored = await get_device_config(host, cred, capture_method=capture_method, policy_id=policy_id)
+        if opnsense_masking.is_opnsense_host(host):
+            stored = await backup_firewall(host, policy_id=policy_id, capture_method=capture_method)
+        elif cred is None:
+            raise RuntimeError(NO_CREDENTIAL_MESSAGE)
+        else:
+            stored = await get_device_config(host, cred, capture_method=capture_method, policy_id=policy_id)
         return True if stored.created else "skipped"
     except Exception as exc:
         await db.create_config_backup(
@@ -759,10 +813,13 @@ async def backup_host(host: dict, cred: dict, *, policy_id: int, capture_method:
 
 
 async def _policy_credential(policy: dict) -> dict | None:
-    """The credential a scheduled run of ``policy`` uses, or None (logged)
-    when it is rejected. The stored credential is re-validated against the
-    policy creator so a policy can never keep running with a credential its
-    creator no longer owns (or after the creator account is removed)."""
+    """The credential a scheduled run of ``policy`` uses, or None when the
+    policy has none or (logged) it is rejected. The stored credential is
+    re-validated against the policy creator so a policy can never keep
+    running with a credential its creator no longer owns (or after the
+    creator account is removed)."""
+    if policy.get("credential_id") is None:
+        return None
     try:
         return await require_credential_access(
             policy["credential_id"],
@@ -780,23 +837,31 @@ async def _policy_credential(policy: dict) -> dict | None:
         return None
 
 
-async def host_backup_policy(host: dict) -> tuple[dict, dict] | None:
+async def host_backup_policy(host: dict) -> tuple[dict, dict | None] | None:
     """The enabled backup policy of ``host``'s inventory group to back it up
     with outside the schedule, and that policy's credential: the first one
-    by name whose credential is accepted. None when there is none."""
+    by name whose credential is accepted. An OPNsense firewall needs no
+    credential (``backup_host`` reads it over the API): the first enabled
+    policy, with its credential when accepted, else None. None when there
+    is no such policy."""
     if host.get("group_id") is None:
         return None
+    opnsense = opnsense_masking.is_opnsense_host(host)
     for policy in await db.get_config_backup_policies(int(host["group_id"])):
         if not policy.get("enabled"):
             continue
         cred = await _policy_credential(policy)
-        if cred is not None:
+        if cred is not None or opnsense:
             return policy, cred
     return None
 
 
 async def _run_config_backups_once() -> dict:
-    """Run backups for all due policies."""
+    """Run backups for all due policies. A policy without a credential
+    backs up its OPNsense hosts and writes an error row for each SSH host.
+    A policy whose credential is rejected counts one error and backs up
+    its OPNsense hosts only (its SSH hosts get no row); with none it is
+    retried at the next wake-up, as before."""
     due_policies = await db.get_config_backup_policies_due()
     policies_run = 0
     hosts_backed_up = 0
@@ -808,9 +873,11 @@ async def _run_config_backups_once() -> dict:
         try:
             hosts = await db.get_hosts_for_group(policy["group_id"])
             cred = await _policy_credential(policy)
-            if cred is None:
+            if cred is None and policy.get("credential_id") is not None:
                 errors += 1
-                continue
+                hosts = [h for h in hosts if opnsense_masking.is_opnsense_host(h)]
+                if not hosts:
+                    continue
 
             async def _backup_host(host, cred_data, pol_id):
                 async with sem:

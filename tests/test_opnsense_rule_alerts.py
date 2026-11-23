@@ -316,6 +316,26 @@ async def test_a_failing_check_still_stores_the_backup(monkeypatch):
     assert await _open(int(host["id"])) == {}
 
 
+async def test_a_changed_secret_is_a_new_backup_but_no_rule_change(monkeypatch):
+    """Backups are stored masked: the check compares the masked previous
+    backup with the new file masked too, so neither a secret nor the
+    masking makes a rule look changed."""
+    host = await _host(monkeypatch, 5)
+    secret_line = "<password>$2y$11$sample.hash.not.a.real.one.sample.hash.value000000</password>"
+    assert secret_line in SAMPLE_CONFIG_XML
+    await _store(_xml(*BASE, ANY))
+    changed = _xml(*BASE, ANY).replace(
+        secret_line, "<password>$2y$11$invented.changed.hash.for.tests.only.0000</password>"
+    )
+    result, section = await _store(changed)
+    assert result["created"] and result["rule_changes"]["compared"] is True
+    assert result["rule_changes"]["summary"] == {"any_any": 0, "shadowed": 0}
+    assert section["Rule changes"] == "No new any-to-any or shadowed rules"
+    stored = await db.get_config_backup(result["backup_id"])
+    assert stored is not None and "invented.changed.hash" not in stored["config_text"]
+    assert await _open(int(host["id"])) == {}
+
+
 # ── API ──────────────────────────────────────────────────────────────────────
 
 

@@ -25,7 +25,9 @@ from fastapi import HTTPException
 from netcontrol.integrations.opnsense import secrets
 from netcontrol.mcp import redact
 from netcontrol.routes import opnsense_masking
+from netcontrol.routes.device_config import store_device_config
 from netcontrol.routes.shared import _compute_config_diff
+from routes.crypto import decrypt
 
 # Every secret value of the sample, by kind. None may appear in any output.
 SECRETS: dict[str, str] = {
@@ -347,15 +349,9 @@ async def fw_db(monkeypatch):
 
 
 async def _store_backup(text: str) -> int:
-    return await db_module.create_config_backup(
-        policy_id=None,
-        host_id=FW,
-        config_text=text,
-        config_text_full="",
-        capture_method="opnsense-api",
-        status="success",
-        error_message="",
-    )
+    # The store every collection uses: masked text plus an encrypted copy.
+    stored = await store_device_config(FW, text, "", capture_method="opnsense-api", device_type="opnsense")
+    return stored.backup_id
 
 
 async def _drift_tables() -> list:
@@ -420,9 +416,11 @@ async def test_drift_cycle_masks_everything_and_detects_a_secret_change(fw_db):
     _assert_no_secret(*outputs)
     assert "invented-radius-NEW" not in json.dumps(outputs, default=str)
 
-    # Raw backups are stored as collected (a restore needs them).
+    # Backups are stored masked; the raw file only encrypted.
     newest = await db_module.get_newest_host_config_backup(FW)
-    assert "invented-radius-NEW" in newest["config_text"]
+    _assert_no_secret(newest)
+    assert "invented-radius-NEW" not in json.dumps(newest)
+    assert "invented-radius-NEW" in decrypt(await db_module.get_config_backup_encrypted_text(newest["id"]))
 
 
 @pytest.mark.asyncio

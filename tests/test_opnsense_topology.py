@@ -1073,6 +1073,93 @@ def test_api_opnsense_build_reports_a_rejected_key(api, monkeypatch):  # noqa: F
     }
 
 
+def test_api_backup_policy_backs_up_the_firewall_over_the_api(api, monkeypatch):  # noqa: F811
+    """A config backup policy without a credential backs up the OPNsense
+    firewall of its group by downloading config.xml over its source's API
+    key, with the source's Config backup option off; a refused download
+    is an error row that names the privilege and holds no secret."""
+    import netcontrol.routes.meraki_topology as routes_module
+    import netcontrol.routes.opnsense_health as health_module
+
+    monkeypatch.setattr(collector_module, "AUDIT_POLL_SECONDS", 0)
+    fake = _FakeFirewall()
+    real_client = routes_module.OpnsenseClient
+
+    def _client_factory(base_url, key, secret, **kwargs):
+        kwargs.update(transport=httpx.MockTransport(fake.handler), requests_per_second=1000)
+        return real_client(base_url, key, secret, **kwargs)
+
+    monkeypatch.setattr(routes_module, "OpnsenseClient", _client_factory)
+    health_module.forget_sources()
+    org = _create(api, options={"verify_tls": False, "config_backup": False}).json()["org"]
+    _wait(api, api.post(f"/api/sources/{org['id']}/build").json()["job_id"])
+    imported = api.post(
+        f"/api/sources/{org['id']}/import-devices", json={"device_keys": [FIREWALL], "new_group_name": "Firewalls"}
+    )
+    assert imported.status_code == 200, imported.text
+    group_id = imported.json()["group"]["id"]
+    (host,) = api.get(f"/api/inventory/{group_id}/hosts").json()
+
+    # A policy before the collection noted the host: it says what to do.
+    created = api.post("/api/config-backups/policies", json={"name": "Firewalls daily", "group_id": group_id})
+    assert created.status_code == 201, created.text
+    policy = created.json()
+    assert policy["credential_id"] is None
+    ran = api.post(f"/api/config-backups/policies/{policy['id']}/run-now").json()
+    assert (ran["backed_up"], ran["skipped"], ran["errors"]) == (0, 0, 1)
+    (row,) = api.get(f"/api/config-backups?policy_id={policy['id']}&status=error").json()
+    assert "not the firewall of any OPNsense source" in row["error_message"]
+
+    # Collected again as an inventory host (Config backup still off: no backup stored).
+    _wait(api, api.post(f"/api/sources/{org['id']}/build").json()["job_id"])
+    assert not [b for b in api.get("/api/config-backups").json() if b["status"] == "success"]
+
+    ran = api.post(f"/api/config-backups/policies/{policy['id']}/run-now").json()
+    assert (ran["backed_up"], ran["skipped"], ran["errors"]) == (1, 0, 0)
+    (stored,) = [b for b in api.get("/api/config-backups").json() if b["status"] == "success"]
+    assert (stored["host_id"], stored["policy_id"], stored["capture_method"]) == (host["id"], policy["id"], "manual")
+    assert "core/backup/download/this" in fake.paths()
+
+    # Unchanged: skipped, no new row.
+    ran = api.post(f"/api/config-backups/policies/{policy['id']}/run-now").json()
+    assert (ran["backed_up"], ran["skipped"], ran["errors"]) == (0, 1, 0)
+
+    # A changed config.xml is a new backup.
+    fake.answers["core/backup/download/this"] = SAMPLE_CONFIG_XML.replace(
+        "<opnsense>", "<opnsense>\n  <!-- changed -->", 1
+    )
+    ran = api.post(f"/api/config-backups/policies/{policy['id']}/run-now").json()
+    assert ran["backed_up"] == 1
+
+    # The API user lacks Diagnostics: Configuration History.
+    fake.fail["core/backup/download/this"] = 403
+    ran = api.post(f"/api/config-backups/policies/{policy['id']}/run-now").json()
+    assert ran["errors"] == 1
+    errors = api.get(f"/api/config-backups?policy_id={policy['id']}&status=error").json()
+    newest = max(errors, key=lambda r: r["id"])
+    assert "HTTP 403" in newest["error_message"] and "Diagnostics: Configuration History" in newest["error_message"]
+    assert SECRET not in newest["error_message"] and KEY not in newest["error_message"]
+
+    # Not a config.xml (a login page).
+    fake.fail.clear()
+    fake.answers["core/backup/download/this"] = "<html>login</html>"
+    api.post(f"/api/config-backups/policies/{policy['id']}/run-now")
+    errors = api.get(f"/api/config-backups?policy_id={policy['id']}&status=error").json()
+    assert "did not answer with an OPNsense config.xml" in max(errors, key=lambda r: r["id"])["error_message"]
+
+    # A credential can be set and cleared again; leaving it out keeps it.
+    cred = api.post("/api/credentials", json={"name": "ssh-backup", "username": "netops", "password": "pw-123456"})
+    assert cred.status_code in (200, 201), cred.text
+    cred_id = cred.json()["id"]
+    put = api.put(f"/api/config-backups/policies/{policy['id']}", json={"credential_id": cred_id})
+    assert put.status_code == 200 and put.json()["credential_id"] == cred_id
+    put = api.put(f"/api/config-backups/policies/{policy['id']}", json={"name": "Firewalls nightly"})
+    assert put.json()["credential_id"] == cred_id
+    put = api.put(f"/api/config-backups/policies/{policy['id']}", json={"credential_id": None})
+    assert put.status_code == 200 and put.json()["credential_id"] is None
+    assert put.json()["name"] == "Firewalls nightly"
+
+
 # ── Per-firewall advisories ──────────────────────────────────────────────────
 
 

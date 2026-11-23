@@ -51,6 +51,7 @@ import routes.database as db
 
 from netcontrol.integrations.opnsense.rules import rule_change_findings
 from netcontrol.integrations.pathtrace.opnsense_config import parse_document
+from netcontrol.routes.opnsense_masking import mask_text
 from netcontrol.routes.security_events import host_suppressed, source_muted
 from netcontrol.routes.topology_availability import deliver_alert
 from netcontrol.telemetry import configure_logging
@@ -143,11 +144,13 @@ def _compare(previous: str | None, config_xml: str) -> dict[str, Any] | bool | N
     """The findings of the change from ``previous`` to ``config_xml``:
     ``None`` when ``config_xml`` is no OPNsense configuration, ``False``
     when there is nothing to compare it with. Parsing and the shadow
-    analysis are CPU work: run off the event loop."""
-    after = parse_document(config_xml)
+    analysis are CPU work: run off the event loop. Both sides are compared
+    masked, as stored backups are (masking is idempotent), so a secret can
+    never make a rule look changed."""
+    after = parse_document(mask_text(config_xml))
     if after is None:
         return None
-    before = parse_document(previous) if previous else None
+    before = parse_document(mask_text(previous)) if previous else None
     if before is None:
         return False
     return rule_change_findings(before, after)

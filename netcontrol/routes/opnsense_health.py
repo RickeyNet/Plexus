@@ -41,6 +41,10 @@ by ``record_inventory_host`` at every collection) at most every
 whose ``include_health``, ``include_vpn`` and ``include_ids_alerts`` options are all off, whose
 automatic collection is off or that has no key is not read. Best-effort: a failure is logged and the
 poll goes on without it.
+
+The same snapshot summary answers ``source_of_host`` (``inventory_hosts``,
+whatever the options): the source a backup policy downloads a firewall's
+config.xml from (``netcontrol.routes.opnsense_backup``).
 """
 
 from __future__ import annotations
@@ -90,6 +94,31 @@ def _eligible(org: dict) -> bool:
     )
 
 
+async def inventory_hosts(orgs: list[dict]) -> dict[int, int]:
+    """host_id -> org_ref of the firewall of each OPNsense source in
+    ``orgs``, from the summary of its newest snapshot (``SUMMARY_KEY``,
+    written by ``record_inventory_host``). Other providers are skipped."""
+    found: dict[int, int] = {}
+    for org in orgs:
+        if str(org.get("provider") or "") != PROVIDER:
+            continue
+        rows = await db.list_meraki_snapshots(int(org["id"]), 1)
+        host_id = (rows[0].get("summary") or {}).get(SUMMARY_KEY) if rows else None
+        if host_id:
+            found[int(host_id)] = int(org["id"])
+    return found
+
+
+async def source_of_host(host_id: int) -> dict | None:
+    """The OPNsense source whose firewall is inventory host ``host_id`` (as
+    its newest collection matched it), whatever its health, VPN and IDS
+    options; ``None`` when there is none. A backup policy backs the
+    firewall up over this source's API key."""
+    orgs = await db.list_meraki_orgs()
+    org_ref = (await inventory_hosts(orgs)).get(int(host_id))
+    return next((org for org in orgs if int(org["id"]) == org_ref), None)
+
+
 async def _host_sources() -> dict[int, int]:
     """host_id -> org_ref of every source whose health the poll reads."""
     global _loaded_at
@@ -98,14 +127,7 @@ async def _host_sources() -> dict[int, int]:
     async with _lock:
         if time.monotonic() - _loaded_at < SOURCES_TTL_SECONDS:
             return _HOST_SOURCES
-        found: dict[int, int] = {}
-        for org in await db.list_meraki_orgs():
-            if not _eligible(org):
-                continue
-            rows = await db.list_meraki_snapshots(int(org["id"]), 1)
-            host_id = (rows[0].get("summary") or {}).get(SUMMARY_KEY) if rows else None
-            if host_id:
-                found[int(host_id)] = int(org["id"])
+        found = await inventory_hosts([org for org in await db.list_meraki_orgs() if _eligible(org)])
         _HOST_SOURCES.clear()
         _HOST_SOURCES.update(found)
         _loaded_at = time.monotonic()

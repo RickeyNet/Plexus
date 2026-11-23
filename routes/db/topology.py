@@ -107,6 +107,9 @@ __all__ = [
     "get_latest_config_backups_per_host",
     "get_latest_config_texts_for_hosts",
     "get_config_backup",
+    "get_config_backup_encrypted_text",
+    "get_unsealed_config_backups",
+    "seal_config_backup",
     "get_previous_successful_config_backup",
     "search_config_backups",
     "delete_config_backup",
@@ -1777,12 +1780,13 @@ async def delete_old_config_drift_events(days: int = 90) -> int:
 async def create_config_backup_policy(
     name: str,
     group_id: int,
-    credential_id: int,
+    credential_id: int | None,
     interval_seconds: int = 86400,
     retention_days: int = 30,
     created_by: str = "",
 ) -> int:
-    """Create a new config backup policy."""
+    """Create a new config backup policy. ``credential_id`` ``None``: the
+    policy backs up API-read devices (OPNsense) only."""
     db = await _dbcore.get_db()
     try:
         cursor = await db.execute(
@@ -1842,9 +1846,11 @@ async def get_config_backup_policy(policy_id: int) -> dict | None:
 
 
 async def update_config_backup_policy(policy_id: int, **kwargs) -> None:
-    """Update a backup policy. Pass only the fields to change."""
+    """Update a backup policy. Pass only the fields to change; ``None``
+    leaves a field as it is, except ``credential_id``, which ``None``
+    clears (the policy then backs up API-read devices only)."""
     allowed = {"name", "enabled", "credential_id", "interval_seconds", "retention_days"}
-    updates = {k: v for k, v in kwargs.items() if k in allowed and v is not None}
+    updates = {k: v for k, v in kwargs.items() if k in allowed and (v is not None or k == "credential_id")}
     if not updates:
         return
     updates["updated_at"] = "datetime('now')"
@@ -2143,17 +2149,32 @@ async def create_config_backup(
     status: str = "success",
     error_message: str = "",
     config_text_full: str = "",
+    config_text_enc: str = "",
+    config_text_digest: str = "",
 ) -> int:
     """Store a config backup record. ``config_text_full`` is the config with
-    default settings included (``''``: the platform has no such form)."""
+    default settings included (``''``: the platform has no such form). An
+    OPNsense backup (``netcontrol.routes.opnsense_backup_encryption``)
+    passes its masked text as ``config_text`` and the raw file encrypted
+    (``config_text_enc``) with its keyed digest (``config_text_digest``)."""
     db = await _dbcore.get_db()
     try:
         cursor = await db.execute(
             """INSERT INTO config_backups
                (policy_id, host_id, config_text, config_text_full, capture_method, status, error_message,
-                captured_at, checked_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))""",
-            (policy_id, host_id, config_text, config_text_full, capture_method, status, error_message),
+                config_text_enc, config_text_digest, captured_at, checked_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))""",
+            (
+                policy_id,
+                host_id,
+                config_text,
+                config_text_full,
+                capture_method,
+                status,
+                error_message,
+                config_text_enc,
+                config_text_digest,
+            ),
         )
         await db.commit()
         return cursor.lastrowid
@@ -2163,11 +2184,12 @@ async def create_config_backup(
 
 async def get_newest_host_config_backup(host_id: int, max_age_seconds: int | None = None) -> dict | None:
     """The host's newest successful backup (``id``, ``config_text``,
-    ``config_text_full``, ``captured_at``, ``checked_at``), whoever captured
+    ``config_text_full``, ``captured_at``, ``checked_at`` and, for the
+    store's change check only, ``config_text_digest``), whoever captured
     it. With ``max_age_seconds``, None unless the device confirmed it
     (captured or re-read unchanged) within that many seconds; an older row
     is never returned in its place."""
-    sql = """SELECT id, config_text, config_text_full, captured_at, checked_at FROM config_backups
+    sql = """SELECT id, config_text, config_text_full, captured_at, checked_at, config_text_digest FROM config_backups
              WHERE id = (SELECT MAX(id) FROM config_backups WHERE host_id = ? AND status = 'success')"""
     params: list = [host_id]
     if max_age_seconds is not None:
@@ -2303,8 +2325,16 @@ async def get_latest_config_texts_for_hosts(host_ids: list[int]) -> dict[int, di
         await db.close()
 
 
+# Columns of an OPNsense backup that never leave the store: the encrypted
+# raw config.xml and its keyed digest. Read the first with
+# ``get_config_backup_encrypted_text`` (the raw download only).
+_SEALED_COLUMNS = ("config_text_enc", "config_text_digest")
+
+
 async def get_config_backup(backup_id: int) -> dict | None:
-    """Get a single backup record including config text."""
+    """Get a single backup record including config text (an OPNsense
+    backup's masked text; the encrypted raw file and its digest are left
+    out)."""
     db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
@@ -2314,7 +2344,73 @@ async def get_config_backup(backup_id: int) -> dict | None:
                WHERE b.id = ?""",
             (backup_id,),
         )
-        return row_to_dict(await cursor.fetchone())
+        row = row_to_dict(await cursor.fetchone())
+    finally:
+        await db.close()
+    if row is not None:
+        for column in _SEALED_COLUMNS:
+            row.pop(column, None)
+    return row
+
+
+async def get_config_backup_encrypted_text(backup_id: int) -> str:
+    """The encrypted raw config.xml of an OPNsense backup, ``''`` for any
+    other backup (or one stored before encryption and not converted yet)."""
+    db = await _dbcore.get_db(read_only=True)
+    try:
+        cursor = await db.execute("SELECT config_text_enc FROM config_backups WHERE id = ?", (backup_id,))
+        row = await cursor.fetchone()
+        return str(row[0] or "") if row else ""
+    finally:
+        await db.close()
+
+
+async def get_unsealed_config_backups(
+    *, after_id: int, limit: int, device_type: str, capture_method: str, sniff_roots: Iterable[str]
+) -> list[dict]:
+    """Successful backups with ``id > after_id`` that may be an OPNsense
+    configuration stored in plain text (before backups were encrypted):
+    no encrypted copy and no digest yet, and the host's ``device_type``,
+    the ``capture_method`` or the first 4096 characters (one of
+    ``sniff_roots``, such as ``<opnsense``) point to one. Oldest first, at
+    most ``limit``. ``id``, ``capture_method``, ``config_text``,
+    ``config_text_full`` and the host's ``device_type``; the caller
+    confirms each."""
+    roots = [f"%{root.lower()}%" for root in sniff_roots]
+    sniff = " OR ".join("LOWER(SUBSTR(b.config_text, 1, 4096)) LIKE ?" for _ in roots) or "FALSE"
+    db = await _dbcore.get_db(read_only=True)
+    try:
+        cursor = await db.execute(
+            f"""SELECT b.id, b.capture_method, b.config_text, b.config_text_full, h.device_type
+                FROM config_backups b
+                LEFT JOIN hosts h ON h.id = b.host_id
+                WHERE b.id > ? AND b.status = 'success' AND b.config_text <> ''
+                  AND b.config_text_enc = '' AND b.config_text_digest = ''
+                  AND (h.device_type = ? OR b.capture_method = ? OR {sniff})
+                ORDER BY b.id LIMIT ?""",  # nosec B608 - placeholders only
+            (int(after_id), device_type, capture_method, *roots, int(limit)),
+        )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+async def seal_config_backup(
+    backup_id: int, *, config_text: str, config_text_full: str, config_text_enc: str, config_text_digest: str
+) -> bool:
+    """Replace a plain-text OPNsense backup with its masked text, encrypted
+    raw copy and digest. Only a row not sealed yet is changed (several
+    processes may convert at once); True when this call changed it."""
+    db = await _dbcore.get_db()
+    try:
+        cursor = await db.execute(
+            """UPDATE config_backups
+               SET config_text = ?, config_text_full = ?, config_text_enc = ?, config_text_digest = ?
+               WHERE id = ? AND config_text_enc = '' AND config_text_digest = ''""",
+            (config_text, config_text_full, config_text_enc, config_text_digest, backup_id),
+        )
+        await db.commit()
+        return bool(cursor.rowcount)
     finally:
         await db.close()
 

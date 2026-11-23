@@ -53,8 +53,10 @@ them) into `monitoring_alerts` / notification channels
 | APC Smart-UPS through a Network Management Card (inventory) | host (the card's interface), UPS battery and output state | SNMP + ICMP poll (`apc_ups`, no SSH driver: the card's command line is used only by the Upgrades tool); PowerNet-MIB battery status, capacity, runtime, replace indicator, temperature, output status, load and voltage, input voltage and frequency, last transfer cause, and the card's temperature probe; plus the card's SNMP traps (v1 / v2c, decoded on arrival) | Yes (ICMP) | Yes | Full pipeline over SNMP. The UPS state is stored per host (`host_vendor_status`), kept as metric samples with hourly / daily rollups, and raises server-side alerts into `monitoring_alerts` / notification channels: on battery, battery low / fault / not present / needs replacing, output off or on bypass, overload, battery temperature (warning 40 °C, critical 50 °C), each resolved when it clears (`netcontrol/integrations/apc/snmp.py`). Traps: Yes. A PowerNet-MIB trap from an `apc_ups` host raises or resolves the same alerts at once (same dedup keys as the poll; communication lost / established too) and triggers an immediate re-poll of the host (`netcontrol/integrations/apc/traps.py`). No CPU or memory (none to read). A trap is acted on only with the community stored for the host and from the host's own address (the v1 agent address only through an inventory source); SNMPv3 traps are stored undecoded and never acted on. Gaps: SNMPv3 traps are not authenticated (no trap user keys); outlet groups, humidity and the per-module tables of a parallel / three-phase UPS are not read. `docs/apc-ups.md`. |
 | ICMP-only hosts | host | ICMP | Yes | Yes | |
 
-Firewall rule posture: only OPNsense is checked today. A collection that
-stores a new config.xml backup compares its filter rules with the previous
+Firewall rule posture: only OPNsense is checked today. A new config.xml
+backup (stored by a collection, or by a config backup policy run, which
+downloads config.xml over the source's API key with no SSH and no policy
+credential) compares its filter rules with the previous
 backup and raises a `monitoring_alerts` alert on the firewall's inventory
 host for each rule the change made any-to-any or shadowed (alert type
 `opnsense_rule_change`, resolved when a later backup no longer has it;

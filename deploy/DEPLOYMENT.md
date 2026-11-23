@@ -625,8 +625,9 @@ docker compose up -d
 A backup script is provided at `deploy/backup.sh`. It dumps PostgreSQL **and**
 archives the `plexus-db` state volume, which holds `netcontrol.key` (the Fernet
 key for stored device credentials) and `session.key`. **Losing
-`netcontrol.key` permanently breaks decryption of every stored credential**, so
-do not back up the database alone.
+`netcontrol.key` permanently breaks decryption of every stored credential**
+and of the raw `config.xml` of OPNsense config backups (their masked text
+stays readable), so do not back up the database alone.
 
 Run on demand:
 

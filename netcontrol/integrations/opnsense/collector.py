@@ -324,6 +324,8 @@ PATH_FIRMWARE_RUNNING = "core/firmware/running"
 PATH_AUDIT = "core/firmware/audit"
 PATH_AUDIT_STATUS = "core/firmware/upgradestatus"
 PATH_CONFIG = "core/backup/download/this"
+CONFIG_PRIVILEGE = "Diagnostics: Configuration History"
+NOT_CONFIG_XML_MESSAGE = "The configuration download did not answer with an OPNsense config.xml"
 
 # The audit runs in the background on the firewall: how often and how many
 # times its progress is read before the collection stops waiting.
@@ -558,6 +560,18 @@ def incomplete_audit(log: str, reason: str) -> dict[str, Any]:
     }
 
 
+async def download_config(client: OpnsenseClient) -> str | None:
+    """The firewall's ``config.xml`` (``PATH_CONFIG``, privilege
+    ``CONFIG_PRIVILEGE``), as text: password hashes, private keys and
+    pre-shared keys included, so the caller stores it as a configuration
+    backup and nowhere else. ``None`` when the answer is not an OPNsense
+    config.xml (a login page, a proxy's error page). Raises
+    ``OpnsenseApiError`` for a failed call. Used by the collection and by a
+    backup policy run (``netcontrol.routes.opnsense_backup``)."""
+    text = await client.get_text(PATH_CONFIG)
+    return text if "<opnsense" in text[:4096] else None
+
+
 async def collect_opnsense(
     client: OpnsenseClient,
     options: dict[str, Any] | None = None,
@@ -719,18 +733,11 @@ async def collect_opnsense(
     if want_config:
         report(PHASE_CONFIG)
         try:
-            text = await client.get_text(PATH_CONFIG)
+            config_xml = await download_config(client)
             answered += 1
-            if "<opnsense" in text[:4096]:
-                config_xml = text
-            else:
+            if config_xml is None:
                 errors.append(
-                    {
-                        "scope": "config",
-                        "path": "/" + PATH_CONFIG,
-                        "status": None,
-                        "message": "The configuration download did not answer with an OPNsense config.xml",
-                    }
+                    {"scope": "config", "path": "/" + PATH_CONFIG, "status": None, "message": NOT_CONFIG_XML_MESSAGE}
                 )
         except OpnsenseApiError as exc:
             if exc.transport or exc.status_code == 401:

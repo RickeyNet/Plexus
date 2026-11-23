@@ -528,6 +528,39 @@ def test_diff_between_two_backups(document):
     assert diff(document, document)["summary"] == {"rules": 0, "aliases": 0, "nat": 0}
 
 
+def test_rules_aliases_and_nat_read_the_same_from_a_masked_backup(document):
+    """A stored OPNsense backup holds the masked config.xml: nothing these
+    parsers read is a secret, so the masked text gives the same result."""
+    from netcontrol.routes.opnsense_masking import mask_text
+
+    with_secrets = CONFIG.replace(
+        "<ssh><enabled>enabled</enabled></ssh>",
+        "<ssh><enabled>enabled</enabled></ssh><user><name>root</name>"
+        "<bcrypt-hash>$2y$11$InventedBcryptHashForRuleTests0123456789abcdefghijk</bcrypt-hash></user>",
+    ).replace(
+        "<remote-gateway>198.51.100.200</remote-gateway>",
+        "<remote-gateway>198.51.100.200</remote-gateway><pre-shared-key>invented-rules-psk</pre-shared-key>",
+    )
+    raw_doc = parse_document(with_secrets)
+    masked = mask_text(with_secrets)
+    assert "invented-rules-psk" not in masked and "InventedBcrypt" not in masked
+    masked_doc = parse_document(masked)
+    assert raw_doc is not None and masked_doc is not None
+    assert analyze(masked_doc) == analyze(raw_doc) == analyze(document)
+    assert diff(raw_doc, masked_doc)["summary"] == {"rules": 0, "aliases": 0, "nat": 0}
+    raw_block = forwarding_for_host(
+        {"ip_address": "192.0.2.1", "device_type": "opnsense"},
+        [],
+        None,
+        [],
+        config_backup={"config_text": with_secrets},
+    )
+    masked_block = forwarding_for_host(
+        {"ip_address": "192.0.2.1", "device_type": "opnsense"}, [], None, [], config_backup={"config_text": masked}
+    )
+    assert masked_block == raw_block
+
+
 # ── Path trace through an OPNsense inventory host ────────────────────────────
 
 _ISP_ROUTER = """\

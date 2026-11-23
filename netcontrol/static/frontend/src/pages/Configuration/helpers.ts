@@ -1,6 +1,32 @@
-import type { ConfigDriftEvent } from '@/api/configuration';
+import type { ConfigBackupPolicy, ConfigDriftEvent } from '@/api/configuration';
 
 export type BackupView = 'config' | 'diff';
+
+// A backup policy's credential choice in its form: a credential id,
+// NO_CREDENTIAL (API-read devices only, such as OPNsense firewalls, which
+// are backed up over their source's API key), or null (nothing chosen yet).
+export const NO_CREDENTIAL = 'none';
+export type PolicyCredentialChoice = number | typeof NO_CREDENTIAL | null;
+
+// The choice a saved policy starts its edit form with.
+export function policyCredentialChoice(
+  policy: Pick<ConfigBackupPolicy, 'credential_id'> | null,
+): PolicyCredentialChoice {
+  if (policy == null) return null;
+  return policy.credential_id ?? NO_CREDENTIAL;
+}
+
+// The credential_id a choice saves (null: no credential). Only for a made choice.
+export function policyCredentialId(choice: number | typeof NO_CREDENTIAL): number | null {
+  return choice === NO_CREDENTIAL ? null : choice;
+}
+
+// The note the policy list shows for a policy without a credential.
+export function policyCredentialNote(
+  policy: Pick<ConfigBackupPolicy, 'credential_id'>,
+): string | null {
+  return policy.credential_id == null ? 'No credential: API-read devices (OPNsense) only' : null;
+}
 
 // Only successful captures have a config to diff. An unknown status (detail
 // still loading) leaves the diff view available.

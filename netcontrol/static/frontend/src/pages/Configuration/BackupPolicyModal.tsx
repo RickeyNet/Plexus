@@ -15,6 +15,13 @@ import { Modal } from '@/components/Modal';
 import { QueryError } from '@/components/QueryError';
 import { useObjectScope } from '@/lib/objectScope';
 
+import {
+  NO_CREDENTIAL,
+  type PolicyCredentialChoice,
+  policyCredentialChoice,
+  policyCredentialId,
+} from './helpers';
+
 interface Props {
   policy: ConfigBackupPolicy | null; // null = create mode
   onClose: () => void;
@@ -39,8 +46,9 @@ export function BackupPolicyModal({ policy, onClose }: Props) {
   const [name, setName] = useState(policy?.name ?? '');
   const [enabled, setEnabled] = useState(policy?.enabled ?? true);
   const [groupId, setGroupId] = useState<number | null>(policy?.group_id ?? null);
-  const [credId, setCredId] = useState<number | null>(
-    policy?.credential_id ?? null,
+  // null: nothing chosen yet; NO_CREDENTIAL: API-read devices only.
+  const [credId, setCredId] = useState<PolicyCredentialChoice>(
+    policyCredentialChoice(policy),
   );
   const [hours, setHours] = useState(
     policy ? Math.round(policy.interval_seconds / 3600) : 24,
@@ -84,6 +92,7 @@ export function BackupPolicyModal({ policy, onClose }: Props) {
     isEdit &&
     listsSettled &&
     credId != null &&
+    credId !== NO_CREDENTIAL &&
     !ownCreds.some((c) => c.id === credId) &&
     !svcCreds.some((c) => c.id === credId);
 
@@ -95,11 +104,12 @@ export function BackupPolicyModal({ policy, onClose }: Props) {
     // Report every missing field at once; none of them may end the submit silently.
     const missingName = !name.trim();
     const missingGroup = !isEdit && !groupId;
-    const missingCred = !credId || staleCred;
+    const missingCred = credId == null || staleCred;
     setNameError(missingName ? 'Name is required' : null);
     setGroupError(missingGroup ? 'Choose an inventory group to back up' : null);
-    setCredError(missingCred ? 'Choose a credential for this policy' : null);
-    if (missingName || missingGroup || !credId || staleCred) return;
+    setCredError(missingCred ? 'Choose a credential, or None for API-read devices only' : null);
+    if (missingName || missingGroup || credId == null || staleCred) return;
+    const credential_id = policyCredentialId(credId);
     const interval_seconds = Math.max(1, hours) * 3600;
     if (isEdit) {
       update.mutate(
@@ -108,7 +118,7 @@ export function BackupPolicyModal({ policy, onClose }: Props) {
           data: {
             name: name.trim(),
             enabled,
-            credential_id: credId,
+            credential_id,
             interval_seconds,
             retention_days: retentionDays,
           },
@@ -123,7 +133,7 @@ export function BackupPolicyModal({ policy, onClose }: Props) {
         {
           name: name.trim(),
           group_id: groupId,
-          credential_id: credId,
+          credential_id,
           interval_seconds,
           retention_days: retentionDays,
         },
@@ -226,10 +236,12 @@ export function BackupPolicyModal({ policy, onClose }: Props) {
           className="form-select"
           value={staleCred ? '' : (credId ?? '')}
           onChange={(e) => {
-            setCredId(e.target.value ? Number(e.target.value) : null);
+            const value = e.target.value;
+            setCredId(value === NO_CREDENTIAL ? NO_CREDENTIAL : value ? Number(value) : null);
             setCredError(null);
           }}
           aria-invalid={!!credError}
+          aria-describedby={`${formId}-credential-hint`}
           required
         >
           {(staleCred || credId == null) && (
@@ -237,6 +249,7 @@ export function BackupPolicyModal({ policy, onClose }: Props) {
               Select a credential…
             </option>
           )}
+          <option value={NO_CREDENTIAL}>None (API-backed devices only, such as OPNsense)</option>
           {svcCreds.length > 0 ? (
             <>
               <optgroup label="My credentials">
@@ -263,6 +276,15 @@ export function BackupPolicyModal({ policy, onClose }: Props) {
           )}
         </select>
         <FieldError>{credError}</FieldError>
+        <p
+          id={`${formId}-credential-hint`}
+          className="text-muted"
+          style={{ fontSize: '0.85em', marginTop: '0.25rem' }}
+        >
+          Devices backed up over SSH use this credential. An OPNsense firewall is
+          backed up over the API key of its OPNsense source and needs none; with
+          None, every SSH device of the group gets an error entry.
+        </p>
         {staleCred && (
           <p
             style={{

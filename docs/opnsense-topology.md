@@ -102,7 +102,7 @@ default) as described in [Scheduled collection](meraki-topology.md#scheduled-col
 | Status: CARP | CARP virtual IPs, their state, demotion and maintenance mode |
 | VPN: WireGuard: Status | WireGuard peers and their latest handshake |
 | Status: OpenVPN | OpenVPN instances and connected clients |
-| Diagnostics: Configuration History | the config.xml download (only with **Config backup** on) |
+| Diagnostics: Configuration History | the config.xml download: by the collection with **Config backup** on, and by a [backup policy](#config-backup) of the firewall's group whatever that option says |
 | Firewall: Rules (the privilege that lists `api/firewall/filter_util/*`) | the filter rule counters (only with **Rule counters** on; 24.1+) |
 | Diagnostics: PF Table IP addresses (`api/firewall/alias_util/*`) | the pf tables of the aliases `config.xml` cannot resolve, for path tracing (only with **Alias tables** and **Config backup** on) |
 | Diagnostics: ARP Table | the ARP table (only with **ARP, NDP and DHCP leases** on) |
@@ -817,14 +817,56 @@ inventory first** (the **Import devices** step after adding the source, or
 stored, and the collection has a warning that says to import the firewall.
 
 config.xml holds password hashes, private keys, certificates and
-pre-shared keys. It is never put in the topology snapshot; it is only kept
-in the Config Backups table, which is readable by users with the Config
-Backups feature. Turn **Config backup** off if that is not wanted.
+pre-shared keys. It is never put in the topology snapshot. The Config
+Backups table keeps it in two forms:
+
+- **Masked text**, with every secret replaced by its fingerprint marker
+  (see [Config drift and masked secrets](#config-drift-and-masked-secrets)).
+  This is what the backup view, compare, search, the rules view, rule
+  change alerts, the filter log labels, config drift, path tracing and AI
+  access read. None of them needs a secret value.
+- **The file as collected, encrypted** (AES-256-GCM with the Plexus
+  encryption key, `netcontrol.key`), plus a keyed digest of it so an
+  unchanged file is recognised without decrypting it. A file where only a
+  secret changed is a new backup.
+
+A database dump or a read of the table therefore does not give the
+secrets. Only **Download** and **Download All** decrypt the file, for
+users with `config-backups.write` (or admins) and write access to the
+firewall's group; it comes back byte for byte as collected, ready to
+restore on the firewall. Other users get no download, as for any backup.
+
+The encryption key is needed to download a raw file. If `netcontrol.key`
+is lost or replaced, the download answers `409` with a message that the
+encryption key differs (**Download All** leaves those backups out and
+names them in `NOT-INCLUDED.txt`); the masked text, drift and rules keep
+working. Back up `netcontrol.key` together with the database. Backups an
+older release stored in plain text are converted (masked, encrypted) in
+the background when the server starts; nothing is lost.
+
+Turn **Config backup** off to stop the collection from storing the file.
+A backup policy of the firewall's group still backs it up (below); delete
+or disable that policy too if keeping the file is not wanted.
 
 An imported firewall gets the device type `opnsense`. Plexus has no SSH
-driver for OPNsense, so a backup policy does not read it over SSH: its
-backups come from the OPNsense collection only. SNMP polling works through
-the generic path once an SNMP profile is assigned to its group.
+driver for OPNsense, so a **backup policy** (**Configuration > Config
+Backups**) never reads it over SSH. On every scheduled run, **Run Now** and
+configuration change message, the policy downloads `config.xml` over this
+source's API key and stores it the same way, with the policy and the run's
+method (`scheduled`, `manual`, `syslog`). This works whatever the **Config
+backup** option says, and the policy needs no credential for it: choose
+**None (API-backed devices only, such as OPNsense)** for a group of
+firewalls only. Plexus finds the source from the inventory host its newest
+collection matched, so collect the source and import the firewall before
+the first run. A failed download is an `error` backup that says why (no
+such source, no API key, the download refused for want of **Diagnostics:
+Configuration History**, an answer that is not a config.xml). With
+**Config backup** on, the collection keeps storing a backup when
+`config.xml` changed, so the rules view, drift, rule change alerts and
+names stay current between policy runs.
+
+SNMP polling works through the generic path once an SNMP profile is
+assigned to its group.
 
 ## Config drift and masked secrets
 
@@ -865,9 +907,9 @@ with the previous backup (`GET /api/config-backups/{id}/diff`, on the
 normalized form, with `revision` and `previous_revision`), and search
 (matched lines are masked, and a hit only on a secret value is dropped so a
 search cannot confirm one). AI access (MCP) masks the same elements with a
-bare `[masked]`. The stored backups themselves are kept as collected, and
-**Download** returns the file as stored, so it can be restored on the
-firewall.
+bare `[masked]`. The stored backup is this masked text; **Download**
+decrypts the encrypted copy and returns the file as collected, so it can
+be restored on the firewall (see [Config backup](#config-backup)).
 
 Masked elements: any element named `password`, `passwd`, `pass`, `pw`,
 `pwd`, `authpass`, `privpass`, `smtppassword`, `bcrypt-hash`, `md5-hash`,

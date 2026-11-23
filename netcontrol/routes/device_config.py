@@ -41,6 +41,7 @@ import routes.database as db
 
 from netcontrol.routes.intended_config import recompare_host
 from netcontrol.routes.network_objects import sync_host_bindings
+from netcontrol.routes.opnsense_backup_encryption import is_opnsense_backup, same_digest, seal
 from netcontrol.routes.shared import _capture_device_configs
 
 # How old a stored configuration an on-demand action (a compliance scan, a
@@ -64,6 +65,14 @@ class DeviceConfig:
     config_text_full: str
     created: bool  # a new backup row was written (the config changed)
     reused: bool  # no session was opened: a stored backup was recent enough
+
+
+def host_lock(host_id: int) -> asyncio.Lock:
+    """The lock serializing captures of ``host_id``: a capture read over
+    another path (an OPNsense firewall's config.xml over its API) holds it
+    while it reads and stores, so two captures of one host never race to
+    store. Not reentrant: never held around ``get_device_config``."""
+    return _host_locks.setdefault(int(host_id), asyncio.Lock())
 
 
 def _from_row(row: dict, *, created: bool, reused: bool) -> DeviceConfig:
@@ -92,13 +101,23 @@ async def store_device_config(
 
     Either way the configuration is read into the host's interface
     addresses with the parser of ``device_type`` (``None``: the host's); a
-    new row also re-compares the host's intended configuration."""
+    new row also re-compares the host's intended configuration.
+
+    An OPNsense ``config.xml`` (``opnsense_backup_encryption``) is stored
+    masked with the raw file encrypted beside it, and is unchanged only
+    when the keyed digest of the raw file matches the newest backup's (a
+    changed secret is a new backup). The returned ``config_text`` and what
+    the interface addresses are read from are the masked text."""
     newest = await db.get_newest_host_config_backup(host_id)
-    if (
-        newest is not None
-        and newest.get("config_text") == config_text
-        and (newest.get("config_text_full") or "") == config_text_full
-    ):
+    sealed = None
+    if is_opnsense_backup(config_text, device_type=device_type, capture_method=capture_method):
+        # Masking and encrypting a large config.xml is CPU work.
+        sealed = await asyncio.to_thread(seal, config_text, config_text_full)
+        config_text, config_text_full = sealed.config_text, sealed.config_text_full
+        unchanged = newest is not None and same_digest(newest.get("config_text_digest"), sealed.config_text_digest)
+    else:
+        unchanged = newest is not None and newest.get("config_text") == config_text
+    if unchanged and newest is not None and (newest.get("config_text_full") or "") == config_text_full:
         await db.mark_config_backup_checked(int(newest["id"]))
         stored = _from_row(newest, created=False, reused=False)
     else:
@@ -110,6 +129,8 @@ async def store_device_config(
             capture_method=capture_method,
             status="success",
             error_message="",
+            config_text_enc=sealed.config_text_enc if sealed else "",
+            config_text_digest=sealed.config_text_digest if sealed else "",
         )
         stored = DeviceConfig(
             backup_id=int(backup_id),
@@ -137,8 +158,7 @@ async def get_device_config(
     device and stored. Raises what the SSH capture raises."""
     host_id = int(host["id"])
     asked = next(_sequence)
-    lock = _host_locks.setdefault(host_id, asyncio.Lock())
-    async with lock:
+    async with host_lock(host_id):
         last = _last_capture.get(host_id)
         if last is not None and last[0] > asked:
             row = await db.get_config_backup(last[1])

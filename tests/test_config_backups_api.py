@@ -1,4 +1,4 @@
-"""API-level behavior tests for config backup search and diff routes."""
+"""API-level behavior tests for config backup search, diff and policy runs (OPNsense hosts over the API, policies without a credential)."""
 
 from __future__ import annotations
 
@@ -196,3 +196,197 @@ async def test_scheduled_backup_goes_through_the_shared_capture(monkeypatch):
         (11, {"capture_method": "scheduled", "policy_id": 3}),
         (12, {"capture_method": "scheduled", "policy_id": 3}),
     ]
+
+
+# ── Policies without a credential, OPNsense hosts over the API ───────────────
+
+_FIREWALL = {"id": 21, "ip_address": "192.0.2.21", "device_type": "opnsense", "group_id": 7}
+_SWITCH = {"id": 22, "ip_address": "192.0.2.22", "device_type": "cisco_xe", "group_id": 7}
+
+
+def _stored(host_id: int, created: bool = True):
+    from netcontrol.routes.device_config import DeviceConfig
+
+    return DeviceConfig(host_id, "text", "", created=created, reused=False)
+
+
+@pytest.fixture
+def capture(monkeypatch):
+    """Record the SSH captures, the API backups and the error rows."""
+    calls: dict[str, list] = {"ssh": [], "api": [], "errors": []}
+
+    async def _ssh(host, cred, **kwargs):
+        calls["ssh"].append((host["id"], cred, kwargs))
+        return _stored(host["id"])
+
+    async def _api(host, **kwargs):
+        calls["api"].append((host["id"], kwargs))
+        return _stored(host["id"])
+
+    async def _error_row(**kwargs):
+        calls["errors"].append(kwargs)
+        return 1
+
+    monkeypatch.setattr(config_backups_module, "get_device_config", _ssh)
+    monkeypatch.setattr(config_backups_module, "backup_firewall", _api)
+    monkeypatch.setattr(config_backups_module.db, "create_config_backup", _error_row)
+    return calls
+
+
+@pytest.mark.asyncio
+async def test_backup_host_reads_an_opnsense_host_over_the_api_and_needs_no_credential(capture):
+    result = await config_backups_module.backup_host(_FIREWALL, None, policy_id=3, capture_method="manual")
+    assert result is True
+    assert capture["api"] == [(21, {"policy_id": 3, "capture_method": "manual"})]
+    assert capture["ssh"] == [] and capture["errors"] == []
+
+
+@pytest.mark.asyncio
+async def test_backup_host_without_a_credential_writes_an_error_row_for_an_ssh_host(capture):
+    result = await config_backups_module.backup_host(_SWITCH, None, policy_id=3, capture_method="scheduled")
+    assert result is False and capture["ssh"] == []
+    (row,) = capture["errors"]
+    assert row["status"] == "error" and row["host_id"] == 22 and row["policy_id"] == 3
+    assert row["error_message"] == config_backups_module.NO_CREDENTIAL_MESSAGE
+
+
+@pytest.mark.asyncio
+async def test_backup_host_turns_a_failed_api_backup_into_an_error_row(capture, monkeypatch):
+    from netcontrol.routes.opnsense_backup import NO_SOURCE_MESSAGE, FirewallBackupError
+
+    async def _fail(host, **kwargs):
+        raise FirewallBackupError(NO_SOURCE_MESSAGE)
+
+    monkeypatch.setattr(config_backups_module, "backup_firewall", _fail)
+    assert await config_backups_module.backup_host(_FIREWALL, None, policy_id=3, capture_method="manual") is False
+    assert capture["errors"][0]["error_message"] == NO_SOURCE_MESSAGE
+
+
+def _due(monkeypatch, policy: dict, hosts: list[dict]) -> AsyncMock:
+    db = config_backups_module.db
+    last_run = AsyncMock()
+    monkeypatch.setattr(db, "get_config_backup_policies_due", AsyncMock(return_value=[policy]))
+    monkeypatch.setattr(db, "get_hosts_for_group", AsyncMock(return_value=hosts))
+    monkeypatch.setattr(db, "update_config_backup_policy_last_run", last_run)
+    monkeypatch.setattr(db, "delete_old_config_backups", AsyncMock(return_value=0))
+    return last_run
+
+
+@pytest.mark.asyncio
+async def test_a_scheduled_policy_without_a_credential_backs_up_its_firewall(capture, monkeypatch):
+    policy = {"id": 4, "group_id": 7, "credential_id": None, "created_by": "admin", "retention_days": 30}
+    last_run = _due(monkeypatch, policy, [_FIREWALL, _SWITCH])
+    check = AsyncMock()
+    monkeypatch.setattr(config_backups_module, "require_credential_access", check)
+
+    result = await config_backups_module._run_config_backups_once()
+
+    assert result == {"policies_run": 1, "hosts_backed_up": 1, "errors": 1}
+    assert capture["api"] == [(21, {"policy_id": 4, "capture_method": "scheduled"})] and capture["ssh"] == []
+    assert [r["host_id"] for r in capture["errors"]] == [22]
+    check.assert_not_awaited()
+    last_run.assert_awaited_once_with(4)
+
+
+@pytest.mark.asyncio
+async def test_a_rejected_credential_still_backs_up_the_firewall(capture, monkeypatch):
+    """The SSH hosts keep today's behaviour (no row, one error, retried at
+    the next wake-up when nothing else ran); the firewall is backed up."""
+    policy = {"id": 5, "group_id": 7, "credential_id": 9, "created_by": "gone", "retention_days": 30}
+    monkeypatch.setattr(
+        config_backups_module, "require_credential_access", AsyncMock(side_effect=HTTPException(403, "no"))
+    )
+    last_run = _due(monkeypatch, policy, [_FIREWALL, _SWITCH])
+    result = await config_backups_module._run_config_backups_once()
+    assert result == {"policies_run": 1, "hosts_backed_up": 1, "errors": 1}
+    assert [h for h, _ in capture["api"]] == [21] and capture["ssh"] == [] and capture["errors"] == []
+    last_run.assert_awaited_once_with(5)
+
+    capture["api"].clear()
+    last_run = _due(monkeypatch, policy, [_SWITCH])
+    result = await config_backups_module._run_config_backups_once()
+    assert result == {"policies_run": 0, "hosts_backed_up": 0, "errors": 1}
+    assert capture["api"] == [] and capture["ssh"] == []
+    last_run.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_host_backup_policy_needs_a_credential_only_for_an_ssh_host(monkeypatch):
+    policy = {"id": 6, "name": "a", "group_id": 7, "credential_id": None, "enabled": 1}
+    monkeypatch.setattr(config_backups_module.db, "get_config_backup_policies", AsyncMock(return_value=[policy]))
+    assert await config_backups_module.host_backup_policy(_FIREWALL) == (policy, None)
+    assert await config_backups_module.host_backup_policy(_SWITCH) is None
+
+
+# ── opnsense_backup.backup_firewall: the error messages ─────────────────────
+
+
+@pytest.fixture
+def firewall_source(monkeypatch):
+    import netcontrol.routes.opnsense_health as health
+
+    org = {"id": 41, "name": "Edge firewall", "provider": "opnsense", "base_url": "https://fw1.example.com"}
+    source = AsyncMock(return_value=org)
+    monkeypatch.setattr(health, "source_of_host", source)
+    monkeypatch.setattr(config_backups_module.db, "get_meraki_org_api_key", AsyncMock(return_value="key-1:secret-1"))
+    return source
+
+
+@pytest.mark.asyncio
+async def test_backup_firewall_needs_the_host_to_be_a_collected_firewall(firewall_source):
+    from netcontrol.routes.opnsense_backup import NO_SOURCE_MESSAGE, FirewallBackupError, backup_firewall
+
+    firewall_source.return_value = None
+    with pytest.raises(FirewallBackupError) as raised:
+        await backup_firewall(_FIREWALL, policy_id=1, capture_method="manual")
+    assert str(raised.value) == NO_SOURCE_MESSAGE and "import the firewall" in NO_SOURCE_MESSAGE
+
+
+@pytest.mark.asyncio
+async def test_backup_firewall_needs_the_source_key(firewall_source, monkeypatch):
+    from netcontrol.routes.opnsense_backup import FirewallBackupError, backup_firewall
+
+    monkeypatch.setattr(config_backups_module.db, "get_meraki_org_api_key", AsyncMock(return_value=""))
+    with pytest.raises(FirewallBackupError, match="OPNsense source 'Edge firewall' has no API key"):
+        await backup_firewall(_FIREWALL, policy_id=1, capture_method="manual")
+
+    monkeypatch.setattr(config_backups_module.db, "get_meraki_org_api_key", AsyncMock(return_value="no-colon"))
+    with pytest.raises(FirewallBackupError, match="key:secret") as raised:
+        await backup_firewall(_FIREWALL, policy_id=1, capture_method="manual")
+    assert "no-colon" not in str(raised.value)
+
+
+def _answering(monkeypatch, handler) -> None:
+    import httpx
+    import netcontrol.routes.meraki_topology as topology_routes
+
+    real = topology_routes.OpnsenseClient
+
+    def _client(base_url, key, secret, **kwargs):
+        kwargs.update(transport=httpx.MockTransport(handler), requests_per_second=1000)
+        return real(base_url, key, secret, **kwargs)
+
+    monkeypatch.setattr(topology_routes, "OpnsenseClient", _client)
+
+
+@pytest.mark.asyncio
+async def test_backup_firewall_names_the_privilege_of_a_refused_download(firewall_source, monkeypatch):
+    import httpx
+    from netcontrol.routes.opnsense_backup import FirewallBackupError, backup_firewall
+
+    _answering(monkeypatch, lambda request: httpx.Response(403, json={"message": "Forbidden"}))
+    with pytest.raises(FirewallBackupError) as raised:
+        await backup_firewall(_FIREWALL, policy_id=1, capture_method="manual")
+    message = str(raised.value)
+    assert "HTTP 403" in message and "Diagnostics: Configuration History" in message
+    assert "secret-1" not in message and "key-1" not in message
+
+
+@pytest.mark.asyncio
+async def test_backup_firewall_refuses_an_answer_that_is_no_config_xml(firewall_source, monkeypatch):
+    import httpx
+    from netcontrol.routes.opnsense_backup import FirewallBackupError, backup_firewall
+
+    _answering(monkeypatch, lambda request: httpx.Response(200, text="<html>login</html>"))
+    with pytest.raises(FirewallBackupError, match="did not answer with an OPNsense config.xml"):
+        await backup_firewall(_FIREWALL, policy_id=1, capture_method="manual")

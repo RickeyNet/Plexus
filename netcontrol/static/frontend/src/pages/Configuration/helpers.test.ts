@@ -7,6 +7,10 @@ import {
   filterDriftEvents,
   groupDriftEvents,
   normalizeDiffForGrouping,
+  NO_CREDENTIAL,
+  policyCredentialChoice,
+  policyCredentialId,
+  policyCredentialNote,
   statusColor,
 } from './helpers';
 
@@ -97,5 +101,26 @@ describe('backupDiffAvailable', () => {
   it('allows the diff view while status is unknown', () => {
     expect(backupDiffAvailable(undefined)).toBe(true);
     expect(backupDiffAvailable(null)).toBe(true);
+  });
+});
+
+describe('backup policy credential', () => {
+  it('starts a new policy with nothing chosen', () => {
+    expect(policyCredentialChoice(null)).toBeNull();
+  });
+
+  it('starts a saved policy with its credential, or None when it has none', () => {
+    expect(policyCredentialChoice({ credential_id: 4 })).toBe(4);
+    expect(policyCredentialChoice({ credential_id: null })).toBe(NO_CREDENTIAL);
+  });
+
+  it('saves None as a null credential_id', () => {
+    expect(policyCredentialId(NO_CREDENTIAL)).toBeNull();
+    expect(policyCredentialId(7)).toBe(7);
+  });
+
+  it('notes a policy without a credential in the list', () => {
+    expect(policyCredentialNote({ credential_id: null })).toMatch(/API-read devices/);
+    expect(policyCredentialNote({ credential_id: 3 })).toBeNull();
   });
 });

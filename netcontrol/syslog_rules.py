@@ -1457,7 +1457,9 @@ async def run_config_change(host_id: int) -> dict:
         return outcome
     if not state.CONFIG_DRIFT_CHECK_CONFIG.get("enabled") or not await db.get_config_baseline_for_host(host_id):
         return outcome
-    config_text = await config_drift._capture_for_drift(host, cred, max_age_seconds=CONFIG_REUSE_SECONDS)
+    # No credential only for an OPNsense firewall, whose drift snapshot is
+    # its newest backup (no SSH): a host read over SSH failed above without one.
+    config_text = await config_drift._capture_for_drift(host, cred or {}, max_age_seconds=CONFIG_REUSE_SECONDS)
     outcome["drift"] = await config_drift.snapshot_and_analyze(host_id, config_text, capture_method=CAPTURE_METHOD)
     return outcome
 

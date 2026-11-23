@@ -26,9 +26,15 @@ keys, OTP seeds, tokens), plus any element whose name says it holds one
 ``*privkey*``, ``*psk*``, ``*community*``, a name ending in ``key``, ...),
 except names that describe one (``keytype``, ``keylen``, ``certref``,
 ``pubkey``, ``password_policy``, ...). Independently of the name, any
-long base64 or hex value (a certificate, a key, an encoded blob) becomes
-``[masked blob:...]``, a bcrypt/crypt hash anywhere becomes a marker and
-the password of a URL with credentials (``https://user:pw@host``) too.
+long base64 or hex value (a certificate, a key, an encoded blob; not text
+of short words such as a rule description) becomes ``[masked blob:...]``,
+a bcrypt/crypt hash anywhere becomes a marker and the password of a URL
+with credentials (``https://user:pw@host``) too.
+
+A stored OPNsense config backup holds this masked form (the raw file is
+kept encrypted, ``netcontrol.routes.opnsense_backup_encryption``), so the
+parsers of stored backups (rules, aliases, names, path tracing) must never
+need a secret value.
 
 ``normalize_config_xml`` gives a form that is stable across saves of an
 unchanged configuration: the XML pretty-printed with two-space indents,
@@ -238,6 +244,7 @@ _CDATA = re.compile(r"<!\[CDATA\[(.*?)\]\]>", re.DOTALL)
 # A long base64 or hex value: a certificate, a key, an encoded blob.
 _BLOB = re.compile(r"[A-Za-z0-9+/=\s]+")
 _BLOB_MIN_CHARS = 64
+_BLOB_MIN_LINE_CHARS = 32
 # bcrypt / crypt(3) hashes anywhere.
 _CRYPT_HASH = re.compile(r"\$(?:2[abxy]|1|5|6|y|argon2(?:id|i|d))\$[^\s<\"'&]+")
 # The password of a URL with credentials.
@@ -245,18 +252,26 @@ _URL_PASSWORD = re.compile(r"(?P<p>\b[a-z][a-z0-9+.\-]*://[^/\s:@<>\"']+:)(?P<v>
 
 
 def _plain(value: str) -> str:
-    """The value as the configuration means it: CDATA unwrapped, entities
-    resolved, surrounding whitespace dropped."""
-    return html.unescape(_CDATA.sub(lambda m: m.group(1), value)).strip()
+    """The value as the configuration means it: CDATA unwrapped, line
+    breaks as an XML parser reads them (``\\r\\n`` and ``\\r`` become
+    ``\\n``, so the raw file and its normalized form give one fingerprint),
+    entities resolved, surrounding whitespace dropped."""
+    literal = _CDATA.sub(lambda m: m.group(1), value).replace("\r\n", "\n").replace("\r", "\n")
+    return html.unescape(literal).strip()
 
 
 def _is_blob(plain: str) -> bool:
-    compact = "".join(plain.split())
+    tokens = plain.split()
+    compact = "".join(tokens)
     return (
         len(compact) >= _BLOB_MIN_CHARS
         and _BLOB.fullmatch(plain) is not None
         and any(c.isdigit() or c in "+/" for c in compact)
         and not compact.isdigit()
+        # Short words between blanks are text (a rule description, the
+        # names of an alias), not an encoded value: every line of a
+        # wrapped blob but the last is long.
+        and all(len(token) >= _BLOB_MIN_LINE_CHARS for token in tokens[:-1])
     )
 
 
@@ -294,7 +309,7 @@ def mask_config_xml(
 
     out = _LEAF.sub(_leaf, text)
     out = _CRYPT_HASH.sub(lambda m: _marker(m.group(0), key, use_fingerprint), out)
-    return _URL_PASSWORD.sub(
+    out = _URL_PASSWORD.sub(
         lambda m: (
             m.group(0)
             if _MARKER.fullmatch(m.group("v"))
@@ -302,13 +317,17 @@ def mask_config_xml(
         ),
         out,
     )
+    # Text masked before (a stored OPNsense backup) carries fingerprint
+    # markers: without fingerprints every marker is the bare one.
+    return out if use_fingerprint else _MARKER.sub(MASKED, out)
 
 
 # ── Normalization ────────────────────────────────────────────────────────────
 
-_ROOTS = ("opnsense", "pfsense")
+# Root element names of a config.xml.
+CONFIG_XML_ROOTS = ("opnsense", "pfsense")
 _LOOKS_LIKE = re.compile(
-    r"\A﻿?\s*(?:<\?xml[^>]*\?>\s*)?(?:<!--.*?-->\s*)*<(?:" + "|".join(_ROOTS) + r")[\s>/]",
+    r"\A﻿?\s*(?:<\?xml[^>]*\?>\s*)?(?:<!--.*?-->\s*)*<(?:" + "|".join(CONFIG_XML_ROOTS) + r")[\s>/]",
     re.DOTALL | re.IGNORECASE,
 )
 _SNIFF_CHARS = 4096
@@ -370,7 +389,11 @@ def normalize_config_xml(text: str) -> str:
             element.attrib.clear()
             element.attrib.update(items)
     ElementTree.indent(root, space="  ")
-    return '<?xml version="1.0"?>\n' + ElementTree.tostring(root, encoding="unicode") + "\n"
+    # A carriage return in the parsed text came from a ``&#13;`` (the parser
+    # turns a literal one into a line feed): written back as the reference,
+    # so reading the normalized form gives the same value.
+    body = ElementTree.tostring(root, encoding="unicode").replace("\r", "&#13;")
+    return '<?xml version="1.0"?>\n' + body + "\n"
 
 
 def config_revision(text: str) -> dict[str, str]:

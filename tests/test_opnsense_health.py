@@ -578,3 +578,21 @@ async def test_the_collection_notes_the_inventory_host(firewall_source):
     rows = _section(snapshot, "Health")["rows"]
     assert rows[-2][0] == "History" and rows[-1][0] == "Source"
     assert rows[-2][1].endswith("stored with the monitoring poll of fw-edge-1.example.com")
+
+
+async def test_a_backup_policy_finds_the_source_of_its_firewall_whatever_the_poll_options(firewall_source):
+    """``source_of_host`` reads the same snapshot summary as the poll's host
+    map, without the health, VPN and IDS options the poll needs."""
+    host_id = await _host(7)
+    org_ref = await _source_with_host(host_id)
+    await db.update_meraki_org(
+        org_ref, options={"include_health": False, "include_vpn": False, "include_ids_alerts": False}
+    )
+    health_poll.forget_sources()
+    assert host_id not in await health_poll._host_sources()
+    found = await health_poll.source_of_host(host_id)
+    assert found is not None and int(found["id"]) == org_ref
+    assert (await health_poll.inventory_hosts([found]))[host_id] == org_ref
+    assert await health_poll.inventory_hosts([{**found, "provider": "meraki"}]) == {}
+    other = await _host(8)
+    assert await health_poll.source_of_host(other) is None

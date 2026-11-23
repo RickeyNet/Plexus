@@ -30,7 +30,7 @@ import { useShowMore } from '@/lib/useShowMore';
 import { BackupModal } from './BackupModal';
 import { BackupPolicyModal } from './BackupPolicyModal';
 import { RestoreBackupModal } from './RestoreBackupModal';
-import { type BackupView } from './helpers';
+import { type BackupView, policyCredentialNote } from './helpers';
 import { RAW_BACKUP_REASON, useCanDownloadBackups, useCanWriteHost, writeControl } from './scopeGating';
 
 type SubTab = 'policies' | 'history';
@@ -226,6 +226,7 @@ function PoliciesList({
                   }}
                 >
                   Group: {p.group_name || '?'} ({p.host_count || 0} hosts)
+                  {policyCredentialNote(p) && <> · {policyCredentialNote(p)}</>}
                 </span>
               </div>
               <div
