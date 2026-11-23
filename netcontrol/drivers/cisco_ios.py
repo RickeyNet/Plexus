@@ -2,11 +2,18 @@
 
 from __future__ import annotations
 
-from netcontrol.drivers.base import CiscoStyleTables, Driver, NetflowConfig, RouteTableCommands, register_driver
+from netcontrol.drivers.base import (
+    CiscoShowInventory,
+    CiscoStyleTables,
+    Driver,
+    NetflowConfig,
+    RouteTableCommands,
+    register_driver,
+)
 
 
 @register_driver
-class CiscoIOSDriver(CiscoStyleTables, Driver):
+class CiscoIOSDriver(CiscoShowInventory, CiscoStyleTables, Driver):
     device_types = ("cisco_ios",)
     vendor = "cisco"
     display_name = "Cisco IOS"

@@ -10,6 +10,7 @@ import { Callout } from './Callout';
 import { DataTable } from './DataTable';
 import { EmptyState } from './EmptyState';
 import { LoadingState } from './LoadingState';
+import { Pager } from './Pager';
 import { QueryError } from './QueryError';
 
 const DEFAULT_PAGE_SIZE = 20;
@@ -83,45 +84,6 @@ export function ChangeEntry({
       </div>
       <ChangeDiff change={change} />
     </li>
-  );
-}
-
-/** Page controls: newer/older by `pageSize`. */
-function Pager({
-  offset,
-  pageSize,
-  total,
-  onChange,
-}: {
-  offset: number;
-  pageSize: number;
-  total: number;
-  onChange: (offset: number) => void;
-}) {
-  if (total <= pageSize) return null;
-  const last = Math.min(total, offset + pageSize);
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', justifyContent: 'flex-end', marginTop: '0.5rem' }}>
-      <span className="text-muted" style={{ fontSize: '0.85em' }}>
-        {offset + 1}-{last} of {total.toLocaleString()}
-      </span>
-      <button
-        type="button"
-        className="btn btn-sm btn-secondary"
-        disabled={offset === 0}
-        onClick={() => onChange(Math.max(0, offset - pageSize))}
-      >
-        Newer
-      </button>
-      <button
-        type="button"
-        className="btn btn-sm btn-secondary"
-        disabled={last >= total}
-        onClick={() => onChange(offset + pageSize)}
-      >
-        Older
-      </button>
-    </div>
   );
 }
 

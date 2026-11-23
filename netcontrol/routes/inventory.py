@@ -26,6 +26,7 @@ from netcontrol.data_validation import enforce as enforce_validation_rules, pick
 from netcontrol.device_categories import DEVICE_CATEGORIES
 from netcontrol.drivers import DriverCapabilityError, GenericDriver, get_driver, supports_cli
 from netcontrol.drivers.show_version import ShowVersionFacts, parse_show_version
+from netcontrol.hardware_components import collect_over_ssh
 from netcontrol.integrations.apc import nmc_cli
 from netcontrol.integrations.apc.firmware import DEVICE_TYPE as APC_UPS_DEVICE_TYPE
 from netcontrol.integrations.meraki.enrich import load_inventory_index
@@ -2070,6 +2071,12 @@ async def fetch_host_serial(host_id: int, body: FetchSerialRequest, request: Req
     so NX-OS hosts (which print "Processor Board ID" instead of "System
     Serial Number") and future non-Cisco vendors work without branching
     here.
+
+    On a driver with ``show inventory`` (Cisco) it also reads and stores
+    the host's hardware components (``components``: the number stored),
+    unless the host has a complete SNMP hardware read within the last
+    12 hours: SNMP is the component source of a host it works on, SSH of
+    a host it does not (``hardware_components.collect_over_ssh``).
     """
     host = await require_host(request, host_id, write=True)
     cred = await require_credential_access(body.credential_id, session=_get_session(request))
@@ -2094,21 +2101,28 @@ async def fetch_host_serial(host_id: int, body: FetchSerialRequest, request: Req
         raise HTTPException(422, "Serial number not found in command output")
 
     await db.update_host_serial(host_id, serial)
+    # Every hardware component with a serial too, when the driver has
+    # ``show inventory`` (Cisco); 0 otherwise or when it fails.
+    components = await collect_over_ssh(host, lambda command: _run_show_command(host, cred, command))
     session = _get_session(request)
     await _audit(
         "inventory",
         "host.serial_fetched",
         user=session["user"] if session else "",
-        detail=f"host_id={host_id} serial={serial}",
+        detail=f"host_id={host_id} serial={serial} components={components}",
         correlation_id=_corr_id(request),
     )
-    return {"host_id": host_id, "serial_number": serial}
+    return {"host_id": host_id, "serial_number": serial, "components": components}
 
 
 @router.post("/api/groups/{group_id}/fetch-serials")
 @scoped("group")
 async def bulk_fetch_group_serials(group_id: int, body: FetchSerialRequest, request: Request):
-    """Fetch serial numbers for all hosts in a group concurrently (max 5 SSH at a time)."""
+    """Fetch serial numbers for all hosts in a group concurrently (max 5 SSH at a time).
+
+    Each result row carries ``components``: the hardware components stored
+    from ``show inventory`` (Cisco), 0 for another driver, a failure, or a
+    host with a recent complete SNMP hardware read (SNMP is its source)."""
     await require_group(request, group_id, write=True)
     cred = await require_credential_access(body.credential_id, session=_get_session(request))
     hosts = await db.get_hosts_for_group(group_id)
@@ -2131,18 +2145,27 @@ async def bulk_fetch_group_serials(group_id: int, body: FetchSerialRequest, requ
                     "hostname": host["hostname"],
                     "error": f"No driver for device_type={host.get('device_type')!r}",
                     "ok": False,
+                    "components": 0,
                 }
             try:
                 output = await _run_show_command(host, cred, driver.serial_number_show_command())
                 serial = driver.parse_serial_number(output) or ""
                 if serial:
                     await db.update_host_serial(host["id"], serial)
-                    return {"host_id": host["id"], "hostname": host["hostname"], "serial_number": serial, "ok": True}
+                    components = await collect_over_ssh(host, lambda command: _run_show_command(host, cred, command))
+                    return {
+                        "host_id": host["id"],
+                        "hostname": host["hostname"],
+                        "serial_number": serial,
+                        "ok": True,
+                        "components": components,
+                    }
                 return {
                     "host_id": host["id"],
                     "hostname": host["hostname"],
                     "error": "Not found in output",
                     "ok": False,
+                    "components": 0,
                 }
             except Exception:
                 LOGGER.warning(
@@ -2150,7 +2173,13 @@ async def bulk_fetch_group_serials(group_id: int, body: FetchSerialRequest, requ
                     host["id"],
                     host.get("ip_address"),
                 )
-                return {"host_id": host["id"], "hostname": host["hostname"], "error": "Connection failed", "ok": False}
+                return {
+                    "host_id": host["id"],
+                    "hostname": host["hostname"],
+                    "error": "Connection failed",
+                    "ok": False,
+                    "components": 0,
+                }
 
     results = list(await asyncio.gather(*[_fetch_one(h) for h in hosts]))
     session = _get_session(request)

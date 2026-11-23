@@ -13,6 +13,8 @@ const LABELS: Record<string, string> = {
   '/federation': 'Federation',
   '/floor-plan': 'Floor Plans',
   '/inventory': 'Inventory',
+  '/hardware': 'Hardware · Components',
+  '/hardware/changes': 'Hardware · Changes',
   '/ipam': 'IPAM',
   '/organization': 'Organization · Regions',
   '/organization/sites': 'Organization · Sites',

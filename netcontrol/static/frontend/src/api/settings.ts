@@ -312,6 +312,8 @@ export interface EventReceiverSettings {
   syslog_tls_match_client_cert: boolean;
   /** Off: syslog over UDP is stored but raises no alert and starts no trigger. */
   syslog_udp_actions: boolean;
+  /** Raise alerts from the SNMP trap rules (re-poll and backup follow the two triggers above). */
+  trap_alerts: boolean;
 }
 
 /** The syslog stream listeners: TCP and TLS. */
@@ -336,6 +338,9 @@ export interface EventReceiverConfig extends EventReceiverSettings {
   syslog_tls_received?: number;
   syslog_errors?: number;
   trap_errors?: number;
+  /** Traps from inventory hosts dropped since Plexus started: a wrong v1 / v2c community, an SNMPv3 trap failing its USM checks. */
+  trap_dropped_community?: number;
+  trap_dropped_v3?: number;
   /** Stream listeners: unreadable messages, framing errors and failed TLS handshakes. */
   syslog_tcp_errors?: number;
   syslog_tls_errors?: number;

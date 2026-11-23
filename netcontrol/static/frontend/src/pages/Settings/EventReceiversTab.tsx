@@ -152,7 +152,7 @@ export function EventReceiversTab() {
         {receiver('syslog_tls')}
         {receiver('trap')}
 
-        <h4 style={{ margin: '0 0 0.5rem 0' }}>What received syslog messages do</h4>
+        <h4 style={{ margin: '0 0 0.5rem 0' }}>What received syslog messages and traps do</h4>
         <CheckboxRow>
           <CheckboxField
             label="Act on UDP messages"
@@ -176,15 +176,21 @@ export function EventReceiversTab() {
             onChange={(v) => setDraft({ ...draft, syslog_alerts: v })}
           />
           <CheckboxField
+            label="Raise alerts from SNMP trap rules"
+            checked={draft.trap_alerts}
+            help="Traps from inventory hosts, with the host's SNMP community (SNMPv3: signed by the host's SNMPv3 user), that match a built-in trap rule raise or resolve a monitoring alert."
+            onChange={(v) => setDraft({ ...draft, trap_alerts: v })}
+          />
+          <CheckboxField
             label="Back up the config on a change message"
             checked={draft.config_change_trigger}
-            help="A configuration-change message starts a config backup and drift check of that host."
+            help="A configuration-change syslog message or trap starts a config backup and drift check of that host."
             onChange={(v) => setDraft({ ...draft, config_change_trigger: v })}
           />
           <CheckboxField
-            label="Re-poll on link down or reload"
+            label="Re-poll on link down, module down or reload"
             checked={draft.repoll_trigger}
-            help="A link-down or reload message polls that host right away instead of at the next interval."
+            help="A link-down, module down or back online, or reload message, or a trap that names a state change, polls that host right away instead of at the next interval."
             onChange={(v) => setDraft({ ...draft, repoll_trigger: v })}
           />
           <CheckboxField

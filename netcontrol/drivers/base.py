@@ -599,6 +599,17 @@ class Driver:
         """
         raise DriverCapabilityError(f"{type(self).__name__} does not implement parse_serial_number()")
 
+    def show_inventory_command(self) -> str:
+        """Return the show command that lists every hardware component with
+        a serial (chassis, modules, power supplies, fans, transceivers).
+
+        Only the Cisco platforms implement it (``CiscoShowInventory``):
+        their ``show inventory`` prints NAME / DESCR / PID / VID / SN
+        blocks, read by ``netcontrol.drivers.show_inventory``. The fetch
+        serial action skips the component read for any other driver.
+        """
+        raise DriverCapabilityError(f"{type(self).__name__} does not implement show_inventory_command()")
+
     # ── Software upgrade capability surface ────────────────────────────────
     #
     # The upgrades route (``netcontrol/routes/upgrades.py``) historically
@@ -904,6 +915,15 @@ class CiscoStyleTables:
 
     def parse_neighbors(self, protocol: str, rows: list[dict]) -> list[dict]:
         return Driver._parse_neighbor_rows(protocol, rows)
+
+
+class CiscoShowInventory:
+    """Mixin: ``show inventory`` (IOS, IOS XE, NX-OS, IOS XR, ASA, FTD),
+    whose NAME / DESCR / PID / VID / SN blocks one parser reads
+    (``netcontrol.drivers.show_inventory.parse_show_inventory``)."""
+
+    def show_inventory_command(self) -> str:
+        return "show inventory"
 
 
 class GenericDriver(Driver):

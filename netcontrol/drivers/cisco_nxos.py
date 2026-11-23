@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from netcontrol.drivers.base import (
+    CiscoShowInventory,
     CiscoStyleTables,
     Driver,
     DriverCapabilityError,
@@ -13,7 +14,7 @@ from netcontrol.drivers.base import (
 
 
 @register_driver
-class CiscoNXOSDriver(CiscoStyleTables, Driver):
+class CiscoNXOSDriver(CiscoShowInventory, CiscoStyleTables, Driver):
     # Netmiko exposes both ssh and non-ssh transports under separate
     # device_type strings; both map to the same NX-OS syntax here.
     device_types = ("cisco_nxos", "cisco_nxos_ssh")

@@ -48,11 +48,11 @@ right behaviour.
 
 from __future__ import annotations
 
-from netcontrol.drivers.base import Driver, RouteTableCommands, register_driver
+from netcontrol.drivers.base import CiscoShowInventory, Driver, RouteTableCommands, register_driver
 
 
 @register_driver
-class CiscoFTDDriver(Driver):
+class CiscoFTDDriver(CiscoShowInventory, Driver):
     device_types = ("cisco_ftd", "cisco_asa")
     vendor = "cisco"
     display_name = "Cisco FTD / ASA"

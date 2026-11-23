@@ -371,14 +371,29 @@ received (the listener source allowlist, with a per-source rate limit:
 [administration.md](administration.md#listener-sources)), and an SNMPv1 /
 v2c trap from an inventory host is stored only when it carries the SNMP
 community stored for that host (its SNMP profile, else its group's
-settings), for every vendor alike. **Upgrading:** sources that are not
-inventory hosts, and traps whose community differs from the host's polling
-community, are dropped by default; they are counted in the receiver
-settings (`syslog_dropped_source`, `trap_dropped_community`, ...).
+settings), for every vendor alike; an SNMPv3 trap from an inventory host
+is decoded and stored only when it passes the SNMPv3 checks with the
+host's SNMPv3 poll user ([SNMP Traps](snmp-traps.md#snmpv3)).
+**Upgrading:** sources that are not inventory hosts, traps whose community
+differs from the host's polling community, and SNMPv3 traps from an
+inventory host that fail the SNMPv3 checks (stored undecoded before) are
+dropped by default; they are counted in the receiver settings
+(`syslog_dropped_source`, `trap_dropped_community`, `trap_dropped_v3`,
+...).
+
+A trap is stored with its name and decoded varbinds from the trap registry
+(`linkDown: ifIndex 12, ifDescr GigabitEthernet1/0/12, ifAdminStatus up,
+ifOperStatus down`); with **Type** set to **SNMP Trap** the table shows
+the trap name (its OID on hover, or the OID itself for a trap the registry
+does not know, whose varbinds read `oid = value`). An SNMPv2c inform is
+stored the same way and acknowledged with a Response. See
+[SNMP Traps](snmp-traps.md) for the traps named per vendor.
 
 Syslog from inventory hosts can also raise alerts, start a config backup
 and drift check, and trigger an immediate re-poll: see
-[Syslog Rules](syslog-rules.md).
+[Syslog Rules](syslog-rules.md). Traps from inventory hosts do the same
+through the built-in trap rules, as their own alert family (metric
+`trap_<rule>`): see [SNMP Traps](snmp-traps.md).
 
 ### Security
 

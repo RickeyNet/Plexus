@@ -730,8 +730,14 @@ export interface SyslogEvent {
   received_at?: string;
   host_id?: number;
   hostname?: string;
+  /** The address the event came from (also for a source that is no inventory host). */
+  source_ip?: string;
   severity?: string;
+  /** `syslog` or `trap`. */
   event_type?: string;
+  /** A trap's snmpTrapOID (`1.3.6.1.6.3.1.1.5.3`); empty for syslog. */
+  oid?: string;
+  /** A trap: `<name>: <varbinds>` from the trap registry (docs/snmp-traps.md). */
   message?: string;
   event_data?: string;
 }

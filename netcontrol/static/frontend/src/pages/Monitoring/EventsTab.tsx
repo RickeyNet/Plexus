@@ -8,6 +8,7 @@ import { QueryError } from '@/components/QueryError';
 import { StatGrid, StatTile } from '@/components/StatTile';
 import { formatBackendTimestamp } from '@/lib/datetime';
 
+import { EVENT_TYPES, eventHostLabel, trapName } from './events';
 import { countTone } from './helpers';
 
 const SEVERITIES = [
@@ -20,11 +21,6 @@ const SEVERITIES = [
   { value: 'notice', label: 'Notice' },
   { value: 'info', label: 'Info' },
   { value: 'debug', label: 'Debug' },
-];
-
-const TYPES = [
-  { value: 'syslog', label: 'Syslog' },
-  { value: 'snmp_trap', label: 'SNMP Trap' },
 ];
 
 export function EventsTab() {
@@ -45,7 +41,7 @@ export function EventsTab() {
     if (!search) return list;
     const q = search.toLowerCase();
     return list.filter((e) =>
-      [e.hostname, e.message, e.event_type, e.severity, e.event_data]
+      [e.hostname, e.source_ip, e.message, e.event_type, e.severity, e.event_data, e.oid]
         .filter(Boolean)
         .some((v) => String(v).toLowerCase().includes(q)),
     );
@@ -55,8 +51,9 @@ export function EventsTab() {
   const critCount = items.filter((e) => ['emergency', 'alert', 'critical'].includes(e.severity || '')).length;
   const errCount = items.filter((e) => e.severity === 'error').length;
   const warnCount = items.filter((e) => e.severity === 'warning').length;
-  const typeLabel = TYPES.find((t) => t.value === eventType)?.label ?? eventType;
+  const typeLabel = EVENT_TYPES.find((t) => t.value === eventType)?.label ?? eventType;
   const filtered = !!severity || !!search;
+  const traps = eventType === 'trap';
 
   return (
     <div>
@@ -70,7 +67,7 @@ export function EventsTab() {
         <div className="form-group" style={{ marginBottom: 0 }}>
           <label className="form-label" htmlFor={`${fid}-type`}>Type</label>
           <select id={`${fid}-type`} className="form-select" value={eventType} onChange={(e) => setEventType(e.target.value)}>
-            {TYPES.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
+            {EVENT_TYPES.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
           </select>
         </div>
         <div className="form-group" style={{ marginBottom: 0, flex: 1, minWidth: 200 }}>
@@ -95,7 +92,9 @@ export function EventsTab() {
         items.length ? (
           <table className="data-table">
             <thead>
-              <tr><th>Time</th><th>Host</th><th>Severity</th><th>Type</th><th>Message</th></tr>
+              <tr>
+                <th>Time</th><th>Host</th><th>Severity</th><th>{traps ? 'Trap' : 'Type'}</th><th>Message</th>
+              </tr>
             </thead>
             <tbody>
               {items.map((e, i) => {
@@ -103,9 +102,15 @@ export function EventsTab() {
                 return (
                 <tr key={i}>
                   <td style={{ whiteSpace: 'nowrap' }}>{formatBackendTimestamp(e.received_at)}</td>
-                  <td>{e.hostname || e.host_id || '-'}</td>
+                  <td>{eventHostLabel(e)}</td>
                   <td><SeverityBadge severity={e.severity} /></td>
-                  <td>{e.event_type || '-'}</td>
+                  {traps ? (
+                    <td title={e.oid || undefined}>
+                      {trapName(e.message) || <code style={{ fontSize: '0.85em' }}>{e.oid || '-'}</code>}
+                    </td>
+                  ) : (
+                    <td>{e.event_type || '-'}</td>
+                  )}
                   <td
                     title={message || undefined}
                     style={{ maxWidth: 400, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}

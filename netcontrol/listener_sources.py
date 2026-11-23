@@ -29,7 +29,8 @@ The same refresh loads each host's hostname (``INVENTORY_HOSTNAMES``), which
 the syslog TLS receiver compares with a client certificate.
 
 A dropped datagram is counted per listener and reason (``source``, ``rate``,
-and ``community`` for a trap whose community is wrong) and logged at most
+``community`` for a trap whose community is wrong, and ``v3`` for an SNMPv3
+trap from an inventory host that fails its USM checks) and logged at most
 once per ``DROP_LOG_INTERVAL_SECONDS`` per listener.
 
 The settings are persisted in ``auth_settings("listener_sources")`` and
@@ -56,7 +57,7 @@ LISTENER_LABELS = {"trap": "SNMP trap", "syslog": "syslog", "flow": "flow"}
 POLICY_INVENTORY = "inventory"
 POLICY_ANY = "any"
 POLICIES: tuple[str, ...] = (POLICY_INVENTORY, POLICY_ANY)
-DROP_REASONS: tuple[str, ...] = ("source", "rate", "community")
+DROP_REASONS: tuple[str, ...] = ("source", "rate", "community", "v3")
 
 DEFAULTS: dict[str, Any] = {
     # inventory: only inventory host addresses (plus extra_cidrs); any: every source.
@@ -329,6 +330,7 @@ class SourceGuard:
             "dropped_source": self.dropped.get("source", 0),
             "dropped_rate": self.dropped.get("rate", 0),
             "dropped_community": self.dropped.get("community", 0),
+            "dropped_v3": self.dropped.get("v3", 0),
             "tracked_sources": len(self._buckets),
         }
 
@@ -344,6 +346,7 @@ _REASON_TEXT = {
     "source": "not an inventory host or allowed network",
     "rate": "over the per-source rate limit",
     "community": "wrong SNMP community",
+    "v3": "SNMPv3 trap not from the host's SNMPv3 user (authentication, level, time window or replay)",
 }
 
 GUARDS: dict[str, SourceGuard] = {name: SourceGuard(name) for name in LISTENERS}

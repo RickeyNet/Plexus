@@ -20,7 +20,9 @@ gateway alarm, CARP transition, VPN tunnel up / down or configuration save
 starts a collection of the firewall's topology source within seconds (see
 [OPNsense re-collect trigger](#opnsense-re-collect-trigger)).
 
-The rules are set up under **Monitoring > Configure > Syslog Rules**.
+The rules are set up under **Monitoring > Configure > Syslog Rules**. The
+same engine runs the built-in SNMP trap rules, listed in that tab below the
+syslog rules, as their own alert family: see [SNMP Traps](snmp-traps.md).
 
 ## How a message becomes an alert
 

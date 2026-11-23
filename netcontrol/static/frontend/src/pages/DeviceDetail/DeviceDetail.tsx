@@ -37,6 +37,7 @@ import { AlertCorrelationModal } from './AlertCorrelationModal';
 import { BgpIntentSection } from './BgpIntentSection';
 import { ErrorTrendingTab } from './ErrorTrendingTab';
 import { FlowTab } from './FlowTab';
+import { HardwareTab } from './HardwareTab';
 import { InterfaceTab } from './InterfaceTab';
 import { DeviceInfoBar } from './DeviceInfoBar';
 import { UpsStatusCard } from './UpsStatusCard';
@@ -49,6 +50,7 @@ const ALL_TABS = [
   { id: 'alerts', label: 'Alerts' },
   { id: 'compliance', label: 'Compliance' },
   { id: 'syslog', label: 'Syslog' },
+  { id: 'hardware', label: 'Hardware' },
   { id: 'changelog', label: 'Changelog' },
 ] as const;
 type TabId = (typeof ALL_TABS)[number]['id'];
@@ -81,6 +83,10 @@ const TAB_HELP: Record<TabId, { title: string; text: string }> = {
   syslog: {
     title: 'Syslog from This Device',
     text: 'Recent syslog entries received from this device, in chronological order. Useful when an alert points here and you want to see what the device itself logged.',
+  },
+  hardware: {
+    title: 'Hardware Components',
+    text: 'The chassis, modules, power supplies, fans and transceivers read from this device, each with its serial, and every change to them: a module installed, removed, moved or replaced, or a new firmware revision. Newest change first.',
   },
   changelog: {
     title: 'Changes to This Host',
@@ -238,6 +244,7 @@ export function DeviceDetail() {
         {tab === 'syslog' && (
           <SyslogTab events={syslog.data?.events || []} loading={syslog.isLoading} />
         )}
+        {tab === 'hardware' && <HardwareTab hostId={hostId} />}
         {tab === 'changelog' && <ChangelogPanel objectType="host" objectId={hostId} title={null} />}
       </div>
     </div>

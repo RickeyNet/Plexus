@@ -904,6 +904,10 @@ EVENT_RECEIVER_DEFAULTS = {
     "syslog_tls_match_client_cert": False,
     # Act on syslog that arrived over UDP; off: UDP syslog is stored only.
     "syslog_udp_actions": True,
+    # Raise alerts from the SNMP trap rules (netcontrol.trap_rules). Their
+    # re-poll and config-change triggers follow repoll_trigger and
+    # config_change_trigger.
+    "trap_alerts": True,
 }
 
 _EVENT_RECEIVER_BOOL_KEYS = (
@@ -919,6 +923,7 @@ _EVENT_RECEIVER_BOOL_KEYS = (
     "syslog_tls_require_client_cert",
     "syslog_tls_match_client_cert",
     "syslog_udp_actions",
+    "trap_alerts",
 )
 _EVENT_RECEIVER_PORT_KEYS = ("syslog_port", "trap_port", "syslog_tcp_port", "syslog_tls_port")
 

@@ -39,6 +39,10 @@ DEFAULT_RULES = {
     "netcontrol/environment_health.py": 95.0,
     "netcontrol/routing_health.py": 95.0,
     "netcontrol/health_checks.py": 95.0,
+    # SNMPv3 trap decoding: the keyless header read, USM authentication,
+    # decryption and the timeliness window on untrusted datagrams. Measured
+    # by tests/test_snmpv3_traps.py (100%); do not lower it to land a change.
+    "netcontrol/snmpv3_traps.py": 95.0,
     # Floor from tests/test_jobs.py (param coercion, queue ordering,
     # dependency gating, event writer). The runner itself is untested.
     "netcontrol/routes/jobs.py": 25.0,
@@ -188,6 +192,14 @@ DEFAULT_RULES = {
     "netcontrol/hardware_lifecycle.py": 95.0,
     "routes/db/hardware_lifecycle.py": 90.0,
     "netcontrol/routes/hardware_lifecycle.py": 90.0,
+    # Hardware components with serials: the SNMP / show inventory readers,
+    # the change rules, storage and the API. Measured by
+    # tests/test_hardware_components*.py (99%, 100%, 96%, 95%); do not
+    # lower them to land a change.
+    "netcontrol/hardware_components.py": 95.0,
+    "netcontrol/drivers/show_inventory.py": 95.0,
+    "routes/db/hardware_components.py": 92.0,
+    "netcontrol/routes/hardware_components.py": 90.0,
     # Software end of life per release series: the series / estimate /
     # status rules, the entry storage and the API with the advisory sync.
     # Measured by tests/test_software_lifecycle.py (98%, 98%, 100%); do not
@@ -220,6 +232,21 @@ DEFAULT_RULES = {
     "netcontrol/routes/syslog_rules.py": 92.0,
     "routes/db/syslog_rules.py": 92.0,
     "netcontrol/monitoring_repoll.py": 88.0,
+    # SNMP trap registry (naming, per-vendor tables) and trap rules.
+    # Measured by tests/test_snmp_traps.py (95%, tables 100%, 96%); do not
+    # lower them to land a change.
+    "netcontrol/snmp_traps/__init__.py": 92.0,
+    "netcontrol/snmp_traps/model.py": 95.0,
+    "netcontrol/snmp_traps/standard.py": 95.0,
+    "netcontrol/snmp_traps/netsnmp.py": 95.0,
+    "netcontrol/snmp_traps/cisco.py": 95.0,
+    "netcontrol/snmp_traps/juniper.py": 95.0,
+    "netcontrol/snmp_traps/arista.py": 95.0,
+    "netcontrol/snmp_traps/fortinet.py": 95.0,
+    "netcontrol/snmp_traps/paloalto.py": 95.0,
+    "netcontrol/snmp_traps/aruba.py": 95.0,
+    "netcontrol/snmp_traps/netgear.py": 95.0,
+    "netcontrol/trap_rules.py": 92.0,
     # Syslog rule activity analysis; measured by tests/test_syslog_activity.py.
     "netcontrol/syslog_activity.py": 92.0,
     # Syslog over TCP / TLS (framing, limits, listeners), the TLS server

@@ -258,6 +258,8 @@ export interface SnmpTestResponse {
 
 export interface SerialFetchResult {
   serial_number: string;
+  /** Hardware components stored from `show inventory`; 0 when the platform has none. */
+  components?: number;
 }
 
 export interface BulkSerialFetchResult {
@@ -266,6 +268,7 @@ export interface BulkSerialFetchResult {
     ok: boolean;
     serial_number?: string;
     error?: string;
+    components?: number;
   }>;
 }
 
@@ -958,7 +961,11 @@ export function useFetchHostSerial() {
         method: 'POST',
         body: { credential_id: credentialId },
       }),
-    onSuccess: () => invalidateInventory(qc),
+    onSuccess: () => {
+      invalidateInventory(qc);
+      // The fetch also stores each module's serial (api/hardware).
+      void qc.invalidateQueries({ queryKey: ['hardware'] });
+    },
   });
 }
 
@@ -974,7 +981,11 @@ export function useFetchGroupSerials() {
         method: 'POST',
         body: { credential_id: credentialId },
       }),
-    onSuccess: () => invalidateInventory(qc),
+    onSuccess: () => {
+      invalidateInventory(qc);
+      // The fetch also stores each module's serial (api/hardware).
+      void qc.invalidateQueries({ queryKey: ['hardware'] });
+    },
   });
 }
 

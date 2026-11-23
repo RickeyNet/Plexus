@@ -10,6 +10,8 @@ import { useDialogs } from '@/components/DialogProvider-context';
 import { useCredentials } from '@/api/compliance';
 import { useFetchGroupSerials, useFetchHostSerial } from '@/api/inventory';
 
+import { componentsNote } from './helpers';
+
 export type SerialTarget =
   | { mode: 'single'; hostId: number; hostname?: string }
   | { mode: 'bulk'; groupId: number; groupName?: string };
@@ -45,18 +47,19 @@ export function SerialModal({ target, onClose }: Props) {
       if (target.mode === 'single') {
         const r = await fetchHost.mutateAsync({ hostId: target.hostId, credentialId });
         onClose();
-        void alert(`Serial: ${r.serial_number}`);
+        void alert(`Serial: ${r.serial_number}${componentsNote(r.components ?? 0)}`);
         return;
       }
       const r = await fetchGroup.mutateAsync({ groupId: target.groupId, credentialId });
       const ok = r.results.filter((x) => x.ok).length;
       const failed = r.results.length - ok;
+      const components = r.results.reduce((n, x) => n + (x.components ?? 0), 0);
       onClose();
       if (failed === 0) {
-        void alert(`Fetched ${ok} serial number${ok !== 1 ? 's' : ''}.`);
+        void alert(`Fetched ${ok} serial number${ok !== 1 ? 's' : ''}.${componentsNote(components)}`);
       } else {
         void alert(
-          `${ok} succeeded, ${failed} failed. Check device connectivity.`,
+          `${ok} succeeded, ${failed} failed. Check device connectivity.${componentsNote(components)}`,
         );
       }
     } catch (err) {
@@ -96,12 +99,16 @@ export function SerialModal({ target, onClose }: Props) {
           <>
             Runs <code>show version | include System Serial Number</code> on every
             host in this group via SSH (up to 5 concurrent connections) and stores
-            the results.
+            the results. On Cisco devices whose hardware SNMP has not read in the last 12 hours, it
+            also reads <code>show inventory</code> and stores the serial of each module, power
+            supply, fan and transceiver.
           </>
         ) : (
           <>
             Runs <code>show version | include System Serial Number</code> via SSH
-            and stores the result.
+            and stores the result. On a Cisco device whose hardware SNMP has not read in the last 12
+            hours, it also reads <code>show inventory</code> and stores the serial of each module,
+            power supply, fan and transceiver.
           </>
         )}
       </p>

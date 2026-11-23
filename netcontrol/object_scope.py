@@ -136,6 +136,7 @@ SCOPE_ENFORCED_FEATURES: frozenset[str] = frozenset(
 # Admin routers are not listed: admins are unrestricted.
 SCOPE_ENFORCED_ROUTERS: tuple[str, ...] = (
     "netcontrol.routes.inventory:router",
+    "netcontrol.routes.hardware_components:router",
     "netcontrol.routes.bulk_import:router",
     "netcontrol.routes.custom_fields:inventory_router",
     # Definitions, tags and the generic object API: open to every signed-in

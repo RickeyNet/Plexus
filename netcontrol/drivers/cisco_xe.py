@@ -4,7 +4,14 @@ from __future__ import annotations
 
 import re
 
-from netcontrol.drivers.base import CiscoStyleTables, Driver, NetflowConfig, RouteTableCommands, register_driver
+from netcontrol.drivers.base import (
+    CiscoShowInventory,
+    CiscoStyleTables,
+    Driver,
+    NetflowConfig,
+    RouteTableCommands,
+    register_driver,
+)
 
 # Receive windows in bytes.  ``_DEFAULT_TCP_WINDOW`` is the IOS default
 # when ``ip tcp window-size`` is unset.  A TCP or SSH window below
@@ -17,7 +24,7 @@ _RECOMMENDED_WINDOW = 65536
 
 
 @register_driver
-class CiscoXEDriver(CiscoStyleTables, Driver):
+class CiscoXEDriver(CiscoShowInventory, CiscoStyleTables, Driver):
     device_types = ("cisco_xe",)
     vendor = "cisco"
     display_name = "Cisco IOS-XE"

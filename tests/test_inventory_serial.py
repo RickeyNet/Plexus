@@ -160,6 +160,8 @@ def test_fetch_serial_success(monkeypatch, request):
     sample_output = "System Serial Number: FCW2346L0AJ"
 
     async def _mock_run_show(host, credentials, command):
+        if command == "show inventory":
+            return ""  # no component listed: nothing stored
         assert "System Serial Number" in command
         return sample_output
 
@@ -173,6 +175,7 @@ def test_fetch_serial_success(monkeypatch, request):
     data = resp.json()
     assert data["serial_number"] == "FCW2346L0AJ"
     assert data["host_id"] == host_id
+    assert data["components"] == 0
 
     # Verify stored in DB
     assert _get_host_serial(host_id) == "FCW2346L0AJ"
@@ -373,7 +376,8 @@ def test_fetch_serial_nxos_uses_processor_board_id(monkeypatch, request):
     assert resp.json()["serial_number"] == "FOX2401P12X"
     # And the command that was actually sent is the NX-OS form (quoted
     # multi-word include) - never the IOS form.
-    assert seen_commands == ['show version | include "Processor Board ID"']
+    # Then ``show inventory`` for the hardware components (Cisco drivers).
+    assert seen_commands == ['show version | include "Processor Board ID"', "show inventory"]
 
 
 def test_serial_number_column_exists():

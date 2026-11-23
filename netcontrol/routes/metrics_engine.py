@@ -31,7 +31,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 import netcontrol.routes.state as state
-from netcontrol import health_checks, listener_sources, syslog_rules, syslog_stream, syslog_tls
+from netcontrol import health_checks, listener_sources, syslog_rules, syslog_stream, syslog_tls, trap_rules
 from netcontrol.bounded_map import BoundedDict
 from netcontrol.integrations.apc.snmp import UPS_METRICS, ups_metric_samples
 from netcontrol.integrations.apc.traps import handle_apc_trap, parse_apc_trap
@@ -46,7 +46,17 @@ from netcontrol.object_scope import (
 )
 from netcontrol.routes import opnsense_filterlog
 from netcontrol.routes.shared import _audit, _corr_id, _get_session
-from netcontrol.routes.snmp import decode_snmp_trap, trap_community_matches
+from netcontrol.routes.snmp import decode_snmp_trap, snmp_inform_response, trap_community_matches
+from netcontrol.snmp_traps import name_trap
+from netcontrol.snmpv3_traps import (
+    REFUSED as SNMPV3_REFUSED,
+    PendingV3Trap,
+    ReplayGuard,
+    V3Header,
+    decode_snmpv3_trap,
+    parse_snmpv3_header,
+    resolve_trap_v3_credentials,
+)
 from netcontrol.telemetry import configure_logging, redact_value
 
 router = APIRouter()
@@ -863,6 +873,12 @@ async def _downsampling_loop() -> None:
                     LOGGER.info("metrics: auto-resolved %d syslog alerts", resolved)
             except Exception as exc:
                 LOGGER.warning("metrics: syslog alert auto-resolve failed: %s", redact_value(str(exc)))
+            try:
+                resolved = await trap_rules.resolve_expired_alerts()
+                if resolved:
+                    LOGGER.info("metrics: auto-resolved %d trap alerts", resolved)
+            except Exception as exc:
+                LOGGER.warning("metrics: trap alert auto-resolve failed: %s", redact_value(str(exc)))
 
             # Security event (IDS) alerts whose signature went quiet.
             try:
@@ -935,42 +951,96 @@ class _TrapSyslogProtocol(asyncio.DatagramProtocol):
         stats.last_message_at = time.time()
         try:
             if self.event_type == "trap":
-                self._handle_trap(data, source_ip)
+                self._handle_trap(data, source_ip, addr)
             else:
                 self._handle_syslog(data, source_ip)
         except Exception as exc:
             stats.errors += 1
             LOGGER.debug("metrics: %s parse error from %s: %s", self.event_type, source_ip, exc)
 
-    def _handle_trap(self, data: bytes, source_ip: str):
-        # Basic SNMPv2c trap parsing - extract OID and value from the PDU.
-        # Full ASN.1 parsing would need pysnmp; this extracts the readable
-        # parts. Only the stored prefix is hexed (raw_data is capped at 2000
-        # chars = 1000 bytes anyway).
+    def _acknowledge_inform(self, data: bytes, addr: tuple) -> None:
+        """Send the Response an SNMPv2c InformRequest's sender waits for, to
+        the address and port it came from (the datagram passed the listener
+        guard). Its community is checked later, in the batch writer: the
+        answer only says the inform arrived, and is no larger than it."""
+        transport = getattr(self, "transport", None)
+        response = snmp_inform_response(data)
+        if transport is not None and response is not None:
+            transport.sendto(response, addr)
+
+    def _handle_trap(self, data: bytes, source_ip: str, addr: tuple | None = None):
+        # Only the stored prefix is hexed (raw_data is capped at 2000 chars =
+        # 1000 bytes anyway).
         raw_hex = data[:1000].hex()
-        # A v1 / v2c trap is decoded and queued with its decoded form: the
-        # batch writer checks its community against the source host's and,
-        # for an APC UPS trap (PowerNet-MIB, stored with its name and
-        # severity), acts on it there. Nothing runs outside the bounded queue.
+        # An SNMPv3 datagram needs the source host's keys: only its header is
+        # read here, and it is queued whole for the batch writer's keyed
+        # decode (``_screen_traps``) when the source is an inventory host.
+        v3_header = parse_snmpv3_header(data)
+        if v3_header is not None:
+            self._queue_v3_trap(data, source_ip, raw_hex, v3_header)
+            return
+        # A v1 / v2c trap (or v2c inform) is decoded, named from the trap
+        # registry (netcontrol.snmp_traps) and queued with its decoded form:
+        # the batch writer checks its community against the source host's
+        # and runs the trap rules on it, or, for an APC UPS trap
+        # (PowerNet-MIB, stored with its name and severity), the APC
+        # handler. Nothing that needs the database runs outside the bounded
+        # queue.
         trap = decode_snmp_trap(data)
+        if trap is not None and trap.get("pdu") == "inform" and addr is not None:
+            self._acknowledge_inform(data, addr)
         apc_trap = parse_apc_trap(trap)
         if apc_trap is not None:
             _queue_trap_syslog_event(
                 source_ip, "trap", "", apc_trap.severity, apc_trap.trap_oid, apc_trap.message, raw_hex, trap
             )
             return
-        message = f"SNMP trap from {source_ip} ({len(data)} bytes)"
-        oid = ""
-        # Last printable run that looks like an OID wins (matches the old scan)
-        for m in _PRINTABLE_RUN.finditer(data):
-            candidate = m.group().decode("ascii")
-            if "." in candidate:
-                oid = candidate
-
+        if trap is not None:
+            severity, oid, message = trap_event_fields(trap)
+            _queue_trap_syslog_event(source_ip, "trap", "", severity, oid, message, raw_hex, trap)
+            return
+        # Not decodable (malformed): stored with its size and the last
+        # readable run that looks like an OID.
+        oid, message = _undecoded_trap_fields(data, source_ip)
         _queue_trap_syslog_event(source_ip, "trap", "", "info", oid, message, raw_hex, trap)
+
+    def _queue_v3_trap(self, data: bytes, source_ip: str, raw_hex: str, header: V3Header) -> None:
+        """Queue an SNMPv3 datagram: stored as an undecoded trap unless the
+        batch writer decodes it. Its bytes ride along (``PendingV3Trap``)
+        only from an inventory source and while fewer than
+        ``_V3_PENDING_MAX`` wait in the buffer, so a flood holds at most
+        that many datagrams; a source admitted by an extra network or the
+        ``any`` policy has no SNMPv3 user to check them with."""
+        global _v3_pending
+        oid, message = _undecoded_trap_fields(data, source_ip)
+        pending = None
+        if listener_sources.inventory_host_id(source_ip) is not None and _v3_pending < _V3_PENDING_MAX:
+            pending = PendingV3Trap(bytes(data), header)
+            _v3_pending += 1
+        _queue_trap_syslog_event(source_ip, "trap", "", "info", oid, message, raw_hex, pending)
 
     def _handle_syslog(self, data: bytes, source_ip: str):
         handle_syslog_message(data, source_ip)
+
+
+def _undecoded_trap_fields(data: bytes, source_ip: str) -> tuple[str, str]:
+    """``(oid, message)`` an undecoded trap is stored with: its size and the
+    last printable run that looks like an OID."""
+    message = f"SNMP trap from {source_ip} ({len(data)} bytes)"
+    oid = ""
+    # Last printable run that looks like an OID wins (matches the old scan)
+    for m in _PRINTABLE_RUN.finditer(data):
+        candidate = m.group().decode("ascii")
+        if "." in candidate:
+            oid = candidate
+    return oid, message
+
+
+def trap_event_fields(trap: dict) -> tuple[str, str, str]:
+    """``(severity, oid, message)`` a decoded trap is stored with (a dict of
+    ``decode_snmp_trap``'s shape, from any decoder): named by the trap
+    registry, its severity set by the trap rules (``trap_rules.event_fields``)."""
+    return trap_rules.event_fields(name_trap(trap))
 
 
 # RFC 5424 numeric severities → Plexus taxonomy. 0-2 (Emergency/Alert/
@@ -1031,9 +1101,17 @@ _HOST_IP_CACHE_MAX = 4096
 
 # (source_ip, event_type, facility, severity, oid, message, raw_data, trap,
 # transport): ``trap`` is the decoded v1 / v2c trap (``decode_snmp_trap``),
-# None for syslog and for a trap that could not be decoded (SNMPv3,
-# malformed); ``transport`` is ``udp``, ``tcp`` or ``tls``.
+# an SNMPv3 datagram waiting for the batch writer's keyed decode
+# (``PendingV3Trap``), or None for syslog and for a trap that could not be
+# decoded; ``transport`` is ``udp``, ``tcp`` or ``tls``.
 _trap_event_buffer: list[tuple] = []
+# SNMPv3 datagrams held in the buffer (``PendingV3Trap``): at most
+# _V3_PENDING_MAX (16 KiB each); reset when the writer takes the buffer.
+_V3_PENDING_MAX = 1000
+_v3_pending = 0
+# The SNMPv3 timeliness / replay state of the trap receiver (RFC 3414
+# 3.2.7 b), per (source, engine ID); in memory, so a restart forgets it.
+_V3_REPLAY_GUARD = ReplayGuard()
 _trap_events_dropped = 0
 # Never reset (the writer resets _trap_events_dropped each flush): shown in
 # the receiver settings as events dropped since Plexus started.
@@ -1050,7 +1128,15 @@ _host_ip_cache: BoundedDict = BoundedDict(_HOST_IP_CACHE_MAX, _host_ip_entry_exp
 
 
 def _queue_trap_syslog_event(
-    source_ip, event_type, facility, severity, oid, message, raw_data, trap: dict | None = None, transport: str = "udp"
+    source_ip,
+    event_type,
+    facility,
+    severity,
+    oid,
+    message,
+    raw_data,
+    trap: dict | PendingV3Trap | None = None,
+    transport: str = "udp",
 ) -> None:
     global _trap_events_dropped, _trap_events_dropped_total, _trap_event_writer_task
     if len(_trap_event_buffer) >= _TRAP_EVENT_BUFFER_MAX:
@@ -1085,9 +1171,10 @@ async def _resolve_host_id_cached(source_ip: str) -> int | None:
 
 def _take_trap_event_batch() -> list[tuple]:
     """Everything queued, the queue emptied (the overflow count logged)."""
-    global _trap_events_dropped
+    global _trap_events_dropped, _v3_pending
     batch = _trap_event_buffer[:]
     _trap_event_buffer.clear()
+    _v3_pending = 0
     if _trap_events_dropped:
         LOGGER.warning("metrics: trap/syslog buffer overflow - dropped %d events", _trap_events_dropped)
         _trap_events_dropped = 0
@@ -1102,46 +1189,118 @@ async def _trap_event_writer_loop() -> None:
         await _flush_trap_syslog_batch(_take_trap_event_batch())
 
 
-async def _screen_traps(batch: list[tuple], host_ids: dict[str, int | None]) -> tuple[list[tuple], list[tuple]]:
+def _trap_believed(trap: dict, host: dict, v3_authenticated: bool = False) -> bool:
+    """Whether a decoded trap from inventory ``host`` may be acted on: a v1
+    / v2c trap carries the host's stored community; an SNMPv3 trap was
+    authenticated by the batch writer with the host's SNMPv3 user
+    (``v3_authenticated``, never read from the trap itself)."""
+    if trap.get("version") == "v3":
+        return v3_authenticated
+    return trap_community_matches(trap, host)
+
+
+_V3_DROP = "drop"
+
+
+async def _decode_v3_row(row: tuple, pending: PendingV3Trap, host: dict, credentials: dict[int, Any]) -> tuple | str | None:
+    """The keyed decode of one queued SNMPv3 datagram from inventory
+    ``host`` (``snmpv3_traps``): the row with the decoded trap, named, in
+    its trap slot; ``_V3_DROP`` when the message is refused (not from the
+    host's SNMPv3 user as configured, a replay, outside the time window);
+    None to store it as an undecoded trap (an inform, a discovery probe,
+    another PDU). The host's credentials are resolved once per batch."""
+    host_id = int(host["id"])
+    if host_id not in credentials:
+        try:
+            credentials[host_id] = await resolve_trap_v3_credentials(host)
+        except Exception as exc:  # noqa: BLE001 - a bad stored config is "no SNMPv3 user"
+            LOGGER.debug("metrics: SNMPv3 credentials of host %s not resolved: %s", host_id, exc)
+            credentials[host_id] = None
+    result = decode_snmpv3_trap(pending.data, credentials[host_id], _V3_REPLAY_GUARD, row[0])
+    if result.trap is None:
+        LOGGER.debug("metrics: SNMPv3 trap from %s not decoded: %s", row[0], result.failure)
+        return _V3_DROP if result.failure in SNMPV3_REFUSED else None
+    apc_trap = parse_apc_trap(result.trap)
+    if apc_trap is not None:
+        severity, oid, message = apc_trap.severity, apc_trap.trap_oid, apc_trap.message
+    else:
+        severity, oid, message = trap_event_fields(result.trap)
+    return (row[0], "trap", "", severity, oid, message[:2000], row[6], result.trap, row[8])
+
+
+async def _screen_traps(
+    batch: list[tuple], host_ids: dict[str, int | None]
+) -> tuple[list[tuple], list[tuple], list[tuple]]:
     """The batch without the decoded (v1 / v2c) traps whose source is an
     inventory host but whose community is not that host's (each counted as
-    a ``community`` drop of the trap listener), and the APC traps to act on
-    (``(source_ip, ApcTrap)``, from inventory sources only). A trap from a
-    source admitted only by an extra network or the ``any`` policy has no
-    host whose community could be checked: it is stored, never acted on.
-    An undecodable trap (SNMPv3, malformed) is stored and never acted on."""
+    a ``community`` drop of the trap listener), the APC traps to act on
+    (``(source_ip, ApcTrap, authenticated host id or None)``) and the other
+    traps for the trap rules (``(host_id, trap)``), from inventory sources
+    only. A trap from a source admitted only by an extra network or the
+    ``any`` policy has no host whose community could be checked: it is
+    stored, never acted on. An undecodable trap (malformed) is stored and
+    never acted on.
+
+    An SNMPv3 datagram (``PendingV3Trap``) from an inventory host is
+    decoded here with that host's SNMPv3 poll user (``_decode_v3_row``):
+    decoded, it is stored named and acted on like a believed v1 / v2c trap;
+    refused, it is dropped and counted as a ``v3`` drop; anything else (an
+    inform, a discovery probe, another PDU) is stored undecoded. One from
+    any other source is stored undecoded, never decoded."""
     trap_host_ids = sorted(
         {hid for row in batch if row[1] == "trap" and row[7] is not None and (hid := host_ids.get(row[0])) is not None}
     )
     hosts = {int(h["id"]): h for h in await db.get_hosts_by_ids(trap_host_ids)} if trap_host_ids else {}
     guard = listener_sources.guard("trap")
+    credentials: dict[int, Any] = {}
     kept: list[tuple] = []
     apc: list[tuple] = []
+    believed: list[tuple] = []
     for row in batch:
         trap = row[7]
-        if row[1] == "trap" and trap is not None:
+        if row[1] == "trap" and isinstance(trap, PendingV3Trap):
+            host_id = host_ids.get(row[0])
+            host = hosts.get(int(host_id)) if host_id is not None else None
+            decoded = await _decode_v3_row(row, trap, host, credentials) if host is not None else None
+            if decoded == _V3_DROP:
+                guard.note_drop("v3", row[0])
+                continue
+            if not isinstance(decoded, tuple) or host is None or not _trap_believed(decoded[7], host, True):
+                kept.append((*row[:7], None, *row[8:]))
+                continue
+            row, trap = decoded, decoded[7]
+            apc_trap = parse_apc_trap(trap)
+            if apc_trap is not None:
+                apc.append((row[0], apc_trap, int(host["id"])))
+            else:
+                believed.append((int(host["id"]), trap))
+        elif row[1] == "trap" and trap is not None:
             host_id = host_ids.get(row[0])
             if host_id is not None:
                 host = hosts.get(int(host_id))
-                if host is None or not trap_community_matches(trap, host):
+                if host is None or not _trap_believed(trap, host):
                     guard.note_drop("community", row[0])
                     continue
                 apc_trap = parse_apc_trap(trap)
                 if apc_trap is not None:
-                    apc.append((row[0], apc_trap))
+                    apc.append((row[0], apc_trap, None))
+                else:
+                    believed.append((int(host_id), trap))
         kept.append(row)
-    return kept, apc
+    return kept, apc, believed
 
 
 async def _flush_trap_syslog_batch(batch: list[tuple]) -> None:
     """Store a batch of queued events (``_trap_event_buffer`` rows), then
-    run the syslog rules on it and act on its APC traps, one after another:
-    the work a datagram causes stays inside the bounded queue."""
+    run the syslog rules on it, act on its APC traps and run the trap rules
+    on its other believed traps, one after another: the work a datagram
+    causes stays inside the bounded queue."""
     rows: list[tuple] = []
     apc: list[tuple] = []
+    believed: list[tuple] = []
     try:
         host_ids = {ip: await _resolve_host_id_cached(ip) for ip in {row[0] for row in batch}}
-        batch, apc = await _screen_traps(batch, host_ids)
+        batch, apc, believed = await _screen_traps(batch, host_ids)
         rows = [
             (source_ip, host_ids.get(source_ip), event_type, facility, severity, oid, message, raw_data, transport)
             for (source_ip, event_type, facility, severity, oid, message, raw_data, _trap, transport) in batch
@@ -1153,11 +1312,29 @@ async def _flush_trap_syslog_batch(batch: list[tuple]) -> None:
     except Exception as exc:
         LOGGER.warning("metrics: trap/syslog batch write failed, dropping %d events: %s", len(batch), exc)
     await _evaluate_syslog_rules(rows)
-    for source_ip, apc_trap in apc:
+    for source_ip, apc_trap, authenticated_host_id in apc:
         try:
-            await handle_apc_trap(source_ip, apc_trap)
+            if authenticated_host_id is None:
+                await handle_apc_trap(source_ip, apc_trap)
+            else:
+                # SNMPv3: authenticated with that host's user, no community.
+                await handle_apc_trap(source_ip, apc_trap, authenticated_host_id=authenticated_host_id)
         except Exception as exc:  # noqa: BLE001 - one trap must not stop the writer
             LOGGER.warning("metrics: handling an APC trap from %s failed: %s", source_ip, exc)
+    await _evaluate_trap_rules(believed)
+
+
+async def _evaluate_trap_rules(believed: list[tuple]) -> None:
+    """Hand the believed traps of inventory hosts (``(host_id, trap)``, the
+    trap a dict of ``decode_snmp_trap``'s shape) to the trap rule engine
+    (``netcontrol.trap_rules``: alerts, re-poll and config-change triggers).
+    A rule error is logged: it never touches the stored events."""
+    if not believed:
+        return
+    try:
+        await trap_rules.process_trap_batch([(host_id, name_trap(trap)) for host_id, trap in believed])
+    except Exception as exc:  # noqa: BLE001 - a rule failure must not stop the writer
+        LOGGER.warning("metrics: trap rule evaluation failed for %d traps: %s", len(believed), exc)
 
 
 async def _evaluate_syslog_rules(rows: list[tuple]) -> None:
@@ -1372,12 +1549,14 @@ def event_receiver_snapshot() -> dict:
         snapshot[f"{kind}_last_message_at"] = _epoch_iso(stats.last_message_at)
         snapshot[f"{kind}_started_at"] = _epoch_iso(stats.started_at)
         # Refused by the listener allowlist / rate limit (and, for traps, a
-        # wrong community) since Plexus started.
+        # wrong community or an SNMPv3 trap failing its USM checks) since
+        # Plexus started.
         drops = listener_sources.guard(kind).stats()
         snapshot[f"{kind}_dropped_source"] = drops["dropped_source"]
         snapshot[f"{kind}_dropped_rate"] = drops["dropped_rate"]
         if kind == "trap":
             snapshot["trap_dropped_community"] = drops["dropped_community"]
+            snapshot["trap_dropped_v3"] = drops["dropped_v3"]
     # The TCP and TLS syslog listeners share the syslog drop counters above.
     for transport, listener in _STREAM_LISTENERS.items():
         prefix = f"syslog_{transport}"
@@ -1822,6 +2001,7 @@ class EventReceiverConfigRequest(BaseModel):
     syslog_tls_require_client_cert: bool | None = None
     syslog_tls_match_client_cert: bool | None = None
     syslog_udp_actions: bool | None = None
+    trap_alerts: bool | None = None
 
 
 def _receiver_config_error(cfg: dict) -> str:
@@ -1867,7 +2047,8 @@ async def _save_event_receiver_config(cfg: dict, request: Request, action: str) 
             f"syslog_tls={'on' if sanitized['syslog_tls_enabled'] else 'off'}:{sanitized['syslog_tls_port']} "
             f"syslog_tls_require_client_cert={sanitized['syslog_tls_require_client_cert']} "
             f"syslog_tls_match_client_cert={sanitized['syslog_tls_match_client_cert']} "
-            f"syslog_udp_actions={sanitized['syslog_udp_actions']}"
+            f"syslog_udp_actions={sanitized['syslog_udp_actions']} "
+            f"trap_alerts={sanitized['trap_alerts']}"
         ),
         correlation_id=_corr_id(request),
     )

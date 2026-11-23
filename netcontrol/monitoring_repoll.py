@@ -58,6 +58,32 @@ def _prune(now: float, keep_seconds: float) -> None:
             _last_scheduled.pop(host_id, None)
 
 
+# Hosts whose hardware may have changed (a module went down or came online,
+# the device reloaded or restarted): their next poll that reaches them over
+# SNMP reads their hardware components too (``netcontrol.hardware_components``).
+# Kept in memory: a restart loses a pending mark, and the regular read (every
+# few hours) catches the change then.
+_hardware_stale: set[int] = set()
+
+
+def mark_hardware_stale(host_id: int) -> None:
+    """Have the next poll of ``host_id`` read its hardware components."""
+    _hardware_stale.add(int(host_id))
+
+
+def hardware_stale(host_id: int) -> bool:
+    return int(host_id) in _hardware_stale
+
+
+def clear_hardware_stale(host_id: int) -> None:
+    _hardware_stale.discard(int(host_id))
+
+
+def forget_hardware_stale() -> None:
+    """Drop every mark (tests; host ids restart with the database)."""
+    _hardware_stale.clear()
+
+
 def schedule_repoll(host_id: int, delay: float, *, min_interval: float = 0.0) -> bool:
     """Poll ``host_id`` once after ``delay`` seconds. False when a re-poll of
     the host is already waiting, or when one was scheduled less than

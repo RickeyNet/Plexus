@@ -28,6 +28,7 @@ import { usePendingKeys } from '@/lib/usePendingKeys';
 
 import { INACTIVE_OPACITY } from './helpers';
 import { SyslogActivitySection } from './SyslogActivitySection';
+import { TrapRulesSection } from './TrapRulesSection';
 import {
   activityByKey,
   activityWindowLabel,
@@ -104,7 +105,8 @@ export function SyslogRulesTab() {
     <div>
       <div className="toolbar" style={{ justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.5rem' }}>
         <span className="text-muted" style={{ fontSize: '0.85em' }}>
-          Rules run on the server against syslog from inventory hosts and raise alerts under Monitoring → Alerts.
+          Rules run on the server against syslog (and, below, SNMP traps) from inventory hosts and raise alerts under
+          Monitoring → Alerts.
         </span>
         <button className="btn btn-primary" onClick={() => setCreating(true)}>+ New Syslog Rule</button>
       </div>
@@ -198,6 +200,8 @@ export function SyslogRulesTab() {
           </tbody>
         </DataTable>
       ))}
+
+      <TrapRulesSection />
 
       <SyslogActivitySection
         hours={hours}

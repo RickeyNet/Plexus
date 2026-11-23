@@ -60,6 +60,7 @@ export function receiverSettings(cfg: EventReceiverConfig): EventReceiverSetting
     syslog_tls_require_client_cert: cfg.syslog_tls_require_client_cert,
     syslog_tls_match_client_cert: cfg.syslog_tls_match_client_cert,
     syslog_udp_actions: cfg.syslog_udp_actions,
+    trap_alerts: cfg.trap_alerts,
   };
 }
 
@@ -170,6 +171,16 @@ export function receiverCounters(cfg: EventReceiverConfig, kind: ReceiverKind, n
   ];
   if (!isStreamKind(kind)) {
     items.push({ label: 'Unreadable', value: formatCount(errors), tone: errors > 0 ? 'warning' : undefined });
+    if (kind === 'trap') {
+      // Traps from inventory hosts dropped since Plexus started: not the
+      // host's SNMP community, or an SNMPv3 trap failing its USM checks.
+      const community = cfg.trap_dropped_community ?? 0;
+      const v3 = cfg.trap_dropped_v3 ?? 0;
+      items.push(
+        { label: 'Wrong community', value: formatCount(community), tone: community > 0 ? 'warning' : undefined },
+        { label: 'SNMPv3 refused', value: formatCount(v3), tone: v3 > 0 ? 'warning' : undefined },
+      );
+    }
     return items;
   }
   // Stream errors also count framing errors and failed TLS handshakes.

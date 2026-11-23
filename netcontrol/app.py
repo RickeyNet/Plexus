@@ -208,6 +208,7 @@ from netcontrol.routes.git_sources import git_sources_loop, router as git_source
 from netcontrol.routes.graph_export import router as graph_export_router
 from netcontrol.routes.graph_templates import router as graph_templates_router
 from netcontrol.routes.graphql import admin_router as graphql_admin_router, router as graphql_router
+from netcontrol.routes.hardware_components import router as hardware_components_router
 from netcontrol.routes.hardware_lifecycle import (
     _lifecycle_check_loop,
     router as hardware_lifecycle_router,
@@ -2547,6 +2548,12 @@ app.include_router(
 app.include_router(
     inventory_admin_router,
     dependencies=[Depends(require_admin)],
+)
+# Hardware components with serials and their history (docs/hardware-inventory.md):
+# read with inventory, the on-demand SNMP read with inventory.write.
+app.include_router(
+    hardware_components_router,
+    dependencies=[Depends(require_auth), Depends(require_feature_method("inventory"))],
 )
 # Custom fields and tags: definitions are readable by any signed-in user and
 # managed by admins; host and group data sit with inventory access, prefix

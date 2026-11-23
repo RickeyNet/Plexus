@@ -371,12 +371,16 @@ def test_the_receiver_stores_and_dispatches_an_apc_trap(monkeypatch):
     assert apc_traps.parse_apc_trap(trap).number == 7
 
 
-def test_the_receiver_keeps_other_traps_as_before(monkeypatch):
+def test_the_receiver_names_other_traps_from_the_registry(monkeypatch):
+    # Not an APC trap: named by netcontrol.snmp_traps (an unknown one by its
+    # OID and its varbinds; tests/test_snmp_traps.py covers the named ones).
     queued = _receive(monkeypatch, v1_trap(5, enterprise="1.3.6.1.4.1.9"), OTHER_IP)
     assert apc_traps.parse_apc_trap(queued[0][7]) is None
-    assert queued[0][3] == "info" and queued[0][5].startswith(f"SNMP trap from {OTHER_IP}")
+    assert queued[0][3] == "info" and queued[0][4] == "1.3.6.1.4.1.9.0.5"
+    assert queued[0][5] == f"SNMP trap 1.3.6.1.4.1.9.0.5: {apc_traps.MTRAPARGS_STRING} = {CARD_TEXT}"
     queued = _receive(monkeypatch, b"\x30\x03junk", OTHER_IP)
     assert len(queued) == 1 and queued[0][7] is None
+    assert queued[0][5].startswith(f"SNMP trap from {OTHER_IP}")
 
 
 async def test_the_writer_runs_the_handler_and_logs_its_failure(repolls, monkeypatch, caplog):

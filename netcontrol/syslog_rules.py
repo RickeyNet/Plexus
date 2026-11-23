@@ -48,6 +48,15 @@ messages. ``netcontrol.syslog_activity`` reports what the rules matched in
 the stored traffic and what they missed.
 
 ``docs/syslog-rules.md`` describes the rules and the triggers.
+
+The engine has a second message source: the SNMP trap rules
+(``netcontrol.trap_rules``, ``docs/snmp-traps.md``) build ``Rule`` objects
+with ``source`` ``trap`` and go through the same threshold counters
+(``_track``), alert raise / resolve (``apply_actions``), auto-resolve
+(``resolve_expired_rule_alerts``), stored overrides (``rule_rows``,
+``builtin_override``) and configuration-change trigger
+(``note_config_change``). Their alerts are their own family: type
+``trap``, metric ``trap_<key>``, dedup key ``trap:<key>:<host>:<instance>``.
 """
 
 from __future__ import annotations
@@ -61,6 +70,7 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from functools import partial
+from typing import Any, Protocol
 
 import routes.database as db
 from routes.user_regex import UserRegex, compile_user_regex
@@ -68,7 +78,7 @@ from routes.user_regex import UserRegex, compile_user_regex
 import netcontrol.routes.state as state
 from netcontrol import source_recollect
 from netcontrol.bounded_map import BoundedDict
-from netcontrol.monitoring_repoll import keep_task, schedule_repoll
+from netcontrol.monitoring_repoll import keep_task, mark_hardware_stale, schedule_repoll
 from netcontrol.syslog_vendor_formats import aos_switch_tag, vendor_tag
 
 LOGGER = logging.getLogger("plexus.syslog_rules")
@@ -100,6 +110,9 @@ COUNTERS_MAX = 10000
 REPOLL_DELAY_SECONDS = 5.0
 RELOAD_REPOLL_DELAY_SECONDS = 30.0
 REPOLL_MIN_INTERVAL_SECONDS = 60.0
+# Re-poll reasons after which the hardware may have changed: the re-poll
+# (or the next poll that reaches the device) reads its hardware components.
+HARDWARE_REPOLL_REASONS = frozenset({"module", "reload", "restart"})
 
 # Configuration change: the run starts this long after the host's last
 # configuration message (one session logs several), at most one run per
@@ -1022,7 +1035,10 @@ class RuleError(ValueError):
 @dataclass
 class Rule:
     """A rule the engine evaluates: a built-in (with its stored override)
-    or a custom rule. ``key`` names it in the alert's metric and dedup key."""
+    or a custom rule. ``key`` names it in the alert's metric and dedup key.
+    ``source`` is the message source: ``syslog`` (its match functions take
+    a ``ParsedSyslog``) or ``trap`` (``netcontrol.trap_rules``: they take a
+    ``netcontrol.snmp_traps.NamedTrap``)."""
 
     key: str
     name: str
@@ -1032,8 +1048,8 @@ class Rule:
     threshold_count: int
     threshold_window_seconds: int
     auto_resolve_minutes: int
-    raise_match: Callable[[ParsedSyslog], str | None]
-    clear_match: Callable[[ParsedSyslog], str | None] | None = None
+    raise_match: Callable[[Any], str | None]
+    clear_match: Callable[[Any], str | None] | None = None
     id: int | None = None
     description: str = ""
     families: tuple[str, ...] = ()
@@ -1046,16 +1062,25 @@ class Rule:
     created_at: str = ""
     updated_at: str = ""
     overridden: bool = field(default=False)
+    source: str = ALERT_TYPE
 
     @property
     def metric(self) -> str:
-        return metric_name(self.key)
+        return metric_name(self.key, self.source)
+
+    @property
+    def ref(self) -> str:
+        """The rule's name across sources: its key for a syslog rule, its
+        metric (``trap_<key>``) otherwise. Keys the threshold counters and
+        the stored override row (``builtin_key``)."""
+        return self.key if self.source == ALERT_TYPE else self.metric
 
     def payload(self) -> dict:
         """The API form of the rule."""
         return {
             "id": self.id,
             "key": self.key,
+            "source": self.source,
             "metric": self.metric,
             "name": self.name,
             "description": self.description,
@@ -1077,12 +1102,25 @@ class Rule:
         }
 
 
-def metric_name(rule_key: str) -> str:
-    return f"syslog_{rule_key}"
+def metric_name(rule_key: str, source: str = ALERT_TYPE) -> str:
+    return f"{source}_{rule_key}"
 
 
-def dedup_key(rule_key: str, host_id: int, instance: str) -> str:
-    return f"syslog:{rule_key}:{host_id}:{instance}"
+def dedup_key(rule_key: str, host_id: int, instance: str, source: str = ALERT_TYPE) -> str:
+    return f"{source}:{rule_key}:{host_id}:{instance}"
+
+
+def builtin_override(override: dict | None, severity: str) -> dict:
+    """The fields a stored override row (``syslog_alert_rules`` with a
+    ``builtin_key``) sets on a built-in rule of either source: ``severity``
+    (the rule's own when unset), ``enabled`` (on without a row),
+    ``updated_at`` and ``overridden``."""
+    return {
+        "severity": (override or {}).get("severity") or severity,
+        "enabled": bool(override["enabled"]) if override else True,
+        "updated_at": (override or {}).get("updated_at", ""),
+        "overridden": override is not None,
+    }
 
 
 def custom_rule_key(rule_id: int) -> str:
@@ -1103,8 +1141,6 @@ def _builtin(rule: BuiltinRule, override: dict | None) -> Rule:
     return Rule(
         key=rule.key,
         name=rule.name,
-        severity=(override or {}).get("severity") or rule.severity,
-        enabled=bool(override["enabled"]) if override else True,
         builtin=True,
         threshold_count=rule.threshold_count,
         threshold_window_seconds=rule.threshold_window_seconds,
@@ -1116,8 +1152,7 @@ def _builtin(rule: BuiltinRule, override: dict | None) -> Rule:
         match_type="builtin",
         tags=_matcher_tags(rule.raise_on),
         clear_tags=_matcher_tags(rule.clear_on),
-        updated_at=(override or {}).get("updated_at", ""),
-        overridden=override is not None,
+        **builtin_override(override, rule.severity),
     )
 
 
@@ -1262,22 +1297,37 @@ def merge_rules(rows: list[dict]) -> list[Rule]:
 
 
 _rules_cache: tuple[float, list[Rule]] | None = None
+_rows_cache: tuple[float, list[dict]] | None = None
 
 
 def invalidate_rules_cache() -> None:
-    """Drop the cached rule set: called on every rule write."""
-    global _rules_cache
+    """Drop the cached rule set and stored rows: called on every rule write
+    (syslog or trap)."""
+    global _rules_cache, _rows_cache
     _rules_cache = None
+    _rows_cache = None
+
+
+async def rule_rows() -> list[dict]:
+    """The rows of ``syslog_alert_rules`` (custom rules and the overrides of
+    the built-in syslog and trap rules), cached for ``CACHE_TTL_SECONDS``."""
+    global _rows_cache
+    now = _clock()
+    if _rows_cache is not None and _rows_cache[0] > now:
+        return _rows_cache[1]
+    rows = await db.list_syslog_alert_rules()
+    _rows_cache = (now + CACHE_TTL_SECONDS, rows)
+    return rows
 
 
 async def get_rules() -> list[Rule]:
-    """Every rule, enabled or not, cached for ``CACHE_TTL_SECONDS`` (so
-    other worker processes pick up a change too)."""
+    """Every syslog rule, enabled or not, cached for ``CACHE_TTL_SECONDS``
+    (so other worker processes pick up a change too)."""
     global _rules_cache
     now = _clock()
     if _rules_cache is not None and _rules_cache[0] > now:
         return _rules_cache[1]
-    rules = merge_rules(await db.list_syslog_alert_rules())
+    rules = merge_rules(await rule_rows())
     _rules_cache = (now + CACHE_TTL_SECONDS, rules)
     return rules
 
@@ -1304,26 +1354,42 @@ def _count(key: tuple[str, int, str], threshold: int, window: int, now: float) -
     return True, len(dq) >= threshold and now - dq[0] <= window
 
 
-def _track(rule: Rule, host_id: int, parsed: ParsedSyslog, now: float) -> tuple[bool, str] | None:
-    """Count a message of ``host_id`` for ``rule`` at ``now``: a raise match
-    is counted, a clear match drops the counter. ``(True, instance)`` when
-    the match meets the threshold (raise), ``(False, instance)`` on a clear
-    match (resolve), else None."""
+def _track(rule: Rule, host_id: int, parsed: Any, now: float) -> tuple[bool, str] | None:
+    """Count a message (a ``ParsedSyslog``, or a ``NamedTrap`` for a trap
+    rule) of ``host_id`` for ``rule`` at ``now``: a raise match is counted,
+    a clear match drops the counter. ``(True, instance)`` when the match
+    meets the threshold (raise), ``(False, instance)`` on a clear match
+    (resolve), else None."""
     instance = rule.raise_match(parsed)
     if instance is not None:
-        counted, met = _count((rule.key, host_id, instance), rule.threshold_count, rule.threshold_window_seconds, now)
+        counted, met = _count((rule.ref, host_id, instance), rule.threshold_count, rule.threshold_window_seconds, now)
         return (True, instance) if counted and met else None
     instance = rule.clear_match(parsed) if rule.clear_match is not None else None
     if instance is not None:
-        _counters.pop((rule.key, host_id, instance), None)
+        _counters.pop((rule.ref, host_id, instance), None)
         return False, instance
     return None
+
+
+track = _track
 
 
 # ── The engine ───────────────────────────────────────────────────────────────
 
 
-def alert_message(rule: Rule, instance: str, parsed: ParsedSyslog) -> str:
+class RuleEvent(Protocol):
+    """What an alert message quotes of the message that raised it: a
+    ``ParsedSyslog`` or a ``NamedTrap`` (``raw_tag``: the tag or trap name,
+    ``text``: what follows it)."""
+
+    @property
+    def raw_tag(self) -> str: ...
+
+    @property
+    def text(self) -> str: ...
+
+
+def alert_message(rule: Rule, instance: str, parsed: RuleEvent) -> str:
     title = rule.name + (f" on {instance}" if instance else "")
     if rule.threshold_count > 1:
         title += f" ({rule.threshold_count} times within {_duration(rule.threshold_window_seconds)})"
@@ -1364,6 +1430,8 @@ async def process_syslog_batch(rows: Iterable[tuple[int, str]]) -> dict:
         if repoll_on:
             reason = repoll_reason(parsed)
             if reason:
+                if reason in HARDWARE_REPOLL_REASONS:
+                    mark_hardware_stale(host_id)
                 delay = RELOAD_REPOLL_DELAY_SECONDS if reason == "reload" else REPOLL_DELAY_SECONDS
                 if schedule_repoll(host_id, delay, min_interval=REPOLL_MIN_INTERVAL_SECONDS):
                     outcome["repolls"] += 1
@@ -1371,7 +1439,7 @@ async def process_syslog_batch(rows: Iterable[tuple[int, str]]) -> dict:
             note_config_change(host_id)
             outcome["config_changes"] += 1
     if actions:
-        await _apply(actions, outcome)
+        await apply_actions(actions, outcome)
     return outcome
 
 
@@ -1395,14 +1463,20 @@ async def process_recollect_batch(rows: Iterable[tuple[str, int | None, str]]) -
     return await source_recollect.schedule_for_events(events)
 
 
-async def _apply(actions: list[tuple[bool, Rule, int, str, ParsedSyslog]], outcome: dict) -> None:
+async def apply_actions(actions: list[tuple[bool, Rule, int, str, Any]], outcome: dict) -> None:
+    """Raise or resolve the alerts of ``actions`` (``(raise_it, rule,
+    host_id, instance, message)`` from ``_track``), adding to ``outcome``'s
+    ``raised`` / ``resolved``. The alert's type is the rule's source
+    (``syslog`` or ``trap``): each source raises and resolves only its own
+    alerts."""
     hosts = {int(h["id"]): h for h in await db.get_hosts_by_ids(sorted({a[2] for a in actions}))}
     for raise_it, rule, host_id, instance, parsed in actions:
-        key = dedup_key(rule.key, host_id, instance)
+        key = dedup_key(rule.key, host_id, instance, rule.source)
         if not raise_it:
-            # A syslog source can be forged: a clear message resolves only
-            # an alert syslog raised for this host, never one polling owns.
-            outcome["resolved"] += await db.resolve_monitoring_alerts(key, alert_type=ALERT_TYPE, host_id=host_id)
+            # A syslog (or trap) source can be forged: a clear message
+            # resolves only an alert its own source raised for this host,
+            # never one polling owns.
+            outcome["resolved"] += await db.resolve_monitoring_alerts(key, alert_type=rule.source, host_id=host_id)
             continue
         host = hosts.get(host_id)
         if host is None:
@@ -1412,7 +1486,7 @@ async def _apply(actions: list[tuple[bool, Rule, int, str, ParsedSyslog]], outco
         await db.create_monitoring_alert(
             host_id=host_id,
             poll_id=None,
-            alert_type=ALERT_TYPE,
+            alert_type=rule.source,
             metric=rule.metric,
             message=alert_message(rule, instance, parsed),
             severity=rule.severity,
@@ -1422,17 +1496,24 @@ async def _apply(actions: list[tuple[bool, Rule, int, str, ParsedSyslog]], outco
         outcome["raised"] += 1
 
 
+async def resolve_expired_rule_alerts(rules: Iterable[Rule]) -> int:
+    """Resolve the open alerts of every rule in ``rules`` with an
+    ``auto_resolve_minutes`` that have not been seen again for that long
+    (each under its source's alert type)."""
+    resolved = 0
+    for rule in rules:
+        if rule.auto_resolve_minutes > 0:
+            resolved += await db.resolve_stale_monitoring_alerts(
+                rule.source, rule.metric, rule.auto_resolve_minutes, f"auto-resolved (no new {rule.source} match)"
+            )
+    return resolved
+
+
 async def resolve_expired_alerts() -> int:
     """Resolve the open syslog alerts of every rule with an
     ``auto_resolve_minutes`` that have not been seen again for that long.
     Called by a periodic loop; returns how many were resolved."""
-    resolved = 0
-    for rule in await get_rules():
-        if rule.auto_resolve_minutes > 0:
-            resolved += await db.resolve_stale_monitoring_alerts(
-                ALERT_TYPE, rule.metric, rule.auto_resolve_minutes, "auto-resolved (no new syslog match)"
-            )
-    return resolved
+    return await resolve_expired_rule_alerts(await get_rules())
 
 
 async def resolve_rule_alerts(rule_key: str) -> int:

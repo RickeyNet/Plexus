@@ -20,6 +20,7 @@ import {
   repollLabel,
   ruleMatchCounts,
   SYSLOG_BUILTIN_METRICS,
+  TRAP_BUILTIN_METRICS,
   thresholdLabel,
   transportSummary,
   udpTransportNote,
@@ -92,6 +93,22 @@ describe('syslog rule labels', () => {
       'syslog_module',
       'syslog_auth_failure',
     ]);
+  });
+
+  it('lists a suppression metric per built-in trap rule, in their own trap_ family', () => {
+    expect(TRAP_BUILTIN_METRICS.map((m) => m.value)).toEqual([
+      'trap_link_down',
+      'trap_module',
+      'trap_power_supply',
+      'trap_fan',
+      'trap_temperature',
+      'trap_bgp_neighbor',
+      'trap_ospf_neighbor',
+      'trap_ha_switchover',
+      'trap_device_restart',
+      'trap_snmp_auth_failure',
+    ]);
+    expect(TRAP_BUILTIN_METRICS.every((m) => m.label.startsWith('Trap: '))).toBe(true);
   });
 });
 

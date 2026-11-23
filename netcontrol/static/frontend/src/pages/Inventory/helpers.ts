@@ -337,3 +337,9 @@ export function snmpTestOutcome(response: SnmpTestResponse): SnmpTestOutcome {
     ? { ok: true, data: response.result }
     : { ok: false, error: response.error || 'Unknown error' };
 }
+
+/** " Stored N hardware components." after a serial fetch result; nothing at zero. */
+export function componentsNote(count: number): string {
+  if (count <= 0) return '';
+  return ` Stored ${count} hardware component${count === 1 ? '' : 's'}.`;
+}

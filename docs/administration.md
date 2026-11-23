@@ -281,17 +281,30 @@ last started: **Received** messages, **Last message** and **Unreadable**
 messages (ones that could not be parsed). Below them is the number of events
 dropped since Plexus started because the write buffer was full.
 
-Three switches set what a received syslog message does:
+Four switches set what a received syslog message or trap does:
 
 - **Raise alerts from syslog rules**: a message that matches a syslog alert
   rule raises a monitoring alert.
+- **Raise alerts from SNMP trap rules**: a trap from an inventory host,
+  with that host's SNMP community (SNMPv3: authenticated with the host's
+  SNMPv3 poll user), that matches a built-in trap rule raises
+  or resolves a monitoring alert (metric `trap_<rule>`, see
+  [SNMP Traps](snmp-traps.md)).
 - **Back up the config on a change message**: a configuration-change
-  message starts a config backup and drift check of the sending host.
-- **Re-poll on link down or reload**: a link-down or reload message polls
-  the sending host at once.
+  message or trap starts a config backup and drift check of the sending
+  host.
+- **Re-poll on link down, module down or reload**: a link-down, module down / back
+  online or reload message, or a trap that names a state change, polls the
+  sending host at once.
 
-All three are on by default. Received events are listed in
-[Monitoring > Events](monitoring.md#events).
+All four are on by default. Received events are listed in
+[Monitoring > Events](monitoring.md#events), traps with their name and
+decoded varbinds. The trap receiver answers an SNMPv2c inform with the
+Response its sender waits for. An SNMPv3 trap from an inventory host is
+decoded with that host's SNMPv3 poll user, and dropped when it fails the
+SNMPv3 checks ([snmp-traps.md](snmp-traps.md#snmpv3)); SNMPv3 informs are
+stored undecoded and not answered. The trap receiver's counters show
+**Wrong community** and **SNMPv3 refused** drops since Plexus started.
 
 Syslog can also arrive over TCP and TLS, whose source address cannot be
 forged ([syslog-rules.md](syslog-rules.md#transports)):
@@ -363,9 +376,14 @@ A dropped datagram is not parsed and not counted as **Received**. Each
 listener counts its drops since Plexus started: `dropped_source` (not an
 allowed source), `dropped_rate` (over the rate limit) and, for traps,
 `dropped_community` (wrong SNMP community, see
-[apc-ups.md](apc-ups.md#snmp-traps)). They are in the GET response above,
-in `GET /api/admin/metrics/receivers/config` (`syslog_dropped_source`,
-`trap_dropped_rate`, `trap_dropped_community`, ...) and in the flow
+[snmp-traps.md](snmp-traps.md#intake)) and `dropped_v3` (an SNMPv3 trap
+from an inventory host that fails the SNMPv3 checks: user, security level,
+authentication, time window, replay or decryption, see
+[snmp-traps.md](snmp-traps.md#snmpv3); the reason is logged at debug
+level). They are in the GET response above, in
+`GET /api/admin/metrics/receivers/config` (`syslog_dropped_source`,
+`trap_dropped_rate`, `trap_dropped_community`, `trap_dropped_v3`, ...) and
+in the flow
 collector's `GET /api/flows/status` and `/api/admin/flows/config`. Drops are
 logged at warning level at most once a minute per listener, with the count
 since the last line.
@@ -488,7 +506,8 @@ The receiver `PUT` also takes `syslog_tcp_enabled`, `syslog_tcp_port`,
 `syslog_tls_enabled`, `syslog_tls_port`, `syslog_tls_require_client_cert`,
 `syslog_tls_match_client_cert` (only with `syslog_tls_require_client_cert`
 on: the client certificate must name the inventory host at the source
-address) and `syslog_udp_actions`; the `GET` answer adds, for `syslog_tcp`
+address), `syslog_udp_actions` and `trap_alerts` (alerts from the SNMP trap
+rules); the `GET` answer adds, for `syslog_tcp`
 and `syslog_tls`, `<listener>_running`, `_listening_port`, `_received`,
 `_errors`, `_last_message_at`, `_started_at`, `_connections`,
 `_connections_refused` and `_error`, and for `syslog_tls`

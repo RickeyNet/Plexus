@@ -446,6 +446,37 @@ async def _resolve_snmp_secrets(snmp_config: dict) -> dict:
         return snmp_config
 
 
+# The stored SNMPv3 protocol names (``state._sanitize_snmp_*``) and the pysnmp
+# protocol each one selects. The SNMPv3 trap decoder (netcontrol.snmpv3_traps)
+# reads them too, so a trap is checked with the same protocols the poll uses.
+DEFAULT_SNMP_AUTH_PROTOCOL = "sha"
+DEFAULT_SNMP_PRIV_PROTOCOL = "aes128"
+
+
+def usm_protocols(v3: dict) -> tuple[Any, Any]:
+    """The pysnmp (auth, priv) protocols named by a stored ``v3`` config
+    (``auth_protocol`` / ``priv_protocol``), SHA-1 and AES-128 for a name
+    that is missing or unknown. None for both when pysnmp is not installed."""
+    auth_map = {
+        "md5": usmHMACMD5AuthProtocol,
+        "sha": usmHMACSHAAuthProtocol,
+        "sha256": usmHMAC192SHA256AuthProtocol,
+        "sha512": usmHMAC384SHA512AuthProtocol,
+    }
+    priv_map = {
+        "des": usmDESPrivProtocol,
+        "aes128": usmAesCfb128Protocol,
+        "aes192": usmAesCfb192Protocol,
+        "aes256": usmAesCfb256Protocol,
+    }
+    auth_key = str(v3.get("auth_protocol", DEFAULT_SNMP_AUTH_PROTOCOL)).lower()
+    priv_key = str(v3.get("priv_protocol", DEFAULT_SNMP_PRIV_PROTOCOL)).lower()
+    return (
+        auth_map.get(auth_key, auth_map[DEFAULT_SNMP_AUTH_PROTOCOL]),
+        priv_map.get(priv_key, priv_map[DEFAULT_SNMP_PRIV_PROTOCOL]),
+    )
+
+
 # ── SNMP Get ─────────────────────────────────────────────────────────────────
 
 
@@ -500,22 +531,7 @@ async def _snmp_get(ip_address: str, timeout_seconds: float, snmp_config: dict) 
         priv_password = str(v3.get("priv_password", "")).strip()
         if not username or not auth_password:
             return None
-        auth_map = {
-            "md5": usmHMACMD5AuthProtocol,
-            "sha": usmHMACSHAAuthProtocol,
-            "sha256": usmHMAC192SHA256AuthProtocol,
-            "sha512": usmHMAC384SHA512AuthProtocol,
-        }
-        priv_map = {
-            "des": usmDESPrivProtocol,
-            "aes128": usmAesCfb128Protocol,
-            "aes192": usmAesCfb192Protocol,
-            "aes256": usmAesCfb256Protocol,
-        }
-        auth_proto_key = str(v3.get("auth_protocol", "sha")).lower()
-        priv_proto_key = str(v3.get("priv_protocol", "aes128")).lower()
-        auth_proto = auth_map.get(auth_proto_key, usmHMACSHAAuthProtocol)
-        priv_proto = priv_map.get(priv_proto_key, usmAesCfb128Protocol)
+        auth_proto, priv_proto = usm_protocols(v3)
         if priv_password:
             auth_data = UsmUserData(
                 username,
@@ -593,8 +609,8 @@ async def _snmp_get(ip_address: str, timeout_seconds: float, snmp_config: dict) 
         sys_descr = ""
     if ent_model and any(m in ent_model.lower() for m in _SNMP_BAD_MARKERS):
         ent_model = ""
-    if ent_serial and any(m in ent_serial.lower() for m in _SNMP_BAD_MARKERS):
-        ent_serial = ""
+    # A placeholder serial ("N/A", zeros) would match unrelated devices.
+    ent_serial = real_serial(ent_serial)
     vendor, detected_type, os_name = _infer_vendor_os_from_text(sys_descr)
     hw_model, sw_version = _parse_model_and_version(sys_descr)
     # Prefer entPhysicalModelName (actual hardware PID like C9300-48T) over
@@ -726,20 +742,7 @@ def _build_snmp_auth(snmp_config: dict):
         priv_password = str(v3.get("priv_password", "")).strip()
         if not username or not auth_password:
             return None
-        auth_map = {
-            "md5": usmHMACMD5AuthProtocol,
-            "sha": usmHMACSHAAuthProtocol,
-            "sha256": usmHMAC192SHA256AuthProtocol,
-            "sha512": usmHMAC384SHA512AuthProtocol,
-        }
-        priv_map = {
-            "des": usmDESPrivProtocol,
-            "aes128": usmAesCfb128Protocol,
-            "aes192": usmAesCfb192Protocol,
-            "aes256": usmAesCfb256Protocol,
-        }
-        auth_proto = auth_map.get(str(v3.get("auth_protocol", "sha")).lower(), usmHMACSHAAuthProtocol)
-        priv_proto = priv_map.get(str(v3.get("priv_protocol", "aes128")).lower(), usmAesCfb128Protocol)
+        auth_proto, priv_proto = usm_protocols(v3)
         if priv_password:
             auth_data = UsmUserData(
                 username, authKey=auth_password, privKey=priv_password, authProtocol=auth_proto, privProtocol=priv_proto
@@ -920,6 +923,25 @@ def _snmp_str(raw_value) -> str:
     return s
 
 
+# Serial values that name no serial: what agents print for a component
+# without one (compared in lower case, after the pysnmp sentinels above).
+_PLACEHOLDER_SERIALS = frozenset(
+    {"n/a", "na", "none", "null", "unknown", "unavailable", "not available", "not specified", "-", "--", "0x"}
+)
+
+
+def real_serial(raw_value: Any) -> str:
+    """A serial number value, or "" for a missing one: empty, a pysnmp
+    sentinel (``_SNMP_BAD_MARKERS``), a placeholder ("N/A", "Unknown" ...)
+    or only zeros (``0000000``)."""
+    serial = _snmp_str(raw_value) if raw_value is not None else ""
+    if not serial or serial.lower() in _PLACEHOLDER_SERIALS:
+        return ""
+    if set(serial) <= {"0"} or set(serial.lower()) <= {"0", "x"}:
+        return ""
+    return serial
+
+
 def snmp_int(raw_value: Any) -> int | None:
     """An SNMP value as an integer; None for a missing value, a pysnmp
     sentinel (NoSuchInstance ...) or anything that is not a whole number."""
@@ -943,15 +965,19 @@ _SNMP_GENERIC_TRAPS = "1.3.6.1.6.3.1.1.5"  # snmpTraps (coldStart = .1)
 
 
 def decode_snmp_trap(data: bytes) -> dict | None:
-    """Decode an SNMPv1 or SNMPv2c trap datagram with pysnmp's BER codec.
+    """Decode an SNMPv1 or SNMPv2c trap datagram, or an SNMPv2c
+    InformRequest, with pysnmp's BER codec.
 
     Returns ``{"version": "v1" | "v2c", "community", "trap_oid",
-    "agent_address", "varbinds": [(oid, text)]}``. A v1 trap's OID is
-    formed as RFC 3584 does: ``enterprise.0.specific`` for an
-    enterprise-specific trap, ``snmpTraps.(generic + 1)`` otherwise; the
-    agent address is set only on v1. None for anything else: SNMPv3 (its
-    PDU needs the user's keys), a PDU that is not a trap, bytes that are
-    not valid BER, or pysnmp not installed.
+    "agent_address", "varbinds": [(oid, text)], "pdu": "trap" | "inform",
+    "request_id"}``. A v1 trap's OID is formed as RFC 3584 does:
+    ``enterprise.0.specific`` for an enterprise-specific trap,
+    ``snmpTraps.(generic + 1)`` otherwise; the agent address is set only on
+    v1, the request id only on v2c (0 on v1). An inform is decoded as a
+    trap is; the sender waits for the Response ``snmp_inform_response``
+    builds. None for anything else: SNMPv3 (its PDU needs the user's keys),
+    a PDU that is not a trap or inform, bytes that are not valid BER, or
+    pysnmp not installed.
     """
     try:
         from pyasn1.codec.ber import decoder as ber_decoder
@@ -966,7 +992,8 @@ def decode_snmp_trap(data: bytes) -> dict | None:
         message, _rest = ber_decoder.decode(data, asn1Spec=proto.Message())
         pdu = proto.apiMessage.get_pdu(message)
         trap_pdu = proto.TrapPDU() if version == snmp_api.SNMP_VERSION_1 else proto.SNMPv2TrapPDU()
-        if not pdu.isSameTypeWith(trap_pdu):
+        inform = version != snmp_api.SNMP_VERSION_1 and pdu.isSameTypeWith(proto.InformRequestPDU())
+        if not inform and not pdu.isSameTypeWith(trap_pdu):
             return None
         community = bytes(proto.apiMessage.get_community(message).asOctets()).decode("utf-8", "replace")
         varbinds = [(oid.prettyPrint(), value.prettyPrint()) for oid, value in proto.apiTrapPDU.get_varbinds(pdu)]
@@ -982,6 +1009,7 @@ def decode_snmp_trap(data: bytes) -> dict | None:
         else:
             trap_oid = next((value for oid, value in varbinds if oid == SNMP_TRAP_OID), "")
             agent_address = ""
+        request_id = 0 if version == snmp_api.SNMP_VERSION_1 else int(proto.apiPDU.get_request_id(pdu))
     except Exception:  # noqa: BLE001 - untrusted network input: anything malformed is "not a trap"
         return None
     return {
@@ -990,7 +1018,33 @@ def decode_snmp_trap(data: bytes) -> dict | None:
         "trap_oid": trap_oid,
         "agent_address": agent_address,
         "varbinds": varbinds,
+        "pdu": "inform" if inform else "trap",
+        "request_id": request_id,
     }
+
+
+def snmp_inform_response(data: bytes) -> bytes | None:
+    """The Response PDU that acknowledges an SNMPv2c InformRequest datagram:
+    the same version, community, request id and varbinds, error-status 0
+    (RFC 3416 4.2.7). None when ``data`` is not a v2c inform."""
+    try:
+        from pyasn1.codec.ber import decoder as ber_decoder, encoder as ber_encoder
+        from pysnmp.proto import api as snmp_api
+    except ImportError:
+        return None
+    try:
+        if int(snmp_api.decodeMessageVersion(data)) != snmp_api.SNMP_VERSION_2C:
+            return None
+        proto = snmp_api.PROTOCOL_MODULES[snmp_api.SNMP_VERSION_2C]
+        message, _rest = ber_decoder.decode(data, asn1Spec=proto.Message())
+        pdu = proto.apiMessage.get_pdu(message)
+        if not pdu.isSameTypeWith(proto.InformRequestPDU()):
+            return None
+        response = proto.apiMessage.get_response(message)
+        proto.apiPDU.set_varbinds(proto.apiMessage.get_pdu(response), proto.apiPDU.get_varbinds(pdu))
+        return bytes(ber_encoder.encode(response))
+    except Exception:  # noqa: BLE001 - untrusted network input: anything malformed gets no answer
+        return None
 
 
 def trap_community_matches(trap: dict | None, host: dict) -> bool:

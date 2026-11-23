@@ -111,6 +111,7 @@ def test_sanitize_clamps_ports_and_coerces_bools():
         "syslog_tls_require_client_cert": False,
         "syslog_tls_match_client_cert": False,
         "syslog_udp_actions": True,
+        "trap_alerts": True,
     }
     assert state._sanitize_event_receiver_config({"syslog_tls_match_client_cert": 1})["syslog_tls_match_client_cert"]
 

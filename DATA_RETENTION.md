@@ -30,6 +30,7 @@ or the corresponding API endpoint without a restart.
 | Webhook delivery log (`webhook_deliveries`) | 30 days | `APP_WEBHOOK_DELIVERY_RETENTION_DAYS` (env, minimum 1); pruned hourly by the webhook dispatcher. Deleting a webhook deletes its log. See `docs/webhooks.md` |
 | Per-object change log (`object_changes`) | 90 days | `Settings > System > Change log` / `change_log_retention_days` (1 to 3650); pruned hourly. See `docs/change-log.md` |
 | ChatOps command log (`chatops_command_log`) | 90 days | Fixed; rows older than that are deleted as new commands are logged. See `docs/chatops.md` |
+| Hardware components and their history (`hardware_components`, `hardware_component_events`, `hardware_collection_state`) | Kept; not pruned automatically | None. A host's components (present, missing and removed) and its collection state are deleted with the host; its history events are kept after the host is deleted (host link cleared, hostname kept) so a serial can still be traced. See `docs/hardware-inventory.md` |
 
 Minimums are enforced at the API layer (e.g. job history can't go below
 30 days). Increase a value freely; the next cleanup pass will simply

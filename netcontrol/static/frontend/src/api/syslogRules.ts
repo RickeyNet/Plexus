@@ -14,8 +14,10 @@ export type SyslogSeverity = 'info' | 'warning' | 'critical';
 export interface SyslogRule {
   /** Null for a built-in rule. */
   id: number | null;
-  /** Names the rule in the alert metric (`syslog_<key>`) and dedup key. */
+  /** Names the rule in the alert metric (`syslog_<key>`, `trap_<key>`) and dedup key. */
   key: string;
+  /** `syslog`, or `trap` for a built-in SNMP trap rule (/monitoring/trap-rules). */
+  source?: 'syslog' | 'trap';
   metric: string;
   name: string;
   description: string;
@@ -66,7 +68,7 @@ export interface SyslogTestResult {
   /** The unsaved rule's result, when one was sent. */
   draft: SyslogMatch | null;
   config_change: boolean;
-  /** `interface_down`, `reload`, `restart` or empty. */
+  /** `interface_down`, `module`, `reload`, `restart` or empty. */
   repoll: string;
   /** The program (RFC 5424 APP-NAME / RFC 3164 tag); empty when none was found. */
   program?: string;
@@ -116,6 +118,24 @@ export function usePatchBuiltinSyslogRule() {
   return useMutation<SyslogRule, Error, { key: string; data: { enabled?: boolean; severity?: string } }>({
     mutationFn: ({ key, data }) => apiRequest(`${PATH}/builtin/${encodeURIComponent(key)}`, { method: 'PATCH', body: data }),
     onSuccess: () => qc.invalidateQueries({ queryKey: KEY }),
+  });
+}
+
+// --- Built-in SNMP trap rules (/api/monitoring/trap-rules, netcontrol/trap_rules.py) ---
+// The same shape as a built-in syslog rule: `tags` / `clear_tags` are the trap names.
+
+const TRAP_PATH = '/monitoring/trap-rules';
+const TRAP_KEY = ['trap-rules'];
+
+export function useTrapRules() {
+  return useQuery<SyslogRule[]>({ queryKey: TRAP_KEY, queryFn: () => apiRequest(TRAP_PATH) });
+}
+
+export function usePatchBuiltinTrapRule() {
+  const qc = useQueryClient();
+  return useMutation<SyslogRule, Error, { key: string; data: { enabled?: boolean; severity?: string } }>({
+    mutationFn: ({ key, data }) => apiRequest(`${TRAP_PATH}/builtin/${encodeURIComponent(key)}`, { method: 'PATCH', body: data }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: TRAP_KEY }),
   });
 }
 

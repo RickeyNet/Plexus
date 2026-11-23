@@ -37,6 +37,7 @@ const Routing = lazy(() => pageLoaders.routing().then(m => ({ default: m.Routing
 const Circuits = lazy(() => pageLoaders.circuits().then(m => ({ default: m.Circuits })));
 const Help = lazy(() => pageLoaders.help().then(m => ({ default: m.Help })));
 const Dcim = lazy(() => pageLoaders.dcim().then(m => ({ default: m.Dcim })));
+const Hardware = lazy(() => pageLoaders.hardware().then(m => ({ default: m.Hardware })));
 const Sync = lazy(() => pageLoaders.sync().then(m => ({ default: m.Sync })));
 const Software = lazy(() => pageLoaders.software().then(m => ({ default: m.Software })));
 const Jobs = lazy(() => pageLoaders.jobs().then(m => ({ default: m.Jobs })));
@@ -194,6 +195,7 @@ export function App() {
           <Route path="/federation" element={<Federation />} />
           <Route path="/floor-plan" element={<FloorPlan />} />
           <Route path="/inventory" element={<Inventory />} />
+          <Route path="/hardware/:tab?" element={<Hardware />} />
           <Route path="/ipam/:tab?" element={<Ipam />} />
           <Route path="/virtualization/:tab?" element={<Virtualization />} />
           <Route path="/organization/:tab?" element={<Organization />} />

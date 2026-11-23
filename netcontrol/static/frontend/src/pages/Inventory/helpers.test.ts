@@ -5,6 +5,7 @@ import { SETTINGS_SERVICE_CREDENTIAL } from '@/lib/credentialChoice';
 
 import {
   applyGroupOrder,
+  componentsNote,
   describeSshEnrichment,
   descendantIds,
   discoveryCredentialOptions,
@@ -381,5 +382,13 @@ describe('snmpTestOutcome', () => {
   it('keeps the error on failure', () => {
     expect(snmpTestOutcome({ success: false, error: 'timeout' })).toEqual({ ok: false, error: 'timeout' });
     expect(snmpTestOutcome({ success: false })).toEqual({ ok: false, error: 'Unknown error' });
+  });
+});
+
+describe('componentsNote', () => {
+  it('counts the hardware components a serial fetch stored, nothing at zero', () => {
+    expect(componentsNote(0)).toBe('');
+    expect(componentsNote(1)).toBe(' Stored 1 hardware component.');
+    expect(componentsNote(12)).toBe(' Stored 12 hardware components.');
   });
 });

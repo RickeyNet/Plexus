@@ -12,6 +12,14 @@ describe('breadcrumbTrail', () => {
     expect(breadcrumbTrail('/inventory')).toEqual([{ label: 'Inventory' }]);
   });
 
+  it('names the Hardware page tabs', () => {
+    expect(breadcrumbTrail('/hardware')).toEqual([{ label: 'Hardware', to: undefined }, { label: 'Components' }]);
+    expect(breadcrumbTrail('/hardware/changes')).toEqual([
+      { label: 'Hardware', to: '/hardware' },
+      { label: 'Changes' },
+    ]);
+  });
+
   it('links a tab back to its page', () => {
     expect(breadcrumbTrail('/monitoring/alerts')).toEqual([
       { label: 'Monitoring', to: '/monitoring' },

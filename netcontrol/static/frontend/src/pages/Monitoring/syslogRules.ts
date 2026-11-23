@@ -39,6 +39,24 @@ export const SYSLOG_BUILTIN_METRICS: { value: string; label: string }[] = [
   { value: 'syslog_auth_failure', label: 'Syslog: Repeated login failures' },
 ];
 
+/**
+ * The suppression metrics of the built-in SNMP trap rules: `trap_<key>`
+ * (netcontrol/trap_rules.py). Their own family: a suppression of
+ * `syslog_<key>` or of a polled metric does not cover them.
+ */
+export const TRAP_BUILTIN_METRICS: { value: string; label: string }[] = [
+  { value: 'trap_link_down', label: 'Trap: Interface down' },
+  { value: 'trap_module', label: 'Trap: Module down' },
+  { value: 'trap_power_supply', label: 'Trap: Power supply fault' },
+  { value: 'trap_fan', label: 'Trap: Fan fault' },
+  { value: 'trap_temperature', label: 'Trap: Temperature alarm' },
+  { value: 'trap_bgp_neighbor', label: 'Trap: BGP neighbor down' },
+  { value: 'trap_ospf_neighbor', label: 'Trap: OSPF neighbor down' },
+  { value: 'trap_ha_switchover', label: 'Trap: HA failover or switchover' },
+  { value: 'trap_device_restart', label: 'Trap: Device or agent restarted' },
+  { value: 'trap_snmp_auth_failure', label: 'Trap: SNMP authentication failures' },
+];
+
 /** 600 -> "10 min", 3600 -> "1 h", 45 -> "45 s". */
 export function formatSeconds(seconds: number): string {
   if (seconds > 0 && seconds % 3600 === 0) return `${seconds / 3600} h`;

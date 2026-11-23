@@ -36,11 +36,18 @@ The differences that motivate a dedicated driver instead of reusing
 
 from __future__ import annotations
 
-from netcontrol.drivers.base import Driver, DriverCapabilityError, NetflowConfig, RouteTableCommands, register_driver
+from netcontrol.drivers.base import (
+    CiscoShowInventory,
+    Driver,
+    DriverCapabilityError,
+    NetflowConfig,
+    RouteTableCommands,
+    register_driver,
+)
 
 
 @register_driver
-class CiscoXRDriver(Driver):
+class CiscoXRDriver(CiscoShowInventory, Driver):
     device_types = ("cisco_xr",)
     vendor = "cisco"
     display_name = "Cisco IOS-XR"

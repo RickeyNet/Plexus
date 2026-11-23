@@ -258,6 +258,10 @@ def _pg_fresh_database(_pg_session_template):
     from netcontrol import health_checks as _health_checks
 
     _health_checks.forget_all()
+    # Hardware component reads: hosts marked stale by an event, reads being stored.
+    from netcontrol import hardware_components as _hardware_components
+
+    _hardware_components.forget_all()
     yield
 
 

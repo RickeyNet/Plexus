@@ -6,7 +6,9 @@ accepts in its bounded event buffer; its batch writer stores them in
 ``trap_syslog_events`` and, for an APC trap whose source is an inventory
 host, hands the trap to ``handle_apc_trap`` here. When the trap belongs to
 an ``apc_ups`` host and carries that host's stored SNMP community
-(``snmp.trap_community_matches``), the handler
+(``snmp.trap_community_matches``) -- or, for SNMPv3, the receiver already
+authenticated it with that host's SNMPv3 user (``netcontrol.snmpv3_traps``)
+-- the handler
 
 - raises or resolves the built-in UPS alert the trap names, under the same
   dedup key the monitoring poll uses (``snmp.alert_dedup_key``), so a trap
@@ -189,13 +191,18 @@ async def find_ups_host(source_ip: str, agent_address: str = "") -> dict | None:
 # ── Acting on a trap ────────────────────────────────────────────────────────
 
 
-async def handle_apc_trap(source_ip: str, trap: ApcTrap) -> dict:
+async def handle_apc_trap(source_ip: str, trap: ApcTrap, authenticated_host_id: int | None = None) -> dict:
     """Act on an APC trap: when it comes from an ``apc_ups`` host
     (``find_ups_host``) with that host's stored SNMP community and
     monitoring is on, raise or resolve the alert it names (unless
     suppressed) and schedule the host's re-poll. Returns what was done:
     ``{"host_id", "alert", "action", "repoll"}`` (``host_id`` None when the
-    trap is not from a UPS in inventory or its community is wrong)."""
+    trap is not from a UPS in inventory or its community is wrong).
+
+    ``authenticated_host_id`` is the inventory host whose SNMPv3 user the
+    receiver authenticated the trap with (``snmpv3_traps``): such a trap,
+    which carries no community, is believed when it names that same host.
+    A v1 / v2c trap never passes one and is always checked by community."""
     import netcontrol.routes.state as state
     from netcontrol.routes.snmp import trap_community_matches
 
@@ -205,7 +212,11 @@ async def handle_apc_trap(source_ip: str, trap: ApcTrap) -> dict:
     host = await find_ups_host(source_ip, trap.agent_address)
     if host is None:
         return outcome
-    if not trap_community_matches(trap.trap, host):
+    if authenticated_host_id is not None:
+        if int(host["id"]) != int(authenticated_host_id):
+            LOGGER.debug("apc traps: SNMPv3 trap from %s ignored: authenticated for another host", source_ip)
+            return outcome
+    elif not trap_community_matches(trap.trap, host):
         LOGGER.debug("apc traps: trap from %s ignored: not the host's SNMP community", source_ip)
         return outcome
     host_id = int(host["id"])

@@ -27,7 +27,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 import netcontrol.routes.state as state
-from netcontrol import health_checks, snmp_health
+from netcontrol import hardware_components, health_checks, snmp_health
 from netcontrol.drivers import supports_cli
 from netcontrol.integrations.apc import snmp as apc_snmp
 from netcontrol.integrations.availability import ENTITY_TYPES as TOPOLOGY_ENTITY_TYPES
@@ -606,6 +606,10 @@ async def _poll_host_monitoring(host: dict, cred: dict, snmp_cfg: dict) -> dict:
             # timeouts.
             if uptime_vals or if_oper:
                 result.update(await health_checks.read_health(host["id"], device_type, _get, _walk_table))
+                # Hardware components with serials (netcontrol/hardware_components.py):
+                # at most every few hours, sooner after a module or restart
+                # event; read and stored here, never raised.
+                await hardware_components.collect_in_poll(host, device_type, _get, _walk_table)
 
             # An APC UPS: its battery, output and identity (PowerNet-MIB).
             if device_type == apc_snmp.STATUS_KIND:

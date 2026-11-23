@@ -1,4 +1,6 @@
-"""Syslog alert rules API: ``/api/monitoring/syslog-rules``.
+"""Syslog alert rules API: ``/api/monitoring/syslog-rules``, and the
+built-in SNMP trap rules: ``/api/monitoring/trap-rules`` (list, and the
+``enabled`` / ``severity`` override of each; ``netcontrol.trap_rules``).
 
 Registered in ``app.py`` with the monitoring routes' dependencies: reading
 needs ``monitoring``, every write ``monitoring.write``. One merged list of
@@ -22,7 +24,7 @@ import routes.database as db
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
-from netcontrol import syslog_activity, syslog_rules as engine
+from netcontrol import syslog_activity, syslog_rules as engine, trap_rules
 from netcontrol.object_scope import group_filter, refuse_scoped, scope_exempt, scoped
 from netcontrol.routes.shared import _audit, _corr_id, _session_user
 
@@ -171,3 +173,48 @@ async def try_syslog_rules(body: RuleTest):
         return await engine.explain_message(body.message, body.rule)
     except engine.RuleError as exc:
         raise _bad(exc) from None
+
+
+# ── SNMP trap rules (netcontrol.trap_rules, docs/snmp-traps.md) ─────────────
+#
+# Built-in only: the same payload as a built-in syslog rule (``source``
+# ``trap``, ``tags`` / ``clear_tags`` the trap names), and the same override
+# (``enabled``, ``severity``), stored under ``builtin_key`` ``trap_<key>``.
+
+TRAP_PREFIX = "/api/monitoring/trap-rules"
+_TRAP_RULE_NOT_FOUND = "Trap rule not found"
+
+
+async def _trap_rules() -> list[engine.Rule]:
+    engine.invalidate_rules_cache()
+    return await trap_rules.get_rules()
+
+
+@router.get(TRAP_PREFIX)
+@scope_exempt("SNMP trap alert rules apply to every host and hold no host data")
+async def list_trap_rules():
+    return [r.payload() for r in await _trap_rules()]
+
+
+@router.patch(TRAP_PREFIX + "/builtin/{key}")
+@scoped("refused")
+async def patch_builtin_trap_rule(key: str, body: BuiltinPatch, request: Request):
+    await refuse_scoped(request)
+    current = next((r for r in await _trap_rules() if r.key == key), None)
+    if current is None:
+        raise HTTPException(status_code=404, detail=_TRAP_RULE_NOT_FOUND)
+    severity = current.severity if body.severity is None else body.severity
+    if severity not in engine.SEVERITIES:
+        raise HTTPException(status_code=400, detail=f"severity must be one of: {', '.join(engine.SEVERITIES)}.")
+    enabled = current.enabled if body.enabled is None else body.enabled
+    user = _session_user(request)
+    await db.set_syslog_builtin_override(current.ref, enabled, severity, user)
+    engine.invalidate_rules_cache()
+    await _audit(
+        "monitoring",
+        "trap_rule.builtin_updated",
+        user=user,
+        detail=f"rule={key} enabled={enabled} severity={severity}",
+        correlation_id=_corr_id(request),
+    )
+    return next(r.payload() for r in await _trap_rules() if r.key == key)

@@ -36,6 +36,7 @@ function config(over: Partial<EventReceiverConfig> = {}): EventReceiverConfig {
     syslog_tls_require_client_cert: false,
     syslog_tls_match_client_cert: false,
     syslog_udp_actions: true,
+    trap_alerts: true,
     syslog_running: true,
     trap_running: true,
     syslog_received: 1234,
@@ -68,6 +69,7 @@ describe('receiverSettings', () => {
       syslog_tls_require_client_cert: false,
       syslog_tls_match_client_cert: false,
       syslog_udp_actions: true,
+      trap_alerts: true,
     });
   });
 
@@ -192,6 +194,23 @@ describe('receiverCounters', () => {
     expect(items[0].value).toBe('0');
     expect(items[1].value).toBe('None yet');
     expect(items[2].tone).toBeUndefined();
+  });
+
+  it('adds the trap drops: wrong community and SNMPv3 refused', () => {
+    const items = receiverCounters(config({ trap_dropped_community: 3, trap_dropped_v3: 0 }), 'trap', now);
+    expect(items.map((i) => i.label)).toEqual([
+      'Received',
+      'Last message',
+      'Unreadable',
+      'Wrong community',
+      'SNMPv3 refused',
+    ]);
+    expect(items.slice(3).map((i) => [i.value, i.tone])).toEqual([
+      ['3', 'warning'],
+      ['0', undefined],
+    ]);
+    expect(receiverCounters(config({ trap_dropped_v3: 2 }), 'trap', now)[4].tone).toBe('warning');
+    expect(receiverCounters(config(), 'syslog', now)).toHaveLength(3);
   });
 
   it('adds the connections of a stream listener', () => {

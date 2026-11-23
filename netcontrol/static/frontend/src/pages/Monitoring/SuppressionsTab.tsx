@@ -20,7 +20,7 @@ import { formatBackendDateTime, parseBackendDate, toLocalInputValue } from '@/li
 import { usePendingKeys } from '@/lib/usePendingKeys';
 
 import { INACTIVE_OPACITY } from './helpers';
-import { SYSLOG_BUILTIN_METRICS } from './syslogRules';
+import { SYSLOG_BUILTIN_METRICS, TRAP_BUILTIN_METRICS } from './syslogRules';
 
 export function SuppressionsTab() {
   const { confirm, alert } = useDialogs();
@@ -234,6 +234,7 @@ function CreateSuppressionModal({ isOpen, onClose }: { isOpen: boolean; onClose:
             <option value="ups_battery_temperature">UPS Battery Temperature</option>
             <option value="ups_communication">UPS Communication Lost</option>
             {SYSLOG_BUILTIN_METRICS.map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
+            {TRAP_BUILTIN_METRICS.map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
           </select>
         </div>
         <div className="form-group">

@@ -2981,6 +2981,7 @@ from routes.db.flows import *  # noqa: E402,F403
 from routes.db.geolocation import *  # noqa: E402,F403
 from routes.db.git_sources import *  # noqa: E402,F403
 from routes.db.graphs import *  # noqa: E402,F403
+from routes.db.hardware_components import *  # noqa: E402,F403
 from routes.db.hardware_lifecycle import *  # noqa: E402,F403
 from routes.db.intended_config import *  # noqa: E402,F403
 from routes.db.inventory import *  # noqa: E402,F403

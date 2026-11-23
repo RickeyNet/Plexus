@@ -268,6 +268,8 @@ const NAV: TopItem[] = [
     icon: ic.templates,
     children: [
       { label: 'Inventory', icon: ic.inventory, to: '/inventory', feature: 'inventory' },
+      // Hardware components and their serials, and the changes to them.
+      { label: 'Hardware', icon: ic.inventory, to: '/hardware', feature: 'inventory' },
       { label: 'IPAM', icon: ic.ipam, to: '/ipam', feature: 'ipam' },
       { label: 'Virtualization', icon: ic.virtualization, to: '/virtualization', feature: 'virtualization' },
       // Regions, sites, tenant groups and tenants.
