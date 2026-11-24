@@ -81,7 +81,9 @@ A new policy is enabled. To pause it, open the policy's **⋯** menu, choose
 Click **Run Now** on a policy card. Plexus backs up every host in the group
 and shows a message such as `Backup complete: 12 saved, 1 errors, 3
 unchanged (skipped)`. "Unchanged" hosts had the same configuration as their
-newest backup, so no new backup was written.
+newest backup, so no new backup was written. When hosts failed, the message
+lists the first five by hostname, each with the reason; every failed host
+also gets an `error` entry with that reason under **History**.
 
 ### View, compare and download
 
@@ -375,8 +377,17 @@ PUT /api/config-backups/policies/8
 
 ```json
 POST /api/config-backups/policies/7/run-now
-{ "ok": true, "backed_up": 12, "skipped": 3, "errors": 1 }
+{
+  "ok": true, "backed_up": 12, "skipped": 3, "errors": 1,
+  "failures": [
+    { "host_id": 31, "hostname": "fw-branch-1", "ip_address": "192.0.2.21",
+      "error": "This host is not the firewall of any OPNsense source: collect its OPNsense source (Map sources) and import the firewall into the inventory first, then run the policy again" }
+  ]
+}
 ```
+
+`failures` names the hosts that failed, by hostname, each with the reason
+stored on its `error` backup; at most 25, while `errors` counts them all.
 
 Drift:
 

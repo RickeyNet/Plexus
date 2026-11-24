@@ -131,10 +131,20 @@ export interface BackupPolicyUpdatePayload {
   retention_days?: number;
 }
 
+/** A host a policy run could not back up, and why (the text of its error entry). */
+export interface RunBackupPolicyFailure {
+  host_id: number;
+  hostname: string;
+  ip_address: string;
+  error: string;
+}
+
 export interface RunBackupPolicyResult {
   backed_up: number;
   errors: number;
   skipped?: number;
+  /** The failed hosts by hostname; the server names 25 at most, `errors` counts all. */
+  failures?: RunBackupPolicyFailure[];
 }
 
 export interface RestoreBackupResult {

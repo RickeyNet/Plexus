@@ -262,6 +262,17 @@ async def test_backup_host_turns_a_failed_api_backup_into_an_error_row(capture, 
     assert capture["errors"][0]["error_message"] == NO_SOURCE_MESSAGE
 
 
+@pytest.mark.asyncio
+async def test_backup_host_outcome_gives_the_reason_stored_on_the_error_row(capture):
+    """Run Now names why a host failed: the text of its error row."""
+    outcome = await config_backups_module.backup_host_outcome(_SWITCH, None, policy_id=3, capture_method="manual")
+    assert outcome == (False, config_backups_module.NO_CREDENTIAL_MESSAGE)
+    assert capture["errors"][0]["error_message"] == outcome[1]
+
+    outcome = await config_backups_module.backup_host_outcome(_FIREWALL, None, policy_id=3, capture_method="manual")
+    assert outcome == (True, "")
+
+
 def _due(monkeypatch, policy: dict, hosts: list[dict]) -> AsyncMock:
     db = config_backups_module.db
     last_run = AsyncMock()

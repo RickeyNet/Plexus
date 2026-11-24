@@ -624,12 +624,19 @@ async def delete_config_backup_route(backup_id: int, request: Request):
 
 # ── Backup Actions ───────────────────────────────────────────────────────────
 
+# The failed hosts a Run Now answer names with their reason (``errors`` counts
+# them all); every failure is also an error row of the backup history.
+_RUN_NOW_MAX_FAILURES = 25
+
 
 @router.post("/api/config-backups/policies/{policy_id}/run-now")
 @scoped("policy")
 async def run_config_backup_policy_now(policy_id: int, request: Request):
     """Trigger an immediate backup run for a specific policy (its group must
-    be writable for a caller limited to selected inventory groups)."""
+    be writable for a caller limited to selected inventory groups). The
+    answer counts the hosts backed up, unchanged and failed, and names the
+    failed ones (``failures``, by hostname, at most ``_RUN_NOW_MAX_FAILURES``)
+    with the reason stored on their error row."""
     if (await request_scope(request)).restricted:
         # Before the running check, so a hidden policy is not revealed by 409.
         await _require_policy(request, policy_id, write=True)
@@ -656,21 +663,31 @@ async def run_config_backup_policy_now(policy_id: int, request: Request):
         backed_up = 0
         skipped = 0
         errs = 0
+        failures: list[dict] = []
         sem = state.device_op_semaphore()
 
         async def _do_backup(host):
             nonlocal backed_up, skipped, errs
             async with sem:
-                result = await backup_host(host, cred, policy_id=policy_id, capture_method="manual")
+                result, reason = await backup_host_outcome(host, cred, policy_id=policy_id, capture_method="manual")
             if result is True:
                 backed_up += 1
             elif result == "skipped":
                 skipped += 1
             else:
                 errs += 1
+                failures.append(
+                    {
+                        "host_id": host["id"],
+                        "hostname": host.get("hostname") or "",
+                        "ip_address": host.get("ip_address") or "",
+                        "error": reason,
+                    }
+                )
 
         await asyncio.gather(*[_do_backup(h) for h in hosts], return_exceptions=True)
         await db.update_config_backup_policy_last_run(policy_id)
+        failures.sort(key=lambda f: (f["hostname"], f["host_id"]))
 
         session = _get_session(request)
         await _audit(
@@ -680,7 +697,13 @@ async def run_config_backup_policy_now(policy_id: int, request: Request):
             detail=f"policy_id={policy_id} backed_up={backed_up} skipped={skipped} errors={errs}",
             correlation_id=_corr_id(request),
         )
-        return {"ok": True, "backed_up": backed_up, "skipped": skipped, "errors": errs}
+        return {
+            "ok": True,
+            "backed_up": backed_up,
+            "skipped": skipped,
+            "errors": errs,
+            "failures": failures[:_RUN_NOW_MAX_FAILURES],
+        }
     finally:
         _running_policies.discard(policy_id)
 
@@ -780,13 +803,16 @@ NO_CREDENTIAL_MESSAGE = (
 )
 
 
-async def backup_host(host: dict, cred: dict | None, *, policy_id: int, capture_method: str) -> bool | str:
-    """Back up one host of a backup policy. True when a new backup row was
-    stored, ``"skipped"`` when the config is unchanged (no new row: the
-    host's newest backup is marked re-checked instead), False when the
-    capture failed (recorded as an error row). ``capture_method`` is stored
-    on the row: ``scheduled``, ``manual``, ``syslog`` (a configuration
-    change message from the device).
+async def backup_host_outcome(
+    host: dict, cred: dict | None, *, policy_id: int, capture_method: str
+) -> tuple[bool | str, str]:
+    """Back up one host of a backup policy. The result, and for a failed
+    capture the reason stored on its error row (``""`` otherwise). The
+    result is True when a new backup row was stored, ``"skipped"`` when the
+    config is unchanged (no new row: the host's newest backup is marked
+    re-checked instead), False when the capture failed (recorded as an
+    error row). ``capture_method`` is stored on the row: ``scheduled``,
+    ``manual``, ``syslog`` (a configuration change message from the device).
 
     An OPNsense firewall is backed up over the API key of its OPNsense
     source (``opnsense_backup.backup_firewall``: no SSH, ``cred`` unused);
@@ -799,17 +825,24 @@ async def backup_host(host: dict, cred: dict | None, *, policy_id: int, capture_
             raise RuntimeError(NO_CREDENTIAL_MESSAGE)
         else:
             stored = await get_device_config(host, cred, capture_method=capture_method, policy_id=policy_id)
-        return True if stored.created else "skipped"
+        return (True if stored.created else "skipped"), ""
     except Exception as exc:
+        reason = str(exc)[:1000]
         await db.create_config_backup(
             policy_id=policy_id,
             host_id=host["id"],
             config_text="",
             capture_method=capture_method,
             status="error",
-            error_message=str(exc)[:1000],
+            error_message=reason,
         )
-        return False
+        return False, reason
+
+
+async def backup_host(host: dict, cred: dict | None, *, policy_id: int, capture_method: str) -> bool | str:
+    """The result of ``backup_host_outcome``, without the reason."""
+    result, _reason = await backup_host_outcome(host, cred, policy_id=policy_id, capture_method=capture_method)
+    return result
 
 
 async def _policy_credential(policy: dict) -> dict | None:

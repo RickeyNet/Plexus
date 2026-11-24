@@ -1,4 +1,8 @@
-import type { ConfigBackupPolicy, ConfigDriftEvent } from '@/api/configuration';
+import type {
+  ConfigBackupPolicy,
+  ConfigDriftEvent,
+  RunBackupPolicyResult,
+} from '@/api/configuration';
 
 export type BackupView = 'config' | 'diff';
 
@@ -26,6 +30,25 @@ export function policyCredentialNote(
   policy: Pick<ConfigBackupPolicy, 'credential_id'>,
 ): string | null {
   return policy.credential_id == null ? 'No credential: API-read devices (OPNsense) only' : null;
+}
+
+// The failed hosts the Run Now message names; the others are under History.
+const RUN_FAILURES_SHOWN = 5;
+
+// What Run Now shows when it is done: the counts, then each failed host
+// with its reason (the text of its error entry under History).
+export function runBackupPolicyMessage(res: RunBackupPolicyResult): string {
+  let msg = `Backup complete: ${res.backed_up} saved, ${res.errors} errors`;
+  if (res.skipped) msg += `, ${res.skipped} unchanged (skipped)`;
+  if (!res.errors) return msg;
+  const lines = (res.failures ?? [])
+    .slice(0, RUN_FAILURES_SHOWN)
+    .map((f) => `${f.hostname || f.ip_address || `Host ${f.host_id}`}: ${f.error || 'no reason recorded'}`);
+  const unnamed = res.errors - lines.length;
+  if (unnamed > 0) {
+    lines.push(`${unnamed}${lines.length ? ' more' : ''} failed: see their error entries under History.`);
+  }
+  return `${msg}\n\n${lines.join('\n')}`;
 }
 
 // Only successful captures have a config to diff. An unknown status (detail

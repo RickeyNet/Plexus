@@ -1109,6 +1109,15 @@ def test_api_backup_policy_backs_up_the_firewall_over_the_api(api, monkeypatch):
     assert (ran["backed_up"], ran["skipped"], ran["errors"]) == (0, 0, 1)
     (row,) = api.get(f"/api/config-backups?policy_id={policy['id']}&status=error").json()
     assert "not the firewall of any OPNsense source" in row["error_message"]
+    # Run Now names the failed host and why, as its error row does.
+    assert ran["failures"] == [
+        {
+            "host_id": host["id"],
+            "hostname": host["hostname"],
+            "ip_address": host["ip_address"],
+            "error": row["error_message"],
+        }
+    ]
 
     # Collected again as an inventory host (Config backup still off: no backup stored).
     _wait(api, api.post(f"/api/sources/{org['id']}/build").json()["job_id"])
@@ -1116,6 +1125,7 @@ def test_api_backup_policy_backs_up_the_firewall_over_the_api(api, monkeypatch):
 
     ran = api.post(f"/api/config-backups/policies/{policy['id']}/run-now").json()
     assert (ran["backed_up"], ran["skipped"], ran["errors"]) == (1, 0, 0)
+    assert ran["failures"] == []
     (stored,) = [b for b in api.get("/api/config-backups").json() if b["status"] == "success"]
     assert (stored["host_id"], stored["policy_id"], stored["capture_method"]) == (host["id"], policy["id"], "manual")
     assert "core/backup/download/this" in fake.paths()

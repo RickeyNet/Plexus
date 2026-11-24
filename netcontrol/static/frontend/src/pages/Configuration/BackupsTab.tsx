@@ -30,7 +30,7 @@ import { useShowMore } from '@/lib/useShowMore';
 import { BackupModal } from './BackupModal';
 import { BackupPolicyModal } from './BackupPolicyModal';
 import { RestoreBackupModal } from './RestoreBackupModal';
-import { type BackupView, policyCredentialNote } from './helpers';
+import { type BackupView, policyCredentialNote, runBackupPolicyMessage } from './helpers';
 import { RAW_BACKUP_REASON, useCanDownloadBackups, useCanWriteHost, writeControl } from './scopeGating';
 
 type SubTab = 'policies' | 'history';
@@ -252,10 +252,10 @@ function PoliciesList({
                     void pending.run(`run:${p.id}`, async () => {
                       try {
                         const res = await run.mutateAsync(p.id);
-                        let msg = `Backup complete: ${res.backed_up} saved, ${res.errors} errors`;
-                        if (res.skipped)
-                          msg += `, ${res.skipped} unchanged (skipped)`;
-                        void alert(msg);
+                        void alert({
+                          message: runBackupPolicyMessage(res),
+                          variant: res.errors ? 'error' : 'default',
+                        });
                       } catch (e) {
                         void alert({ message: (e as Error).message, variant: 'error' });
                       }
