@@ -243,6 +243,8 @@ export interface SecretVariable extends ReferencedRow {
   description?: string | null;
   created_by?: string | null;
   created_at?: string | null;
+  /** Whose jobs may have the secret resolved; empty rule = every user who may run the job. */
+  usable_by?: JobPermissionRule;
 }
 
 export interface CredentialPayload {
@@ -258,6 +260,7 @@ export interface SecretVariablePayload {
   value?: string;
   description?: string;
   external?: ExternalReferenceBody;
+  usable_by?: JobPermissionRule;
 }
 
 // ── Playbooks ──────────────────────────────────────────────────────────────

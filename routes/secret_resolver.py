@@ -45,6 +45,36 @@ async def _plaintext(row: dict) -> str | None:
         return None
 
 
+# Role and access group ids of the user a secret is resolved for; ``None``
+# is a system caller (unattended polling), to which no rule applies.
+SecretUser = tuple[str, list[int]] | None
+
+
+def secret_rule(raw: object) -> dict:
+    """A secret variable's stored ``usable_by`` as a ``{"roles", "groups"}``
+    rule (``netcontrol.job_inputs.normalize_rule``); empty is open (every
+    user who may run the job). A stored value that no longer validates
+    reads as admins only, so a damaged rule never opens a secret up."""
+    from netcontrol.job_inputs import JobInputError, normalize_rule
+
+    try:
+        return normalize_rule(raw, "usable_by")
+    except JobInputError:
+        return {"roles": ["admin"], "groups": []}
+
+
+def may_use_secret(row: dict, user: SecretUser) -> bool:
+    """Whether ``user`` may have the secret variable ``row`` resolved: always
+    for a system caller (``None``), else by its ``usable_by`` rule (admins
+    always pass)."""
+    if user is None:
+        return True
+    from netcontrol.job_inputs import rule_allows
+
+    role, group_ids = user
+    return rule_allows(secret_rule(row.get("usable_by")), role=role, group_ids=group_ids)
+
+
 def normalize_secret_name(name: str) -> str:
     """Reduce a pasted reference to the bare secret name.
 
@@ -80,6 +110,7 @@ async def resolve_secrets(
     template_commands: list[str],
     *,
     redact: bool = False,
+    user: SecretUser = None,
 ) -> list[str]:
     """Replace ``{{secret.NAME}}`` placeholders with decrypted values.
 
@@ -90,6 +121,11 @@ async def resolve_secrets(
     redact:
         If True, replace values with ``********`` instead of the real
         plaintext.  Used for dry-run / audit display.
+    user:
+        The (role, access group ids) the secrets are resolved for. A secret
+        whose ``usable_by`` rule does not allow them is reported as missing,
+        so a caller cannot tell it from one that does not exist. ``None``
+        (the default) is a system caller and applies no rule.
 
     Returns
     -------
@@ -99,7 +135,8 @@ async def resolve_secrets(
     Raises
     ------
     SecretResolutionError
-        If any referenced secret variable does not exist in the store.
+        If any referenced secret variable does not exist in the store (or
+        may not be used by ``user``).
     """
     # Fast path - nothing to resolve
     names = extract_secret_names(template_commands)
@@ -110,7 +147,7 @@ async def resolve_secrets(
     secrets_map: dict[str, str] = {}
     for name in names:
         row = await db.get_secret_variable_by_name(name)
-        if row is None:
+        if row is None or not may_use_secret(row, user):
             continue
         if redact:
             secrets_map[name] = "********"
@@ -140,13 +177,15 @@ def redact_secrets_in_text(text: str) -> str:
     return _SECRET_ANY_RE.sub("********", text)
 
 
-async def build_redaction_set(template_commands: list[str]) -> set[str]:
+async def build_redaction_set(template_commands: list[str], *, user: SecretUser = None) -> set[str]:
     """Return the set of decrypted secret values referenced in *template_commands*.
 
     Used to scrub job output logs so plaintext secrets never reach the DB
     or WebSocket subscribers. Raises ``SecretResolutionError`` for an
     external secret that cannot be resolved: a value missing here would
-    not be scrubbed if a later resolution succeeded.
+    not be scrubbed if a later resolution succeeded. A secret ``user`` may
+    not use (``resolve_secrets``) is skipped like a missing one: it is not
+    decrypted, and ``resolve_secrets`` refuses it.
     """
     names = extract_secret_names(template_commands)
     if not names:
@@ -155,7 +194,7 @@ async def build_redaction_set(template_commands: list[str]) -> set[str]:
     failed: list[str] = []
     for name in names:
         row = await db.get_secret_variable_by_name(name)
-        if row:
+        if row and may_use_secret(row, user):
             val = await _plaintext(row)
             if val is None:
                 failed.append(name)

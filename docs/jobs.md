@@ -180,6 +180,32 @@ a letter or `_`, and is at most 64 characters. If you paste the full
 `{{secret.NAME}}` reference, Plexus keeps only the name. The value is stored
 encrypted and never shown again; **Edit** lets you replace it.
 
+### Who may use a secret variable
+
+**Usable by** on the create and edit form limits whose jobs may have the
+secret resolved. Tick **Admins only** to keep it to admins, or tick one or
+more access groups to add their members; nothing ticked (the default) lets
+every user who can run the job use it, and so does **Every user (role:
+user)**. The list shows each secret's rule under **Usable by**.
+
+- Admins and the server API token may always use every secret.
+- A user the rule does not allow gets the same answer as for a secret that
+  does not exist: launch, retry and **Run Live** are refused with "a
+  secret variable that does not exist or that it may not use", and a
+  secret input reads "the secret variable does not exist or this job may
+  not use it". Neither names the secret.
+- The rule is checked against the person who launched the job again when
+  the job leaves the queue (jobs from ChatOps presets and approved jobs
+  too). If an admin tightened the rule, or the launcher lost the role or
+  access group, since launch, the job fails before it signs in, with the
+  same message and no secret name in the job log. The server log names
+  the secret for admins.
+- A job launched with the server API token is stored as launched by
+  `admin`; at the queue it counts as an admin only while an account named
+  `admin` exists and is an admin, as for the other queue checks.
+- SNMPv3 profiles that reference a secret variable are admin settings and
+  polling is not a user's job: the rule does not apply to them.
+
 ### Secret variables and ad-hoc targets
 
 A job sends the value of every secret variable its instruction set (any
@@ -300,8 +326,10 @@ days** or **Last 30 days**.
   broadcast, `0.0.0.0/8`), if a non-admin sends secrets to an ad-hoc
   address (see [Secret variables and ad-hoc
   targets](#secret-variables-and-ad-hoc-targets)), if a run input is not
-  valid (or names a host, group or secret that does not exist), or if the
-  task's permissions refuse you.
+  valid (or names a host, group or secret that does not exist), if a
+  secret's **Usable by** rule does not include you (see [Who may use a
+  secret variable](#who-may-use-a-secret-variable)), or if the task's
+  permissions refuse you.
 - **Secrets in logs.** Secret values (from instruction sets and secret
   inputs) are removed from Python and Ansible task output before it is
   stored, together with their base64 (standard and URL-safe, with or

@@ -404,13 +404,30 @@ def _secret_inputs_given(schema: list[dict], values: dict) -> bool:
     return any(f.get("type") == "secret" and f.get("name") in values for f in job_inputs.normalize_schema(schema))
 
 
-async def _stored_job_uses_secrets(job: dict) -> bool:
-    """Whether a stored job's template (any variant) or inputs reference
-    secret variables (retry and rerun run it again as stored)."""
+async def _stored_job_secret_lines(job: dict) -> list[str]:
+    """A stored job's template lines (every variant) and its input values
+    that hold ``{{secret.NAME}}`` references (retry and rerun run it again
+    as stored)."""
     lines = await _template_command_lines(job.get("template_id"))
-    if lines and has_secret_references("\n".join(lines)):
-        return True
-    return _params_use_secrets(_stored_params(job.get("parameters")))
+    params = _stored_params(job.get("parameters"))
+    return lines + [v for v in params.values() if isinstance(v, str) and has_secret_references(v)]
+
+
+async def _require_secret_use(lines: list[str], caller: tuple[str, list[int]]) -> None:
+    """400 (``SECRET_UNAVAILABLE``) when ``lines`` reference a secret variable
+    that does not exist or whose ``usable_by`` rule does not allow ``caller``
+    (role, access group ids): the two read the same. Checked without
+    decrypting anything; the queue checks the launcher again."""
+    if not lines or not has_secret_references("\n".join(lines)):
+        return
+    try:
+        await resolve_secrets(lines, redact=True, user=caller)
+    except SecretResolutionError as exc:
+        # Server log only: the names stay out of the response.
+        LOGGER.info("job request: unavailable secret variable(s): %s", ", ".join(exc.missing))
+        raise HTTPException(
+            400, f"{SECRET_UNAVAILABLE}. Check the template against Credentials → Secret Variables."
+        ) from None
 
 
 async def _require_secret_targets(request: Request, ad_hoc_ips: list[str] | None, *, uses_secrets: bool) -> None:
@@ -422,6 +439,22 @@ async def _require_secret_targets(request: Request, ad_hoc_ips: list[str] | None
     outside = await unmanaged_addresses(ad_hoc_ips, request)
     if outside:
         raise HTTPException(403, _secrets_need_inventory(outside))
+
+
+async def _require_stored_secrets(request: Request, job: dict) -> None:
+    """Retry and rerun (Run Live) of a stored job: the ad-hoc target check
+    of ``_require_secret_targets``, then, for a non-admin caller, every
+    secret the job references must exist and allow them (``_require_secret_use``,
+    the launch refusal). Admins and API token callers keep the old answer: a
+    missing secret fails the new job when the queue starts it."""
+    lines = await _stored_job_secret_lines(job)
+    uses_secrets = bool(lines) and has_secret_references("\n".join(lines))
+    await _require_secret_targets(request, _stored_list(job, "ad_hoc_ips"), uses_secrets=uses_secrets)
+    if not uses_secrets:
+        return
+    caller = await job_inputs.user_permissions(_get_session(request))
+    if caller[0] != "admin":
+        await _require_secret_use(lines, caller)
 
 
 async def _launcher_secret_targets_refused(job: dict, hosts: Iterable[dict] = ()) -> list[str]:
@@ -932,6 +965,10 @@ async def _process_job_queue_inner():
     _all_bodies = [template_commands, *template_by_device_type.values()]
     _needs_secrets = any(b and has_secret_references("\n".join(b)) for b in _all_bodies)
     stored_inputs = _stored_params(next_job.get("parameters"))
+    # Each secret's usable_by rule is applied to the launcher as they are
+    # now (an admin may have tightened it, or the launcher lost a role or an
+    # access group, since launch); a refused secret reads as a missing one.
+    launcher: tuple[str, list[int]] = ("", [])
     if _needs_secrets or _params_use_secrets(stored_inputs):
         # Re-checked here: the launcher may have lost the admin role, the
         # host may have left the inventory, or the job came from a preset.
@@ -940,16 +977,17 @@ async def _process_job_queue_inner():
             await db.finish_job(job_id, status="failed")
             await db.add_job_event(job_id, "error", _secrets_need_inventory(refused))
             return
+        launcher = await job_inputs.launcher_permissions(next_job.get("launched_by"))
     if _needs_secrets:
         try:
             for body in _all_bodies:
                 if body and has_secret_references("\n".join(body)):
-                    _secret_redact_values |= await build_redaction_set(body)
+                    _secret_redact_values |= await build_redaction_set(body, user=launcher)
             if template_commands:
-                template_commands = await resolve_secrets(template_commands)
+                template_commands = await resolve_secrets(template_commands, user=launcher)
             for dt, body in list(template_by_device_type.items()):
                 if body:
-                    template_by_device_type[dt] = await resolve_secrets(body)
+                    template_by_device_type[dt] = await resolve_secrets(body, user=launcher)
             await db.add_job_event(job_id, "info", "Secret variables resolved successfully")
         except SecretResolutionError as exc:
             # The job log is readable by the launcher: no names (see SECRET_UNAVAILABLE).
@@ -985,7 +1023,7 @@ async def _process_job_queue_inner():
     # Typed inputs are stored with secret fields as {{secret.NAME}}
     # references; decrypt them only now, and scrub the values from the log.
     try:
-        job_parameters, input_redact = await job_inputs.resolve_secret_inputs(stored_inputs)
+        job_parameters, input_redact = await job_inputs.resolve_secret_inputs(stored_inputs, user=launcher)
     except SecretResolutionError as exc:
         LOGGER.warning("job %s: unresolved secret input(s): %s", job_id, ", ".join(exc.missing))
         await db.finish_job(job_id, status="failed")
@@ -1498,19 +1536,13 @@ async def launch_job(body: JobLaunch, request: Request):
         uses_secrets=template_uses_secrets or _secret_inputs_given(schema, coerced_params),
     )
 
-    # Validate that all {{secret.NAME}} references can be resolved
+    # Every {{secret.NAME}} reference must exist and its usable_by rule must
+    # allow the caller (dry-resolved, redacted: decrypted only at run time).
+    caller = await job_inputs.user_permissions(session)
     if template_uses_secrets:
-        try:
-            # Dry-resolve (redacted) to verify all secrets exist without
-            # decrypting yet - actual decryption happens at execution time.
-            await resolve_secrets(template_commands, redact=True)
-        except SecretResolutionError as exc:
-            LOGGER.info("job launch: unresolved secret variable(s): %s", ", ".join(exc.missing))
-            raise HTTPException(
-                400, f"{SECRET_UNAVAILABLE}. Check the template against Credentials → Secret Variables."
-            )
+        await _require_secret_use(template_commands, caller)
     try:
-        coerced_params = await job_inputs.resolve_references(schema, coerced_params)
+        coerced_params = await job_inputs.resolve_references(schema, coerced_params, user=caller)
     except job_inputs.JobInputError as exc:
         raise _input_error(exc)
 
@@ -1616,9 +1648,7 @@ async def retry_job_endpoint(job_id: int, request: Request):
         await _require_playbook_launch(request, playbook)
         await _require_job_permission(request, playbook, commit=not bool(job.get("dry_run", 1)))
         await _require_input_scope(request, effective_input_schema(playbook)[0], _stored_params(job.get("parameters")))
-    await _require_secret_targets(
-        request, _stored_list(job, "ad_hoc_ips"), uses_secrets=await _stored_job_uses_secrets(job)
-    )
+    await _require_stored_secrets(request, job)
     session = _get_session(request)
     user = session["user"] if session else "admin"
 
@@ -1655,9 +1685,7 @@ async def rerun_job_endpoint(job_id: int, request: Request):
         await _require_playbook_launch(request, playbook)
         await _require_job_permission(request, playbook, commit=True)
         await _require_input_scope(request, effective_input_schema(playbook)[0], _stored_params(job.get("parameters")))
-    await _require_secret_targets(
-        request, _stored_list(job, "ad_hoc_ips"), uses_secrets=await _stored_job_uses_secrets(job)
-    )
+    await _require_stored_secrets(request, job)
     session = _get_session(request)
     user = session["user"] if session else "admin"
 

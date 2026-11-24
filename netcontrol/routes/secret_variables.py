@@ -6,6 +6,10 @@ and resolved at job execution time.  Values are AES-256-GCM encrypted at rest,
 or live in an external secrets provider (``external``: provider, path, key;
 docs/secrets-providers.md).  Only admins can create/update/delete secret
 variables; values are never returned.
+
+``usable_by`` (a ``{"roles", "groups"}`` rule, ``netcontrol.job_inputs``)
+limits which users' jobs may have the secret resolved; empty is open.
+Admins are always allowed (``routes.secret_resolver.may_use_secret``).
 """
 
 from __future__ import annotations
@@ -16,8 +20,9 @@ import routes.database as db
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 from routes.crypto import encrypt
-from routes.secret_resolver import normalize_secret_name
+from routes.secret_resolver import normalize_secret_name, secret_rule
 
+from netcontrol import job_inputs
 from netcontrol.routes.shared import _audit, _corr_id, admin_session
 from netcontrol.secrets_providers.base import check_reference
 from netcontrol.secrets_providers.service import reference_provider
@@ -60,15 +65,18 @@ class SecretVariableCreate(BaseModel):
     value: str = ""
     description: str = ""
     external: ExternalSecretReference | None = None
+    usable_by: dict | None = None
 
 
 class SecretVariableUpdate(BaseModel):
     """A new ``value`` replaces an external reference; ``external``
-    replaces the stored value."""
+    replaces the stored value; ``usable_by`` replaces the rule (``{}``
+    opens it)."""
 
     value: str | None = None
     description: str | None = None
     external: ExternalSecretReference | None = None
+    usable_by: dict | None = None
 
 
 async def _checked_reference(ref: ExternalSecretReference) -> dict:
@@ -84,6 +92,40 @@ async def _checked_reference(ref: ExternalSecretReference) -> dict:
     return {"provider_id": ref.provider_id, "path": ref.path.strip(), "key": ref.key.strip()}
 
 
+async def _checked_rule(raw: dict) -> dict:
+    """The ``usable_by`` rule as stored; 422 (as for playbook permissions)
+    for a bad rule or an access group that does not exist."""
+    try:
+        rule = job_inputs.normalize_rule(raw, "usable_by")
+    except job_inputs.JobInputError as exc:
+        raise HTTPException(status_code=422, detail={"message": exc.message, "fields": exc.fields}) from exc
+    missing = await job_inputs.unknown_access_groups(rule["groups"])
+    if missing:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "message": "The rule names access groups that do not exist.",
+                "fields": {"usable_by.groups": f"Unknown access group id(s): {', '.join(map(str, missing))}"},
+            },
+        )
+    return rule
+
+
+def _rule_text(rule: dict) -> str:
+    """A rule for the audit log: roles and group ids, never a value."""
+    if not (rule["roles"] or rule["groups"]):
+        return "usable by: every user who may run the job"
+    roles = ", ".join(rule["roles"]) or "none"
+    groups = ", ".join(map(str, rule["groups"])) or "none"
+    return f"usable by: roles {roles}; access groups {groups}"
+
+
+def _with_rule(sv: dict) -> dict:
+    """A secret variable row with ``usable_by`` as a rule object."""
+    sv["usable_by"] = secret_rule(sv.get("usable_by"))
+    return sv
+
+
 # ── Routes ────────────────────────────────────────────────────────────────────
 
 
@@ -96,7 +138,7 @@ async def list_secret_variables(request: Request):
     wired up, which is information a regular user shouldn't need.
     """
     await admin_session(request)
-    return await db.get_all_secret_variables()
+    return [_with_rule(sv) for sv in await db.get_all_secret_variables()]
 
 
 # Registered before /{var_id} so the literal `names` segment matches first;
@@ -120,7 +162,7 @@ async def get_secret_variable(var_id: int, request: Request):
     sv = await db.get_secret_variable(var_id)
     if not sv:
         raise HTTPException(404, "Secret variable not found")
-    return sv
+    return _with_rule(sv)
 
 
 @router.post("/api/secret-variables", status_code=201)
@@ -131,6 +173,7 @@ async def create_secret_variable(body: SecretVariableCreate, request: Request):
     external = await _checked_reference(body.external) if body.external is not None else None
     if not body.value and external is None:
         raise HTTPException(400, "Value must not be empty")
+    usable_by = await _checked_rule(body.usable_by or {})
 
     # Check for duplicate name
     existing = await db.get_secret_variable_by_name(name)
@@ -144,13 +187,15 @@ async def create_secret_variable(body: SecretVariableCreate, request: Request):
         description=body.description,
         created_by=session["user"],
         external=external,
+        usable_by=usable_by,
     )
     await _audit(
         "config",
         "secret_variable.create",
         user=session["user"],
         detail=f"created secret variable '{name}'"
-        + (f" (external reference: provider {external['provider_id']})" if external else ""),
+        + (f" (external reference: provider {external['provider_id']})" if external else "")
+        + f" ({_rule_text(usable_by)})",
         correlation_id=_corr_id(request),
     )
     # Log neither the name nor the id: CodeQL treats anything returned by
@@ -169,12 +214,14 @@ async def update_secret_variable(var_id: int, body: SecretVariableUpdate, reques
         raise HTTPException(404, "Secret variable not found")
 
     external = await _checked_reference(body.external) if body.external is not None else None
+    usable_by = await _checked_rule(body.usable_by) if body.usable_by is not None else None
     enc_value = encrypt(body.value) if body.value and external is None else None
     updated = await db.update_secret_variable(
         var_id,
         enc_value=enc_value,
         description=body.description,
         external=external,
+        usable_by=usable_by,
     )
     if not updated:
         raise HTTPException(404, "Secret variable not found")
@@ -186,6 +233,8 @@ async def update_secret_variable(var_id: int, body: SecretVariableUpdate, reques
         what.append("value")
     if body.description is not None:
         what.append("description")
+    if usable_by is not None:
+        what.append(_rule_text(usable_by))
     await _audit(
         "config",
         "secret_variable.update",

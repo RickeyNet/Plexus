@@ -1,5 +1,6 @@
 import { useId, useState, type FormEvent } from 'react';
 
+import { AccessRuleChecks } from '@/components/AccessRuleChecks';
 import { Callout } from '@/components/Callout';
 import { DeleteButton } from '@/components/DeleteButton';
 import { EmptyState } from '@/components/EmptyState';
@@ -13,8 +14,10 @@ import {
   useDeleteSecretVariable,
   useSecretVariables,
   useUpdateSecretVariable,
+  type JobPermissionRule,
   type SecretVariable,
 } from '@/api/jobs';
+import { useAccessGroups } from '@/api/settings';
 import { useReferenceProviders } from '@/api/secretsProviders';
 import { ExternalReferenceFields, ValueSourceToggle, type ValueSource } from '@/components/ExternalReferenceFields';
 import { SecretInput } from '@/components/SecretInput';
@@ -30,10 +33,20 @@ import {
   type ReferenceErrors,
 } from '@/lib/secretsProviders';
 import { usePendingKeys } from '@/lib/usePendingKeys';
+import { accessRuleSummary } from '@/lib/accessGroups';
+
+const OPEN_RULE: JobPermissionRule = { roles: [], groups: [] };
+const EVERYONE = 'everyone who can run jobs';
+const USABLE_BY_HELP =
+  'Nothing ticked: every user who can run the job may use this secret. ' +
+  'Admins only: no other user may use it in a job. ' +
+  'Admins and API tokens are always allowed. Others get the same answer as for a secret that does not exist.';
 
 export function SecretVariablesList() {
   const { confirm, alert } = useDialogs();
   const query = useSecretVariables();
+  // The page is admin only, like the secret variables API.
+  const accessGroups = useAccessGroups();
   const deleteMut = useDeleteSecretVariable();
   const deleting = usePendingKeys<number>();
   const [showCreate, setShowCreate] = useState(false);
@@ -84,6 +97,9 @@ export function SecretVariablesList() {
                     External: {referenceLabel(v)}
                   </div>
                 )}
+                <div className="text-muted" style={{ fontSize: '0.85rem', marginTop: '0.15rem' }}>
+                  Usable by: {accessRuleSummary(v.usable_by, accessGroups.data, EVERYONE)}
+                </div>
                 <div className="text-muted" style={{ fontSize: '0.75rem', marginTop: '0.15rem' }}>
                   Created by {v.created_by || 'system'}
                   {v.created_at && ` • ${v.created_at.replace('T', ' ').substring(0, 16)}`}
@@ -118,6 +134,8 @@ function normalizeSecretName(raw: string): string {
 function CreateSecretModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) {
   const createMut = useCreateSecretVariable();
   const providers = useReferenceProviders(isOpen);
+  const accessGroups = useAccessGroups(isOpen);
+  const [usableBy, setUsableBy] = useState<JobPermissionRule>(OPEN_RULE);
   const formId = useId();
   const [name, setName] = useState('');
   const [value, setValue] = useState('');
@@ -150,8 +168,8 @@ function CreateSecretModal({ isOpen, onClose }: { isOpen: boolean; onClose: () =
     if (nextErrors.name || nextErrors.value || Object.keys(nextRef).length > 0) return;
     createMut.mutate(
       external
-        ? { name: normalized, description: description.trim(), external: referencePayload(reference) }
-        : { name: normalized, value, description: description.trim() },
+        ? { name: normalized, description: description.trim(), external: referencePayload(reference), usable_by: usableBy }
+        : { name: normalized, value, description: description.trim(), usable_by: usableBy },
       {
         onSuccess: () => {
           setName('');
@@ -159,6 +177,7 @@ function CreateSecretModal({ isOpen, onClose }: { isOpen: boolean; onClose: () =
           setDescription('');
           setSource('stored');
           setReference(referenceDraft(null));
+          setUsableBy(OPEN_RULE);
           onClose();
         },
         onError: (e) => { setSaveError((e as Error).message); },
@@ -244,6 +263,15 @@ function CreateSecretModal({ isOpen, onClose }: { isOpen: boolean; onClose: () =
           <label className="form-label" htmlFor={`${formId}-description`}>Description (optional)</label>
           <input id={`${formId}-description`} className="form-input" value={description} onChange={(e) => setDescription(e.target.value)} />
         </div>
+        <AccessRuleChecks
+          title="Usable by"
+          help={USABLE_BY_HELP}
+          value={usableBy}
+          onChange={setUsableBy}
+          accessGroups={accessGroups.data}
+          accessGroupsFailed={accessGroups.isError}
+          adminsOnlyOption
+        />
       </form>
     </Modal>
   );
@@ -252,6 +280,8 @@ function CreateSecretModal({ isOpen, onClose }: { isOpen: boolean; onClose: () =
 function EditSecretModal({ secret, onClose }: { secret: SecretVariable | null; onClose: () => void }) {
   const updateMut = useUpdateSecretVariable();
   const providers = useReferenceProviders(secret != null);
+  const accessGroups = useAccessGroups(secret != null);
+  const [usableBy, setUsableBy] = useState<JobPermissionRule>(OPEN_RULE);
   const formId = useId();
   const [value, setValue] = useState('');
   const [description, setDescription] = useState('');
@@ -270,6 +300,7 @@ function EditSecretModal({ secret, onClose }: { secret: SecretVariable | null; o
       setDescription(secret.description ?? '');
       setSource(hasReference(secret) ? 'external' : 'stored');
       setReference(referenceDraft(secret));
+      setUsableBy(secret.usable_by ?? OPEN_RULE);
       setRefErrors({});
       setSaveError(null);
     }
@@ -279,8 +310,9 @@ function EditSecretModal({ secret, onClose }: { secret: SecretVariable | null; o
     e.preventDefault();
     if (!secret) return;
     setSaveError(null);
-    const data: { value?: string; description?: string; external?: ExternalReferenceBody } = {
+    const data: { value?: string; description?: string; external?: ExternalReferenceBody; usable_by: JobPermissionRule } = {
       description: description.trim(),
+      usable_by: usableBy,
     };
     if (external) {
       const nextRef = validateReference(reference);
@@ -340,6 +372,16 @@ function EditSecretModal({ secret, onClose }: { secret: SecretVariable | null; o
           <label className="form-label" htmlFor={`${formId}-description`}>Description</label>
           <input id={`${formId}-description`} className="form-input" value={description} onChange={(e) => setDescription(e.target.value)} />
         </div>
+        <AccessRuleChecks
+          title="Usable by"
+          help={USABLE_BY_HELP}
+          value={usableBy}
+          onChange={setUsableBy}
+          accessGroups={accessGroups.data}
+          accessGroupsFailed={accessGroups.isError}
+          showMissing
+          adminsOnlyOption
+        />
       </form>
     </Modal>
   );

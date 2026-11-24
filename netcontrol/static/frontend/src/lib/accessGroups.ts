@@ -21,16 +21,25 @@ export function toggleGroupId(value: number[], id: number, on: boolean): number[
   return on ? [...rest, id] : rest;
 }
 
+/** Whether a `{roles, groups}` rule allows admins and nobody else. */
+export function isAdminsOnly(rule: { roles: string[]; groups: number[] }): boolean {
+  return rule.groups.length === 0 && rule.roles.length > 0 && rule.roles.every((r) => r === 'admin');
+}
+
 /** A `{roles, groups}` rule in words, `open` for the empty rule (e.g. "users;
- *  access groups: NOC, Field"). */
+ *  access groups: NOC, Field"; "admins only" when no other role or group is
+ *  named). */
 export function accessRuleSummary(
   rule: { roles: string[]; groups: number[] } | undefined,
   groups: AccessGroup[] | undefined,
   open: string,
 ): string {
   if (!rule || (rule.roles.length === 0 && rule.groups.length === 0)) return open;
+  if (isAdminsOnly(rule)) return 'admins only';
   const parts: string[] = [];
-  if (rule.roles.length > 0) parts.push(rule.roles.map((r) => `${r}s`).join(', '));
+  // Admins are always allowed, so the admin role adds nothing next to another role or a group.
+  const roles = rule.roles.filter((r) => r !== 'admin');
+  if (roles.length > 0) parts.push(roles.map((r) => `${r}s`).join(', '));
   if (rule.groups.length > 0) parts.push(`access groups: ${accessGroupLabels(rule.groups, groups).join(', ')}`);
   return parts.join('; ');
 }

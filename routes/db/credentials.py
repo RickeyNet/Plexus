@@ -48,9 +48,17 @@ __all__ = [
 # 0106) with the provider's name; never a value.
 _SECRET_VARIABLE_COLUMNS = (
     "v.id, v.name, v.description, v.created_by, v.created_at, v.updated_at, "
-    "v.ext_provider_id, v.ext_path, v.ext_key, p.name AS ext_provider_name"
+    "v.ext_provider_id, v.ext_path, v.ext_key, p.name AS ext_provider_name, v.usable_by"
 )
 _SECRET_VARIABLE_FROM = "secret_variables v LEFT JOIN secrets_providers p ON p.id = v.ext_provider_id"
+
+
+def _usable_by_text(rule: dict | None) -> str:
+    """A ``usable_by`` rule as stored (migration 0140): ``''`` for the open
+    rule, else its JSON. Read back with ``routes.secret_resolver.secret_rule``."""
+    if not rule or not (rule.get("roles") or rule.get("groups")):
+        return ""
+    return json.dumps({"roles": list(rule.get("roles") or []), "groups": list(rule.get("groups") or [])})
 
 
 async def get_all_secret_variables() -> list[dict]:
@@ -85,7 +93,7 @@ async def get_secret_variable_by_name(name: str) -> dict | None:
     conn = await _dbcore.get_db()
     try:
         cursor = await conn.execute(
-            "SELECT id, name, enc_value, description, created_by, ext_provider_id, ext_path, ext_key "
+            "SELECT id, name, enc_value, description, created_by, ext_provider_id, ext_path, ext_key, usable_by "
             "FROM secret_variables WHERE name = ?",
             (name,),
         )
@@ -101,16 +109,19 @@ async def create_secret_variable(
     created_by: str = "",
     *,
     external: dict | None = None,
+    usable_by: dict | None = None,
 ) -> int:
     """Insert a secret variable. ``external`` (``provider_id``, ``path``,
-    ``key``) stores a reference instead of ``enc_value`` (then ``''``)."""
+    ``key``) stores a reference instead of ``enc_value`` (then ``''``).
+    ``usable_by`` is a validated ``{"roles", "groups"}`` rule; ``None``
+    stores the open rule."""
     ext = _external_columns(external)
     conn = await _dbcore.get_db()
     try:
         cursor = await conn.execute(
             "INSERT INTO secret_variables (name, enc_value, description, created_by, ext_provider_id, ext_path, "
-            "ext_key) VALUES (?,?,?,?,?,?,?)",
-            (name, "" if external else enc_value, description, created_by, *ext[:3]),
+            "ext_key, usable_by) VALUES (?,?,?,?,?,?,?,?)",
+            (name, "" if external else enc_value, description, created_by, *ext[:3], _usable_by_text(usable_by)),
         )
         await conn.commit()
         return cursor.lastrowid
@@ -124,9 +135,11 @@ async def update_secret_variable(
     enc_value: str | None = None,
     description: str | None = None,
     external: dict | None = None,
+    usable_by: dict | None = None,
 ) -> bool:
     """Update a secret variable. ``external`` sets a reference (and clears
-    the stored value); a new ``enc_value`` clears the reference."""
+    the stored value); a new ``enc_value`` clears the reference.
+    ``usable_by`` replaces the rule (``None`` leaves it)."""
     updates = []
     args: list = []
     if external is not None:
@@ -138,6 +151,9 @@ async def update_secret_variable(
     if description is not None:
         updates.append("description = ?")
         args.append(description)
+    if usable_by is not None:
+        updates.append("usable_by = ?")
+        args.append(_usable_by_text(usable_by))
     if not updates:
         return True
     updates.append("updated_at = NOW()::text")

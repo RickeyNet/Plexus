@@ -366,6 +366,15 @@ Service credentials (`/api/credentials/service`) and secret variables
 `value`) take the same reference. See
 [secrets-providers.md](secrets-providers.md).
 
+A secret variable also takes and returns `usable_by: {roles, groups}`: the
+user roles (`user`, `admin`) and access group ids whose jobs may have it
+resolved. Empty or left out on create is open (every user who may run the
+job); left out on update keeps the rule, and `{}` opens it.
+`{"roles": ["admin"]}` keeps the secret to admins. A bad role or
+an access group id that does not exist answers `422` with
+`{message, fields}`. Admins and the API token are always allowed. See
+[jobs.md](jobs.md#who-may-use-a-secret-variable).
+
 ### Secrets providers
 Reads need the `secrets-providers` feature. Create, update, delete and test
 are admin only (an admin session or the server API token; others get

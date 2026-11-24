@@ -315,18 +315,15 @@ async def _clean_permissions(raw: dict | None, request: Request | None) -> dict 
         permissions = job_inputs.normalize_permissions(raw)
     except job_inputs.JobInputError as exc:
         raise _unprocessable(exc)
-    wanted = {g for rule in permissions.values() for g in rule["groups"]}
-    if wanted:
-        known = {int(g["id"]) for g in await db.get_all_access_groups()}
-        missing = sorted(wanted - known)
-        if missing:
-            raise HTTPException(
-                status_code=422,
-                detail={
-                    "message": "The permissions name access groups that do not exist.",
-                    "fields": {"groups": f"Unknown access group id(s): {', '.join(map(str, missing))}"},
-                },
-            )
+    missing = await job_inputs.unknown_access_groups({g for rule in permissions.values() for g in rule["groups"]})
+    if missing:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "message": "The permissions name access groups that do not exist.",
+                "fields": {"groups": f"Unknown access group id(s): {', '.join(map(str, missing))}"},
+            },
+        )
     return permissions
 
 

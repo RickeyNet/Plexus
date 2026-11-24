@@ -36,7 +36,9 @@ other field is refused.
 Permissions (``playbooks.permissions``) name the user roles and access group
 ids allowed to ``run`` the job and to ``commit`` (run it live). An empty
 rule means "no restriction"; an empty commit rule falls back to the run
-rule. Admins and server API token callers are always allowed.
+rule. Admins and server API token callers are always allowed. A secret
+variable's ``usable_by`` is one such rule (``normalize_rule``,
+``rule_allows``), applied by ``routes.secret_resolver``.
 
 Used by ``netcontrol.routes.playbooks`` and ``netcontrol.routes.jobs``.
 """
@@ -268,11 +270,14 @@ def validate_inputs(schema: list[dict], raw: dict | None) -> dict:
     return values
 
 
-async def resolve_references(schema: list[dict], values: dict) -> dict:
+async def resolve_references(schema: list[dict], values: dict, *, user: tuple[str, list[int]] | None = None) -> dict:
     """Check host, group and secret inputs exist and turn them into what the
     job record stores: hosts and groups as small dicts, secrets as
-    ``{{secret.NAME}}`` references. Raises :class:`JobInputError`."""
+    ``{{secret.NAME}}`` references. ``user`` (role, access group ids) is the
+    caller a secret's ``usable_by`` rule must allow; ``None`` applies no rule.
+    Raises :class:`JobInputError`."""
     import routes.database as db
+    from routes.secret_resolver import may_use_secret
 
     out = dict(values)
     errors: dict[str, str] = {}
@@ -301,7 +306,8 @@ async def resolve_references(schema: list[dict], values: dict) -> dict:
                 continue
             out[name] = {"id": group["id"], "name": group.get("name") or ""}
         elif field["type"] == "secret":
-            if await db.get_secret_variable_by_name(value) is None:
+            row = await db.get_secret_variable_by_name(value)
+            if row is None or not may_use_secret(row, user):
                 # Not naming the secret, and worded as for one the job may not
                 # use: the answer must not confirm which names exist.
                 errors[name] = f"{label}: the secret variable does not exist or this job may not use it."
@@ -312,18 +318,19 @@ async def resolve_references(schema: list[dict], values: dict) -> dict:
     return out
 
 
-async def resolve_secret_inputs(params: dict) -> tuple[dict, set[str]]:
+async def resolve_secret_inputs(params: dict, *, user: tuple[str, list[int]] | None = None) -> tuple[dict, set[str]]:
     """Run time: replace ``{{secret.NAME}}`` input values with the decrypted
     secret. Returns the resolved inputs and the values to scrub from the job
-    log. Raises ``SecretResolutionError`` for a secret that no longer exists."""
+    log. Raises ``SecretResolutionError`` for a secret that no longer exists
+    or whose ``usable_by`` rule does not allow ``user`` (``None``: no rule)."""
     from routes.secret_resolver import build_redaction_set, resolve_secrets
 
     resolved = dict(params)
     redact: set[str] = set()
     for key, value in params.items():
         if isinstance(value, str) and has_secret_references(value):
-            redact |= await build_redaction_set([value])
-            resolved[key] = (await resolve_secrets([value]))[0]
+            redact |= await build_redaction_set([value], user=user)
+            resolved[key] = (await resolve_secrets([value], user=user))[0]
     return resolved, redact
 
 
@@ -496,8 +503,36 @@ def normalize_permissions(raw: object) -> dict:
     return out
 
 
+def normalize_rule(raw: object, field: str = "rule") -> dict:
+    """One ``{"roles", "groups"}`` rule in canonical form (the shape of a
+    run or commit permission, also a secret variable's ``usable_by``). An
+    empty value is the open rule. Raises :class:`JobInputError` with errors
+    keyed ``<field>.roles`` and ``<field>.groups``."""
+    if raw is None or raw == "":
+        raw = {}
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except ValueError as exc:
+            raise JobInputError("The rule is not valid JSON.") from exc
+    errors: dict[str, str] = {}
+    rule = _rule(raw, field, errors)
+    if errors:
+        raise JobInputError("The rule is not valid.", errors)
+    return rule
+
+
 def _is_open(rule: dict) -> bool:
     return not rule.get("roles") and not rule.get("groups")
+
+
+def rule_allows(rule: dict, *, role: str, group_ids: list[int]) -> bool:
+    """Whether a user with ``role`` in access groups ``group_ids`` passes one
+    rule: admins always, anyone on an open rule, else a listed role or a
+    shared access group."""
+    if role == "admin" or _is_open(rule):
+        return True
+    return role in rule.get("roles", []) or bool(set(group_ids) & set(rule.get("groups", [])))
 
 
 def effective_rule(permissions: dict, action: str) -> dict:
@@ -514,10 +549,28 @@ def is_allowed(permissions: dict, action: str, *, role: str, group_ids: list[int
         return True
     if action == "commit" and not is_allowed(permissions, "run", role=role, group_ids=group_ids):
         return False
-    rule = effective_rule(permissions, action)
-    if _is_open(rule):
-        return True
-    return role in rule.get("roles", []) or bool(set(group_ids) & set(rule.get("groups", [])))
+    return rule_allows(effective_rule(permissions, action), role=role, group_ids=group_ids)
+
+
+async def unknown_access_groups(group_ids: list[int] | set[int]) -> list[int]:
+    """The ids among ``group_ids`` that name no access group, sorted (what a
+    saved rule may not reference)."""
+    if not group_ids:
+        return []
+    import routes.database as db
+
+    known = {int(g["id"]) for g in await db.get_all_access_groups()}
+    return sorted(set(group_ids) - known)
+
+
+async def _role_and_groups(user: dict | None) -> tuple[str, list[int]]:
+    """A user row's role and access group ids; no role and no groups for an
+    unknown user (fails closed: such a caller passes open rules only)."""
+    if not user:
+        return "", []
+    import routes.database as db
+
+    return str(user.get("role") or ""), await db.get_user_group_ids(int(user["id"]))
 
 
 async def user_permissions(session: dict | None) -> tuple[str, list[int]]:
@@ -527,7 +580,15 @@ async def user_permissions(session: dict | None) -> tuple[str, list[int]]:
         return "admin", []
     import routes.database as db
 
-    user = await db.get_user_by_id(session["user_id"])
-    if not user:
-        return "", []
-    return str(user.get("role") or ""), await db.get_user_group_ids(int(user["id"]))
+    return await _role_and_groups(await db.get_user_by_id(session["user_id"]))
+
+
+async def launcher_permissions(launched_by: str | None) -> tuple[str, list[int]]:
+    """The role and access group ids of a job's launcher (``jobs.launched_by``)
+    when the queue starts it. Fails closed on an unknown user, as
+    ``_launcher_is_admin`` in ``netcontrol.routes.jobs`` does: an API token
+    launch is stored as ``admin`` and counts as admin only while a user of
+    that name is one."""
+    import routes.database as db
+
+    return await _role_and_groups(await db.get_user_by_username(launched_by) if launched_by else None)

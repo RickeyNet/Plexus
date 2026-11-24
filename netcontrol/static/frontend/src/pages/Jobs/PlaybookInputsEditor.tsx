@@ -1,5 +1,6 @@
 import { useId } from 'react';
 
+import { AccessRuleChecks } from '@/components/AccessRuleChecks';
 import { FieldError } from '@/components/FieldError';
 import type { AccessGroup } from '@/api/settings';
 import type { JobPermissionRule, JobPermissions } from '@/api/jobs';
@@ -188,41 +189,19 @@ const ACTIONS: { key: keyof JobPermissions; title: string; help: string }[] = [
 
 /** Run and commit permission rules: the user role and access groups allowed. */
 export function JobPermissionsEditor({ value, onChange, accessGroups, accessGroupsFailed }: PermissionsEditorProps) {
-  const fid = useId();
-
-  function toggle(action: keyof JobPermissions, kind: keyof JobPermissionRule, item: string | number, on: boolean) {
-    const rule = value[action];
-    const list = rule[kind] as (string | number)[];
-    const next = on ? [...list, item] : list.filter((x) => x !== item);
-    onChange({ ...value, [action]: { ...rule, [kind]: next } });
-  }
-
   return (
     <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
       {ACTIONS.map(({ key, title, help }) => (
-        <div key={key} className="form-group" role="group" aria-labelledby={`${fid}-${key}`} style={{ flex: '1 1 240px' }}>
-          <span className="form-label" id={`${fid}-${key}`}>{title}</span>
-          <label className="form-check">
-            <input
-              type="checkbox"
-              checked={value[key].roles.includes('user')}
-              onChange={(e) => toggle(key, 'roles', 'user', e.target.checked)}
-            />
-            <span>Every user (role: user)</span>
-          </label>
-          {(accessGroups ?? []).map((g) => (
-            <label key={g.id} className="form-check">
-              <input
-                type="checkbox"
-                checked={value[key].groups.includes(g.id)}
-                onChange={(e) => toggle(key, 'groups', g.id, e.target.checked)}
-              />
-              <span>Access group: {g.name}</span>
-            </label>
-          ))}
-          {accessGroupsFailed && <div className="form-help">Access groups could not be loaded.</div>}
-          <div className="form-help">{help}</div>
-        </div>
+        <AccessRuleChecks
+          key={key}
+          title={title}
+          help={help}
+          value={value[key]}
+          onChange={(rule: JobPermissionRule) => onChange({ ...value, [key]: rule })}
+          accessGroups={accessGroups}
+          accessGroupsFailed={accessGroupsFailed}
+          style={{ flex: '1 1 240px' }}
+        />
       ))}
     </div>
   );
