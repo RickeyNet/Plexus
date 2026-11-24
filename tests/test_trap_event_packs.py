@@ -50,6 +50,9 @@ def _value(value):
 def v2c(trap_oid: str, varbinds=()) -> bytes:
     pdu = P2.SNMPv2TrapPDU()
     P2.apiPDU.set_defaults(pdu)
+    # A fixed request-id: set_defaults picks a random one, and the encoded bytes
+    # become parametrize ids, which must match across pytest-xdist workers.
+    P2.apiPDU.set_request_id(pdu, 7)
     P2.apiPDU.set_varbinds(
         pdu,
         [
