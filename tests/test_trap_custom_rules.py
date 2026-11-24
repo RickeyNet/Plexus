@@ -119,6 +119,8 @@ def test_a_rule_is_cleaned_to_its_stored_form():
         ({"name": "x", "pattern": "noSuchTrap"}, "registry does not know: noSuchTrap"),
         ({"name": "x", "pattern": "1.3.6..1"}, "not a dotted OID"),
         ({"name": "x", "pattern": "1.3.x.*"}, "OID prefix that is not a dotted OID"),
+        ({"name": "x", "pattern": "1.3.٦"}, "not a dotted OID"),  # an Arabic-Indic digit
+        ({"name": "x", "pattern": "1.3." + "1" * 400 + "!"}, "not a dotted OID"),
         ({"name": "x", "pattern": "1" * 501}, "longer than 500"),
         ({"name": "x", "pattern": DISK_TRAP, "clear_pattern": "nope"}, "clearing trap names a trap"),
         ({"name": "x", "pattern": DISK_TRAP, "severity": "loud"}, "severity must be"),

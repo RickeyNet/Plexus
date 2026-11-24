@@ -1076,9 +1076,15 @@ CONDITIONS_MAX = 10
 VALUE_MAX = 200
 TRAP_SPEC_MAX = 500
 
-_OID = re.compile(r"\d+(?:\.\d+)+")
 _TRAP_NAMES: dict[str, str] = {t.name.lower(): t.name for t in TRAPS_BY_OID.values()}
 _OBJECT_NAMES: dict[str, str] = {name.lower(): name for name in OBJECTS}
+
+
+def _is_dotted_oid(text: str) -> bool:
+    """Two or more dot-separated ASCII number arcs, such as ``1.3.6.1``.
+    Checked without a regex, so a long input costs linear time."""
+    arcs = text.split(".")
+    return len(arcs) >= 2 and all(arc.isascii() and arc.isdigit() for arc in arcs)
 
 
 def _trap_oid_forms(trap_oid: str) -> tuple[str, ...]:
@@ -1111,12 +1117,12 @@ def _spec_token(token: str, label: str) -> str:
     """One trap of a pattern in its stored form, or ``RuleError``."""
     if token.endswith(".*"):
         oid = token[:-2].lstrip(".")
-        if not _OID.fullmatch(oid):
+        if not _is_dotted_oid(oid):
             raise RuleError(f"The {label} has an OID prefix that is not a dotted OID: {token}")
         return f"{oid}.*"
     if token.lstrip(".")[:1].isdigit():
         oid = token.lstrip(".")
-        if not _OID.fullmatch(oid):
+        if not _is_dotted_oid(oid):
             raise RuleError(f"The {label} has an OID that is not a dotted OID: {token}")
         return oid
     name = _TRAP_NAMES.get(token.lower())
@@ -1158,7 +1164,7 @@ def _clean_object(raw: object, label: str) -> str:
     text = str(raw or "").strip()
     if text.lstrip(".")[:1].isdigit():
         oid = text.lstrip(".")
-        if not _OID.fullmatch(oid):
+        if not _is_dotted_oid(oid):
             raise RuleError(f"The {label} is not a dotted OID: {text}")
         return oid
     name = _OBJECT_NAMES.get(text.lower())
