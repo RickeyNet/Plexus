@@ -46,9 +46,9 @@ def test_every_driver_package_has_a_manufacturer():
 
     import netcontrol.drivers as drivers
 
-    names = [
-        p.stem for p in Path(drivers.__file__).parent.glob("*.py") if p.stem not in ("__init__", "base", "show_version")
-    ]
+    # Shared output parsers live beside the drivers but are not driver packages.
+    not_drivers = ("__init__", "base", "show_version", "show_inventory")
+    names = [p.stem for p in Path(drivers.__file__).parent.glob("*.py") if p.stem not in not_drivers]
     assert names
     for name in names:
         assert manufacturer_name("", name) != UNKNOWN_MANUFACTURER, name
