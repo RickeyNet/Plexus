@@ -30,8 +30,11 @@ raises nor resolves (on its way somewhere, or not known); ``admin_down``
 (disabled by an operator) is not an alert and resolves one; ``down``
 raises.
 
-The vendor tables are in ``module_health``, ``environment_health`` and
-``routing_health``; which ones a device type reads is ``health_checks``.
+The vendor tables are in ``module_health``, ``environment_health``,
+``routing_health`` and ``ha_health``; which ones a device type reads is
+``health_checks``. Where one check reads several tables of a device (HA:
+the redundancy peer and the stack members), ``merge`` makes one state of
+them.
 """
 
 from __future__ import annotations
@@ -74,6 +77,15 @@ PHYSICAL_CLASS_PORT = 10
 # TruthValue (SNMPv2-TC): entPhysicalIsFRU false(2).
 TRUTH_FALSE = 2
 
+# IF-MIB (RFC 2863): ifIndex (the row pointer an entAliasMappingIdentifier
+# names), ifAdminStatus down(2), ifOperStatus up(1), ifName.
+IF_INDEX = "1.3.6.1.2.1.2.2.1.1"
+IF_ADMIN_STATUS = "1.3.6.1.2.1.2.2.1.7"
+IF_OPER_STATUS = "1.3.6.1.2.1.2.2.1.8"
+IF_NAME = "1.3.6.1.2.1.31.1.1.1.1"
+IF_ADMIN_DOWN = 2
+IF_OPER_UP = 1
+
 Get = Callable[[tuple[str, ...]], Awaitable[dict]]
 # A walk of one column: its rows, ``{}`` when it ran to its end with no row,
 # None when it was not read (cut short).
@@ -101,6 +113,32 @@ def text(raw: Any) -> str:
 def entity_name(values: dict[str, Any]) -> str:
     """An entPhysicalTable row's name: entPhysicalName, else its descr."""
     return text(values.get(ENT_PHYSICAL_NAME)) or text(values.get(ENT_PHYSICAL_DESCR))
+
+
+def octets(raw: Any) -> bytes | None:
+    """An OCTET STRING / BITS value as bytes; None for a missing value or a
+    pysnmp sentinel."""
+    if raw is None or any(m in str(raw).lower() for m in ("no such", "endofmibview")):
+        return None
+    if isinstance(raw, bytes | bytearray):
+        return bytes(raw)
+    as_octets = getattr(raw, "asOctets", None)
+    if callable(as_octets):
+        return bytes(as_octets())
+    value = str(raw).strip()
+    if value.lower().startswith("0x"):
+        try:
+            return bytes.fromhex(value[2:])
+        except ValueError:
+            return None
+    return None
+
+
+def bit_set(data: bytes, bit: int) -> bool:
+    """Whether a BITS value (bit 0 is the high bit of the first octet) has
+    ``bit`` set."""
+    byte = bit // 8
+    return byte < len(data) and bool(data[byte] & (0x80 >> (bit % 8)))
 
 
 def _no_name(_values: dict[str, Any]) -> str:
@@ -136,6 +174,9 @@ class TableSource:
     filter_ok_rows: bool = True
     # The kind of a row from its filter values; None: not an item.
     kind_of: Callable[[dict[str, Any]], str | None] | None = None
+    # The kind of a row from its index alone (a table indexed by a type, as
+    # CISCO-FIREWALL-MIB cfwHardwareStatusTable); None: not an item.
+    index_kind: Callable[[str], str | None] | None = None
     # Read for the rows classed down: names, and the admin-off check.
     detail_oids: tuple[str, ...] = ()
     admin_off: Callable[[dict[str, Any]], bool] = field(default=_not_admin_off)
@@ -152,7 +193,9 @@ class TableSource:
     state_of: Callable[[Any], int | None] = field(default=snmp_int)
 
     def single_kind(self) -> str | None:
-        return next(iter(self.kinds)) if len(self.kinds) == 1 and self.kind_of is None else None
+        if len(self.kinds) != 1 or self.kind_of is not None or self.index_kind is not None:
+            return None
+        return next(iter(self.kinds))
 
     async def read(self, get: Get, walk: Walk, host_id: int) -> dict[str, Any] | None:
         """Read and parse the table: see :func:`read_table`. ``host_id`` is
@@ -216,6 +259,11 @@ def _kinds(source: TableSource, states: dict[str, int], values: dict[str, Any]) 
     for index in sorted(states, key=oid_sort_key):
         if single is not None and not source.filter_oids:
             kinds[index] = single
+            continue
+        if source.index_kind is not None:
+            kind = source.index_kind(index)
+            if kind is not None and kind in source.kinds:
+                kinds[index] = kind
             continue
         if not _needs_filter(source, states[index]):
             continue  # an OK row of unknown kind: left out
@@ -329,6 +377,51 @@ async def read_table(source: TableSource, get: Get, walk: Walk) -> dict[str, Any
     return parse_table(source, state_rows, values)
 
 
+def _first_index_part(item: dict[str, Any]) -> str:
+    return str(item["index"]).split(".")[0]
+
+
+async def interface_details(
+    items: list[dict[str, Any]],
+    get: Get,
+    if_index_of: Callable[[dict[str, Any]], str] = _first_index_part,
+    *,
+    rename: bool = True,
+    link_down: str | None = None,
+) -> None:
+    """For the items down that sit on an interface (``if_index_of(item)``,
+    "" for none): admin down when an operator shut the interface (IF-MIB
+    ifAdminStatus down(2)), and with ``rename`` the interface's name added
+    to the item's (``"<name> on <ifName>"``). With ``link_down`` (a class),
+    an item on an interface that is not admin down and whose ifOperStatus
+    is not up(1) takes that class: its state follows from the link being
+    down, which the interface check reports. A GET unanswered changes
+    nothing."""
+    down = [i for i in items if i["class"] == DOWN and if_index_of(i)]
+    if_indexes = sorted({if_index_of(i) for i in down}, key=oid_sort_key)
+    if not if_indexes:
+        return
+    columns = (
+        *((IF_NAME,) if rename else ()),
+        IF_ADMIN_STATUS,
+        *((IF_OPER_STATUS,) if link_down is not None else ()),
+    )
+    answers = await get_all(get, [f"{oid}.{i}" for i in if_indexes for oid in columns]) or {}
+    for item in down:
+        if_index = if_index_of(item)
+        if_name = text(answers.get(f"{IF_NAME}.{if_index}"))
+        if rename and if_name:
+            item["name"] = f"{item['name']} on {if_name}"
+        if snmp_int(answers.get(f"{IF_ADMIN_STATUS}.{if_index}")) == IF_ADMIN_DOWN:
+            item["class"] = ADMIN_DOWN
+            item["status"] = f"{item['status']}, interface admin down"
+            continue
+        oper = snmp_int(answers.get(f"{IF_OPER_STATUS}.{if_index}")) if link_down is not None else None
+        if link_down is not None and oper is not None and oper != IF_OPER_UP:
+            item["class"] = link_down
+            item["status"] = f"{item['status']}, link down"
+
+
 # ── Checks: alerts, clearing, counts ─────────────────────────────────────────
 
 
@@ -376,6 +469,28 @@ def select(check: HealthCheck, table: dict[str, Any] | None) -> dict[str, Any]:
     return {
         "source": table.get("source", ""),
         "vendor": table.get("vendor", ""),
+        check.items_key: items,
+        "down_count": sum(1 for i in items if i["class"] == DOWN),
+    }
+
+
+def merge(check: HealthCheck, states: list[dict[str, Any]]) -> dict[str, Any]:
+    """One check's state from the states of several tables of its kind
+    (the redundancy peer and the stack members of one switch), whose item
+    indexes are kept apart by the tables. ``{}`` when one of them was not
+    read: a state missing a table's items would clear that table's open
+    alerts. Empty tables add no item; all empty is an empty state."""
+    if len(states) == 1:
+        return states[0]
+    if not states or any(not s for s in states):
+        return {}
+    read = [s for s in states if not s.get("empty")]
+    if not read:
+        return states[0]
+    items = [item for s in read for item in s.get(check.items_key) or []]
+    return {
+        "source": ", ".join(s.get("source", "") for s in read),
+        "vendor": ", ".join(dict.fromkeys(s.get("vendor", "") for s in read)),
         check.items_key: items,
         "down_count": sum(1 for i in items if i["class"] == DOWN),
     }

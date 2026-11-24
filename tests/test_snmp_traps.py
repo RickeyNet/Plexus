@@ -283,7 +283,12 @@ SAMPLES = [
         "vrrpOperMasterIpAddr 192.0.2.254",
         ("ha_switchover", "raise", "VRRP 3.1"),
     ),
-    (v2c("1.3.6.1.2.1.17.0.2"), "topologyChange", "Spanning tree topology change", None),
+    (
+        v2c("1.3.6.1.2.1.17.0.2"),
+        "topologyChange",
+        "Spanning tree topology change",
+        ("stp_topology_change", "raise", ""),
+    ),
     # net-snmp (OPNsense)
     (v2c("1.3.6.1.4.1.8072.4.0.1"), "nsNotifyStart", "net-snmp agent started", ("device_restart", "raise", "")),
     # Cisco
@@ -613,7 +618,7 @@ def test_the_stored_severity_follows_the_rule():
     assert tr.event_fields(named(LINK_UP))[0] == "info"
     assert tr.event_fields(named(cefc_module(7)))[0] == "critical"
     assert tr.event_fields(named(cefc_module(2)))[0] == "info"
-    assert tr.event_fields(named(v2c("1.3.6.1.2.1.17.0.1")))[0] == "info"  # newRoot: the registry's
+    assert tr.event_fields(named(v2c("1.3.6.1.2.1.16.0.2")))[0] == "info"  # fallingAlarm: the registry's
 
 
 def test_the_repoll_delay():

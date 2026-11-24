@@ -1,4 +1,4 @@
-"""Power supply, fan and temperature state in the monitoring poll
+"""Power supply, fan, temperature and optics state in the monitoring poll
 (netcontrol/environment_health.py on netcontrol/snmp_health.py).
 
 Each vendor's table is fed invented rows shaped as its MIB defines them;
@@ -158,7 +158,7 @@ def test_entity_state_temperature_keeps_celsius_sensors():
         f"{env.ENT_PHY_SENSOR_TYPE}.4": 4,  # a voltage sensor in alarm: not a temperature
         f"{ENT_NAME}.2": "Inlet sensor",
     }
-    status = _parse(env.ENTITY_STATE_TEMPERATURE, env.TEMPERATURE, rows, values)
+    status = _parse(env.ENTITY_STATE_SENSORS, env.TEMPERATURE, rows, values)
     assert _classes(status) == {"2": sh.DOWN, "3": sh.DOWN}
     checks = sh.alert_checks(env.TEMPERATURE, 4, status)
     assert [(c["message"], c["severity"]) for c in checks] == [
@@ -313,7 +313,8 @@ async def test_cisco_sensor_thresholds():
     }
     agent = Agent(rows, answers)
     status = sh.select(env.TEMPERATURE, await env.CISCO_SENSOR_THRESHOLDS.read(agent.get, agent.walk, 1))
-    assert _classes(status) == {"10": sh.OK, "11": sh.DOWN, "13": sh.DOWN}
+    # Only the sensors in alarm are items (a sensor all false is OK by its absence).
+    assert _classes(status) == {"11": sh.DOWN, "13": sh.DOWN}
     # Type and severities of the sensors in alarm only; names of the celsius ones.
     assert not any(oid.endswith(".10") or ".10." in oid for oid in agent.asked())
     checks = sh.alert_checks(env.TEMPERATURE, 2, status)
@@ -333,7 +334,7 @@ async def test_cisco_sensor_thresholds_not_read():
     # All thresholds false: no GET at all.
     agent = Agent({f"{env.ENT_SENSOR_THRESHOLD_EVALUATION}.11.1": 2})
     status = sh.select(env.TEMPERATURE, await env.CISCO_SENSOR_THRESHOLDS.read(agent.get, agent.walk, 1))
-    assert agent.gets == [] and _classes(status) == {"11": sh.OK}
+    assert agent.gets == [] and _classes(status) == {} and status["down_count"] == 0
 
 
 async def test_juniper_reads_its_fru_table_once_for_modules_supplies_and_fans():
@@ -361,6 +362,214 @@ async def test_juniper_reads_its_fru_table_once_for_modules_supplies_and_fans():
     assert [c["message"] for c in sh.alert_checks(env.POWER, 1, result["power_supply_health"])] == ["PEM 0 is offline"]
     assert _classes(result["fan_health"]) == {"4.1.0.0": sh.ADMIN_DOWN}
     assert "temperature_health" not in result  # no Juniper temperature source
+
+
+# ── Optics ───────────────────────────────────────────────────────────────────
+
+ALIAS = env.ENT_ALIAS_MAPPING_IDENTIFIER
+CONTAINED_IN = sh.ENT_PHYSICAL_CONTAINED_IN
+
+
+def test_sensor_readings():
+    assert env.sensor_reading(-725, 2, "dBm") == "-7.25 dBm"
+    assert env.sensor_reading(-3, 0, "dBm") == "-3 dBm"
+    assert env.sensor_reading(5, -1, "dBm") == "50 dBm"
+    assert env.sensor_reading(None, 2, "dBm") == ""
+
+
+def test_bits_of_a_value():
+    assert sh.bit_set(b"\x80", 0) and sh.bit_set(b"\x00\x40", 9)
+    assert not sh.bit_set(b"\x80", 1) and not sh.bit_set(b"", 3)
+
+
+async def test_the_port_of_a_sensor_is_found_up_its_containers():
+    answers = {
+        f"{CONTAINED_IN}.1001": 1000,  # sensor -> transceiver
+        f"{CONTAINED_IN}.1000": 900,  # transceiver -> port
+        f"{ALIAS}.900.0": "1.3.6.1.2.1.2.2.1.1.17",
+        f"{ALIAS}.2001": "x",  # not the instance asked (no logical index)
+        f"{CONTAINED_IN}.2001": 0,  # a sensor on no port
+    }
+    agent = Agent({}, answers)
+    assert await env.entity_if_indexes(agent.get, ["1001", "2001"]) == {"1001": "17"}
+    assert len(agent.gets) == 3
+    assert await env.entity_if_indexes(agent.get, []) == {}
+
+
+async def test_cisco_optics_thresholds_reading_and_port():
+    ev, sev, rel, typ = (
+        env.ENT_SENSOR_THRESHOLD_EVALUATION,
+        env.ENT_SENSOR_THRESHOLD_SEVERITY,
+        env.ENT_SENSOR_THRESHOLD_RELATION,
+        env.ENT_SENSOR_TYPE,
+    )
+    rows = {
+        f"{ev}.20.1": 1,  # sensor 20: receive power below its low warning and low alarm
+        f"{ev}.20.2": 1,
+        f"{ev}.20.3": 2,
+        f"{ev}.21.1": 1,  # sensor 21: transmit power on a port shut down
+        f"{ev}.22.1": 1,  # sensor 22: equalTo relation, severity other
+        f"{ev}.23.1": 2,  # sensor 23: no threshold crossed
+    }
+    answers = {
+        f"{typ}.20": 14,
+        f"{typ}.21": 14,
+        f"{typ}.22": 14,
+        f"{sev}.20.1": 10,
+        f"{rel}.20.1": 1,
+        f"{sev}.20.2": 20,
+        f"{rel}.20.2": 2,
+        f"{sev}.21.1": 30,
+        f"{rel}.21.1": 4,
+        f"{sev}.22.1": 1,
+        f"{rel}.22.1": 5,
+        f"{ENT_NAME}.20": "Te1/1/1 Receive Power Sensor",
+        f"{env.ENT_SENSOR_SCALE}.20": 9,
+        f"{env.ENT_SENSOR_PRECISION}.20": 1,
+        f"{env.ENT_SENSOR_VALUE}.20": -312,
+        f"{ENT_NAME}.21": "Te1/1/2 Transmit Power Sensor",
+        f"{env.ENT_SENSOR_SCALE}.21": 8,  # milli: no reading shown
+        f"{env.ENT_SENSOR_VALUE}.21": 5,
+        f"{ALIAS}.20.0": "1.3.6.1.2.1.2.2.1.1.10",
+        f"{ALIAS}.21.0": "1.3.6.1.2.1.2.2.1.1.11",
+        f"{sh.IF_ADMIN_STATUS}.10": 1,
+        f"{sh.IF_ADMIN_STATUS}.11": 2,
+    }
+    agent = Agent(rows, answers)
+    table = await env.CISCO_SENSOR_THRESHOLDS.read(agent.get, agent.walk, 1)
+    assert sh.select(env.TEMPERATURE, table)["items"] == []
+    status = sh.select(env.OPTICS, table)
+    assert _classes(status) == {"20": sh.DOWN, "21": sh.ADMIN_DOWN, "22": sh.DOWN}
+    checks = sh.alert_checks(env.OPTICS, 6, status)
+    assert [(c["dedup_key"], c["message"], c["severity"]) for c in checks] == [
+        ("6:optic_level_alarm:20", "Te1/1/1 Receive Power Sensor (-31.2 dBm) is below its major threshold", "critical"),
+        ("6:optic_level_alarm:22", "Optic 22 is past a threshold", "warning"),
+    ]
+    shut = next(i for i in status["items"] if i["index"] == "21")
+    assert shut["status"] == "above its critical threshold, interface admin down"
+    # The interface's name is not asked: the sensor's own name carries it.
+    assert not any(oid.startswith(sh.IF_NAME) for oid in agent.asked())
+
+
+async def test_entity_state_optics_by_name_and_port():
+    rows = {f"{env.ENT_STATE_ALARM}.{i}": b"\x08" for i in (31, 32, 33)}
+    values = {
+        f"{ENT_CLASS}.31": 8,
+        f"{env.ENT_PHY_SENSOR_TYPE}.31": 6,
+        f"{ENT_NAME}.31": "DOM Rx Power Sensor for Ethernet5",
+        f"{ENT_CLASS}.32": 8,
+        f"{env.ENT_PHY_SENSOR_TYPE}.32": 4,
+        f"{ENT_NAME}.32": "DOM Voltage Sensor for Ethernet5",  # not an optic's light level
+        f"{ENT_CLASS}.33": 8,
+        f"{env.ENT_PHY_SENSOR_TYPE}.33": 1,
+        f"{sh.ENT_PHYSICAL_DESCR}.33": "DOM Tx Power Sensor for Ethernet6",
+        f"{CONTAINED_IN}.31": 300,
+        f"{ALIAS}.300.0": "1.3.6.1.2.1.2.2.1.1.5",
+        f"{sh.IF_ADMIN_STATUS}.5": 1,
+    }
+    agent = Agent(rows, values)
+    table = await env.ENTITY_STATE_SENSORS.read(agent.get, agent.walk, 1)
+    status = sh.select(env.OPTICS, table)
+    assert _classes(status) == {"31": sh.DOWN, "33": sh.DOWN}
+    assert [c["message"] for c in sh.alert_checks(env.OPTICS, 1, status)] == [
+        "DOM Rx Power Sensor for Ethernet5 is in a warning alarm",
+        "DOM Tx Power Sensor for Ethernet6 is in a warning alarm",
+    ]
+    assert env.entity_sensor_kind({ENT_CLASS: 7}) is None
+    assert sh.is_empty(await env.ENTITY_STATE_SENSORS.read(Agent({}).get, Agent({}).walk, 1))
+
+
+async def test_juniper_dom_alarm_and_warning_bits():
+    alarms, warnings = env.JNX_DOM_CURRENT_ALARMS, env.JNX_DOM_CURRENT_WARNINGS
+    rows = {
+        f"{alarms}.501": b"\x08\x00\x00",  # domRxLaserPowerLowAlarm(4)
+        f"{alarms}.502": b"\x00\x00\x00",
+        f"{alarms}.503": b"\x00\x00\x00",
+        f"{alarms}.504": b"\x80\x00\x00",  # loss of signal only: not a light-level alarm
+        f"{alarms}.505": b"\x00\x80\x00",  # domTxLaserOutputPowerLowAlarm(8), port shut down
+        f"{alarms}.506": "No Such Instance currently exists at this OID",
+        f"{alarms}.507": b"\x08\x00\x00",  # receive power low, the link down
+        f"{warnings}.502": b"\x40\x00",  # domRxLaserPowerLowWarning(1)
+        f"{warnings}.503": b"\x00\x00",
+    }
+    answers = {
+        f"{sh.IF_NAME}.501": "xe-0/0/1",
+        f"{sh.IF_ADMIN_STATUS}.501": 1,
+        f"{sh.IF_ADMIN_STATUS}.505": 2,
+        f"{sh.IF_OPER_STATUS}.501": 1,
+        f"{sh.IF_ADMIN_STATUS}.507": 1,
+        f"{sh.IF_OPER_STATUS}.507": 2,
+    }
+    agent = Agent(rows, answers)
+    status = sh.select(env.OPTICS, await env.JUNIPER_DOM.read(agent.get, agent.walk, 1))
+    assert _classes(status) == {
+        "501": sh.DOWN,
+        "502": sh.DOWN,
+        "503": sh.OK,
+        "504": sh.OK,
+        "505": sh.ADMIN_DOWN,
+        "507": sh.TRANSITIONAL,
+    }
+    checks = sh.alert_checks(env.OPTICS, 2, status)
+    assert [(c["message"], c["severity"]) for c in checks] == [
+        ("Optic on xe-0/0/1 is in a critical alarm (receive power low)", "critical"),
+        ("Optic 502 is in a warning alarm (receive power low)", "warning"),
+    ]
+    assert sh.is_empty(await env.JUNIPER_DOM.read(Agent({}).get, Agent({}).walk, 1))
+    for cut in (alarms, warnings):
+        agent = Agent({f"{alarms}.501": b"\x00"}, cut={cut})
+        assert await env.JUNIPER_DOM.read(agent.get, agent.walk, 1) is None
+
+
+async def test_aos_switch_transceiver_alarms_count_only_with_dom():
+    alarms = env.HP_XCVR_ALARMS
+    rows = {
+        f"{alarms}.1": b"\x00\x20\x00",  # rxPowerLowAlarm(10)
+        f"{alarms}.2": b"\x20\x00\x00",  # txPowerLowWarning(2), not a DOM transceiver
+        f"{alarms}.3": b"\x00\x00\x00",
+    }
+    answers = {f"{env.HP_XCVR_DIAGNOSTICS}.1": 1, f"{env.HP_XCVR_DIAGNOSTICS}.2": 2, f"{sh.IF_NAME}.1": "A1"}
+    agent = Agent(rows, answers)
+    status = sh.select(env.OPTICS, await env.AOS_SWITCH_DOM.read(agent.get, agent.walk, 1))
+    assert _classes(status) == {"1": sh.DOWN, "2": sh.OK, "3": sh.OK}
+    assert [c["message"] for c in sh.alert_checks(env.OPTICS, 1, status)] == [
+        "Optic on A1 is in a critical alarm (receive power low)"
+    ]
+    silent = Agent(rows, silent_gets=True)
+    assert await env.AOS_SWITCH_DOM.read(silent.get, silent.walk, 1) is None
+
+
+async def test_nxos_reads_the_sensor_thresholds_once_for_temperature_and_optics():
+    ev = env.ENT_SENSOR_THRESHOLD_EVALUATION
+    rows = {f"{ev}.20.1": 1, f"{ev}.30.1": 1}
+    answers = {
+        f"{env.ENT_SENSOR_TYPE}.20": 14,
+        f"{env.ENT_SENSOR_TYPE}.30": 8,
+        f"{env.ENT_SENSOR_THRESHOLD_SEVERITY}.20.1": 20,
+        f"{env.ENT_SENSOR_THRESHOLD_SEVERITY}.30.1": 10,
+    }
+    agent = Agent(rows, answers)
+    result = await health_checks.read_health(1, "cisco_nxos", agent.get, agent.walk_table)
+    assert agent.walks.count(ev) == 1
+    assert _classes(result["optics_health"]) == {"20": sh.DOWN}
+    assert _classes(result["temperature_health"]) == {"30": sh.DOWN}
+
+
+async def test_the_poll_raises_and_resolves_an_optic(monkeypatch):
+    group_id, host_id = await add_host("juniper_junos")
+    host = {**(await db.get_host(host_id)), "group_id": group_id}
+    alarms, warnings = env.JNX_DOM_CURRENT_ALARMS, env.JNX_DOM_CURRENT_WARNINGS
+    agent = Agent(
+        {f"{SYS_UPTIME}.0": 4200, f"{alarms}.501": b"\x08\x00", f"{warnings}.501": b"\x00"},
+        {f"{sh.IF_NAME}.501": "xe-0/0/1"},
+    )
+    result = await poll(monkeypatch, host, agent)
+    assert await evaluate(host_id, group_id, result) == 1
+    alerts = await open_alerts(host_id)
+    assert [(a["metric"], a["severity"]) for a in alerts.values()] == [("optic_level_alarm", "critical")]
+    agent.rows[f"{alarms}.501"] = b"\x00\x00"
+    await evaluate(host_id, group_id, await poll(monkeypatch, host, agent))
+    assert await open_alerts(host_id) == {}
 
 
 # ── Wiring: the poll's alert evaluation ──────────────────────────────────────
@@ -406,7 +615,7 @@ async def test_fan_and_temperature_alerts_and_their_suppression():
     group_id, host_id = await add_host("arista_eos")
     fan = sh.select(env.FAN, sh.parse_table(env.ARISTA_FAN, {f"{env.ARISTA_FAN_STATE}.5": 2}, {}))
     temp_table = sh.parse_table(
-        env.ENTITY_STATE_TEMPERATURE,
+        env.ENTITY_STATE_SENSORS,
         {f"{env.ENT_STATE_ALARM}.9": b"\x20"},
         {f"{ENT_CLASS}.9": 8, f"{env.ENT_PHY_SENSOR_TYPE}.9": 8},
     )
@@ -472,8 +681,10 @@ async def test_the_poll_reads_the_cisco_environment(monkeypatch):
     assert result["power_supply_health"]["down_count"] == 1
     assert result["fan_health"]["down_count"] == 0
     assert result["temperature_health"]["down_count"] == 1
-    # ENVMON answered: the FRU and sensor tables are not asked.
-    assert not {env.CEFC_FRU_POWER_OPER, env.CEFC_FAN_TRAY_OPER, env.ENT_SENSOR_THRESHOLD_EVALUATION} & set(agent.walks)
+    # ENVMON answered: the FRU tables are not asked; the sensor threshold
+    # table is, once, for the optics.
+    assert not {env.CEFC_FRU_POWER_OPER, env.CEFC_FAN_TRAY_OPER} & set(agent.walks)
+    assert agent.walks.count(env.ENT_SENSOR_THRESHOLD_EVALUATION) == 1
 
     from netcontrol.routes.monitoring import _process_poll_result
 

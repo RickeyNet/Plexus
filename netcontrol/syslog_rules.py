@@ -57,6 +57,11 @@ with ``source`` ``trap`` and go through the same threshold counters
 ``builtin_override``) and configuration-change trigger
 (``note_config_change``). Their alerts are their own family: type
 ``trap``, metric ``trap_<key>``, dedup key ``trap:<key>:<host>:<instance>``.
+A custom trap rule is a row of ``syslog_alert_rules`` with ``source``
+``trap`` (``custom_rule`` builds both kinds); ``merge_rules`` here leaves
+those rows out. The syslog line of a ``clogMessageGenerated`` trap comes
+back here through ``process_syslog_batch``, and the trap restore reuses
+``replay_stored``.
 """
 
 from __future__ import annotations
@@ -390,6 +395,14 @@ class BuiltinRule:
 _IFACE = r"([^\s,]+)"
 _JUNOS_FRU = r"jnxContentsDescr ([^,)]+)"
 
+
+def _asa_ftd(*ids: int) -> tuple[str, ...]:
+    """The tags of Cisco ASA message ids and of the same ids on FTD, which
+    logs them as ``%FTD-<level>-<id>`` from release 6.3 (FTD Syslog
+    Messages guide)."""
+    return tuple(f"{prefix}-{i}" for i in ids for prefix in ("ASA", "FTD"))
+
+
 # An interface going down (not by an operator): the link_flap rule counts
 # these, and the re-poll trigger acts on the first one.
 INTERFACE_DOWN: tuple[Matcher, ...] = (
@@ -400,11 +413,12 @@ INTERFACE_DOWN: tuple[Matcher, ...] = (
         text=r"changed state to down\b",
         instance=rf"Interface {_IFACE}",
     ),
-    # IOS / IOS XE / IOS XR / Arista EOS line protocol, ASA 411002.
+    # IOS / IOS XE / IOS XR / Arista EOS line protocol, ASA 411002 and FTD
+    # 411002 ("Line protocol on Interface inside, changed state to down").
     _m(
         "LINEPROTO-UPDOWN",
         "PKT_INFRA-LINEPROTO-UPDOWN",
-        "ASA-411002",
+        *_asa_ftd(411002),
         text=r"changed state to down\b",
         instance=rf"Line protocol on Interface {_IFACE}",
     ),
@@ -458,6 +472,16 @@ _AOSS_SUPPLY = r"\bSupply: ([A-Za-z0-9/]+)"
 _AOSS_INTERNAL_PSU = r"\bInternal power supply (\S+) is\b"
 _ARISTA_PSU = r"\b(PowerSupply\d+)"
 _ARISTA_FAN = r"\b(Fan\d+(?:/\d+)?)"
+_XR_NONOP = r"^(.+?) (?:is Non-Operational|has become operational)\b"
+_XR_FAN = r"\bon slot ([^\s,]+), fan (\d+)|^(\S+) FAILED\b"
+_XR_FANTRAY = r"\bon slot ([^\s,]+)"
+_CAT9K_FAN = r"^Switch (\d+): System fan (\d+)"
+# ASA / FTD 735xxx: "Cooling Fan 1: OK", "Power Supply 1: Failure Detected",
+# "Power Supply 1: Fan OK", "Power Supply Unit Redundancy Lost".
+_ASA_FAN = r"\b(Cooling Fan [^\s:]+):"
+_ASA_PSU = r"\b(Power Supply [^\s:]+):"
+_ASA_PSU_FAN = r"\b(Power Supply [^\s:]+): Fan\b"
+_ASA_PSU_REDUNDANCY = r"\b(Power Supply Unit Redundancy)\b"
 
 # Modules: the slot of an IOS XE card or SPA ("... in slot R1", "... from
 # chassis 2 slot 1" on StackWise Virtual: "2/1", "... in subslot 6/0"), an
@@ -466,6 +490,8 @@ _ARISTA_FAN = r"\b(Fan\d+(?:/\d+)?)"
 _IOSXE_SLOT = r"\b(?:in|from) (?:chassis (\d+) )?(?:sub)?slot ([^\s,]+)"
 _NXOS_MODULE = r"\b(?:Module|Supervisor) (\d+)"
 _NXOS_XBAR = r"\b(Xbar \d+)"
+_C4K_MODULE = r"\bModule (\d+)|\bslot (\d+)"
+_ARISTA_CARD = r"\bCard (\S+)"
 _JUNOS_FRU_NAME = r"\bjnxFruName ([^,)]+)"
 # JUNIPER-MIB jnxFruType of the FRUs that are modules: FPC (3), SFM (4),
 # control board (5), routing engine (6), SIB (9), PIC (11), line card
@@ -529,6 +555,57 @@ MODULE_DOWN: tuple[Matcher, ...] = (
         exclude=r"\bjnxFruOfflineReason [578]\b",
         instance=_JUNOS_FRU_NAME,
     ),
+    # Catalyst 4500 (Catalyst 4500 System Message Guide 15.1(1)SG): "Module 3
+    # is removed", "Module 3 is offline", "Module 3 software bring up did not
+    # complete within allocated time", "Holding module in slot 3 in reset,
+    # due to insufficient power".
+    _m(
+        "C4K_IOSMODPORTMAN-MODULEREMOVED",
+        "C4K_IOSMODPORTMAN-MODULEOFFLINE",
+        "C4K_CHASSIS-MODULEBRINGUPTIMEDOUT",
+        "C4K_CHASSIS-INSUFFICIENTPOWERSHUTDOWN",
+        instance=_C4K_MODULE,
+    ),
+    # IOS XR (System Error Message Reference 5.1.1, category PLATFORM): "OIR:
+    # Node 0/1/CPU0 removed", "Reset node 0/1/CPU0 due to heartbeat loss",
+    # "Node 0/1/CPU0 is shutdown due to a critical alarm", "Node ... fails to
+    # load IOS XR image ...", "Cannot boot node ... due to multiple resets
+    # ...", "Power off node ... due to multiple critical environmental
+    # alarms ...".
+    _m(
+        "PLATFORM-INVMGR-OIROUT",
+        "PLATFORM-OIRD-OIROUT",
+        "PLATFORM-SHELFMGR-NODE_RESET_BRINGDOWN",
+        "PLATFORM-SHELFMGR-SHUTDOWN",
+        "PLATFORM-SHELFMGR-FAILED_LOAD",
+        "PLATFORM-SHELFMGR-INRESET_BRINGDOWN",
+        "PLATFORM-SHELFMGR-SHUTDOWN_ON_ENVMON_ALARM",
+        instance=r"\bnode (\S+)",
+    ),
+    # Arista EOS (EOS System Message Guide 4.12.10): "Linecard3 unexpectedly
+    # lost power. ...", "Communication with Linecard3 has been lost. ...",
+    # "Card Linecard3 failed to power on in state ...", "Card Linecard3 has
+    # been removed. ...", "Hardware failure when reading the card in slot 3".
+    # CARD_POWERED_OFF (also an operator's power off) is not counted.
+    _m("HARDWARE-CARD_LOST_POWER", instance=r"^(\S+) unexpectedly lost power\b"),
+    _m("HARDWARE-CARD_LOST_COMMUNICATION", instance=r"\bCommunication with (\S+) has been lost\b"),
+    _m(
+        "HARDWARE-CARD_FAIL_TO_POWER_ON",
+        "HARDWARE-CARD_FAIL_TO_POWER_ON_FINAL",
+        "FRU-CARD_REMOVED",
+        instance=_ARISTA_CARD,
+    ),
+    _m("FRU-CARD_FAILURE", instance=r"\bin slot (\S+)"),
+    # FortiOS 22111 "FPC down due to PSU action" (FortiGate 6000 / 7000; the
+    # reference gives no msg text, so one alert per chassis).
+    _m("FGT-0100022111"),
+    # AOS-CX (Event Log Message Reference, Module and VSF events): 3202
+    # "<type> module <name> removed", 3207 "<type> module <name> has failed:
+    # <reason>", 9913 "Lost member <id> with <reason>".
+    _m("AOSCX-3202", "AOSCX-3207", instance=r"\bmodule (\S+) (?:removed|has failed)\b"),
+    _m("AOSCX-9913", instance=r"\bLost member (\S+)"),
+    # AOS-Switch 402 "Stack member <id> lost." (Fault events).
+    _m("AOSS-00402", instance=r"\bStack member (\S+) lost\b"),
 )
 # The same module online again: clears the module rule, and re-polls.
 MODULE_UP: tuple[Matcher, ...] = (
@@ -543,6 +620,660 @@ MODULE_UP: tuple[Matcher, ...] = (
     _m("MODULE-XBAR_OK", instance=_NXOS_XBAR),
     # Junos jnxFruOnline: "SNMP trap generated: FRU online (...)".
     _m(prefixes=("CHASSISD_SNMP_TRAP",), text=r"\bFRU online" + _JUNOS_MODULE_FRU, instance=_JUNOS_FRU_NAME),
+    # Catalyst 4500: "Module 3 (<model> S/N:<serial> Hw:1.0) is online".
+    _m("C4K_IOSMODPORTMAN-MODULEONLINE", instance=_C4K_MODULE),
+    # Arista EOS: "Card Linecard3 has been powered on. model: ...".
+    _m("HARDWARE-CARD_POWERED_ON", instance=_ARISTA_CARD),
+    # FortiOS 22112 "FPC up due to PSU action" (LOG_ID_PSU_ACTION_FPC_UP).
+    _m("FGT-0100022112"),
+)
+
+
+# ASA / FTD environment (735xxx): "CPU 0: Temp: 80 C, Critical", "Chassis
+# Ambient 1: Temp: 45 C, Warm", "Power Supply 1: Temp: ...", "IO Hub 0:
+# Temp: ..." (FTD may write "IPMI: " first).
+_ASA_TEMP_SENSOR = r"\b((?:CPU|Chassis Ambient|Power Supply|IO Hub) [^\s:]+): Temp:"
+_C4K_MODULE_SENSOR = r"^Module (\d+) Sensor (.+?) temperature\b"
+_ARISTA_HOT = r"^(.+?) (?:is overheating|temperature critical)\b"
+_ARISTA_COOL = r"^(.+?) temperature has returned to normal\b"
+_IOSXE_SENSOR = r"^Temp:\s*(.+?),?\s+Location:\s*([^,\s]+)"
+_ENVMON_HOT = r"^(?:Warning|Critical): (.+?) temperature \d"
+_ENVMON_COOL = r"^(.+?) temperature normal\b"
+_NXOS_TEMP = r"^(.+?) (?:reported|recovered from|powered down due to) .*?\bSensor[= ](\d+)"
+_XR_SLOT_TEMP = r"^Slot (\S+) temperature\b"
+_MLAG = r"^(MLAG)\b"
+_JSRPD_LINK = r"^HA (control link|fabric link)\b"
+
+# A temperature sensor over its warning or critical threshold, a thermal
+# shutdown, or (where documented) an under-temperature alarm.
+TEMPERATURE_HIGH: tuple[Matcher, ...] = (
+    # IOS XE (System Message Guide for Catalyst Series Switches 17.3.x and
+    # 16.12.x; ASR 1000 / ISR 4000 TechNotes): "Temp: Inlet 1, Location: R0,
+    # State: Critical, Reading: 60 Celsius". The same mnemonic reports
+    # voltage and fan sensors ("V: ...", "RPM: ..."): only Temp counts.
+    _m("ENVIRONMENTAL-ALERT", text=r"^Temp:", instance=_IOSXE_SENSOR),
+    # "Critical limit reached for PVT temperature sensor on Asic: 0 ...".
+    _m("ENVIRONMENTAL-ALERT", text=r"\bPVT temperature sensor\b", instance=r"\bon (Asic): ?(\d+)"),
+    # "Sensor <name> has reached maximum temperature value ...".
+    _m("IOSXE_PEM-TEMPERATURE_RAISE", instance=r"^Sensor (\S+)"),
+    # Catalyst 9000: "Switch 2: <text>".
+    _m(
+        "PLATFORM_THERMAL-OVERTEMP",
+        "PLATFORM_THERMAL-SECONDARY_OVERTEMP",
+        "PLATFORM_THERMAL-OVERTEMP_SHUTDOWN",
+        "PLATFORM_THERMAL-UNDERTEMP",
+        "PLATFORM_THERMAL-UNDERTEMP_SHUTDOWN",
+        instance=r"^Switch (\d+):",
+    ),
+    # Classic Catalyst 2960 / 3560 / 3750 (System Message Guide 15.2(6)E2):
+    # "Temperature has reached warning / critical threshold", "PSU <name>
+    # temperature has reached ... threshold", "Abnormal temperature detected".
+    _m(
+        "HARDWARE-THERMAL_WARNING",
+        "HARDWARE-THERMAL_CRITICAL",
+        "PLATFORM_ENV-TEMP",
+        "PLATFORM_ENV-THERMAL_WARNING",
+        "PLATFORM_ENV-THERMAL_CRITICAL",
+    ),
+    _m("HARDWARE-PSU_THERMAL_WARNING", "HARDWARE-PSU_THERMAL_CRITICAL", instance=r"^PSU (\S+)"),
+    # ENVMON (Catalyst guide 17.3.x, CGS 2520 and 3900 components): "Warning:
+    # CPU temperature 80C exceeds threshold 75C. ...", "Warning: Inlet
+    # Temperature 50C Exceeds 45C. ...".
+    _m(
+        "ENVMON-CPU_WARNING_OVERTEMP",
+        "ENVMON-CPU_CRITICAL_OVERTEMP",
+        "ENVMON-IN_OUTLET_OVERTEMP",
+        "ENVMON-INTAKE_ABNORMTEMP",
+        "ENVMON-ONBOARD_OVERTEMP",
+        "ENVMON-MODULE_OVERTEMP",
+        "ENVMON-POWER_OVERTEMP",
+        instance=_ENVMON_HOT,
+    ),
+    # Catalyst 4500 (System Message Guide 15.1(1)SG).
+    _m("C4K_IOSMODPORTMAN-TEMPHIGH", "C4K_IOSMODPORTMAN-CRITICALTEMP", instance=r"^(Chassis) temperature\b"),
+    _m(
+        "C4K_IOSMODPORTMAN-MODULETEMPHIGH",
+        "C4K_IOSMODPORTMAN-MODULECRITICALTEMP",
+        "C4K_IOSMODPORTMAN-MODULESHUTDOWNTEMP",
+        instance=_C4K_MODULE_SENSOR,
+    ),
+    _m("C4K_CHASSIS-OVERHEATINGSHUTDOWN"),
+    # NX-OS (Nexus 9000 System Messages Reference 10.6(2)F): "Module 1
+    # reported Major temperature alarm. Sensor=3 Temperature=80
+    # MajThreshold=75", "... powered down due to major temperature alarm for
+    # Sensor 3.", "System shutdown in 120 seconds due to major temperature
+    # alarm".
+    _m(
+        "PLATFORM-MOD_TEMPMAJALRM",
+        "PLATFORM-MOD_TEMPMINALRM",
+        "PLATFORM-MOD_TEMPWARMALRM",
+        "PLATFORM-MOD_TEMPSHUTDOWN",
+        instance=_NXOS_TEMP,
+    ),
+    _m("PLATFORM-SYS_SHUTDOWN", text=r"\btemperature alarm\b"),
+    # IOS XR (System Error Message Reference 5.1.1, %PLATFORM-ENVMON-...):
+    # "Chassis ambient temperature 45.0C at or above rising T3 threshold
+    # ...", "Slot 0/1/CPU0 temperature 80.0C at or above rising T4 threshold
+    # ...", and the shutdown (STT) forms.
+    _m(
+        "PLATFORM-ENVMON-CHASSIS_OVERTEMP",
+        "PLATFORM-ENVMON-CHASSIS_OVERTEMP_SHUTDOWN",
+        instance=r"^(Chassis) ambient temperature\b",
+    ),
+    _m("PLATFORM-ENVMON-CARD_OVERTEMP", "PLATFORM-ENVMON-CARD_OVERTEMP_SHUTDOWN", instance=_XR_SLOT_TEMP),
+    # ASA / FTD (ASA Series Syslog Messages, FTD Syslog Messages): Critical
+    # and Warm, and the thermal shutdowns (no sensor named).
+    _m(*_asa_ftd(735007, 735008, 735015, 735016, 735018, 735019), instance=_ASA_TEMP_SENSOR),
+    _m(*_asa_ftd(735022, 735024, 735027, 735029)),
+    # Arista EOS (EOS System Message Guide 4.12.10): "Linecard3 is
+    # overheating", "... temperature critical and is being shutdown", "The
+    # system is overheating", "System temperature critical ...".
+    _m(
+        "ENVMON-CARDOVERHEATWARNING",
+        "ENVMON-CARDOVERHEATSHUTDOWN",
+        "ENVMON-POWERSUPPLY_OVERHEAT_WARNING",
+        "ENVMON-POWERSUPPLY_OVERHEAT_CRITICAL",
+        instance=_ARISTA_HOT,
+    ),
+    _m("ENVMON-SYSTEMOVERHEATWARNING", "ENVMON-SYSTEMOVERHEATSHUTDOWN"),
+    # Junos (System Log Explorer): chassis-wide over-temperature and
+    # shutdown, a FRU or Routing Engine over its limit.
+    _m(
+        "CHASSISD_OVER_TEMP_CONDITION",
+        "CHASSISD_OVER_TEMP_SHUTDOWN_TIME",
+        "CHASSISD_HIGH_TEMP_CONDITION",
+        "CHASSISD_CHASSIS_FIRE_TEMP",
+    ),
+    _m("CHASSISD_TEMP_HOT_NOTICE", instance=r"^(.+?) temperature of "),
+    _m(
+        "CHASSISD_FRU_HIGH_TEMP_CONDITION",
+        "CHASSISD_FRU_OVER_TEMP_CONDITION",
+        instance=r"^(.+?) temperature \S+ over ",
+    ),
+    _m("CHASSISD_FRU_SENSOR_TEMP_WARNING", instance=r":\s*(.+?) temperature sensor (\S+)"),
+    _m(
+        "CHASSISD_RE_WARM_TEMP_CONDITION",
+        "CHASSISD_RE_OVER_TEMP_CONDITION",
+        "CHASSISD_RE_OVER_TEMP_WARNING",
+        "CHASSISD_RE_OVER_TEMP_SHUTDOWN",
+        instance=r"^(Routing Engine \S+) temperature\b",
+    ),
+    # Junos jnxOverTemperature as chassisd logs it: "SNMP trap generated:
+    # Over Temperature! (..., jnxContentsDescr Routing Engine, ...)".
+    _m(prefixes=("CHASSISD_SNMP_TRAP",), text=r"\bOver Temperature\b", instance=_JUNOS_FRU),
+    # FortiOS 22109 "Temperature too high", 22152 "Temperature too low" (the
+    # reference gives no msg text: one alert per firewall).
+    _m("FGT-0100022109", "FGT-0100022152"),
+    # AOS-CX 803: "Over-temperature for sensor <name>, <temp> degC".
+    _m("AOSCX-803", instance=r"\bsensor ([^\s,]+)"),
+    # AOS-Switch 424 (16.10): "Over-temperature detected ...". The id
+    # differs by release, so the text is checked too.
+    _m("AOSS-00424", text=r"\bOver-temperature detected\b"),
+)
+# The same sensor back to normal: clears the temperature rule.
+TEMPERATURE_OK: tuple[Matcher, ...] = (
+    # "Temp: Inlet 1, Location: R0, State: normal".
+    _m("ENVIRONMENTAL-SENSOROK", text=r"^Temp:", instance=_IOSXE_SENSOR),
+    _m("PLATFORM_THERMAL-TEMP_NORMAL", instance=r"^Switch (\d+):"),
+    _m("HARDWARE-THERMAL_NORMAL"),
+    _m("HARDWARE-PSU_THERMAL_NORMAL", instance=r"^PSU (\S+)"),
+    # "CPU temperature normal", "Inlet temperature normal".
+    _m(
+        "ENVMON-CPU_TEMP_OK",
+        "ENVMON-IN_OUTLET_TEMP_OK",
+        "ENVMON-ONBOARD_TEMP_OK",
+        "ENVMON-MODULE_TEMP_OK",
+        "ENVMON-POWER_TEMP_OK",
+        instance=_ENVMON_COOL,
+    ),
+    _m("C4K_IOSMODPORTMAN-TEMPOK", instance=r"^(Chassis) temperature\b"),
+    _m("C4K_IOSMODPORTMAN-MODULETEMPOK", instance=_C4K_MODULE_SENSOR),
+    _m("C4K_CHASSIS-OVERHEATINGOVER"),
+    # NX-OS: "Module 1 recovered from minor / major temperature alarm.
+    # Sensor=3 ..." (not MOD_TEMPRECOVER: a minor alarm is still pending).
+    _m("PLATFORM-MOD_TEMPOK", "PLATFORM-MOD_TEMPMAJOR_OK", instance=_NXOS_TEMP),
+    # IOS XR: "... returned below falling T3 / T4 threshold ...".
+    _m("PLATFORM-ENVMON-CHASSIS_OVERTEMP_CLEAR", instance=r"^(Chassis) ambient temperature\b"),
+    _m("PLATFORM-ENVMON-CARD_OVERTEMP_CLEAR", instance=_XR_SLOT_TEMP),
+    # ASA / FTD: "CPU 0: Temp: 50 C, OK" and the chassis, power supply and
+    # IO hub forms.
+    _m(*_asa_ftd(735017, 735020, 735021, 735026), instance=_ASA_TEMP_SENSOR),
+    # Arista EOS: "Linecard3 temperature has returned to normal", "System
+    # temperature has returned to normal".
+    _m("ENVMON-CARDTEMPNORMAL", "ENVMON-POWERSUPPLY_TEMP_NORMAL", instance=_ARISTA_COOL),
+    _m("ENVMON-SYSTEMTEMPNORMAL"),
+    # Junos jnxTemperatureOK: "SNMP trap generated: Temperature back to
+    # normal (...)".
+    _m(prefixes=("CHASSISD_SNMP_TRAP",), text=r"\bTemperature back to normal\b", instance=_JUNOS_FRU),
+    # FortiOS 22153 "Temperature normal".
+    _m("FGT-0100022153"),
+)
+
+# A redundancy switchover, failover, new stack master / commander, or the
+# loss of an HA peer, member, heartbeat or failover link. Most name no
+# instance (one alert per device; the rule resolves by time); a failover
+# link that has a documented up message names itself.
+HA_SWITCHOVER: tuple[Matcher, ...] = (
+    # IOS XE (Catalyst guide 17.3.x / 16.12.x): "RP switchover <reason>",
+    # "Standby processor fault <reason>"; Catalyst 4500 "Switchover activity
+    # detected changing role from STANDBY to ACTIVE".
+    _m("REDUNDANCY-SWITCHOVER", "REDUNDANCY-STANDBY_LOST", "C4K_REDUNDANCY-SWITCHOVER"),
+    # Classic Catalyst 3750 stack: "Switch 1 has been elected as MASTER of the stack".
+    _m("STACKMGR-MASTER_ELECTED", instance=r"^Switch (\d+) has been elected\b"),
+    # NX-OS (Nexus 9000 System Messages Reference 10.6(2)F and 9.3(10)).
+    _m(
+        "SYSMGR-HASWITCHOVER_PRE_START",
+        "SYSMGR-HASWITCHOVER_START",
+        "SYSMGR-WARMSWITCHOVER_START",
+        "SYSMGR-SWITCHOVER_OVER",
+        "SYSMGR-SWITCHOVER_THRESHOLD_EXCEEDED",
+        "SYSMGR-STANDBY_BOOT_FAILED",
+        "SYSMGR-REDUNDANCY_HEARTBEAT_FAILURE",
+    ),
+    # IOS XR (System Error Message Reference 5.1.1): "this card going
+    # active", "connection to standby card is DOWN", "Card is becoming
+    # active.", "Detected role change to ACTIVE state due to ...".
+    _m("HA-REDCON-GO_ACTIVE", "HA-REDCON-STANDBY_CONNECTION_DOWN", "PLATFORM-REDDRV-GO_ACTIVE"),
+    _m("PLATFORM-REDDRV-ROLE_CHANGE", text=r"\brole change to active\b"),
+    # ASA / FTD failover: this unit switching to active, standby or failed
+    # (104001 to 104003, cloud HA 104500 / 104501), no response from or
+    # failed by the mate (103001, 103004), failover communication lost on an
+    # interface (105005), failover cable or LAN failover link down (105011,
+    # 105032, 105043) and both units switching back and forth (105037).
+    _m(*_asa_ftd(104001, 104002, 104003, 104500, 104501, 103001, 103004, 105005, 105011, 105032, 105043, 105037)),
+    # Arista EOS supervisor redundancy (EOS System Message Guide 4.12.10).
+    _m(
+        "REDUNDANCY-SWITCHOVER_START",
+        "REDUNDANCY-SWITCHOVER_COMPLETE",
+        "REDUNDANCY-IS_DISABLED",
+        "REDUNDANCY-OTHER_DISABLED",
+    ),
+    # Arista MLAG inactive or failed over: "MLAG is inactive with peer ...",
+    # "MLAG failed over to (or remained at) the primary state because the
+    # peer link ... is down", "MLAG stopped receiving heartbeats ...".
+    _m(
+        "MLAG-STATE_INACTIVE_CONNECTION_CLOSED",
+        "MLAG-STATE_INACTIVE_HEARTBEAT_TIMEOUT",
+        "MLAG-STATE_INACTIVE_LOCAL_INTERFACE_DOWN",
+        "MLAG-STATE_PRIMARY_PEER_LINK_DOWN",
+        "MLAG-PEER_EVENT_HEARTBEAT_TIMEOUT",
+        instance=_MLAG,
+    ),
+    # Junos (System Log Explorer): Routing Engine mastership, SRX chassis
+    # cluster redundancy group and node changes, Multinode HA, the cluster
+    # control and fabric links, split brain.
+    _m("CHASSISD_LOST_MASTERSHIP", "UI_MASTERSHIP_EVENT", "JSRPD_SPLIT_BRAIN"),
+    _m("JSRPD_RG_STATE_CHANGE", instance=r"^(Redundancy-group \S+)"),
+    _m("JSRPD_HA_SRG_STATE_CHANGE", instance=r"^(SRG\[[^\]]*\])"),
+    _m("JSRPD_HA_CONTROL_LINK_DOWN", "JSRPD_HA_FAB_LINK_DOWN", instance=_JSRPD_LINK),
+    # FortiOS HA (logid 0108...): 37892 "Virtual cluster member state
+    # moved", 37893 "Virtual cluster member dead", 37898 "HA device
+    # interface failed", 37901 "Heartbeat device interface down", 35013 "HA
+    # failover failed", 35016 "HA failover success".
+    _m("FGT-0108037892", "FGT-0108037893", "FGT-0108037898", "FGT-0108037901", "FGT-0108035013", "FGT-0108035016"),
+    # PAN-OS HA state change: "HA Group 1: Moved from state Active to state
+    # Non-Functional" (Palo Alto knowledge base example).
+    _m("PAN-SYSTEM-STATE-CHANGE", text=r"^HA Group \d+: Moved from state ", instance=r"^(HA Group \d+):"),
+    # AOS-CX VSX: 7001 "VSX ISL port <port> is down", 7005 "VSX Keepalive
+    # failed".
+    _m("AOSCX-7001", "AOSCX-7005", instance=r"^(VSX (?:ISL|Keepalive))\b"),
+    # AOS-Switch stacking 3278: "Member <id> elected as commander. Reason: ...".
+    _m("AOSS-03278", text=r"\belected as commander\b"),
+)
+# The documented recoveries of a link or peer that names itself.
+HA_RESTORED: tuple[Matcher, ...] = (
+    # Arista: "MLAG is active as primary / secondary with peer ...", "MLAG
+    # connection restored with peer ...".
+    _m("MLAG-STATE_PRIMARY", "MLAG-STATE_SECONDARY", "MLAG-STATE_PRIMARY_PEER_LINK_UP", instance=_MLAG),
+    # Junos: "HA control link monitor status is marked up", "HA fabric link is UP".
+    _m("JSRPD_HA_CONTROL_LINK_UP", "JSRPD_HA_FAB_LINK_UP", instance=_JSRPD_LINK),
+)
+
+# Messages a device logs when it is about to reload: the re-poll trigger
+# (``repoll_reason`` ``reload``) and the device_restart rule.
+RELOAD: tuple[Matcher, ...] = (
+    _m("SYS-RELOAD", "UI_REBOOT_EVENT", "PLATFORM-PFM_SYSTEM_RESET", *_asa_ftd(199001)),
+    # FortiOS 32138 "Device rebooted", 32200 "Device shutdown", 32545
+    # "Scheduled daily reboot started"; AOS-Switch 63 "SYSTEM went down:
+    # <reason>"; AOS-CX 706 "Initiating system reboot", 707 "Initiating
+    # chassis thermal reboot".
+    _m("FGT-0100032138", "FGT-0100032200", "FGT-0100032545", "AOSS-00063", "AOSCX-706", "AOSCX-707"),
+    # IOS XR (category INSTALL): "Install manager is about to request a
+    # router reload to complete the install operation".
+    _m("INSTALL-INSTMGR-CALLING_PLATFORM_RELOAD_NODES_ALL"),
+)
+# Messages a device logs once it is back up: the re-poll trigger
+# (``restart``) and the device_restart rule.
+RESTART: tuple[Matcher, ...] = (
+    _m("SYS-RESTART", "SYS-BOOTTIME", "SNMPD_TRAP_COLD_START", "SNMPD_TRAP_WARM_START", *_asa_ftd(199002)),
+    # FortiOS 32009 "FortiGate started"; AOS-Switch 66 "System Booted" and
+    # 64 (the crash reason of a switch that went down); AOS-CX 1206 "Module
+    # rebooted. Reason: ...", 1236 "Module unexpected reboot. Reason: ...".
+    _m("FGT-0100032009", "AOSS-00066", "AOSS-00064", "AOSCX-1206", "AOSCX-1236"),
+    # Arista EOS (EOS System Message Guide 4.12.10): "System restarted",
+    # "Reboot due to kernel panic", "Reboot due to system watchdog".
+    _m("SYS-SYSTEM_RESTARTED", "SYS-KERNEL_PANIC", "HARDWARE-WATCHDOG_ERROR"),
+    # IOS XR: "System cold start detected. Resetting Line Cards."
+    _m("PLATFORM-SHELFMGR-SYSTEM_COLD_START"),
+)
+
+# ── Event rule packs: layer 2, routing and tunnel neighbors, device health ───
+#
+# Message forms from the Cisco System Message Guide for Catalyst Series
+# Switches (IOS XE 17.3.x) unless a comment names another source; the
+# sample texts are those of the Cisco documents named in
+# docs/syslog-rules.md "Event rule packs". The rules are appended to
+# BUILTIN_RULES after the rules above.
+
+_CISCO_FAMILIES = ("Cisco IOS / IOS XE",)
+# STP: "Root Changed for vlan 10: New Root Port is ..." (Catalyst 3750 ...
+# 2960 Switch System Message Guide), "Topology Change Trap for vlan 10".
+_STP_VLAN = r"\bfor (\S+ \d+)"
+# Root guard / loop guard: "Root guard blocking port Gi1/0/1 on VLAN0010."
+# and "... unblocking port ... on ...".
+_STP_GUARD_PORT = r"\b(?:un)?blocking port (\S+) on ([^\s.]+)"
+# Cisco TechNote "Errdisable Port State Recovery": "bpduguard error detected
+# on Gi4/1, putting Gi4/1 in err-disable state" (the -SP- facility on a
+# Catalyst 6500 supervisor); the _VP form adds "vlan <n>".
+_ERR_DISABLED_PORT = r"\berror detected on ([^\s,]+)(?: vlan (\d+))?"
+# HSRP (Cisco TechNote "Understand and Troubleshoot HSRP Problems"): "Vlan10
+# Grp 110 state Standby -> Active", older "Standby: 49: Vlan149 state Active
+# -> Speak" (the interface first in both instances).
+_HSRP_ACTIVE_CHANGE = r"\bstate (?:Active ?-> ?\w+|\w+ ?-> ?Active)\b"
+# EIGRP (Cisco TechNote 118974, NX-OS EIGRP-5-NBRCHANGE_DUAL): "IP-EIGRP(0)
+# 1: Neighbor 192.0.2.1 (Ethernet0/0) is down: holding time expired".
+_EIGRP_NBR = r"\bNeighbor (\S+) \("
+# IS-IS (Cisco "Troubleshoot IS-IS Adjacency Issues"): "ISIS: Adjacency to
+# DeviceB (TenGigabitEthernet0/0/4) Down, hold time expired"; NX-OS
+# (System Routing Messages Reference) "<process> adj L<level> <neighbor>
+# over <interface> - <state> on MT-<n>".
+_ISIS_NBR = r"\bAdjacency to (\S+) \(([^)]+)\)"
+_NXOS_ISIS_NBR = r"\badj L\S* (\S+) over (\S+)"
+# Cisco "IP Security VPN Monitoring": "Crypto session is DOWN. Peer
+# 192.0.2.1:500 fvrf=... Id: ..." (also "Crypto tunnel is UP. ...").
+_CRYPTO_PEER = r"\bPeer (\S+)"
+# Enhanced object tracking of an IP SLA operation: "100 ip sla 100
+# reachability Up -> Down" (or "state"), sample from the ipSpace.net
+# reliable static routing article.
+_TRACK_SLA = r"^(\d+ ip sla \d+) (?:state|reachability) "
+_ILPOWER_PORT = r"\bInterface ([^\s:,]+)"
+_RADIUS_SERVER = r"\bRADIUS server (\S+)"
+
+_LAYER2_RULES: tuple[BuiltinRule, ...] = (
+    BuiltinRule(
+        key="stp_root_change",
+        name="Spanning tree root changed",
+        description="The spanning tree root of a VLAN or instance changed; resolves 60 minutes after the last change.",
+        families=_CISCO_FAMILIES,
+        severity="warning",
+        raise_on=(_m("SPANTREE-ROOTCHANGE", instance=_STP_VLAN),),
+        auto_resolve_minutes=60,
+    ),
+    BuiltinRule(
+        key="stp_topology_change",
+        name="Spanning tree topology changes",
+        description=(
+            "5 spanning tree topology changes in one VLAN or instance within 10 minutes; resolves 30 minutes "
+            "after the last one."
+        ),
+        families=_CISCO_FAMILIES,
+        severity="warning",
+        raise_on=(_m("SPANTREE-TOPOTRAP", instance=_STP_VLAN),),
+        threshold_count=5,
+        threshold_window_seconds=600,
+        auto_resolve_minutes=30,
+    ),
+    BuiltinRule(
+        key="stp_guard",
+        name="Spanning tree guard blocking a port",
+        description=(
+            "Root guard, loop guard or Bridge Assurance put a port in blocking state; resolved when it unblocks "
+            "the port, or after 24 hours."
+        ),
+        families=_CISCO_FAMILIES,
+        severity="warning",
+        raise_on=(
+            _m("SPANTREE-ROOTGUARD_BLOCK", "SPANTREE-LOOPGUARD_BLOCK", instance=_STP_GUARD_PORT),
+            _m("SPANTREE-BRIDGE_ASSURANCE_BLOCK", instance=r"\bblocking port ([^\s.,]+)"),
+        ),
+        clear_on=(
+            _m("SPANTREE-ROOTGUARD_UNBLOCK", "SPANTREE-LOOPGUARD_UNBLOCK", instance=_STP_GUARD_PORT),
+            _m("SPANTREE-BRIDGE_ASSURANCE_UNBLOCK", instance=r"\bunblocking port ([^\s.,]+)"),
+        ),
+        auto_resolve_minutes=1440,
+    ),
+    BuiltinRule(
+        key="port_err_disabled",
+        name="Port error-disabled",
+        description=(
+            "A port was put in err-disable state (BPDU guard, UDLD, port security, storm control, link flap, "
+            "loopback ...); resolves 24 hours after the last err-disable message."
+        ),
+        families=_CISCO_FAMILIES,
+        severity="warning",
+        # PM-4-ERR_RECOVER only says a recovery is attempted: a port that
+        # fails again logs ERR_DISABLE again and keeps the alert open.
+        raise_on=(_m("PM-ERR_DISABLE", "PM-SP-ERR_DISABLE", "PM-ERR_DISABLE_VP", instance=_ERR_DISABLED_PORT),),
+        auto_resolve_minutes=1440,
+    ),
+    BuiltinRule(
+        key="port_security",
+        name="Port security violation",
+        description="An unknown MAC address reached a secure port; resolves 60 minutes after the last violation.",
+        families=_CISCO_FAMILIES,
+        severity="warning",
+        # "Security violation occurred, caused by MAC address <mac> on port
+        # <interface>." (Cisco Community log samples; the guide gives the
+        # mnemonic and says the message names the MAC address and port).
+        raise_on=(
+            _m(
+                "PORT_SECURITY-PSECURE_VIOLATION",
+                "PORT_SECURITY-PSECURE_VIOLATION_VLAN",
+                instance=r"\bon port ([^\s,]+)",
+            ),
+        ),
+        auto_resolve_minutes=60,
+    ),
+    BuiltinRule(
+        key="storm_control",
+        name="Traffic storm",
+        description=(
+            "Storm control filtered a traffic storm on a port or shut the port down; resolved when the storm "
+            "abates, or after 24 hours."
+        ),
+        families=_CISCO_FAMILIES,
+        severity="warning",
+        # "A broadcast storm detected on Gi1/0/1. A packet filter action has
+        # been applied ...", "A packet storm was detected on Gi1/0/1. The
+        # interface has been disabled.", "Storm control shut down Gi1/0/1".
+        raise_on=(
+            _m("STORM_CONTROL-FILTERED", instance=r"\bstorm detected on (\S+)"),
+            _m("STORM_CONTROL-SHUTDOWN", instance=r"\b(?:storm was detected on|shut down) (\S+)"),
+        ),
+        clear_on=(_m("STORM_CONTROL-ABATED", instance=r"\bstorm abated on (\S+)"),),
+        auto_resolve_minutes=1440,
+    ),
+    BuiltinRule(
+        key="mac_flap",
+        name="MAC address flapping",
+        description=(
+            "Hosts in one VLAN moved between ports 3 times within 10 minutes (a loop or a misconfigured "
+            "channel); resolves 30 minutes after the last move."
+        ),
+        families=_CISCO_FAMILIES,
+        severity="warning",
+        # Cisco "Troubleshoot MAC Address Flap Notifications": "Host
+        # 0011.2233.4455 in vlan 10 is flapping between port Gi1/0/10 and
+        # port Po1."
+        raise_on=(_m("SW_MATM-MACFLAP_NOTIF", instance=r"\bin (vlan \d+) is flapping\b"),),
+        threshold_count=3,
+        threshold_window_seconds=600,
+        auto_resolve_minutes=30,
+    ),
+    BuiltinRule(
+        key="duplex_mismatch",
+        name="Duplex mismatch",
+        description=(
+            "CDP found a duplex mismatch with the neighbor on a port; resolves 60 minutes after the last report "
+            "(CDP repeats it while the mismatch lasts)."
+        ),
+        families=_CISCO_FAMILIES,
+        severity="warning",
+        # "duplex mismatch discovered on Gi1/0/1 (not full duplex), with ..."
+        raise_on=(_m("CDP-DUPLEX_MISMATCH", instance=r"\bdiscovered on ([^\s,]+)"),),
+        auto_resolve_minutes=60,
+    ),
+)
+
+_NEIGHBOR_RULES: tuple[BuiltinRule, ...] = (
+    BuiltinRule(
+        key="hsrp_state",
+        name="HSRP failover",
+        description=(
+            "An HSRP group became active on this router or left the active state; resolves 60 minutes after "
+            "the last change."
+        ),
+        families=_CISCO_FAMILIES,
+        severity="warning",
+        raise_on=(
+            _m("HSRP-STATECHANGE", text=_HSRP_ACTIVE_CHANGE, instance=r"^(\S+) Grp (\d+)"),
+            _m("STANDBY-STATECHANGE", text=_HSRP_ACTIVE_CHANGE, instance=r"^Standby: (?=\d+: (\S+))(\d+):"),
+        ),
+        auto_resolve_minutes=60,
+    ),
+    BuiltinRule(
+        key="eigrp_neighbor",
+        name="EIGRP neighbor down",
+        description="An EIGRP neighbor went down; resolved when it is up again.",
+        families=(*_CISCO_FAMILIES, "Cisco NX-OS"),
+        severity="critical",
+        raise_on=(_m("DUAL-NBRCHANGE", "EIGRP-NBRCHANGE_DUAL", text=r"\) is down\b", instance=_EIGRP_NBR),),
+        clear_on=(_m("DUAL-NBRCHANGE", "EIGRP-NBRCHANGE_DUAL", text=r"\) is up\b", instance=_EIGRP_NBR),),
+    ),
+    BuiltinRule(
+        key="isis_adjacency",
+        name="IS-IS adjacency down",
+        description="An IS-IS adjacency went down; resolved when it is up again.",
+        families=(*_CISCO_FAMILIES, "Cisco NX-OS"),
+        severity="critical",
+        raise_on=(
+            _m("CLNS-ADJCHANGE", text=r"\) Down\b", instance=_ISIS_NBR),
+            _m("ISIS-ADJCHANGE", text=r"\bover \S+ - Down\b", instance=_NXOS_ISIS_NBR),
+        ),
+        clear_on=(
+            _m("CLNS-ADJCHANGE", text=r"\) Up\b", instance=_ISIS_NBR),
+            _m("ISIS-ADJCHANGE", text=r"\bover \S+ - Up\b", instance=_NXOS_ISIS_NBR),
+        ),
+    ),
+    BuiltinRule(
+        key="ipsec_tunnel",
+        name="IPsec tunnel down",
+        description="An IPsec (crypto) session to a peer went down; resolved when it is up again.",
+        families=_CISCO_FAMILIES,
+        severity="critical",
+        raise_on=(_m("CRYPTO-SESSION_STATUS", text=r"\bCrypto (?:session|tunnel) is DOWN\b", instance=_CRYPTO_PEER),),
+        clear_on=(_m("CRYPTO-SESSION_STATUS", text=r"\bCrypto (?:session|tunnel) is UP\b", instance=_CRYPTO_PEER),),
+    ),
+    BuiltinRule(
+        key="ip_sla",
+        name="IP SLA probe down",
+        description="A tracked IP SLA operation went down; resolved when it is up again.",
+        families=_CISCO_FAMILIES,
+        severity="warning",
+        raise_on=(_m("TRACK-STATE", text=_TRACK_SLA + r"Up ?-> ?Down\b", instance=_TRACK_SLA),),
+        clear_on=(_m("TRACK-STATE", text=_TRACK_SLA + r"Down ?-> ?Up\b", instance=_TRACK_SLA),),
+    ),
+)
+
+_HEALTH_RULES: tuple[BuiltinRule, ...] = (
+    BuiltinRule(
+        key="poe_fault",
+        name="PoE fault",
+        description=(
+            "A PoE port reported a controller fault, was denied power, drew more than its maximum or was shut "
+            "down for it; resolved when the port is granted power again, or after 24 hours."
+        ),
+        families=_CISCO_FAMILIES,
+        severity="warning",
+        raise_on=(
+            _m(
+                "ILPOWER-CONTROLLER_PORT_ERR",
+                "ILPOWER-ILPOWER_POWER_DENY",
+                "ILPOWER-INVALID_IEEE_CLASS",
+                "ILPOWER-LOG_OVERDRAWN",
+                "ILPOWER-SHUT_OVERDRAWN",
+                instance=_ILPOWER_PORT,
+            ),
+        ),
+        clear_on=(_m("ILPOWER-POWER_GRANTED", "ILPOWER-CLR_OVERDRAWN", instance=_ILPOWER_PORT),),
+        auto_resolve_minutes=1440,
+    ),
+    BuiltinRule(
+        key="optic_power",
+        name="Optic light level out of range",
+        description=(
+            "A transceiver's receive or transmit power crossed its low or high warning or alarm threshold; "
+            "resolves 24 hours after the last crossing."
+        ),
+        families=_CISCO_FAMILIES,
+        severity="warning",
+        # "Te1/4/1: Rx power low alarm; Operating value: -40.0 dBm, Threshold
+        # value: -18.4 dBm." (Cisco Community samples; temperature, voltage
+        # and bias current crossings of the same message are not counted).
+        raise_on=(
+            _m(
+                "SFF8472-THRESHOLD_VIOLATION",
+                text=r"\b[RT]x power (?:high|low) (?:alarm|warning)\b",
+                instance=r"^([^\s:]+):",
+            ),
+        ),
+        auto_resolve_minutes=1440,
+    ),
+    BuiltinRule(
+        key="aaa_server",
+        name="AAA server not responding",
+        description=(
+            "A RADIUS server stopped answering the device; resolved when it is marked alive again, or after 24 hours."
+        ),
+        families=_CISCO_FAMILIES,
+        severity="warning",
+        # Classic RADIUS-4-RADIUS_DEAD and, on IOS XE 17 (Cisco "Understand
+        # AAA Dead Detection"), "RADIUS_AUDIT_MESSAGE-6-RADIUS_DEAD: R0/0:
+        # sessmgrd: RADIUS server 192.0.2.5:1812,1813 is not responding."
+        raise_on=(_m("RADIUS-RADIUS_DEAD", "RADIUS_AUDIT_MESSAGE-RADIUS_DEAD", instance=_RADIUS_SERVER),),
+        clear_on=(_m("RADIUS-RADIUS_ALIVE", instance=_RADIUS_SERVER),),
+        auto_resolve_minutes=1440,
+    ),
+    BuiltinRule(
+        key="ntp_sync",
+        name="NTP synchronization lost",
+        description="The device lost NTP synchronization; resolved when it synchronizes to a peer again.",
+        families=_CISCO_FAMILIES,
+        severity="warning",
+        raise_on=(_m("NTP-UNSYNC"),),
+        clear_on=(_m("NTP-PEERSYNC"),),
+    ),
+    BuiltinRule(
+        key="license_expiry",
+        name="License expiring or expired",
+        description=(
+            "Smart Licensing reported an evaluation, authorization or registration that expires soon or has "
+            "expired, or a failed authorization renewal; resolves 24 hours after the last such message."
+        ),
+        families=_CISCO_FAMILIES,
+        severity="warning",
+        raise_on=(
+            _m(
+                "SMART_LIC-EVAL_WILL_EXPIRE_WARNING",
+                "SMART_LIC-EVAL_EXPIRED",
+                "SMART_LIC-EVAL_EXPIRED_WARNING",
+                "SMART_LIC-AUTHORIZATION_EXPIRED",
+                "SMART_LIC-AUTH_RENEW_FAILED",
+                "SMART_LIC-ID_CERT_EXPIRED",
+                "SMART_LIC-ID_CERT_EXPIRED_WARNING",
+            ),
+        ),
+        auto_resolve_minutes=1440,
+    ),
+    BuiltinRule(
+        key="certificate_expiry",
+        name="Certificate expiring or expired",
+        description=(
+            "A PKI certificate expires soon, has expired or failed to renew; resolves 24 hours after the last "
+            "such message."
+        ),
+        families=_CISCO_FAMILIES,
+        severity="warning",
+        # "Certificate renewal failed for trustpoint <name> Reason : ...",
+        # "... The certificate SN: <serial> has expired."
+        raise_on=(
+            _m(
+                "PKI-CERT_EXPIRY_WARNING",
+                "PKI-CERT_EXPIRY_ALERT",
+                "PKI-CERT_RENEW_FAIL",
+                "PKI-CERTIFICATE_INVALID_EXPIRED",
+                instance=r"\btrustpoint (\S+)|\bcertificate SN: (\S+)",
+            ),
+        ),
+        auto_resolve_minutes=1440,
+    ),
+    BuiltinRule(
+        key="software_fault",
+        name="Software crash or memory failure",
+        description=(
+            "A memory allocation failed, the device reported a crash, or an NX-OS service crashed; resolves 24 "
+            "hours after the last such message."
+        ),
+        families=(*_CISCO_FAMILIES, "Cisco NX-OS"),
+        severity="critical",
+        raise_on=(
+            _m("SYS-MALLOCFAIL", "PLATFORM-CRASHED"),
+            # Cisco Field Notice FN64180: "Service "snmpd" (PID 28063) hasn't
+            # caught signal 11 (core will be saved)."
+            _m("SYSMGR-SERVICE_CRASHED", instance=r'\bService "([^"]+)"'),
+        ),
+        auto_resolve_minutes=1440,
+    ),
 )
 
 BUILTIN_RULES: tuple[BuiltinRule, ...] = (
@@ -558,6 +1289,7 @@ BUILTIN_RULES: tuple[BuiltinRule, ...] = (
             "Cisco IOS XR",
             "Cisco NX-OS",
             "Cisco ASA",
+            "Cisco FTD",
             "Arista EOS",
             "Juniper Junos",
             "Fortinet FortiOS",
@@ -661,6 +1393,9 @@ BUILTIN_RULES: tuple[BuiltinRule, ...] = (
             "Cisco IOS XE (ASR 1000, ISR 4000, Catalyst 9000)",
             "Cisco Catalyst 3750-X / 3560-X",
             "Cisco NX-OS",
+            "Cisco IOS XR",
+            "Cisco ASA",
+            "Cisco FTD",
             "Arista EOS",
             "Juniper Junos",
             "Fortinet FortiOS",
@@ -691,6 +1426,16 @@ BUILTIN_RULES: tuple[BuiltinRule, ...] = (
             _m("AOSCX-304", instance=r"\bPSU (\S+?) faulted"),
             _m("AOSS-00071", text=r"\bPower Supply failure\b", instance=_AOSS_SUPPLY),
             _m("AOSS-02797", text=r"\bis faulted\b", instance=_AOSS_INTERNAL_PSU),
+            # IOS XR (System Error Message Reference 5.1.1, category
+            # PLATFORM): "Power-module 0/PS0/M1/SP failure condition ...",
+            # "<module> is Non-Operational".
+            _m("PLATFORM-PWR_MGMT-MODULE_FAILURE", "PLATFORM-PWRMON-MODULE_FAILURE", instance=r"^Power-module (\S+)"),
+            _m("PLATFORM-ENVMON-POWERSUPPLY_NONOP", instance=_XR_NONOP),
+            # ASA / FTD (ASA Series Syslog Messages 722001-776020, FTD
+            # syslogs9): 735004 "Power Supply <n>: Failure Detected", 735006
+            # "Power Supply Unit Redundancy Lost".
+            _m(*_asa_ftd(735004), instance=_ASA_PSU),
+            _m(*_asa_ftd(735006), instance=_ASA_PSU_REDUNDANCY),
         ),
         clear_on=(
             _m("IOSXE_PEM-PEMOK", instance=rf"slot {_IFACE}"),
@@ -706,6 +1451,12 @@ BUILTIN_RULES: tuple[BuiltinRule, ...] = (
             _m("FGT-0100022115", exclude=r"\bfail|\bredundan|\bdegrad"),
             _m("AOSS-00071", text=r"\bPower Supply OK\b", instance=_AOSS_SUPPLY),
             _m("AOSS-02797", text=r"\bis ok\b", instance=_AOSS_INTERNAL_PSU),
+            # IOS XR: "<module> has become operational".
+            _m("PLATFORM-ENVMON-POWERSUPPLY_NONOP_CLEAR", instance=_XR_NONOP),
+            # ASA / FTD 735003 "Power Supply <n>: OK", 735005 "Power Supply
+            # Unit Redundancy OK".
+            _m(*_asa_ftd(735003), instance=_ASA_PSU),
+            _m(*_asa_ftd(735005), instance=_ASA_PSU_REDUNDANCY),
         ),
         auto_resolve_minutes=1440,
     ),
@@ -714,10 +1465,13 @@ BUILTIN_RULES: tuple[BuiltinRule, ...] = (
         name="Fan fault",
         description="A fan failed; resolved when it reports OK, or after 24 hours.",
         families=(
-            "Cisco IOS XE (ASR 1000, ISR 4000)",
+            "Cisco IOS XE (ASR 1000, ISR 4000, Catalyst 9000)",
             "Cisco Catalyst 2960 / 3560 / 3750 (classic IOS)",
             "Cisco ISR G2 (1900, 2900, 3900)",
             "Cisco NX-OS",
+            "Cisco IOS XR",
+            "Cisco ASA",
+            "Cisco FTD",
             "Arista EOS",
             "Juniper Junos",
             "Fortinet FortiOS",
@@ -747,6 +1501,17 @@ BUILTIN_RULES: tuple[BuiltinRule, ...] = (
             # AOS-CX 214: "<function>: Fan 1/1/1 faulted, reason: <reason>."
             _m("AOSCX-214", instance=r"\bFan (\S+) faulted\b"),
             _m("AOSS-00070", text=r"\bFan failure\b", instance=_AOSS_FAN),
+            # IOS XR: "Fan failure on slot 0/FT0/SP, fan 2, RPM 0" (or "<fan>
+            # FAILED."), "Fan tray failure on slot 0/FT0/SP".
+            _m("PLATFORM-ENVMON-FAN_FAIL", instance=_XR_FAN),
+            _m("PLATFORM-ENVMON-FANTRAY_FAIL", instance=_XR_FANTRAY),
+            # Catalyst 9000 (Catalyst guide 17.3.x / 16.12.x): "Switch 2:
+            # System fan 1 failed".
+            _m("PLATFORM_THERMAL-FRU_FAN_FAILURE", instance=_CAT9K_FAN),
+            # ASA / FTD 735002 "Cooling Fan <n>: Failure Detected", 735012
+            # "Power Supply <n>: Fan Failure Detected".
+            _m(*_asa_ftd(735002), instance=_ASA_FAN),
+            _m(*_asa_ftd(735012), instance=_ASA_PSU_FAN),
         ),
         clear_on=(
             _m("IOSXE_PEM-FANOK", instance=rf"slot {_IFACE}"),
@@ -757,6 +1522,16 @@ BUILTIN_RULES: tuple[BuiltinRule, ...] = (
             # FortiOS 22151 "Fan normal".
             _m("FGT-0100022151"),
             _m("AOSS-00070", text=r"\bFan OK\b", instance=_AOSS_FAN),
+            # IOS XR: "Fan failure cleared on slot ..., fan 2, RPM 5000",
+            # "Fan tray failure cleared on slot ...".
+            _m("PLATFORM-ENVMON-FAN_CLEAR", instance=_XR_FAN),
+            _m("PLATFORM-ENVMON-FANTRAY_CLEAR", instance=_XR_FANTRAY),
+            # Catalyst 9000: "Switch 2: System fan 1 recovered to normal status".
+            _m("PLATFORM_THERMAL-FRU_FAN_RECOVERY", instance=_CAT9K_FAN),
+            # ASA / FTD 735001 "Cooling Fan <n>: OK", 735011 "Power Supply
+            # <n>: Fan OK".
+            _m(*_asa_ftd(735001), instance=_ASA_FAN),
+            _m(*_asa_ftd(735011), instance=_ASA_PSU_FAN),
         ),
         auto_resolve_minutes=1440,
     ),
@@ -771,14 +1546,96 @@ BUILTIN_RULES: tuple[BuiltinRule, ...] = (
             "Cisco IOS XE (Catalyst 9400 / 9600, StackWise Virtual, ASR 1000, ISR 4000)",
             "Cisco Catalyst 3750 / 2975 stacks (classic IOS)",
             "Cisco Catalyst 6500 (classic IOS)",
+            "Cisco Catalyst 4500",
             "Cisco NX-OS",
+            "Cisco IOS XR",
+            "Arista EOS",
             "Juniper Junos",
+            "Fortinet FortiOS (FortiGate 6000 / 7000)",
+            "HPE Aruba AOS-CX",
+            "HPE Aruba AOS-Switch",
         ),
         severity="critical",
         raise_on=MODULE_DOWN,
         clear_on=MODULE_UP,
         # The Catalyst 6500 power-off has no documented recovery message.
         auto_resolve_minutes=1440,
+    ),
+    BuiltinRule(
+        key="temperature",
+        name="Temperature alarm",
+        description=(
+            "A temperature sensor reached its warning or critical threshold (or the device started a thermal "
+            "shutdown); resolved when it reports normal, or after 24 hours."
+        ),
+        families=(
+            "Cisco IOS XE (ASR 1000, ISR 4000, Catalyst 9000)",
+            "Cisco Catalyst 2960 / 3560 / 3750 (classic IOS)",
+            "Cisco Catalyst 4500",
+            "Cisco NX-OS",
+            "Cisco IOS XR",
+            "Cisco ASA",
+            "Cisco FTD",
+            "Arista EOS",
+            "Juniper Junos",
+            "Fortinet FortiOS",
+            "HPE Aruba AOS-CX",
+            "HPE Aruba AOS-Switch",
+        ),
+        severity="critical",
+        raise_on=TEMPERATURE_HIGH,
+        clear_on=TEMPERATURE_OK,
+        auto_resolve_minutes=1440,
+    ),
+    BuiltinRule(
+        key="ha_switchover",
+        name="HA failover or switchover",
+        description=(
+            "A redundancy switchover, firewall failover, new stack master or HA peer, heartbeat or failover link "
+            "loss; resolves 60 minutes after the last such message (or when the link or peer is back)."
+        ),
+        families=(
+            "Cisco IOS XE (supervisor / RP redundancy)",
+            "Cisco Catalyst 3750 stacks (classic IOS)",
+            "Cisco NX-OS",
+            "Cisco IOS XR",
+            "Cisco ASA",
+            "Cisco FTD",
+            "Arista EOS (supervisor redundancy, MLAG)",
+            "Juniper Junos (RE mastership, SRX chassis cluster)",
+            "Fortinet FortiOS (HA)",
+            "Palo Alto PAN-OS (HA)",
+            "HPE Aruba AOS-CX (VSX)",
+            "HPE Aruba AOS-Switch (stacking)",
+        ),
+        severity="warning",
+        raise_on=HA_SWITCHOVER,
+        clear_on=HA_RESTORED,
+        auto_resolve_minutes=60,
+    ),
+    BuiltinRule(
+        key="device_restart",
+        name="Device restarted",
+        description=(
+            "The device restarted, or announced it is reloading or shutting down; resolves 60 minutes after the "
+            "last such message."
+        ),
+        families=(
+            "Cisco IOS / IOS XE",
+            "Cisco IOS XR",
+            "Cisco NX-OS",
+            "Cisco ASA",
+            "Cisco FTD",
+            "Arista EOS",
+            "Juniper Junos",
+            "Fortinet FortiOS",
+            "HPE Aruba AOS-CX",
+            "HPE Aruba AOS-Switch",
+        ),
+        severity="warning",
+        # The same forms as the reload / restart re-poll trigger.
+        raise_on=(*RELOAD, *RESTART),
+        auto_resolve_minutes=60,
     ),
     BuiltinRule(
         key="auth_failure",
@@ -792,6 +1649,7 @@ BUILTIN_RULES: tuple[BuiltinRule, ...] = (
             "Cisco IOS XR",
             "Cisco NX-OS",
             "Cisco ASA",
+            "Cisco FTD",
             "Arista EOS",
             "Juniper Junos",
             "OPNsense",
@@ -809,6 +1667,10 @@ BUILTIN_RULES: tuple[BuiltinRule, ...] = (
                 "ASA-113015",
                 "ASA-605004",
                 "ASA-611102",
+                # FTD logs the same ids except 605004 (not in its guide).
+                "FTD-113005",
+                "FTD-113015",
+                "FTD-611102",
                 "SSHD_LOGIN_FAILED",
                 "LOGIN_FAILED",
                 "FGT-0100032002",  # FortiOS "Admin login failed"
@@ -837,6 +1699,9 @@ BUILTIN_RULES: tuple[BuiltinRule, ...] = (
         threshold_window_seconds=300,
         auto_resolve_minutes=30,
     ),
+    *_LAYER2_RULES,
+    *_NEIGHBOR_RULES,
+    *_HEALTH_RULES,
 )
 BUILTIN_BY_KEY: dict[str, BuiltinRule] = {r.key: r for r in BUILTIN_RULES}
 
@@ -848,11 +1713,17 @@ CONFIG_CHANGE: tuple[Matcher, ...] = (
         "VSHD-VSHD_SYSLOG_CONFIG_I",  # NX-OS
         "MGBL-CONFIG-DB_COMMIT",  # IOS XR
         "ASA-111008",  # ASA: a configuration command
+        "FTD-111008",  # FTD: the same message
         "UI_COMMIT_COMPLETED",  # Junos
     ),
-    # ASA 111010 logs every command run through ASDM or the CLI, show
-    # commands too: only the others count.
-    _m("ASA-111010", text=r"executed '", exclude=r"executed '(?:show|ping|traceroute|more|dir)\b"),
+    # ASA (and FTD) 111010 logs every command run through ASDM or the CLI,
+    # show commands too: only the others count.
+    _m(
+        "ASA-111010",
+        "FTD-111010",
+        text=r"executed '",
+        exclude=r"executed '(?:show|ping|traceroute|more|dir)\b",
+    ),
     # FortiOS applies each change at once: 44544 "Path configured", 44545
     # "Object configured", 44546 "Attribute configured", 44547 "Object
     # attribute configured" (44548 "Action performed", an execute command,
@@ -869,22 +1740,8 @@ CONFIG_CHANGE: tuple[Matcher, ...] = (
     # startup configuration was saved (write memory).
     _m("AOSS-03125", text=r"\bnew Startup Config Seq Num\b"),
 )
-# Messages a device logs when it is about to reload.
-RELOAD: tuple[Matcher, ...] = (
-    _m("SYS-RELOAD", "ASA-199001", "UI_REBOOT_EVENT", "PLATFORM-PFM_SYSTEM_RESET"),
-    # FortiOS 32138 "Device rebooted", 32200 "Device shutdown"; AOS-Switch 63
-    # "SYSTEM went down: <reason>"; AOS-CX 706 "Initiating system reboot",
-    # 707 "Initiating chassis thermal reboot".
-    _m("FGT-0100032138", "FGT-0100032200", "AOSS-00063", "AOSCX-706", "AOSCX-707"),
-)
-# Messages a device logs once it is back up.
-RESTART: tuple[Matcher, ...] = (
-    _m("SYS-RESTART", "SYS-BOOTTIME", "ASA-199002", "SNMPD_TRAP_COLD_START"),
-    # FortiOS 32009 "FortiGate started"; AOS-Switch 66 "System Booted" and
-    # 64 (the crash reason of a switch that went down); AOS-CX 1206 "Module
-    # rebooted. Reason: ...", 1236 "Module unexpected reboot. Reason: ...".
-    _m("FGT-0100032009", "AOSS-00066", "AOSS-00064", "AOSCX-1206", "AOSCX-1236"),
-)
+# RELOAD and RESTART (the re-poll trigger's reload / restart forms) are
+# defined above BUILTIN_RULES: the device_restart rule raises on them.
 
 
 # OPNsense: messages that say a state its topology source collects just
@@ -985,9 +1842,11 @@ def is_config_change(parsed: ParsedSyslog) -> bool:
 
 
 def repoll_reason(parsed: ParsedSyslog) -> str:
-    """``interface_down``, ``module`` (a module down or online again),
-    ``reload``, ``restart`` or "" for a message that does not trigger a
-    re-poll."""
+    """``interface_down``, ``module`` (a module down or online again, or a
+    temperature alarm raised or cleared), ``reload``, ``restart``,
+    ``state_change`` (an HA switchover, failover or its recovery) or "" for a message
+    that does not trigger a re-poll. The temperature and HA reasons are
+    those of the trap rules with the same keys (``trap_rules`` ``repoll``)."""
     if _first(INTERFACE_DOWN, parsed) is not None:
         return "interface_down"
     if _first(MODULE_DOWN, parsed) is not None or _first(MODULE_UP, parsed) is not None:
@@ -996,6 +1855,10 @@ def repoll_reason(parsed: ParsedSyslog) -> str:
         return "reload"
     if _first(RESTART, parsed) is not None:
         return "restart"
+    if _first(TEMPERATURE_HIGH, parsed) is not None or _first(TEMPERATURE_OK, parsed) is not None:
+        return "module"
+    if _first(HA_SWITCHOVER, parsed) is not None or _first(HA_RESTORED, parsed) is not None:
+        return "state_change"
     return ""
 
 
@@ -1010,7 +1873,9 @@ _TAG_OWNERS: tuple[tuple[str, tuple[Matcher, ...]], ...] = (
 def tag_owner(tag: str) -> str:
     """The built-in rule (its key) or trigger (``config_change``, ``repoll``)
     that has a message form with ``tag``, or "" (a module message is owned by
-    the ``module`` rule, which shares its forms with the re-poll trigger). A
+    the ``module`` rule and a reload or restart message by the
+    ``device_restart`` rule, which share their forms with the re-poll
+    trigger). A
     message with such a tag
     that nothing acted on did not meet the text pattern of that form: the
     opposite event (``LINK-UPDOWN`` ... ``to up``), or wording the pattern
@@ -1063,6 +1928,9 @@ class Rule:
     updated_at: str = ""
     overridden: bool = field(default=False)
     source: str = ALERT_TYPE
+    # A custom trap rule's varbind conditions and instance
+    # (``trap_rules.clean_custom_trap_rule``); None for every other rule.
+    trap_match: dict | None = None
 
     @property
     def metric(self) -> str:
@@ -1076,8 +1944,10 @@ class Rule:
         return self.key if self.source == ALERT_TYPE else self.metric
 
     def payload(self) -> dict:
-        """The API form of the rule."""
+        """The API form of the rule (a custom trap rule adds ``trap_match``)."""
+        extra = {"trap_match": self.trap_match} if self.trap_match is not None else {}
         return {
+            **extra,
             "id": self.id,
             "key": self.key,
             "source": self.source,
@@ -1187,9 +2057,30 @@ def _custom_matcher(match_type: str, pattern: str) -> Callable[[ParsedSyslog], s
     return _regex
 
 
-def _custom(row: dict, key: str | None = None) -> Rule:
-    match_type = row["match_type"]
+MatchFn = Callable[[Any], str | None]
+
+
+def _syslog_matchers(row: dict) -> tuple[MatchFn, MatchFn | None]:
+    """The raise and clear match functions of a custom syslog row."""
     clear = row.get("clear_pattern") or ""
+    return (
+        _custom_matcher(row["match_type"], row["pattern"]),
+        _custom_matcher(row["match_type"], clear) if clear else None,
+    )
+
+
+def custom_rule(
+    row: dict,
+    key: str | None = None,
+    *,
+    matchers: Callable[[dict], tuple[MatchFn, MatchFn | None]] = _syslog_matchers,
+    source: str = ALERT_TYPE,
+    trap_match: dict | None = None,
+) -> Rule:
+    """The ``Rule`` of a custom row (syslog by default; a custom trap rule
+    passes its own ``matchers``, ``source`` and ``trap_match``). ValueError
+    when a pattern no longer compiles."""
+    raise_match, clear_match = matchers(row)
     return Rule(
         key=key or custom_rule_key(row["id"]),
         name=row["name"],
@@ -1199,16 +2090,21 @@ def _custom(row: dict, key: str | None = None) -> Rule:
         threshold_count=int(row["threshold_count"]),
         threshold_window_seconds=int(row["threshold_window_seconds"]),
         auto_resolve_minutes=int(row["auto_resolve_minutes"]),
-        raise_match=_custom_matcher(match_type, row["pattern"]),
-        clear_match=_custom_matcher(match_type, clear) if clear else None,
+        raise_match=raise_match,
+        clear_match=clear_match,
         id=row.get("id"),
-        match_type=match_type,
+        match_type=row["match_type"],
         pattern=row["pattern"],
-        clear_pattern=clear,
+        clear_pattern=row.get("clear_pattern") or "",
         created_by=row.get("created_by", ""),
         created_at=row.get("created_at", ""),
         updated_at=row.get("updated_at", ""),
+        source=source,
+        trap_match=trap_match,
     )
+
+
+_custom = custom_rule
 
 
 def _int_field(body: dict, name: str, default: int, low: int, high: int) -> int:
@@ -1236,11 +2132,10 @@ def _check_pattern(match_type: str, pattern: str, label: str) -> None:
             raise RuleError(f"The {label} is not a valid regular expression: {exc}") from None
 
 
-def clean_custom_rule(body: dict) -> dict:
-    """The stored values of a custom rule from an API body, or
-    ``RuleError``. Regex patterns are compiled with RE2 here, so a pattern
-    RE2 rejects (or one with lookarounds or backreferences) is refused when
-    it is saved, never on the receive path."""
+def clean_rule_settings(body: dict) -> dict:
+    """The values every custom rule (syslog or trap) has, from an API body,
+    or ``RuleError``: ``name``, ``enabled``, ``severity`` and the threshold
+    and auto-resolve numbers."""
     if not isinstance(body, dict):
         raise RuleError("The rule must be an object.")
     name = str(body.get("name") or "").strip()
@@ -1248,6 +2143,25 @@ def clean_custom_rule(body: dict) -> dict:
         raise RuleError("The rule needs a name.")
     if len(name) > NAME_MAX:
         raise RuleError(f"The name is longer than {NAME_MAX} characters.")
+    severity = str(body.get("severity") or "warning").strip()
+    if severity not in SEVERITIES:
+        raise RuleError(f"severity must be one of: {', '.join(SEVERITIES)}.")
+    return {
+        "name": name,
+        "enabled": bool(body.get("enabled", True)),
+        "severity": severity,
+        "threshold_count": _int_field(body, "threshold_count", 1, 1, THRESHOLD_COUNT_MAX),
+        "threshold_window_seconds": _int_field(body, "threshold_window_seconds", 300, 1, THRESHOLD_WINDOW_MAX),
+        "auto_resolve_minutes": _int_field(body, "auto_resolve_minutes", 0, 0, AUTO_RESOLVE_MAX),
+    }
+
+
+def clean_custom_rule(body: dict) -> dict:
+    """The stored values of a custom rule from an API body, or
+    ``RuleError``. Regex patterns are compiled with RE2 here, so a pattern
+    RE2 rejects (or one with lookarounds or backreferences) is refused when
+    it is saved, never on the receive path."""
+    settings = clean_rule_settings(body)
     match_type = str(body.get("match_type") or "").strip()
     if match_type not in MATCH_TYPES:
         raise RuleError(f"match_type must be one of: {', '.join(MATCH_TYPES)}.")
@@ -1258,20 +2172,7 @@ def clean_custom_rule(body: dict) -> dict:
     clear_pattern = str(body.get("clear_pattern") or "").strip()
     if clear_pattern:
         _check_pattern(match_type, clear_pattern, "clear pattern")
-    severity = str(body.get("severity") or "warning").strip()
-    if severity not in SEVERITIES:
-        raise RuleError(f"severity must be one of: {', '.join(SEVERITIES)}.")
-    return {
-        "name": name,
-        "enabled": bool(body.get("enabled", True)),
-        "match_type": match_type,
-        "pattern": pattern,
-        "clear_pattern": clear_pattern,
-        "severity": severity,
-        "threshold_count": _int_field(body, "threshold_count", 1, 1, THRESHOLD_COUNT_MAX),
-        "threshold_window_seconds": _int_field(body, "threshold_window_seconds", 300, 1, THRESHOLD_WINDOW_MAX),
-        "auto_resolve_minutes": _int_field(body, "auto_resolve_minutes", 0, 0, AUTO_RESOLVE_MAX),
-    }
+    return {**settings, "match_type": match_type, "pattern": pattern, "clear_pattern": clear_pattern}
 
 
 def draft_rule(body: dict) -> Rule:
@@ -1283,11 +2184,12 @@ def draft_rule(body: dict) -> Rule:
 def merge_rules(rows: list[dict]) -> list[Rule]:
     """The built-in rules (with their stored overrides) then the custom
     rules, from the rows of ``syslog_alert_rules``. A custom row that no
-    longer compiles is skipped (logged)."""
+    longer compiles is skipped (logged); a custom trap rule's row
+    (``source`` ``trap``, ``netcontrol.trap_rules``) is not a syslog rule."""
     overrides = {r["builtin_key"]: r for r in rows if r.get("builtin_key")}
     rules = [_builtin(b, overrides.get(b.key)) for b in BUILTIN_RULES]
     for row in rows:
-        if row.get("builtin_key"):
+        if row.get("builtin_key") or (row.get("source") or ALERT_TYPE) != ALERT_TYPE:
             continue
         try:
             rules.append(_custom(row))
@@ -1516,9 +2418,10 @@ async def resolve_expired_alerts() -> int:
     return await resolve_expired_rule_alerts(await get_rules())
 
 
-async def resolve_rule_alerts(rule_key: str) -> int:
-    """Resolve every open alert of a rule (it was deleted)."""
-    return await db.resolve_stale_monitoring_alerts(ALERT_TYPE, metric_name(rule_key), 0, "rule deleted")
+async def resolve_rule_alerts(rule_key: str, source: str = ALERT_TYPE, reason: str = "rule deleted") -> int:
+    """Resolve every open alert of a rule of ``source`` (it was deleted, or
+    a custom trap rule was disabled)."""
+    return await db.resolve_stale_monitoring_alerts(source, metric_name(rule_key, source), 0, reason)
 
 
 async def explain_message(message: str, draft: dict | None = None) -> dict:
@@ -1553,9 +2456,10 @@ async def explain_message(message: str, draft: dict | None = None) -> dict:
     }
 
 
-def evaluate_rule(rule: Rule, parsed: ParsedSyslog) -> dict | None:
+def evaluate_rule(rule: Rule, parsed: Any) -> dict | None:
     """``{"action": "raise" | "clear", "instance": ...}`` when ``rule``
-    raises or clears on the message, else None."""
+    raises or clears on the message (a ``ParsedSyslog``, or a ``NamedTrap``
+    for a trap rule), else None."""
     instance = rule.raise_match(parsed)
     if instance is not None:
         return {"action": "raise", "instance": instance}
@@ -1695,20 +2599,25 @@ def _restore_transports() -> tuple[str, ...] | None:
     return TRANSPORTS
 
 
-async def _restore_counters() -> int:
-    """Replay the stored messages of inventory hosts through the counters of
-    the enabled threshold rules, each counted at its age before now. Raises
-    and resolves nothing, schedules nothing. A counter a live message
-    already reached takes no older replayed match (``_count`` treats it as
-    a repeat), so a race with the receiver can only under-count. Returns
-    how many messages were replayed."""
-    rules = [r for r in await get_rules() if r.enabled and r.threshold_count > 1]
-    if not rules:
-        return 0
-    window = min(max(r.threshold_window_seconds for r in rules), RESTORE_WINDOW_MAX_SECONDS)
-    rows = await db.list_syslog_messages_since(
-        window, limit=RESTORE_ROWS_MAX, hosts_only=True, transports=_restore_transports()
-    )
+def threshold_rules(rules: Iterable[Rule]) -> list[Rule]:
+    """The enabled rules with a threshold above one: the ones whose counters
+    a restore rebuilds."""
+    return [r for r in rules if r.enabled and r.threshold_count > 1]
+
+
+def restore_window(rules: Iterable[Rule]) -> int:
+    """Seconds of stored events a restore reads for ``rules``: the longest
+    threshold window, capped at ``RESTORE_WINDOW_MAX_SECONDS``."""
+    return min(max((r.threshold_window_seconds for r in rules), default=0), RESTORE_WINDOW_MAX_SECONDS)
+
+
+async def replay_stored(rows: list[dict], replay: Callable[[dict, float], bool]) -> int:
+    """Replay stored events (``trap_syslog_events`` rows, newest first, with
+    ``received_at``), oldest first, each at its age before now on the
+    engine's clock: ``replay(row, at)`` counts the row in the threshold
+    counters (``_track``) and returns whether it was an event to count.
+    Shared by the syslog and the trap restore. Returns how many rows were
+    replayed."""
     now_utc = datetime.now(UTC)
     now = _clock()
     replayed = 0
@@ -1716,14 +2625,40 @@ async def _restore_counters() -> int:
         stamp = _received(row["received_at"])
         if stamp is None:
             continue
-        at = now - max(0.0, (now_utc - stamp).total_seconds())
-        parsed = parse_syslog_message(row["message"] or "")
-        for rule in rules:
-            _track(rule, int(row["host_id"]), parsed, at)
+        if not replay(row, now - max(0.0, (now_utc - stamp).total_seconds())):
+            continue
         replayed += 1
         if replayed % _RESTORE_YIELD_EVERY == 0:
             await asyncio.sleep(0)
     return replayed
+
+
+def track_all(rules: Iterable[Rule], host_id: int, event: Any, at: float) -> None:
+    """Count ``event`` of ``host_id`` at ``at`` for each of ``rules``
+    (raises and resolves nothing: the restore's replay)."""
+    for rule in rules:
+        _track(rule, host_id, event, at)
+
+
+async def _restore_counters() -> int:
+    """Replay the stored messages of inventory hosts through the counters of
+    the enabled threshold rules, each counted at its age before now. Raises
+    and resolves nothing, schedules nothing. A counter a live message
+    already reached takes no older replayed match (``_count`` treats it as
+    a repeat), so a race with the receiver can only under-count. Returns
+    how many messages were replayed."""
+    rules = threshold_rules(await get_rules())
+    if not rules:
+        return 0
+    rows = await db.list_syslog_messages_since(
+        restore_window(rules), limit=RESTORE_ROWS_MAX, hosts_only=True, transports=_restore_transports()
+    )
+
+    def replay(row: dict, at: float) -> bool:
+        track_all(rules, int(row["host_id"]), parse_syslog_message(row["message"] or ""), at)
+        return True
+
+    return await replay_stored(rows, replay)
 
 
 async def _restore_config_changes() -> int:

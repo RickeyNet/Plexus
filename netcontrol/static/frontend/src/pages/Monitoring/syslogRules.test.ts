@@ -70,6 +70,7 @@ describe('syslog rule labels', () => {
     expect(repollLabel('interface_down')).toContain('interface down');
     expect(repollLabel('reload')).toContain('30 s');
     expect(repollLabel('module')).toBe('Re-poll in 5 s (module down or back online)');
+    expect(repollLabel('state_change')).toBe('Re-poll in 5 s (HA switchover or failover)');
     expect(repollLabel('')).toBe('');
   });
 
@@ -91,7 +92,30 @@ describe('syslog rule labels', () => {
       'syslog_power_supply',
       'syslog_fan',
       'syslog_module',
+      'syslog_temperature',
+      'syslog_ha_switchover',
+      'syslog_device_restart',
       'syslog_auth_failure',
+      'syslog_stp_root_change',
+      'syslog_stp_topology_change',
+      'syslog_stp_guard',
+      'syslog_port_err_disabled',
+      'syslog_port_security',
+      'syslog_storm_control',
+      'syslog_mac_flap',
+      'syslog_duplex_mismatch',
+      'syslog_hsrp_state',
+      'syslog_eigrp_neighbor',
+      'syslog_isis_adjacency',
+      'syslog_ipsec_tunnel',
+      'syslog_ip_sla',
+      'syslog_poe_fault',
+      'syslog_optic_power',
+      'syslog_aaa_server',
+      'syslog_ntp_sync',
+      'syslog_license_expiry',
+      'syslog_certificate_expiry',
+      'syslog_software_fault',
     ]);
   });
 
@@ -107,6 +131,17 @@ describe('syslog rule labels', () => {
       'trap_ha_switchover',
       'trap_device_restart',
       'trap_snmp_auth_failure',
+      'trap_stp_root_change',
+      'trap_stp_topology_change',
+      'trap_port_err_disabled',
+      'trap_port_security',
+      'trap_mac_flap',
+      'trap_hsrp_state',
+      'trap_eigrp_neighbor',
+      'trap_isis_adjacency',
+      'trap_ipsec_tunnel',
+      'trap_ip_sla',
+      'trap_poe_fault',
     ]);
     expect(TRAP_BUILTIN_METRICS.every((m) => m.label.startsWith('Trap: '))).toBe(true);
   });

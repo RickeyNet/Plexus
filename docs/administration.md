@@ -416,9 +416,10 @@ Four switches set what a received syslog message or trap does:
   rule raises a monitoring alert.
 - **Raise alerts from SNMP trap rules**: a trap from an inventory host,
   with that host's SNMP community (SNMPv3: authenticated with the host's
-  SNMPv3 poll user), that matches a built-in trap rule raises
+  SNMPv3 poll user), that matches a built-in or custom trap rule raises
   or resolves a monitoring alert (metric `trap_<rule>`, see
-  [SNMP Traps](snmp-traps.md)).
+  [SNMP Traps](snmp-traps.md)). A Cisco `clogMessageGenerated` trap's
+  syslog line follows the syslog switch above instead.
 - **Back up the config on a change message**: a configuration-change
   message or trap starts a config backup and drift check of the sending
   host.
@@ -431,9 +432,29 @@ All four are on by default. Received events are listed in
 decoded varbinds. The trap receiver answers an SNMPv2c inform with the
 Response its sender waits for. An SNMPv3 trap from an inventory host is
 decoded with that host's SNMPv3 poll user, and dropped when it fails the
-SNMPv3 checks ([snmp-traps.md](snmp-traps.md#snmpv3)); SNMPv3 informs are
-stored undecoded and not answered. The trap receiver's counters show
-**Wrong community** and **SNMPv3 refused** drops since Plexus started.
+SNMPv3 checks ([snmp-traps.md](snmp-traps.md#snmpv3)). An SNMPv3 inform from
+an inventory host is checked the same way against the trap receiver's own
+SNMPv3 engine and answered with its Response
+([snmp-traps.md](snmp-traps.md#snmpv3-informs)). The trap receiver's
+counters show **Wrong community** and **SNMPv3 refused** drops since Plexus
+started.
+
+The trap receiver listens on IPv6 as well as IPv4, on the same port (a
+second socket); a host without IPv6 logs that and keeps listening on IPv4.
+The syslog receivers listen on IPv4 only.
+
+`GET /api/admin/metrics/receivers/config` also returns the trap receiver's
+SNMPv3 engine, for configuring devices that send SNMPv3 informs:
+
+| Field | Meaning |
+|---|---|
+| `trap_engine_id` | The receiver's snmpEngineID (hex), generated once and kept. Empty while the trap receiver is stopped or its engine could not start. |
+| `trap_engine_boots` | snmpEngineBoots, incremented each time the trap receiver starts listening. |
+| `trap_v3_informs_answered` | SNMPv3 informs answered with a Response since the receiver started. |
+| `trap_v3_reports_sent` | Reports sent (engine ID discovery and time synchronization). |
+| `trap_usm_unknown_engine_ids` | usmStatsUnknownEngineIDs: discovery probes and messages for another engine ID. |
+| `trap_usm_not_in_time_windows` | usmStatsNotInTimeWindows: informs outside the time window, answered with the Report the sender resynchronizes with. These are not counted as **SNMPv3 refused**. |
+| `trap_ipv6_listening` | Whether the trap receiver's IPv6 socket is bound. |
 
 Syslog can also arrive over TCP and TLS, whose source address cannot be
 forged ([syslog-rules.md](syslog-rules.md#transports)):
@@ -506,7 +527,7 @@ listener counts its drops since Plexus started: `dropped_source` (not an
 allowed source), `dropped_rate` (over the rate limit) and, for traps,
 `dropped_community` (wrong SNMP community, see
 [snmp-traps.md](snmp-traps.md#intake)) and `dropped_v3` (an SNMPv3 trap
-from an inventory host that fails the SNMPv3 checks: user, security level,
+or inform from an inventory host that fails the SNMPv3 checks: user, security level,
 authentication, time window, replay or decryption, see
 [snmp-traps.md](snmp-traps.md#snmpv3); the reason is logged at debug
 level). They are in the GET response above, in

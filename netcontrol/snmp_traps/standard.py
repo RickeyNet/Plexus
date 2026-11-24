@@ -2,7 +2,8 @@
 
 From the MIB texts: SNMPv2-MIB (RFC 3418), IF-MIB (RFC 2863), ENTITY-MIB (RFC 6933), ENTITY-STATE-MIB
 (RFC 4268), BGP4-MIB (RFC 4273), OSPF-TRAP-MIB (RFC 4750), BRIDGE-MIB (RFC 4188),
-VRRP-MIB (RFC 2787), VRRPV3-MIB (RFC 6527) and RMON-MIB (RFC 2819).
+VRRP-MIB (RFC 2787), VRRPV3-MIB (RFC 6527), RMON-MIB (RFC 2819), POWER-ETHERNET-MIB
+(RFC 3621) and ISIS-MIB (RFC 4444).
 Generated from the MIBs (OIDs, object names, enumerations); the severity
 and the one-line meaning are Plexus's. See docs/snmp-traps.md.
 """
@@ -118,6 +119,13 @@ OBJECTS: dict[str, TrapObject] = {
     "vrrpNewMasterReason": TrapObject(
         "1.3.6.1.2.1.68.1.9", {0: "notmaster", 1: "priority", 2: "preempted", 3: "masterNoResponse"}
     ),
+    "pethPsePortDetectionStatus": TrapObject(
+        "1.3.6.1.2.1.105.1.1.1.6",
+        {1: "disabled", 2: "searching", 3: "deliveringPower", 4: "fault", 5: "test", 6: "otherFault"},
+    ),
+    "isisNotificationCircIfIndex": TrapObject("1.3.6.1.2.1.138.1.10.1.2"),
+    "isisPduLspId": TrapObject("1.3.6.1.2.1.138.1.10.1.3"),
+    "isisAdjState": TrapObject("1.3.6.1.2.1.138.1.10.1.12", {1: "down", 2: "initializing", 3: "up", 4: "failed"}),
 }
 
 TRAPS: tuple[TrapDef, ...] = (
@@ -218,4 +226,14 @@ TRAPS: tuple[TrapDef, ...] = (
     TrapDef("1.3.6.1.2.1.207.0.2", "vrrpv3ProtoError", "VRRPV3-MIB", "warning", "VRRPv3 protocol error"),
     TrapDef("1.3.6.1.2.1.16.0.1", "risingAlarm", "RMON-MIB", "warning", "RMON alarm crossed its rising threshold"),
     TrapDef("1.3.6.1.2.1.16.0.2", "fallingAlarm", "RMON-MIB", "info", "RMON alarm crossed its falling threshold"),
+    TrapDef(
+        "1.3.6.1.2.1.105.0.1",
+        "pethPsePortOnOffNotification",
+        "POWER-ETHERNET-MIB",
+        "warning",
+        "PoE port detection status changed",
+    ),
+    TrapDef(
+        "1.3.6.1.2.1.138.0.17", "isisAdjacencyChange", "ISIS-MIB", "warning", "IS-IS adjacency entered or left state up"
+    ),
 )

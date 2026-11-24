@@ -14,8 +14,12 @@ instead of its size. For a trap from an inventory host that carries the
 host's SNMP community (SNMPv3: that is authenticated with the host's
 SNMPv3 user), the server also acts on it:
 
-- **Alerts**: the built-in trap rules below raise or resolve a monitoring
-  alert, with notifications through the alert notification channels.
+- **Alerts**: the built-in trap rules below, and your own
+  [custom trap rules](#custom-rules), raise or resolve a monitoring alert,
+  with notifications through the alert notification channels.
+- **Cisco syslog over SNMP**: a CISCO-SYSLOG-MIB `clogMessageGenerated`
+  trap goes through the syslog rules as the syslog message it carries
+  ([below](#cisco-syslog-messages-sent-as-traps)).
 - **Configuration change**: a trap that says the running configuration
   changed starts the configuration backup and drift check of that host,
   through the same trigger the syslog configuration-change messages use.
@@ -94,8 +98,16 @@ The checks follow the User-based Security Model (RFC 3414), in order:
    150 seconds behind, is refused; an exact copy of a message already
    accepted is refused too. The first authenticated message from an engine
    Plexus has not seen starts that record (there is nothing to compare it
-   with), and the record is kept in memory only: after a Plexus restart the
-   next message from each engine is accepted the same way.
+   with). The record (boots and time per source and engine ID, not the
+   copies) is stored: written at most once a minute, only for the engines
+   whose time moved, and when Plexus stops, and loaded when the trap
+   receiver starts, with each engine's clock run on by the time that
+   passed. After a restart, an older boot or a message more than 150
+   seconds behind is still refused. What remains: an exact copy of a
+   message from the last 150 seconds before the restart is accepted once
+   more (the copies are not stored), and after a crash, the movement since
+   the last write (at most a minute) is lost. The record keeps the 4096
+   most recently seen engines, as the memory does.
 5. **Privacy**: an authPriv message is decrypted with DES, AES-128, AES-192
    or AES-256, as set on the host. AES-192 and AES-256 keys are extended in
    one of two ways that vendors disagree on: the Reeder form (Cisco and
@@ -106,17 +118,85 @@ The checks follow the User-based Security Model (RFC 3414), in order:
 A message that fails the user, level, authentication, time window or
 privacy check is dropped (not stored) and counted as `trap_dropped_v3`
 (**SNMPv3 refused** under **Settings > Syslog & Traps**); the reason is
-logged at debug level. An SNMPv3 inform (or any message with the
-reportable flag), an engine ID discovery probe, a PDU that is not a trap
-and an authenticated message whose content does not decode are stored
-with their size and never acted on.
+logged at debug level. A PDU that is not a trap and an authenticated
+message whose content does not decode are stored with their size and never
+acted on, and so is an SNMPv3 inform or engine ID discovery probe from a
+source that is not an inventory host, or while the receiver's engine is not
+started (see below).
 
 **Upgrading:** every SNMPv3 trap used to be stored undecoded. Now an SNMPv3
 trap from an inventory host that fails the checks above is dropped instead
 of stored. For each device that sends SNMPv3 traps, set its trap user,
 authentication and privacy protocols and passphrases to the host's SNMPv3
-poll user in Plexus, with exactly the same security level, and send traps
-(not informs); or send v1 / v2c traps with the host's community instead.
+poll user in Plexus, with exactly the same security level; or send v1 / v2c
+traps with the host's community instead.
+
+### SNMPv3 informs
+
+For an inform the roles turn round (RFC 3414 section 1.5.1): the receiver
+is the authoritative engine, so the sender must use Plexus's engine ID,
+boots and time, and the user's keys are localized to Plexus's engine ID.
+The trap receiver has its own SNMPv3 engine for this:
+
+- **Engine ID**: generated once in the RFC 3411 format (`80004fb805`
+  followed by 12 random octets) and stored; it never changes, so a device
+  configured with it keeps working across restarts and upgrades.
+  `GET /api/admin/metrics/receivers/config` returns it as `trap_engine_id`
+  ([administration.md](administration.md#syslog--traps)), and Plexus logs
+  it when the trap receiver starts.
+- **Engine boots**: stored and incremented each time the trap receiver
+  starts listening; the engine time counts the seconds since. Only the
+  process that binds the trap port counts a boot.
+- **Discovery**: a message with the reportable flag for another engine ID
+  (an empty one: a discovery probe, RFC 3414 section 4) from an inventory
+  host is answered at once with a Report carrying
+  `usmStatsUnknownEngineIDs` and Plexus's engine ID, boots and time.
+- **The inform**: checked with the host's SNMPv3 poll user exactly as a
+  trap is (user, exact security level, authentication, privacy), then
+  against Plexus's own clock (RFC 3414 section 3.2 step 7a: the same boots,
+  and a time within 150 seconds); an exact copy is refused. A stale inform
+  gets an authenticated `usmStatsNotInTimeWindows` Report, from which the
+  sender takes Plexus's boots and time and sends again; that exchange is
+  neither stored nor counted as a refusal. An accepted inform is answered
+  with its Response (the same request id and varbinds, at the inform's
+  security level), then stored, named and acted on like a trap.
+- **Refused informs** (unknown user, wrong security level, digest or
+  privacy) are dropped and counted as `trap_dropped_v3`, and get no
+  answer. No Report is sent for them: a sender needs only the discovery
+  and time-window Reports, and the others would tell anyone who can spoof
+  an inventory address which user names exist.
+- **Limits**: only inventory hosts get an answer, only to a message with
+  the reportable flag, after the source allowlist and rate limit, and no
+  answer is more than three times the size of the message it answers (or
+  larger than the sender accepts); a larger Response is not sent (the
+  inform is still accepted). The receiver answers within about 0.1 second
+  of the batch writer taking the inform.
+
+If the receiver's engine cannot start (the database is unreachable when
+the trap receiver starts), informs are stored with their size and not
+answered, as before.
+
+Configure a device to send informs with the host's SNMPv3 poll user,
+localized to Plexus's engine ID. An invented example, Plexus at
+`192.0.2.10` with engine ID `80004fb805aabbccddeeff001122334455`:
+
+```text
+! Cisco IOS / IOS XE: the remote engine ID and the user on it come first
+snmp-server engineID remote 192.0.2.10 udp-port 162 80004fb805aabbccddeeff001122334455
+snmp-server user example-user example-group remote 192.0.2.10 udp-port 162 v3 auth sha example-auth-pass priv aes 128 example-priv-pass
+snmp-server group example-group v3 priv
+snmp-server host 192.0.2.10 informs version 3 priv example-user
+```
+
+With net-snmp, `snmpinform` discovers the engine ID itself:
+
+```text
+snmpinform -v 3 -u example-user -l authPriv -a SHA -A 'example-auth-pass' \
+  -x AES -X 'example-priv-pass' 192.0.2.10:162 '' 1.3.6.1.6.3.1.1.5.1
+```
+
+It should return without a timeout and appear in Monitoring > Events as
+`coldStart`.
 
 To check a host's SNMPv3 user end to end, send a test trap from a machine
 whose address is recorded on the host, with net-snmp (`-e` sets the
@@ -148,6 +228,17 @@ section); the traps, threshold and auto-resolve time are fixed.
 | HA failover or switchover (`trap_ha_switchover`) | `ciscoRFSwactNotif`, `cswStackNewMaster`, `jnxRedundancySwitchover`, `jnxJsChassisClusterSwitchover`, `fgTrapHaSwitch`, `fgTrapHaMemberDown`, `panHAStateChangeTrap`, `vrrpTrapNewMaster`, `vrrpv3NewMaster`, AOS-CX `keepAliveDown`, `islDown` | `fgTrapHaMemberUp`, `keepAliveUp`, `islUp` | Per device, or the member serial, redundancy group, VRRP `<ifIndex>.<VRID>`, `VSX keepalive` / `VSX ISL` | Every trap | 60 min | warning |
 | Device or agent restarted (`trap_device_restart`) | `coldStart`, `warmStart`, `nsNotifyStart`, `nsNotifyRestart`, `nsNotifyShutdown`, `ucdStart`, `ucdShutdown`, `jnxDyingGasp`, `panGeneralSystemStartTrap`, `panGeneralSystemShutdownTrap` | Time only | Per device | Every trap | 60 min | warning |
 | SNMP authentication failures (`trap_snmp_auth_failure`) | `authenticationFailure` | Time only | Per device | 5 within 5 min | 30 min | warning |
+| Spanning tree root changed (`trap_stp_root_change`) | BRIDGE-MIB `newRoot` (the device became the root); Netgear `stpInstanceNewRootTrap` | Time only | Per device (Netgear: `instance <MST id>`) | Every trap | 60 min | warning |
+| Spanning tree topology changes (`trap_stp_topology_change`) | BRIDGE-MIB `topologyChange`; Netgear `stpInstanceTopologyChangeTrap` | Time only | Per device (Netgear: `instance <MST id>`) | 5 within 10 min | 30 min | warning |
+| Port error-disabled (`trap_port_err_disabled`) | CISCO-ERR-DISABLE-MIB `cErrDisableInterfaceEventRev1`, `cErrDisableInterfaceEvent` (the cause is in `cErrDisableIfStatusCause`) | Time only | `ifIndex <n>` (`ifIndex <n> vlan <v>` for a port-VLAN pair) | Every trap | 24 h | warning |
+| Port security violation (`trap_port_security`) | CISCO-PORT-SECURITY-MIB `cpsSecureMacAddrViolation`, `cpsTrunkSecureMacAddrViolation`, `cpsIfVlanSecureMacAddrViolation` | Time only | The `ifName`, else `ifIndex <n>`, else per device | Every trap | 60 min | warning |
+| MAC address flapping (`trap_mac_flap`) | CISCO-MAC-NOTIFICATION-MIB `cmnMacMoveNotification` | Time only | `vlan <n>` | 3 within 10 min | 30 min | warning |
+| HSRP failover (`trap_hsrp_state`) | CISCO-HSRP-MIB `cHsrpStateChange` to active, or to initial, learn, listen or speak (the group left active or standby) | Time only | `ifIndex <n> group <g>` | Every trap | 60 min | warning |
+| EIGRP neighbor down (`trap_eigrp_neighbor`) | CISCO-EIGRP-MIB `cEigrpNbrDownEvent` | Time only (the MIB has no neighbor up trap) | The peer address | Every trap | 24 h | critical |
+| IS-IS adjacency down (`trap_isis_adjacency`) | ISIS-MIB `isisAdjacencyChange` and CISCO-IETF-ISIS-MIB `ciiAdjacencyChange` to down or failed | The same traps to up | `<system ID> circuit <n>` (the system ID is the first 6 bytes of the LSP ID) | Every trap | Clear trap only | critical |
+| IPsec tunnel down (`trap_ipsec_tunnel`) | CISCO-IPSEC-FLOW-MONITOR-MIB `cikeTunnelStop`; FortiOS `fgTrapVpnTunDown` | `cikeTunnelStart`; `fgTrapVpnTunUp` | The remote peer address (FortiOS: the remote gateway, else the phase 1 name) | Every trap | Clear trap only | critical |
+| IP SLA probe down (`trap_ip_sla`) | CISCO-RTTMON-MIB `rttMonNotification` with `rttMonReactVar` timeout, connectionLoss or verifyError and `rttMonReactOccurred` true | The same with `rttMonReactOccurred` false | `probe <rttMonCtrlAdminIndex>` | Every trap | Clear trap only | warning |
+| PoE fault (`trap_poe_fault`) | POWER-ETHERNET-MIB `pethPsePortOnOffNotification` with `pethPsePortDetectionStatus` fault or otherFault | The same with deliveringPower | `PoE port <group>.<port>` | Every trap | 24 h | warning |
 
 How the rules behave is the syslog rule engine's
 ([syslog-rules.md](syslog-rules.md#how-a-message-becomes-an-alert)): the
@@ -161,8 +252,10 @@ only while monitoring is on.
 **Their own family.** A trap alert has type `trap`, metric `trap_<rule>` and
 the key `trap:<rule>:<host>:<instance>`. A trap resolves only a trap alert
 of its own host; it never resolves a syslog alert (`syslog_<rule>`) or an
-alert of the poll (`module_down` and the polled checks,
-[monitoring.md](monitoring.md)), and none of those resolves a trap alert.
+alert of the poll (`module_down` and the polled checks, among them
+`ha_role_change` and `device_restarted`, which report a failover and a
+restart from the polled state: [monitoring.md](monitoring.md)), and none
+of those resolves a trap alert.
 A suppression of `syslog_fan` does not cover `trap_fan`. When a device
 sends both syslog and traps for one event, both alerts open: turn one rule
 off when that is too much.
@@ -176,6 +269,94 @@ link-status` on Cisco IOS), or turn the rule off, or suppress
 `trap_link_down` for the hosts whose ports go down all day. The hardware rules resolve after 24
 hours without a new trap because several forms have no recovery trap; the
 poll's own checks keep reporting what is still down.
+
+## Custom rules
+
+A custom trap rule raises an alert for a trap the built-in rules do not
+cover, including one the registry does not name (stored under its OID).
+Create it with **+ New Trap Rule** in the **SNMP trap rules** section.
+
+- **Raising traps**: comma separated trap OIDs (`1.3.6.1.4.1.32473.2.0.5`),
+  OID prefixes ending in `.*` (`1.3.6.1.4.1.32473.2.*`: every trap under
+  it), or trap names the registry knows (`cefcModuleStatusChange`; a name
+  it does not know is refused: use the OID). A v1 trap's
+  `enterprise.0.specific` OID also matches the notification OID without
+  the `0`, as the registry looks it up.
+- **Only when** (optional, at most 10): conditions on the varbinds, all of
+  which must hold. Each names a varbind by its registry object name
+  (`ifAdminStatus`) or its OID (an instance OID under it matches too), an
+  operator and a value: `equals` (ignoring case), `contains` (ignoring
+  case) or `matches` (an RE2 regular expression, ignoring case). The
+  value tested is the decoded value and, for an enumerated object, its
+  label too: `ifAdminStatus equals up` and `ifAdminStatus equals 1` both
+  hold for an interface that is up. A trap without the varbind fails the
+  condition.
+- **Instance**: the varbind whose value (or whose index, after the
+  object's name: `ifIndex 12`) names what the alert is about, one alert per
+  rule, host and instance. Blank, or a trap without that varbind: one alert
+  per device.
+- **Clearing traps** (optional), with their own conditions: a matching
+  trap resolves the open alert of the same host and instance.
+- **Severity, threshold, auto-resolve, enabled**: as for a custom syslog
+  rule ([syslog-rules.md](syslog-rules.md#custom-rules)).
+
+A custom rule is evaluated next to the built-in rules, by the same engine:
+its alert has type `trap`, metric `trap_custom_<id>` and the key
+`trap:custom_<id>:<host>:<instance>`, so suppressions by host, group or
+that metric apply, and the alert is scoped to the host's inventory group
+like every monitoring alert. Disabling or deleting a custom rule resolves
+its open alerts. A custom rule neither starts a re-poll nor changes the
+severity a trap is stored with (the built-in rules do).
+
+The **Test Trap** box of the editor takes a trap OID and its varbinds (one
+per line, `OID = value`) and shows the trap's name and named varbinds,
+what the draft rule and every other trap rule would do, the triggers it
+starts and, for a `clogMessageGenerated` trap, its syslog line and what
+the syslog rules do with it. The API also takes a stored trap
+(`event_id`, an SNMPv1 or v2c trap of at most 1000 bytes: the stored row
+keeps that much of the datagram).
+
+## Cisco syslog messages sent as traps
+
+A Cisco device with `snmp-server enable traps syslog` sends each syslog
+message (at or above the `logging history` severity) as a CISCO-SYSLOG-MIB
+`clogMessageGenerated` trap, with `clogHistFacility`, `clogHistSeverity`,
+`clogHistMsgName` and `clogHistMsgText`. For a believed trap (the same
+condition as for the trap rules), Plexus builds the syslog line it carries,
+`%FACILITY-SEVERITY-MNEMONIC: text` (`clogHistSeverity` emergency(1) to
+debug(8) as the syslog digit 0 to 7), and runs it through the syslog rules
+and triggers: the built-in and custom syslog rules, the configuration
+change trigger and the re-poll trigger
+([syslog-rules.md](syslog-rules.md#cisco-syslog-messages-sent-as-snmp-traps)).
+A trap whose facility or mnemonic does not make a tag is left alone.
+
+The alerts it raises are syslog alerts (type `syslog`, metric
+`syslog_<rule>`, the syslog dedup key), so a device that sends the same
+message as syslog and as a trap meets one alert, not two. It follows the
+syslog switches (**Raise alerts from syslog rules**, the re-poll and
+configuration triggers), not **Raise alerts from SNMP trap rules**: turning
+trap alerts off does not stop it. The syslog transport switch (**Act on UDP
+messages**) does not apply: the trap was believed by its community or
+SNMPv3 user. How the threshold counters count a message that arrives both
+ways is in [syslog-rules.md](syslog-rules.md#cisco-syslog-messages-sent-as-snmp-traps).
+
+## Restart
+
+The threshold counters (the authentication failure rule, and any custom
+rule with a threshold above one) live in memory. At startup, the process
+whose trap receiver listens rebuilds them from the stored traps of the
+longest enabled threshold window (at most 1 hour, the newest 20,000
+traps), each counted at its age, as the syslog counters are rebuilt; the
+syslog line of a stored `clogMessageGenerated` trap is counted for the
+syslog threshold rules too. Nothing is raised, resolved or re-polled.
+
+The stored event does not record whether a trap was believed (a v1 / v2c
+trap with the wrong community is never stored, but an undecodable one and
+an SNMPv3 one are), so each stored trap is decoded again from the bytes the
+row keeps and counted only when it carries the community stored for its
+host now. An SNMPv3 trap (its keys are not kept with it, and its time
+window has passed), an APC trap, a trap larger than 1000 bytes and a trap
+whose community no longer matches are not counted.
 
 ## Configuration change trigger
 
@@ -208,21 +389,40 @@ re-polled while monitoring is off.
 
 Settings > Syslog & Traps (admin):
 
-- **Raise alerts from SNMP trap rules** (`trap_alerts`): the alerts above.
+- **Raise alerts from SNMP trap rules** (`trap_alerts`): the alerts of the
+  built-in and custom trap rules.
 - **Back up the config on a change message** (`config_change_trigger`) and
   **Re-poll on link down, module down or reload** (`repoll_trigger`):
   shared with syslog.
+- **Raise alerts from syslog rules** (`syslog_alerts`): the syslog alerts
+  of a `clogMessageGenerated` trap.
 
 Each is on by default; turning one off stops that behaviour only, and
 traps are still stored.
 
-The API: `GET /api/monitoring/trap-rules` (needs **monitoring**) lists the
-rules in the syslog rules' shape (`source` `trap`, `tags` and
-`clear_tags` the trap names); `PATCH /api/monitoring/trap-rules/builtin/{key}`
-(`enabled`, `severity`; needs **monitoring.write**, audit logged as
-`trap_rule.builtin_updated`). The override is stored with the syslog
-rules' overrides under `trap_<key>`. A user limited to selected inventory
-groups can read the rules but not change them.
+The API (all under `/api/monitoring/trap-rules`; reads need
+**monitoring**, every POST, PUT, PATCH and DELETE **monitoring.write**):
+
+- `GET` lists the built-in then the custom rules in the syslog rules'
+  shape (`source` `trap`; a built-in rule's `tags` and `clear_tags` are
+  the trap names; a custom rule has `match_type` `trap`, `pattern` and
+  `clear_pattern` its traps and `trap_match` its `conditions`,
+  `clear_conditions` and `instance`).
+- `PATCH /builtin/{key}` (`enabled`, `severity`) overrides a built-in
+  rule, stored with the syslog rules' overrides under `trap_<key>` (audit
+  `trap_rule.builtin_updated`).
+- `POST` creates a custom rule, `PUT /{id}` updates one (the fields left
+  out keep their value), `DELETE /{id}` deletes one (audit
+  `trap_rule.created`, `.updated`, `.deleted`; an invalid rule answers
+  400 with the reason). A syslog rule's id is not found here, and the
+  reverse.
+- `POST /test` (`event_id`, or `trap_oid` and `varbinds` as
+  `[[oid, value], ...]`, and optionally `rule`, an unsaved custom rule)
+  explains what the rules would do. A stored trap is read only from a host
+  the caller can see.
+
+A user limited to selected inventory groups can read the rules but not
+change them.
 
 ## Traps named per vendor
 
@@ -241,7 +441,8 @@ named object is named whatever trap carries it.
   `ospfIfConfigError`, `ospfIfAuthFailure`, `ospfRestartStatusChange`;
   BRIDGE-MIB `newRoot`, `topologyChange`; VRRP-MIB `vrrpTrapNewMaster`,
   `vrrpTrapAuthFailure`; VRRPV3-MIB `vrrpv3NewMaster`, `vrrpv3ProtoError`;
-  RMON-MIB `risingAlarm`, `fallingAlarm`.
+  RMON-MIB `risingAlarm`, `fallingAlarm`; POWER-ETHERNET-MIB
+  `pethPsePortOnOffNotification`; ISIS-MIB `isisAdjacencyChange`.
 - **net-snmp (OPNsense, Linux)**: NET-SNMP-AGENT-MIB `nsNotifyStart`,
   `nsNotifyShutdown`, `nsNotifyRestart`; UCD-SNMP-MIB `ucdStart`,
   `ucdShutdown`.
@@ -267,7 +468,15 @@ named object is named whatever trap carries it.
   `cbgpPeer2PrefixThresholdClear`; CISCO-ENTITY-SENSOR-MIB
   `entSensorThresholdNotification`,
   `entSensorThresholdRecoveryNotification`; CISCO-SYSLOG-MIB
-  `clogMessageGenerated`.
+  `clogMessageGenerated`; CISCO-HSRP-MIB `cHsrpStateChange`;
+  CISCO-IPSEC-FLOW-MONITOR-MIB `cikeTunnelStart`, `cikeTunnelStop`;
+  CISCO-ERR-DISABLE-MIB `cErrDisableInterfaceEvent`,
+  `cErrDisableInterfaceEventRev1`; CISCO-PORT-SECURITY-MIB
+  `cpsSecureMacAddrViolation`, `cpsTrunkSecureMacAddrViolation`,
+  `cpsIfVlanSecureMacAddrViolation`; CISCO-MAC-NOTIFICATION-MIB
+  `cmnMacMoveNotification`; CISCO-EIGRP-MIB `cEigrpNbrDownEvent`;
+  CISCO-IETF-ISIS-MIB `ciiAdjacencyChange`; CISCO-RTTMON-MIB
+  `rttMonNotification`.
 - **Juniper Junos**: JUNIPER-MIB `jnxPowerSupplyFailure`,
   `jnxPowerSupplyInputFailure`, `jnxFanFailure`, `jnxOverTemperature`,
   `jnxRedundancySwitchover`, `jnxFruRemoval`, `jnxFruInsertion`,
@@ -342,7 +551,12 @@ PAN-TRAPS, which does not compile, was read as text, its OIDs from
 PAN-COMMON-MIB (`panCommonEventEventsV2` is
 `1.3.6.1.4.1.25461.2.1.3.2.0`) and PAN-GLOBAL-REG. The VRRP-MIB file of
 that collection is a later draft; the `vrrpOperMasterIpAddr` object of RFC
-2787 is named from the same file.
+2787 is named from the same file. The MIBs of the event rule packs
+(CISCO-HSRP-MIB, CISCO-IPSEC-FLOW-MONITOR-MIB, CISCO-ERR-DISABLE-MIB,
+CISCO-PORT-SECURITY-MIB, CISCO-MAC-NOTIFICATION-MIB, CISCO-EIGRP-MIB,
+CISCO-IETF-ISIS-MIB, CISCO-RTTMON-MIB, POWER-ETHERNET-MIB and ISIS-MIB)
+were read from Cisco's own MIB repository (`github.com/cisco/cisco-mibs`,
+`v2/`), their OIDs resolved from the MIB texts.
 
 ## Device configuration
 
@@ -377,17 +591,19 @@ receiver with its community.
   the MIB definitions and checked against invented samples built from
   them (`tests/test_snmp_traps.py`). Monitoring > Events shows what your
   devices send: an unknown trap is stored under its OID.
-- **SNMPv3 informs** are stored with their size only and never answered:
-  Plexus is not an SNMPv3 authoritative engine (that needs its own engine
-  ID and engine boots kept across restarts). Send SNMPv3 traps, or SNMPv2c
-  informs.
-- **SNMPv3 replay record** is kept in memory: after a restart the first
-  message from each engine is accepted without a reference (see
-  [SNMPv3](#snmpv3)). SNMPv3 traps have not been checked against a live
-  device.
+- **SNMPv3 informs** are answered only for inventory hosts; a retransmitted
+  inform (a new message with the same request id, sent when the Response
+  was lost or late) is stored and acted on again. Informs, discovery and
+  the time-window Report have been checked against pysnmp as the sender,
+  not against a live device.
+- **SNMPv3 replay record**: an exact copy of a trap from the last 150
+  seconds before a restart is accepted once more after it, and a crash
+  loses up to a minute of the record (see [SNMPv3](#snmpv3)). SNMPv3 traps
+  have not been checked against a live device.
 - **Cisco ASA / FTD failover**: CISCO-FIREWALL-MIB has no failover
   notification, and no other Cisco MIB with one was retrieved; ASA failover
-  reaches Plexus as syslog.
+  reaches Plexus as syslog, and the poll reads the failover state of the
+  pair ([monitoring.md](monitoring.md#ha-and-redundancy-state)).
 - **Sensor traps without a sensor type**: CISCO-ENTITY-SENSOR-MIB
   `entSensorThreshold*`, ARISTA-ENTITY-SENSOR-MIB `aristaEntSensorAlarm`
   and HP-ICF-CHASSIS `hpicfSensorTrap` do not say whether the sensor is a
@@ -412,7 +628,45 @@ receiver with its community.
   not named.
 - **Aruba Instant On**: no Instant On MIB was found; only the standard
   traps are named.
-- **Cisco `clogMessageGenerated`** is stored with its facility, severity,
-  mnemonic and text; its syslog text is not run through the syslog rules.
-- Threshold counters (the authentication failure rule) live in memory and
-  start empty after a restart.
+- **Cisco `clogMessageGenerated`**: the syslog line is built from the
+  CISCO-SYSLOG-MIB varbind definitions, not from a live device's traps. A
+  message that reaches Plexus both as syslog and as a trap more than 5
+  seconds apart counts twice towards a syslog threshold rule (see
+  [syslog-rules.md](syslog-rules.md#cisco-syslog-messages-sent-as-snmp-traps)).
+- **Restart**: an SNMPv3 trap is not counted when the threshold counters
+  are rebuilt (see [Restart](#restart)).
+- **Custom rules** start no re-poll and do not change the severity a trap is
+  stored with.
+- **Event rule packs**:
+  - `newRoot` is sent by the bridge that became the root, not by the
+    others, and BRIDGE-MIB traps name no VLAN or instance: both spanning
+    tree rules are per device (Netgear's per-instance traps name the MST
+    instance).
+  - CISCO-HSRP-MIB `cHsrpStateChange` carries the new state only, so a
+    router leaving standby for speak raises the alert as well as one
+    leaving active.
+  - CISCO-EIGRP-MIB has no neighbor up notification: the EIGRP alert
+    resolves after 24 hours (the syslog rule resolves on the up message).
+  - CISCO-IPSEC-FLOW-MONITOR-MIB `cipSecTunnelStart` / `Stop` (IPsec SAs)
+    are not named: an SA stops and a new one starts with a new index at
+    every rekey, so they would open an alert per rekey; the IKE tunnel
+    traps are used. `cikeSysFailure`, `cikeProtocolFailure` and the other
+    failure traps are not named.
+  - IP SLA: only the reachability reactions (timeout, connection loss,
+    verify error) of `rttMonNotification` raise; round trip time, jitter,
+    loss and MOS thresholds are stored without a rule. `rttMonNotificationV2`
+    and the older `rttMonConnectionChangeNotification` /
+    `rttMonTimeoutNotification` are not named.
+  - PoE: POWER-ETHERNET-MIB names the port by its PSE group and port index,
+    not its ifIndex.
+  - No trap rule for optics (the CISCO-ENTITY-SENSOR-MIB threshold traps
+    name no sensor type), AAA servers, NTP, licenses, certificates or
+    crashes: no notification for them was confirmed in the MIBs retrieved
+    (`CISCO-NTP-MIB`, `CISCO-SMART-LIC-MIB` and the AAA server MIBs were
+    not searched). Those events reach Plexus as syslog
+    ([syslog-rules.md](syslog-rules.md#event-rule-packs)) or as
+    `clogMessageGenerated` traps.
+  - Juniper, Arista, HPE Aruba and PAN-OS traps for layer 2 events, IS-IS,
+    VPN tunnels and PoE beyond the standard MIBs above are not named
+    (their vendor MIBs were not searched for them). FortiOS
+    `fgTrapVpnTunUp` / `Down` are the only non-Cisco VPN traps with a rule.

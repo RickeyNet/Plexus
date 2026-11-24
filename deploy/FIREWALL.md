@@ -254,6 +254,20 @@ sudo netfilter-persistent save
 
 Verify with `sudo iptables -L DOCKER-USER -n -v --line-numbers`.
 
+**SNMP traps over IPv6.** The trap receiver also listens on IPv6, on the
+same container port (10162). The rules above are IPv4 only. In Docker, a
+trap that reaches the host over IPv6 is forwarded to the container only
+when the compose network has IPv6 (`enable_ipv6: true` with an IPv6
+subnet, and Docker's `ip6tables` on); without it Docker's userland proxy
+forwards it over IPv4 from the bridge gateway address, which is no
+inventory host, so the trap is dropped as a `source` drop. With IPv6 on
+the network, filter it with the same rules using `ip6tables` and an IPv6
+`SNMP_TRAP_SOURCES` (for example `2001:db8:20::/48`). A trap receiver
+outside Docker needs only the host firewall rule for 162/udp (or its own
+port) over IPv6, for example
+`sudo ufw allow from 2001:db8:20::/48 to any port 162 proto udp`. The
+IPv4 rules and published ports are unchanged.
+
 ## 10. Optional - disable Plexus features by closing ports
 
 If you do not use a given collector, simply omit its `ufw allow` and

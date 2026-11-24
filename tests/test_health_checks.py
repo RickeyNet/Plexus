@@ -16,6 +16,11 @@ from netcontrol import (
 from snmp_health_fakes import Agent
 
 ALL_KEYS = {c.result_key for c in hc.CHECKS}
+HA_UNITS = {"ha_peer_health", "ha_link_health"}
+POE = {"poe_port_health", "poe_supply_health", "poe_budget_health"}
+# EIGRP and IP SLA: Cisco only.
+CISCO_ONLY = {"eigrp_health", "ip_sla_health"}
+STANDARD = {"bgp_health", "ospf_health", "isis_health", "fhrp_health"} | POE
 
 
 @pytest.mark.parametrize(
@@ -23,17 +28,18 @@ ALL_KEYS = {c.result_key for c in hc.CHECKS}
     [
         ("cisco_xe", ALL_KEYS),
         ("CISCO_IOS", ALL_KEYS),
-        ("cisco_asa", ALL_KEYS - {"module_health"}),
-        ("juniper_junos", ALL_KEYS - {"temperature_health"}),
-        ("arista_eos", ALL_KEYS - {"module_health"}),
-        ("paloalto_panos", ALL_KEYS - {"module_health"}),
-        ("fortinet", ALL_KEYS - {"module_health"}),
-        ("aruba_osswitch", ALL_KEYS - {"module_health"}),
-        ("aruba_aoscx", {"power_supply_health", "fan_health", "bgp_health", "ospf_health"}),
-        ("netgear_prosafe", ALL_KEYS - {"module_health"}),
-        ("aruba_instant_on", {"bgp_health", "ospf_health"}),
-        ("", {"bgp_health", "ospf_health"}),
-        (None, {"bgp_health", "ospf_health"}),
+        ("cisco_nxos", ALL_KEYS - POE),
+        ("cisco_asa", ALL_KEYS - {"module_health", "fhrp_health"} - POE),
+        ("juniper_junos", ALL_KEYS - {"temperature_health"} - CISCO_ONLY),
+        ("arista_eos", ALL_KEYS - {"module_health"} - HA_UNITS - CISCO_ONLY),
+        ("paloalto_panos", ALL_KEYS - {"module_health", "ha_link_health", "fhrp_health"} - POE - CISCO_ONLY),
+        ("fortinet", ALL_KEYS - {"module_health", "ha_link_health", "optics_health"} - CISCO_ONLY),
+        ("aruba_osswitch", ALL_KEYS - {"module_health"} - HA_UNITS - CISCO_ONLY),
+        ("aruba_aoscx", {"power_supply_health", "fan_health"} | STANDARD | HA_UNITS),
+        ("netgear_prosafe", ALL_KEYS - {"module_health", "optics_health"} - HA_UNITS - CISCO_ONLY),
+        ("aruba_instant_on", STANDARD),
+        ("", STANDARD),
+        (None, STANDARD),
         ("apc_ups", set()),
     ],
 )
@@ -125,8 +131,18 @@ def test_metric_values_and_sample_rows():
         "power_supply_down",
         "fan_down",
         "temperature_alarm",
+        "optic_level_alarm",
+        "poe_port_fault",
+        "poe_supply_down",
+        "poe_budget_high",
         "bgp_peer_down",
         "ospf_neighbor_down",
+        "eigrp_neighbor_down",
+        "isis_adjacency_down",
+        "ip_sla_down",
+        "ha_peer_down",
+        "ha_link_down",
+        "fhrp_group_down",
     }
     assert hc.metric_sample_rows({"host_id": 4, "fan_health": {"empty": True, "down_count": None}}) == []
 
@@ -135,3 +151,14 @@ def test_a_check_key_of_another_shape_is_not_cleared():
     status = sh.select(env.FAN, {"items": []})
     assert sh.cleared_keys(env.FAN, 5, status, ["5:fan_down:rule:2", "5:fan_down:", "5:fan_down:x", "6:fan_down:1"]) == []
     assert sh.down_count(None) is None and sh.select(env.FAN, {}) == {}
+
+
+async def test_a_source_in_two_chains_is_read_once_per_poll_and_confirms_in_both():
+    temperature = hc.Chain(frozenset({env.KIND_TEMPERATURE}), (env.CISCO_SENSOR_THRESHOLDS,))
+    optics = hc.Chain(frozenset({env.KIND_OPTICS}), (env.CISCO_SENSOR_THRESHOLDS,))
+    agent = Agent({})
+    for poll in range(3):
+        shared: dict = {}
+        tables = [await hc._read_chain(chain, 1, agent.get, agent.walk_table, shared) for chain in (temperature, optics)]
+        assert len(agent.walks) == poll + 1
+    assert all(sh.is_empty(t) for t in tables)

@@ -288,6 +288,7 @@ from netcontrol.routes.metrics_engine import (
     _downsampling_loop,
     admin_router as metrics_engine_admin_router,
     apply_event_receiver_config,
+    flush_v3_state,
     router as metrics_engine_router,
     stop_receivers,
 )
@@ -1886,6 +1887,11 @@ async def lifespan(app: FastAPI):
 
     if receiver_running("syslog"):
         keep_task(asyncio.ensure_future(syslog_rules.restore_state()))
+    # The trap threshold counters, from the stored traps, likewise.
+    if receiver_running("trap"):
+        from netcontrol import trap_rules
+
+        keep_task(asyncio.ensure_future(trap_rules.restore_state()))
 
     # Plugins: migrations, startup hooks and background tasks. Each plugin is
     # isolated - one that fails is marked failed and the rest carry on.
@@ -1930,6 +1936,11 @@ async def lifespan(app: FastAPI):
                 await stop_flow_collector()
             except Exception as exc:
                 LOGGER.warning("flow_collector: shutdown failed: %s", type(exc).__name__)
+        try:
+            # The SNMPv3 replay record, written before the receivers close.
+            await flush_v3_state()
+        except Exception as exc:
+            LOGGER.warning("SNMPv3 replay record: shutdown write failed: %s", type(exc).__name__)
         try:
             stop_receivers()
         except Exception as exc:

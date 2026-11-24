@@ -5,7 +5,6 @@ import { BusyButton } from '@/components/BusyButton';
 import { Callout } from '@/components/Callout';
 import { DataTable } from '@/components/DataTable';
 import { DeleteButton } from '@/components/DeleteButton';
-import { useDialogs } from '@/components/DialogProvider-context';
 import { EmptyState } from '@/components/EmptyState';
 import { LoadingState } from '@/components/LoadingState';
 import { Modal } from '@/components/Modal';
@@ -24,9 +23,9 @@ import {
 } from '@/api/syslogRules';
 import { formatBackendDateTime } from '@/lib/datetime';
 import { formatCount } from '@/lib/formatCount';
-import { usePendingKeys } from '@/lib/usePendingKeys';
 
 import { INACTIVE_OPACITY } from './helpers';
+import { RuleNameField, RuleSeverityField, RuleThresholdFields } from './RuleSettingsFields';
 import { SyslogActivitySection } from './SyslogActivitySection';
 import { TrapRulesSection } from './TrapRulesSection';
 import {
@@ -47,20 +46,21 @@ import {
   type SyslogRuleForm,
   type SyslogRulePrefill,
 } from './syslogRules';
+import { useRuleRowActions } from './useRuleRowActions';
 
 // Monitoring -> Configure -> Syslog Rules: the built-in rules (enable and
 // severity only) and the custom rules that turn received syslog messages
 // into alerts (docs/syslog-rules.md).
 export function SyslogRulesTab() {
-  const { confirm, alert } = useDialogs();
   const rules = useSyslogRules();
-  const patchBuiltin = usePatchBuiltinSyslogRule();
-  const updateCustom = useUpdateSyslogRule();
-  const deleteMut = useDeleteSyslogRule();
+  const { change, remove, pending, deleting } = useRuleRowActions({
+    patchBuiltin: usePatchBuiltinSyslogRule(),
+    updateCustom: useUpdateSyslogRule(),
+    deleteCustom: useDeleteSyslogRule(),
+    what: 'syslog rule',
+  });
   const [creating, setCreating] = useState(false);
   const [editing, setEditing] = useState<SyslogRule | null>(null);
-  const pending = usePendingKeys<string>();
-  const deleting = usePendingKeys<string>();
   const [hours, setHours] = useState(DEFAULT_SYSLOG_ACTIVITY_HOURS);
   const activity = useSyslogActivity(hours);
   const matchesByKey = activityByKey(activity.data);
@@ -70,35 +70,6 @@ export function SyslogRulesTab() {
   function createFrom(p: SyslogRulePrefill) {
     setPrefill(p);
     setCreating(true);
-  }
-
-  function change(rule: SyslogRule, data: { enabled?: boolean; severity?: SyslogSeverity }) {
-    return pending.run(rule.key, async () => {
-      try {
-        if (rule.builtin) await patchBuiltin.mutateAsync({ key: rule.key, data });
-        else if (rule.id != null) await updateCustom.mutateAsync({ id: rule.id, data });
-      } catch (e) {
-        void alert({ message: (e as Error).message, variant: 'error' });
-      }
-    });
-  }
-
-  async function handleDelete(rule: SyslogRule) {
-    if (rule.id == null) return;
-    const id = rule.id;
-    const ok = await confirm({
-      title: 'Delete syslog rule',
-      message: `Delete rule '${rule.name}'? Its open alerts are resolved.`,
-      confirmLabel: 'Delete',
-    });
-    if (!ok) return;
-    await deleting.run(rule.key, async () => {
-      try {
-        await deleteMut.mutateAsync(id);
-      } catch (e) {
-        void alert({ message: (e as Error).message, variant: 'error' });
-      }
-    });
   }
 
   return (
@@ -191,7 +162,7 @@ export function SyslogRulesTab() {
                       <BusyButton className="btn btn-sm btn-secondary" busy={busy} onClick={() => void change(r, { enabled: !r.enabled })}>
                         {r.enabled ? 'Disable' : 'Enable'}
                       </BusyButton>
-                      {!r.builtin && <DeleteButton busy={deleting.isPending(r.key)} onClick={() => void handleDelete(r)} />}
+                      {!r.builtin && <DeleteButton busy={deleting.isPending(r.key)} onClick={() => void remove(r)} />}
                     </div>
                   </td>
                 </tr>
@@ -258,6 +229,10 @@ function SyslogRuleModal({ rule, isCreate, prefill, onClose }: {
     setForm((prev) => ({ ...prev, [key]: value }));
   }
 
+  function patch(changes: Partial<SyslogRuleForm>) {
+    setForm((prev) => ({ ...prev, ...changes }));
+  }
+
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
     setSaveError('');
@@ -292,10 +267,7 @@ function SyslogRuleModal({ rule, isCreate, prefill, onClose }: {
     >
       <form id={formId} onSubmit={handleSubmit}>
         {saveError && <Callout tone="danger">{saveError}</Callout>}
-        <div className="form-group">
-          <label className="form-label" htmlFor={`${formId}-name`}>Name</label>
-          <input id={`${formId}-name`} className="form-input" value={form.name} onChange={(e) => set('name', e.target.value)} required maxLength={100} />
-        </div>
+        <RuleNameField formId={formId} value={form.name} onChange={patch} />
         <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
           <div className="form-group" style={{ flex: '1 1 10rem' }}>
             <label className="form-label" htmlFor={`${formId}-type`}>Match</label>
@@ -303,12 +275,7 @@ function SyslogRuleModal({ rule, isCreate, prefill, onClose }: {
               {SYSLOG_MATCH_TYPES.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
             </select>
           </div>
-          <div className="form-group" style={{ flex: '1 1 10rem' }}>
-            <label className="form-label" htmlFor={`${formId}-severity`}>Severity</label>
-            <select id={`${formId}-severity`} className="form-select" value={form.severity} onChange={(e) => set('severity', e.target.value as SyslogSeverity)}>
-              {SYSLOG_SEVERITY_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-            </select>
-          </div>
+          <RuleSeverityField formId={formId} value={form.severity} onChange={patch} style={{ flex: '1 1 10rem' }} />
         </div>
         <div className="form-group">
           <label className="form-label" htmlFor={`${formId}-pattern`}>Raise pattern</label>
@@ -319,24 +286,7 @@ function SyslogRuleModal({ rule, isCreate, prefill, onClose }: {
           <label className="form-label" htmlFor={`${formId}-clear`}>Clear pattern (optional)</label>
           <input id={`${formId}-clear`} className="form-input" value={form.clear_pattern} onChange={(e) => set('clear_pattern', e.target.value)} maxLength={500} />
         </div>
-        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-          <div className="form-group" style={{ flex: '1 1 8rem' }}>
-            <label className="form-label" htmlFor={`${formId}-count`}>Matches to raise</label>
-            <input id={`${formId}-count`} className="form-input" type="number" min="1" max="1000" value={form.threshold_count} onChange={(e) => set('threshold_count', e.target.value)} />
-          </div>
-          <div className="form-group" style={{ flex: '1 1 8rem' }}>
-            <label className="form-label" htmlFor={`${formId}-window`}>Within (seconds)</label>
-            <input id={`${formId}-window`} className="form-input" type="number" min="1" max="86400" value={form.threshold_window_seconds} onChange={(e) => set('threshold_window_seconds', e.target.value)} />
-          </div>
-          <div className="form-group" style={{ flex: '1 1 8rem' }}>
-            <label className="form-label" htmlFor={`${formId}-resolve`}>Auto-resolve (min, 0 = off)</label>
-            <input id={`${formId}-resolve`} className="form-input" type="number" min="0" max="10080" value={form.auto_resolve_minutes} onChange={(e) => set('auto_resolve_minutes', e.target.value)} />
-          </div>
-        </div>
-        <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.9em' }}>
-          <input type="checkbox" checked={form.enabled} onChange={(e) => set('enabled', e.target.checked)} />
-          Enabled
-        </label>
+        <RuleThresholdFields formId={formId} form={form} onChange={patch} />
 
         <div className="form-group" style={{ marginTop: '1rem' }}>
           <label className="form-label" htmlFor={`${formId}-sample`}>Test against a sample message</label>

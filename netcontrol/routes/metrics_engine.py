@@ -31,7 +31,15 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 import netcontrol.routes.state as state
-from netcontrol import health_checks, listener_sources, syslog_rules, syslog_stream, syslog_tls, trap_rules
+from netcontrol import (
+    health_checks,
+    listener_sources,
+    snmpv3_engine,
+    syslog_rules,
+    syslog_stream,
+    syslog_tls,
+    trap_rules,
+)
 from netcontrol.bounded_map import BoundedDict
 from netcontrol.integrations.apc.snmp import UPS_METRICS, ups_metric_samples
 from netcontrol.integrations.apc.traps import handle_apc_trap, parse_apc_trap
@@ -52,8 +60,11 @@ from netcontrol.snmpv3_traps import (
     REFUSED as SNMPV3_REFUSED,
     PendingV3Trap,
     ReplayGuard,
+    V3Failure,
     V3Header,
+    decode_snmpv3_inform,
     decode_snmpv3_trap,
+    engine_discovery_report,
     parse_snmpv3_header,
     resolve_trap_v3_credentials,
 )
@@ -943,7 +954,8 @@ class _TrapSyslogProtocol(asyncio.DatagramProtocol):
         self.transport = transport
 
     def datagram_received(self, data: bytes, addr: tuple):
-        source_ip = addr[0]
+        # An IPv6 source in one form; an IPv4-mapped one as its IPv4 address.
+        source_ip = listener_sources.canonical_address(addr[0])
         if not self._guard.admit(source_ip):
             return
         stats = self._stats
@@ -977,7 +989,8 @@ class _TrapSyslogProtocol(asyncio.DatagramProtocol):
         # decode (``_screen_traps``) when the source is an inventory host.
         v3_header = parse_snmpv3_header(data)
         if v3_header is not None:
-            self._queue_v3_trap(data, source_ip, raw_hex, v3_header)
+            if not self._handle_v3_confirmed(data, source_ip, raw_hex, v3_header, addr):
+                self._queue_v3_trap(data, source_ip, raw_hex, v3_header)
             return
         # A v1 / v2c trap (or v2c inform) is decoded, named from the trap
         # registry (netcontrol.snmp_traps) and queued with its decoded form:
@@ -1003,6 +1016,43 @@ class _TrapSyslogProtocol(asyncio.DatagramProtocol):
         # readable run that looks like an OID.
         oid, message = _undecoded_trap_fields(data, source_ip)
         _queue_trap_syslog_event(source_ip, "trap", "", "info", oid, message, raw_hex, trap)
+
+    def _handle_v3_confirmed(
+        self, data: bytes, source_ip: str, raw_hex: str, header: V3Header, addr: tuple | None
+    ) -> bool:
+        """An SNMPv3 message with the reportable flag (an inform) from an
+        inventory host while the receiver's SNMPv3 engine is started
+        (``snmpv3_engine.LOCAL``): True when handled here. One for another
+        engine ID (a discovery probe) is answered at once with the
+        unknown-engine-ID Report (keyless, ``engine_discovery_report``) and
+        not stored; one for the local engine is queued whole, with the
+        address to answer, for the batch writer's keyed decode
+        (``_decode_v3_row``), within ``_V3_PENDING_MAX``. Anything else
+        (no engine, not reportable, not an inventory source, the pending
+        limit reached) is False: stored undecoded as before."""
+        global _v3_pending, _v3_replies_waiting
+        engine = snmpv3_engine.LOCAL
+        if engine is None or not header.reportable or addr is None:
+            return False
+        if listener_sources.inventory_host_id(source_ip) is None:
+            return False
+        if header.engine_id != engine.engine_id:
+            report = engine_discovery_report(data, engine)
+            if report is None:
+                # Not a probe to answer (a trap sent with the reportable
+                # flag set, a reply too large): the trap path takes it.
+                return False
+            _send_reply(report, addr)
+            return True
+        if _v3_pending >= _V3_PENDING_MAX:
+            return False
+        _v3_pending += 1
+        _v3_replies_waiting += 1
+        oid, message = _undecoded_trap_fields(data, source_ip)
+        _queue_trap_syslog_event(
+            source_ip, "trap", "", "info", oid, message, raw_hex, PendingV3Trap(bytes(data), header, tuple(addr))
+        )
+        return True
 
     def _queue_v3_trap(self, data: bytes, source_ip: str, raw_hex: str, header: V3Header) -> None:
         """Queue an SNMPv3 datagram: stored as an undecoded trap unless the
@@ -1109,8 +1159,11 @@ _trap_event_buffer: list[tuple] = []
 # _V3_PENDING_MAX (16 KiB each); reset when the writer takes the buffer.
 _V3_PENDING_MAX = 1000
 _v3_pending = 0
+# Of those, the informs waiting for their Response (the writer flushes early).
+_v3_replies_waiting = 0
 # The SNMPv3 timeliness / replay state of the trap receiver (RFC 3414
-# 3.2.7 b), per (source, engine ID); in memory, so a restart forgets it.
+# 3.2.7 b), per (source, engine ID): loaded when the trap receiver starts
+# and written back at most once a minute and at shutdown (snmpv3_engine).
 _V3_REPLAY_GUARD = ReplayGuard()
 _trap_events_dropped = 0
 # Never reset (the writer resets _trap_events_dropped each flush): shown in
@@ -1164,6 +1217,10 @@ async def _resolve_host_id_cached(source_ip: str) -> int | None:
             host_id = host["id"]
     except Exception as exc:
         LOGGER.debug("metrics: host lookup failed for %s: %s", source_ip, exc)
+    if host_id is None and ":" in source_ip:
+        # An IPv6 host address stored in another spelling than the
+        # socket's: the listener's address set is keyed in canonical form.
+        host_id = listener_sources.inventory_host_id(source_ip)
     # Bounded (BoundedDict): a scanner spraying forged sources cannot grow it.
     _host_ip_cache[source_ip] = (host_id, now + _HOST_IP_CACHE_TTL_SECONDS)
     return host_id
@@ -1171,22 +1228,42 @@ async def _resolve_host_id_cached(source_ip: str) -> int | None:
 
 def _take_trap_event_batch() -> list[tuple]:
     """Everything queued, the queue emptied (the overflow count logged)."""
-    global _trap_events_dropped, _v3_pending
+    global _trap_events_dropped, _v3_pending, _v3_replies_waiting
     batch = _trap_event_buffer[:]
     _trap_event_buffer.clear()
     _v3_pending = 0
+    _v3_replies_waiting = 0
     if _trap_events_dropped:
         LOGGER.warning("metrics: trap/syslog buffer overflow - dropped %d events", _trap_events_dropped)
         _trap_events_dropped = 0
     return batch
 
 
+# An SNMPv3 inform waits for its Response: while one is queued the writer
+# looks every _TRAP_EVENT_REPLY_SECONDS instead of once a second.
+_TRAP_EVENT_REPLY_SECONDS = 0.1
+
+
 async def _trap_event_writer_loop() -> None:
     while True:
-        await asyncio.sleep(_TRAP_EVENT_FLUSH_SECONDS)
+        waited = 0.0
+        while waited < _TRAP_EVENT_FLUSH_SECONDS:
+            await asyncio.sleep(_TRAP_EVENT_REPLY_SECONDS)
+            waited += _TRAP_EVENT_REPLY_SECONDS
+            if _v3_replies_waiting:
+                break
         if not _trap_event_buffer:
             continue
         await _flush_trap_syslog_batch(_take_trap_event_batch())
+        await snmpv3_engine.persist_replay(_V3_REPLAY_GUARD)
+
+
+async def flush_v3_state() -> int:
+    """Write the SNMPv3 replay record now (shutdown): only the process
+    whose trap receiver listens holds one. Returns the rows written."""
+    if snmpv3_engine.LOCAL is None:
+        return 0
+    return await snmpv3_engine.persist_replay(_V3_REPLAY_GUARD, force=True)
 
 
 def _trap_believed(trap: dict, host: dict, v3_authenticated: bool = False) -> bool:
@@ -1200,6 +1277,10 @@ def _trap_believed(trap: dict, host: dict, v3_authenticated: bool = False) -> bo
 
 
 _V3_DROP = "drop"
+# An inform outside the local engine's time window that was answered with
+# the usmStatsNotInTimeWindows Report: the sender's time synchronization
+# (RFC 3414 section 4), neither stored nor counted as a refusal.
+_V3_HANDSHAKE = "handshake"
 
 
 async def _decode_v3_row(row: tuple, pending: PendingV3Trap, host: dict, credentials: dict[int, Any]) -> tuple | str | None:
@@ -1207,8 +1288,13 @@ async def _decode_v3_row(row: tuple, pending: PendingV3Trap, host: dict, credent
     ``host`` (``snmpv3_traps``): the row with the decoded trap, named, in
     its trap slot; ``_V3_DROP`` when the message is refused (not from the
     host's SNMPv3 user as configured, a replay, outside the time window);
-    None to store it as an undecoded trap (an inform, a discovery probe,
-    another PDU). The host's credentials are resolved once per batch."""
+    None to store it as an undecoded trap (a discovery probe, another PDU).
+    The host's credentials are resolved once per batch.
+
+    An inform for the local engine (``reply_to`` set) is decoded on the
+    authoritative path (``decode_snmpv3_inform``) and its answer (the
+    Response, or a Report) sent to ``reply_to``; one answered with the
+    time-window Report is ``_V3_HANDSHAKE``."""
     host_id = int(host["id"])
     if host_id not in credentials:
         try:
@@ -1216,9 +1302,19 @@ async def _decode_v3_row(row: tuple, pending: PendingV3Trap, host: dict, credent
         except Exception as exc:  # noqa: BLE001 - a bad stored config is "no SNMPv3 user"
             LOGGER.debug("metrics: SNMPv3 credentials of host %s not resolved: %s", host_id, exc)
             credentials[host_id] = None
-    result = decode_snmpv3_trap(pending.data, credentials[host_id], _V3_REPLAY_GUARD, row[0])
+    engine = snmpv3_engine.LOCAL
+    if pending.reply_to is not None and engine is not None and pending.header.engine_id == engine.engine_id:
+        result = decode_snmpv3_inform(
+            pending.data, credentials[host_id], engine, snmpv3_engine.INFORM_REPLAY_GUARD, row[0]
+        )
+        if result.reply is not None:
+            _send_reply(result.reply, pending.reply_to)
+        if result.failure is V3Failure.NOT_IN_TIME_WINDOW and result.reply is not None:
+            return _V3_HANDSHAKE
+    else:
+        result = decode_snmpv3_trap(pending.data, credentials[host_id], _V3_REPLAY_GUARD, row[0])
     if result.trap is None:
-        LOGGER.debug("metrics: SNMPv3 trap from %s not decoded: %s", row[0], result.failure)
+        LOGGER.debug("metrics: SNMPv3 message from %s not decoded: %s", row[0], result.failure)
         return _V3_DROP if result.failure in SNMPV3_REFUSED else None
     apc_trap = parse_apc_trap(result.trap)
     if apc_trap is not None:
@@ -1244,9 +1340,11 @@ async def _screen_traps(
     An SNMPv3 datagram (``PendingV3Trap``) from an inventory host is
     decoded here with that host's SNMPv3 poll user (``_decode_v3_row``):
     decoded, it is stored named and acted on like a believed v1 / v2c trap;
-    refused, it is dropped and counted as a ``v3`` drop; anything else (an
-    inform, a discovery probe, another PDU) is stored undecoded. One from
-    any other source is stored undecoded, never decoded."""
+    refused, it is dropped and counted as a ``v3`` drop; anything else (a
+    discovery probe, another PDU) is stored undecoded. An inform for the
+    local engine is answered there too, and one that only resynchronized
+    its sender's clock is neither stored nor counted. One from any other
+    source is stored undecoded, never decoded."""
     trap_host_ids = sorted(
         {hid for row in batch if row[1] == "trap" and row[7] is not None and (hid := host_ids.get(row[0])) is not None}
     )
@@ -1264,6 +1362,8 @@ async def _screen_traps(
             decoded = await _decode_v3_row(row, trap, host, credentials) if host is not None else None
             if decoded == _V3_DROP:
                 guard.note_drop("v3", row[0])
+                continue
+            if decoded == _V3_HANDSHAKE:
                 continue
             if not isinstance(decoded, tuple) or host is None or not _trap_believed(decoded[7], host, True):
                 kept.append((*row[:7], None, *row[8:]))
@@ -1380,6 +1480,28 @@ _RECEIVER_BIND_HOST = "0.0.0.0"  # nosec B104 - trap/syslog listener must accept
 _RECEIVER_LABELS = {"trap": "SNMP trap", "syslog": "syslog"}
 _receiver_transports: dict[str, asyncio.DatagramTransport | None] = {"trap": None, "syslog": None}
 _receiver_ports: dict[str, int] = {"trap": 0, "syslog": 0}
+# The receivers that also listen on IPv6, on a second socket (IPV6_V6ONLY,
+# so the IPv4 socket above is unchanged) on the same port: the IPv6
+# wildcard when the IPv4 bind host is the IPv4 wildcard, ::1 for loopback
+# (tests), none for any other bind host. A host without IPv6 logs the
+# failed bind and keeps listening on IPv4. The syslog UDP receiver is
+# IPv4 only.
+_IPV6_RECEIVERS: tuple[str, ...] = ("trap",)
+_IPV6_BIND_HOSTS = {"0.0.0.0": "::", "127.0.0.1": "::1"}  # nosec B104 - see _RECEIVER_BIND_HOST
+_receiver_transports6: dict[str, asyncio.DatagramTransport | None] = {"trap": None, "syslog": None}
+
+
+def _send_reply(data: bytes, addr: tuple) -> None:
+    """Send an SNMP answer (a v3 Response or Report) to ``addr`` from the
+    trap receiver's socket of its address family; nothing when that socket
+    is closed."""
+    transport = _receiver_transports6["trap"] if len(addr) == 4 else _receiver_transports["trap"]
+    if transport is None:
+        return
+    try:
+        transport.sendto(data, addr)
+    except Exception as exc:  # noqa: BLE001 - a failed answer is the sender's retry
+        LOGGER.debug("metrics: SNMP answer to %s not sent: %s", addr[0], type(exc).__name__)
 
 
 def _stream_handler(transport: str) -> syslog_stream.Handler:
@@ -1426,10 +1548,54 @@ async def _start_receiver(kind: str, port: int) -> bool:
     _receiver_transports[kind] = transport
     _receiver_ports[kind] = port
     _RECEIVER_STATS[kind].reset(time.time())
+    if kind in _IPV6_RECEIVERS:
+        await _start_receiver6(kind, int(transport.get_extra_info("sockname")[1]))
     # The source allowlist needs the inventory addresses from the first datagram.
     await listener_sources.refresh_inventory()
+    if kind == "trap":
+        # Only the process that bound the port gets here: it alone counts
+        # an engine boot and holds the SNMPv3 replay record.
+        await snmpv3_engine.start()
+        await snmpv3_engine.restore_replay(_V3_REPLAY_GUARD)
     LOGGER.info("metrics: %s receiver started on UDP port %d", label, port)
     return True
+
+
+async def _start_receiver6(kind: str, port: int) -> bool:
+    """Bind the IPv6 socket of a receiver in ``_IPV6_RECEIVERS`` on
+    ``port`` (see ``_IPV6_BIND_HOSTS``). True when it listens; a failed
+    bind is logged and returns False."""
+    _close_receiver6(kind)
+    host = _IPV6_BIND_HOSTS.get(_RECEIVER_BIND_HOST)
+    if host is None or not socket.has_ipv6:
+        return False
+    sock = None
+    try:
+        sock = socket.socket(socket.AF_INET6, socket.SOCK_DGRAM)
+        sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
+        sock.bind((host, port))
+        sock.setblocking(False)
+        transport, _ = await asyncio.get_running_loop().create_datagram_endpoint(
+            lambda: _TrapSyslogProtocol(kind), sock=sock
+        )
+    except Exception as exc:  # noqa: BLE001 - IPv4 keeps listening
+        if sock is not None:
+            sock.close()
+        LOGGER.warning("metrics: %s receiver not listening on IPv6 UDP port %d: %s", _RECEIVER_LABELS[kind], port, exc)
+        return False
+    _receiver_transports6[kind] = transport
+    LOGGER.info("metrics: %s receiver listening on IPv6 UDP port %d", _RECEIVER_LABELS[kind], port)
+    return True
+
+
+def _close_receiver6(kind: str) -> None:
+    transport = _receiver_transports6.get(kind)
+    _receiver_transports6[kind] = None
+    if transport is not None:
+        try:
+            transport.close()
+        except RuntimeError:
+            pass  # its event loop is already closed
 
 
 def _stop_receiver(kind: str) -> bool:
@@ -1438,6 +1604,7 @@ def _stop_receiver(kind: str) -> bool:
     if transport is None:
         return False
     transport.close()
+    _close_receiver6(kind)
     _receiver_transports[kind] = None
     _receiver_ports[kind] = 0
     LOGGER.info("metrics: %s receiver stopped", _RECEIVER_LABELS[kind])
@@ -1557,6 +1724,9 @@ def event_receiver_snapshot() -> dict:
         if kind == "trap":
             snapshot["trap_dropped_community"] = drops["dropped_community"]
             snapshot["trap_dropped_v3"] = drops["dropped_v3"]
+            snapshot["trap_ipv6_listening"] = running and _receiver_transports6["trap"] is not None
+            # The receiver's own SNMPv3 engine (informs) and its counters.
+            snapshot.update(snmpv3_engine.snapshot())
     # The TCP and TLS syslog listeners share the syslog drop counters above.
     for transport, listener in _STREAM_LISTENERS.items():
         prefix = f"syslog_{transport}"

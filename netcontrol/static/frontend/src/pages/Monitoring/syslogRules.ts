@@ -3,6 +3,7 @@
 // components). Also used by the Suppressions tab for the syslog metrics.
 
 import type {
+  RuleSettingsBody,
   SyslogActivity,
   SyslogMatchType,
   SyslogRule,
@@ -10,6 +11,10 @@ import type {
   SyslogRuleBody,
   SyslogSeverity,
   SyslogUnmatchedGroup,
+  TrapCondition,
+  TrapConditionOp,
+  TrapMatch,
+  TrapRuleBody,
 } from '@/api/syslogRules';
 import { countLabel, formatCount } from '@/lib/formatCount';
 
@@ -36,7 +41,30 @@ export const SYSLOG_BUILTIN_METRICS: { value: string; label: string }[] = [
   { value: 'syslog_power_supply', label: 'Syslog: Power supply fault' },
   { value: 'syslog_fan', label: 'Syslog: Fan fault' },
   { value: 'syslog_module', label: 'Syslog: Module down' },
+  { value: 'syslog_temperature', label: 'Syslog: Temperature alarm' },
+  { value: 'syslog_ha_switchover', label: 'Syslog: HA failover or switchover' },
+  { value: 'syslog_device_restart', label: 'Syslog: Device restarted' },
   { value: 'syslog_auth_failure', label: 'Syslog: Repeated login failures' },
+  { value: 'syslog_stp_root_change', label: 'Syslog: Spanning tree root changed' },
+  { value: 'syslog_stp_topology_change', label: 'Syslog: Spanning tree topology changes' },
+  { value: 'syslog_stp_guard', label: 'Syslog: Spanning tree guard blocking a port' },
+  { value: 'syslog_port_err_disabled', label: 'Syslog: Port error-disabled' },
+  { value: 'syslog_port_security', label: 'Syslog: Port security violation' },
+  { value: 'syslog_storm_control', label: 'Syslog: Traffic storm' },
+  { value: 'syslog_mac_flap', label: 'Syslog: MAC address flapping' },
+  { value: 'syslog_duplex_mismatch', label: 'Syslog: Duplex mismatch' },
+  { value: 'syslog_hsrp_state', label: 'Syslog: HSRP failover' },
+  { value: 'syslog_eigrp_neighbor', label: 'Syslog: EIGRP neighbor down' },
+  { value: 'syslog_isis_adjacency', label: 'Syslog: IS-IS adjacency down' },
+  { value: 'syslog_ipsec_tunnel', label: 'Syslog: IPsec tunnel down' },
+  { value: 'syslog_ip_sla', label: 'Syslog: IP SLA probe down' },
+  { value: 'syslog_poe_fault', label: 'Syslog: PoE fault' },
+  { value: 'syslog_optic_power', label: 'Syslog: Optic light level out of range' },
+  { value: 'syslog_aaa_server', label: 'Syslog: AAA server not responding' },
+  { value: 'syslog_ntp_sync', label: 'Syslog: NTP synchronization lost' },
+  { value: 'syslog_license_expiry', label: 'Syslog: License expiring or expired' },
+  { value: 'syslog_certificate_expiry', label: 'Syslog: Certificate expiring or expired' },
+  { value: 'syslog_software_fault', label: 'Syslog: Software crash or memory failure' },
 ];
 
 /**
@@ -55,6 +83,17 @@ export const TRAP_BUILTIN_METRICS: { value: string; label: string }[] = [
   { value: 'trap_ha_switchover', label: 'Trap: HA failover or switchover' },
   { value: 'trap_device_restart', label: 'Trap: Device or agent restarted' },
   { value: 'trap_snmp_auth_failure', label: 'Trap: SNMP authentication failures' },
+  { value: 'trap_stp_root_change', label: 'Trap: Spanning tree root changed' },
+  { value: 'trap_stp_topology_change', label: 'Trap: Spanning tree topology changes' },
+  { value: 'trap_port_err_disabled', label: 'Trap: Port error-disabled' },
+  { value: 'trap_port_security', label: 'Trap: Port security violation' },
+  { value: 'trap_mac_flap', label: 'Trap: MAC address flapping' },
+  { value: 'trap_hsrp_state', label: 'Trap: HSRP failover' },
+  { value: 'trap_eigrp_neighbor', label: 'Trap: EIGRP neighbor down' },
+  { value: 'trap_isis_adjacency', label: 'Trap: IS-IS adjacency down' },
+  { value: 'trap_ipsec_tunnel', label: 'Trap: IPsec tunnel down' },
+  { value: 'trap_ip_sla', label: 'Trap: IP SLA probe down' },
+  { value: 'trap_poe_fault', label: 'Trap: PoE fault' },
 ];
 
 /** 600 -> "10 min", 3600 -> "1 h", 45 -> "45 s". */
@@ -81,6 +120,7 @@ export function repollLabel(reason: string): string {
   if (reason === 'module') return 'Re-poll in 5 s (module down or back online)';
   if (reason === 'reload') return 'Re-poll in 30 s (reload)';
   if (reason === 'restart') return 'Re-poll in 5 s (restart)';
+  if (reason === 'state_change') return 'Re-poll in 5 s (HA switchover or failover)';
   return '';
 }
 
@@ -99,28 +139,36 @@ export function recollectLabel(reason: string | undefined): string {
   return why ? `From an OPNsense firewall: collects its topology source in 5 s (${why})` : '';
 }
 
-export interface SyslogRuleForm {
+/** The form fields every custom rule (syslog or trap) has (`RuleSettingsFields`). */
+export interface RuleSettingsForm {
   name: string;
   enabled: boolean;
-  match_type: SyslogMatchType;
-  pattern: string;
-  clear_pattern: string;
   severity: SyslogSeverity;
   threshold_count: string;
   threshold_window_seconds: string;
   auto_resolve_minutes: string;
 }
 
-export const EMPTY_SYSLOG_RULE_FORM: SyslogRuleForm = {
+export interface SyslogRuleForm extends RuleSettingsForm {
+  match_type: SyslogMatchType;
+  pattern: string;
+  clear_pattern: string;
+}
+
+const EMPTY_RULE_SETTINGS: RuleSettingsForm = {
   name: '',
   enabled: true,
-  match_type: 'contains',
-  pattern: '',
-  clear_pattern: '',
   severity: 'warning',
   threshold_count: '1',
   threshold_window_seconds: '300',
   auto_resolve_minutes: '0',
+};
+
+export const EMPTY_SYSLOG_RULE_FORM: SyslogRuleForm = {
+  ...EMPTY_RULE_SETTINGS,
+  match_type: 'contains',
+  pattern: '',
+  clear_pattern: '',
 };
 
 function asSeverity(value: string): SyslogSeverity {
@@ -131,18 +179,24 @@ function asMatchType(value: string): SyslogMatchType {
   return SYSLOG_MATCH_TYPES.some((o) => o.value === value) ? (value as SyslogMatchType) : 'contains';
 }
 
-/** The form of a stored custom rule. */
-export function formFromRule(rule: SyslogRule): SyslogRuleForm {
+function settingsFormFromRule(rule: SyslogRule): RuleSettingsForm {
   return {
     name: rule.name,
     enabled: rule.enabled,
-    match_type: asMatchType(rule.match_type),
-    pattern: rule.pattern,
-    clear_pattern: rule.clear_pattern,
     severity: asSeverity(rule.severity),
     threshold_count: String(rule.threshold_count),
     threshold_window_seconds: String(rule.threshold_window_seconds),
     auto_resolve_minutes: String(rule.auto_resolve_minutes),
+  };
+}
+
+/** The form of a stored custom rule. */
+export function formFromRule(rule: SyslogRule): SyslogRuleForm {
+  return {
+    ...settingsFormFromRule(rule),
+    match_type: asMatchType(rule.match_type),
+    pattern: rule.pattern,
+    clear_pattern: rule.clear_pattern,
   };
 }
 
@@ -151,19 +205,123 @@ function wholeNumber(value: string, fallback: number): number {
   return value.trim() !== '' && Number.isInteger(n) ? n : fallback;
 }
 
-/** The API body of the form (the server validates ranges and patterns). */
-export function bodyFromForm(form: SyslogRuleForm): SyslogRuleBody {
+function settingsBodyFromForm(form: RuleSettingsForm): RuleSettingsBody {
   return {
     name: form.name.trim(),
     enabled: form.enabled,
-    match_type: form.match_type,
-    pattern: form.pattern.trim(),
-    clear_pattern: form.clear_pattern.trim(),
     severity: form.severity,
     threshold_count: wholeNumber(form.threshold_count, 1),
     threshold_window_seconds: wholeNumber(form.threshold_window_seconds, 300),
     auto_resolve_minutes: wholeNumber(form.auto_resolve_minutes, 0),
   };
+}
+
+/** The API body of the form (the server validates ranges and patterns). */
+export function bodyFromForm(form: SyslogRuleForm): SyslogRuleBody {
+  return {
+    ...settingsBodyFromForm(form),
+    match_type: form.match_type,
+    pattern: form.pattern.trim(),
+    clear_pattern: form.clear_pattern.trim(),
+  };
+}
+
+// --- Custom SNMP trap rules (Monitoring -> Configure -> Syslog Rules, trap section) ---
+
+export const TRAP_CONDITION_OPS: { value: TrapConditionOp; label: string }[] = [
+  { value: 'equals', label: 'equals' },
+  { value: 'contains', label: 'contains' },
+  { value: 'regex', label: 'matches (RE2)' },
+];
+
+export interface TrapRuleForm extends RuleSettingsForm {
+  pattern: string;
+  clear_pattern: string;
+  conditions: TrapCondition[];
+  clear_conditions: TrapCondition[];
+  instance_object: string;
+  instance_part: 'value' | 'index';
+}
+
+export const EMPTY_TRAP_RULE_FORM: TrapRuleForm = {
+  ...EMPTY_RULE_SETTINGS,
+  pattern: '',
+  clear_pattern: '',
+  conditions: [],
+  clear_conditions: [],
+  instance_object: '',
+  instance_part: 'value',
+};
+
+export const EMPTY_TRAP_CONDITION: TrapCondition = { object: '', op: 'equals', value: '' };
+
+/** The form of a stored custom trap rule. */
+export function trapFormFromRule(rule: SyslogRule): TrapRuleForm {
+  const match = rule.trap_match;
+  return {
+    ...settingsFormFromRule(rule),
+    pattern: rule.pattern,
+    clear_pattern: rule.clear_pattern,
+    conditions: match?.conditions ?? [],
+    clear_conditions: match?.clear_conditions ?? [],
+    instance_object: match?.instance.object ?? '',
+    instance_part: match?.instance.part ?? 'value',
+  };
+}
+
+function cleanConditions(conditions: TrapCondition[]): TrapCondition[] {
+  // A row left with neither a varbind nor a value is an unused one.
+  return conditions
+    .map((c) => ({ object: c.object.trim(), op: c.op, value: c.value.trim() }))
+    .filter((c) => c.object !== '' || c.value !== '');
+}
+
+/** The API body of a trap rule form (the server validates the traps and conditions). */
+export function trapBodyFromForm(form: TrapRuleForm): TrapRuleBody {
+  const clearPattern = form.clear_pattern.trim();
+  return {
+    ...settingsBodyFromForm(form),
+    pattern: form.pattern.trim(),
+    clear_pattern: clearPattern,
+    trap_match: {
+      conditions: cleanConditions(form.conditions),
+      // Clearing conditions without a clearing trap would be refused.
+      clear_conditions: clearPattern ? cleanConditions(form.clear_conditions) : [],
+      instance: { object: form.instance_object.trim(), part: form.instance_part },
+    },
+  };
+}
+
+/** A condition as one line: `ifAdminStatus equals up`. */
+export function conditionLabel(c: TrapCondition): string {
+  return `${c.object} ${TRAP_CONDITION_OPS.find((o) => o.value === c.op)?.label ?? c.op} ${c.value}`;
+}
+
+/** What names a trap rule's instance: "Per device", or the varbind's value / index. */
+export function trapInstanceLabel(match: TrapMatch | undefined): string {
+  const object = match?.instance.object ?? '';
+  if (!object) return 'Per device';
+  return match?.instance.part === 'index' ? `Index of ${object}` : `Value of ${object}`;
+}
+
+/**
+ * The varbinds of the trap tester, one per line, `OID = value` (or `OID value`);
+ * blank lines are skipped and the value may be empty.
+ */
+export function parseVarbindLines(text: string): [string, string][] {
+  const out: [string, string][] = [];
+  for (const raw of text.split('\n')) {
+    const line = raw.trim();
+    if (!line) continue;
+    const eq = line.indexOf('=');
+    if (eq >= 0) {
+      out.push([line.slice(0, eq).trim(), line.slice(eq + 1).trim()]);
+      continue;
+    }
+    const space = line.search(/\s/);
+    out.push(space < 0 ? [line, ''] : [line.slice(0, space), line.slice(space).trim()]);
+  }
+  return out;
 }
 
 // --- Received messages (GET /monitoring/syslog-rules/activity) ---

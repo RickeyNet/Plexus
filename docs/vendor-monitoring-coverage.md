@@ -148,9 +148,9 @@ up after a reload, or whose message was lost.
 | Cato, Meraki, AWS, Azure, GCP and other API sources | n/a | n/a | No hardware modules the operator manages (device health comes from the vendor's own status, see Availability and SLA). |
 
 Gaps for every vendor: a module that leaves the table without ever
-reading not OK raises nothing (needs a stored baseline of the modules);
-stack members (Cisco CISCO-STACKWISE-MIB) and supervisor redundancy state
-(CISCO-RF-MIB) are not read.
+reading not OK raises nothing (needs a stored baseline of the modules).
+Stack members (Cisco CISCO-STACKWISE-MIB) and supervisor redundancy state
+(CISCO-RF-MIB) are read by the HA check below.
 
 ### Power supplies, fans and temperature
 
@@ -189,6 +189,44 @@ with invented rows shaped as its MIB text defines them.
 Gaps for every vendor: a supply pulled from its bay leaves the table and
 its alert resolves (as an empty bay, it is not an item).
 
+### Optics and PoE
+
+The monitoring poll of an inventory host reads the alarm state of its
+transceivers' light levels and its Power over Ethernet ports and power
+sources over SNMP, and raises one server-side alert per item into
+`monitoring_alerts` / notification channels: `optic_level_alarm` (the
+device's warning or critical: a receive or transmit level outside the
+thresholds the device holds for the optic), `poe_port_fault` (warning),
+`poe_supply_down` (critical) and `poe_budget_high` (warning: the
+consumption at the device's `pethMainPseUsageThreshold`, else 90%),
+suppressible by metric. Each resolves when the item reads OK, disabled, or
+gone from a table read completely; an optic in alarm on a port that is
+admin down is not an alert. The counts are metric samples and alert rule
+metrics (`netcontrol/environment_health.py`, `netcontrol/poe_health.py`;
+`docs/monitoring.md#optics`, `docs/monitoring.md#power-over-ethernet`).
+They are the polled backstop of the PoE and optic syslog and trap rules and
+of the sensor traps that name no sensor type: the temperature and optical
+power sensors are polled, other sensor types are not. Not run against a
+live device.
+
+| Vendor / platform | Optics | PoE | Notes |
+|---|---|---|---|
+| Cisco IOS / IOS XE | CISCO-ENTITY-SENSOR-MIB `entSensorThresholdEvaluation` of dBm(14) sensors (minor: warning; major, critical: critical) | POWER-ETHERNET-MIB `pethPsePortDetectionStatus`, `pethMainPseOperStatus`, consumption against `pethMainPsePower` | The threshold table is walked once per poll for optics and (where ENVMON has no rows) temperature. The port of a sensor is found through ENTITY-MIB (`entPhysicalContainedIn`, `entAliasMappingIdentifier`): not confirmed per platform that the alias mapping is filled. |
+| Cisco NX-OS / IOS XR / ASA / FTD | as IOS | Not read | No PoE ports. |
+| Juniper Junos | JUNIPER-DOM-MIB `jnxDomCurrentAlarms` / `jnxDomCurrentWarnings` receive and transmit power bits (alarm: critical; warning: warning), per ifIndex | POWER-ETHERNET-MIB | Whether EX switches fill POWER-ETHERNET-MIB is not confirmed. Lane alarms (`jnxDomCurrentLaneTable`, multi-lane optics) not read. |
+| Arista EOS | ENTITY-STATE-MIB `entStateAlarm` of sensors named Rx / Tx power (ARISTA-ENTITY-SENSOR-MIB thresholds set it) | POWER-ETHERNET-MIB | ENTITY-SENSOR-MIB has no dBm type: an optic is told by its sensor name (a convention seen in EOS sensor names, not the MIB). |
+| PAN-OS | as Arista, where ENTITY-STATE-MIB is filled | Not read | No PoE ports. |
+| HPE Aruba AOS-Switch / ProCurve | HP-ICF-TRANSCEIVER-MIB `hpicfXcvrAlarms` receive and transmit power bits, when `hpicfXcvrDiagnostics` is dom(1) | POWER-ETHERNET-MIB | |
+| HPE Aruba AOS-CX | Gap | POWER-ETHERNET-MIB | Gap: no transceiver light-level table in the ARUBAWIRED MIBs retrieved; ARUBAWIRED-POE-MIB not read (the standard MIB is tried). |
+| Fortinet FortiOS, Netgear | Gap | POWER-ETHERNET-MIB | Gap: no transceiver light-level table in the MIBs retrieved. |
+| Any other SNMP platform | Not read | POWER-ETHERNET-MIB | A switch without PoE costs one walk of each table an hour once confirmed empty. |
+| APC UPS, ICMP-only; Cato, Meraki, AWS, Azure, GCP and other API sources | n/a | n/a | |
+
+Gaps for every vendor: POWER-ETHERNET-MIB does not map a PoE port to its
+interface, so a port is named by group and port number; an optic whose
+port cannot be found (a Cisco device that does not fill
+`entAliasMappingIdentifier`) alerts whatever the port's state.
+
 ### BGP peers and OSPF neighbors
 
 The monitoring poll reads the BGP peers and OSPF neighbors of every
@@ -204,7 +242,7 @@ table alerts as gone for 24 hours. Not run against a live device.
 
 | Vendor / platform | BGP | OSPF | Notes |
 |---|---|---|---|
-| Cisco (all inventory types) | CISCO-BGP4-MIB `cbgpPeer2State` (IPv4 and IPv6), else BGP4-MIB `bgpPeerState` | OSPF-MIB `ospfNbrState` | Gap: peers in VRFs that only an SNMP context shows. |
+| Cisco (all inventory types) | CISCO-BGP4-MIB `cbgpPeer3State` (every VRF, IPv4 and IPv6; the message names the VRF), else `cbgpPeer2State` (IPv4 and IPv6), else BGP4-MIB `bgpPeerState` | OSPF-MIB `ospfNbrState` | Gap: on software without `cbgpPeer3Table`, peers in VRFs that only an SNMP context shows. |
 | Juniper Junos | BGP4-V2-MIB-JUNIPER `jnxBgpM2PeerState` (all routing instances, IPv4 and IPv6), else `bgpPeerState` | `ospfNbrState` | `jnxBgpM2PeerStatus` halted(1) is an operator's stop. |
 | Arista EOS | ARISTA-BGP4V2-MIB `aristaBgp4V2PeerState`, else `bgpPeerState` | `ospfNbrState` | |
 | Fortinet, PAN-OS, HPE Aruba, Netgear and any other SNMP platform | `bgpPeerState` | `ospfNbrState` | Whether each answers BGP4-MIB / OSPF-MIB is not confirmed; a device that never answers a table costs one walk of it an hour after its third empty poll. |
@@ -213,6 +251,82 @@ table alerts as gone for 24 hours. Not run against a live device.
 
 Gaps for every vendor: OSPFv3 neighbors (OSPFV3-MIB); the memory of peers
 and neighbors seen up is the server process's (lost on a restart).
+
+### EIGRP, IS-IS, IP SLA and IPsec tunnels
+
+The monitoring poll reads the EIGRP neighbors, IS-IS adjacencies and IP
+SLA probes of an inventory host over SNMP and raises one server-side alert
+per item: `eigrp_neighbor_down` and `isis_adjacency_down` (critical: down
+at two polls in a row, or seen and gone from the table, remembered 24
+hours) and `ip_sla_down` (critical for a probe that gets no answer, warning
+for a result over the probe's own threshold, at two polls in a row)
+(`netcontrol/routing_health.py`;
+`docs/monitoring.md#eigrp-is-is-and-ip-sla`). Not run against a live
+device.
+
+| Vendor / platform | EIGRP | IS-IS | IP SLA | IPsec tunnels |
+|---|---|---|---|---|
+| Cisco (all inventory types) | CISCO-EIGRP-MIB `cEigrpPeerTable` (established peers only; keyed by VRF, AS and address) | ISIS-MIB `isisISAdjState`, else CISCO-IETF-ISIS-MIB `ciiISAdjState` (keyed by circuit and neighbor system ID) | CISCO-RTTMON-MIB `rttMonLatestRttOperSense`; `rttMonCtrlOperState` not active is not an alert | Gap: CISCO-IPSEC-FLOW-MONITOR-MIB `cipSecTunnelTable` lists active tunnels only (`cipSecTunStatus` always reads active), so a failed tunnel cannot be told from an idle one whose SAs expired. |
+| Juniper, Arista, PAN-OS, Fortinet, HPE Aruba, Netgear and any other SNMP platform | n/a | ISIS-MIB `isisISAdjState` | n/a | Not read |
+| APC UPS, ICMP-only; API sources | n/a | n/a | n/a | Tunnels of API sources are in their own availability tracking. |
+
+HSRP and VRRP are the HA check (`fhrp_group_down`).
+
+### HA and redundancy state
+
+The monitoring poll reads the HA and redundancy state of an inventory host
+over SNMP and raises one server-side alert per item into
+`monitoring_alerts` / notification channels: `ha_peer_down` (critical: a
+failover unit, redundancy peer, stack / VSF / cluster member down, out of
+sync, missing or gone), `ha_link_down` (warning: a failover, stack, Virtual
+Chassis or VSX link down) and `fhrp_group_down` (warning: a VRRP or HSRP
+group stuck in its initial state while its interface is admin up),
+suppressible by metric. Each resolves when the item reads OK, is turned off
+by an operator, or is gone from a table the poll read; a poll that read no
+table raises and resolves nothing, and the empty-table rules are those of
+the other polled checks. Roles (active / standby, master / backup) are not
+faults; a role that changed between two polls raises one `ha_role_change`
+event alert per device (warning, resolved an hour after the last change).
+A standby, ring or port that has never been seen working is not alerted
+(a chassis without a standby, a single switch); once seen, it is
+remembered for 7 days in the server process (`netcontrol/ha_health.py` on
+`netcontrol/snmp_health.py`; `docs/monitoring.md#ha-and-redundancy-state`).
+It is the state-based backstop of the HA syslog rules and traps. None of it
+has been run against a live device: every table is tested with invented
+rows shaped as its MIB text defines them.
+
+| Vendor / platform | HA / redundancy units | HA links | VRRP / HSRP | Notes |
+|---|---|---|---|---|
+| Cisco ASA / FTD (`cisco_asa`, `cisco_ftd`) | CISCO-FIREWALL-MIB `cfwHardwareStatusValue` of the primaryUnit(6) / secondaryUnit(7) rows (active, standby, backup, up: OK; down, error, overTemp, noMedia: down; `cfwHardwareStatusDetail` and `cfwHardwareInformation` read for the rows down) | the netInterface(4) row (failover LAN interface) | n/a | A device without failover: the ASA reads `Failover Off` / `not Configured` in the detail (ASA's wording, not the MIB's): not an alert. Whether FTD answers the table is not confirmed. |
+| Cisco IOS / IOS XE / NX-OS / IOS XR | CISCO-RF-MIB `cRFStatusPeerUnitState` (disabled after the peer was seen up: down; the standby sub-states pass); CISCO-STACKWISE-MIB `cswSwitchState` per member (mismatches, invalid: down; provisioned or removed after seen ready, or gone: down) | `cswRingRedundant` (false after seen true: down), `cswStackPortOperStatus` forcedDown(3) (down(2) is "not connected or shut": the ring tells a pulled cable) | CISCO-HSRP-MIB `cHsrpGrpStandbyState` (initial: down at the second poll; learn, speak pass; listen, standby, active OK); VRRP below | A stack member is a chassis entity, not a `cefcModuleTable` module: one alert. Gap: the RF local unit state, a standby stuck in a cold sub-state, StackWise Virtual. |
+| Juniper Junos | JUNIPER-MIB `jnxRedundancyState` (routing engines, control boards: disabled after seen master / backup, or gone: down) | JUNIPER-VIRTUALCHASSIS-MIB `jnxVirtualChassisPortOperStatus` (down after seen up: down; `jnxVirtualChassisPortAdminStatus` down: an operator's) | VRRP below | An offline routing engine is also the module check's `module_down`; a pulled one (FRU empty) only this check's. Gap: SRX chassis clusters (JUNIPER-CHASSIS-CLUSTER-MIB), Virtual Chassis member state (the member table has roles, no state; a member down is its FPC in the module check). |
+| Fortinet FortiOS | FORTINET-FORTIGATE-MIB `fgHaStatsSyncStatus` per member (unsynchronized at two polls: down), the member count (fewer than seen: down), `fgHaSystemMode` standalone: no items | n/a | VRRP below (not confirmed that FortiOS answers VRRP-MIB) | Gap: the HA heartbeat interfaces and the primary role (no state column). |
+| Palo Alto PAN-OS | PAN-COMMON-MIB `panSysHAState` (non-functional, suspended: down), `panSysHAPeerState` (non-functional, suspended: down; unknown at two polls: down), `panSysHAMode` disabled: no items | Gap | n/a | The state words are PAN-OS's HA states (the MIB gives DisplayStrings without a list). Gap: HA1 / HA2 link state (PAN-OS has no MIB object for it; the HA link traps are named). |
+| HPE Aruba AOS-CX | ARUBAWIRED-VSF-MIB `arubaWiredVsfMemberStatus` (version_mismatch, communication_failure, in_other_fragment: down; not_present after seen ready, or gone: down) | ARUBAWIRED-VSX-MIB `arubaWiredVsxIslOperState` (outSync), `arubaWiredVsxKeepAliveOperState` (outofSyncEstablished, failed), at two polls; `arubaWiredVsxDeviceRole` notConfigured: no items | VRRP below | Gap: ARUBAWIRED-VSFv2-MIB, the VSX peer's own state. |
+| Any SNMP platform (also Arista EOS, AOS-Switch, Netgear, Linux) | Gap | Gap | VRRPV3-MIB `vrrpv3OperationsStatus`, else VRRP-MIB `vrrpOperState` (initialize at two polls with the interface admin up and the group enabled: down; backup, master OK) | |
+| Arista EOS | Gap | Gap | VRRP | Gap: MLAG (no public ARISTA-MLAG-MIB found). |
+| HPE Aruba AOS-Switch, Netgear | Gap | Gap | VRRP | Gap: stacking (no MIB with enumerated member states confirmed). |
+| OPNsense | Over its API | n/a | n/a | The CARP state is read over the source's API (`docs/opnsense-topology.md#carp-pairs`), re-collected on a CARP syslog message; not read again over SNMP. |
+| Cato, Meraki, AWS, Azure, GCP and other API sources | n/a | n/a | n/a | HA pairs of API sources (a Cato Socket HA pair, a Meraki warm spare) report through the vendor's own status (Availability and SLA). |
+
+Gaps for every vendor: the memory of what has been seen working is the
+server process's (a restart forgets it: a peer down at that moment raises
+nothing until seen up again, its open alert stays open).
+
+### Device restarts (polled uptime)
+
+Every SNMP-polled inventory host: a polled sysUpTime lower than the
+previous stored poll's (by more than a minute), or shorter than the time
+since that reading (by more than 5 minutes), raises one server-side
+`device_restarted` alert per host (warning, type `event`, resolved an hour
+after the last restart seen); a 32-bit TimeTicks wrap (about 497 days) is
+told apart from the elapsed time. The next poll re-reads the host's hardware
+components. It covers every vendor alike, and catches a reboot faster than
+the ping down threshold that sent no trap or syslog message. Gap: an SNMP
+agent restart on a device that kept running reads the same on some
+platforms (HOST-RESOURCES-MIB `hrSystemUptime` is not read), so the alert
+says "device or SNMP agent". `netcontrol/device_restart.py`;
+`docs/monitoring.md#device-restarts`.
 
 ## Software versions and CVE advisories
 
@@ -379,7 +493,10 @@ on the server against the syslog alert rules (raised and resolved into
 `monitoring_alerts` and the notification channels), starts a config
 backup and drift check on a configuration change message, and re-polls
 the host on an interface-down, module down / back online, reload or
-restart message (`netcontrol/syslog_rules.py`, `docs/syslog-rules.md`). Custom rules
+restart message (`netcontrol/syslog_rules.py`, `docs/syslog-rules.md`).
+The temperature, HA switchover and device restart rules mirror the trap
+rules of the same keys (severity, auto-resolve and re-poll), so an event
+alerts the same way by trap or by syslog. Custom rules
 (tag, text or RE2 regex) work on any vendor's messages; the cells below
 are the built-in rules and triggers. The same intake rules apply to every
 vendor: the trap, syslog and flow listeners accept only inventory host
@@ -391,19 +508,35 @@ its own host, and configuration-change backups have a per-host cooldown.
 
 | Vendor / platform | Built-in alert rules | Config change trigger | Re-poll trigger | Status | Notes |
 |---|---|---|---|---|---|
-| Cisco IOS / IOS XE | Interface flapping, OSPF and BGP neighbor down, power supply and fan (IOS XE `IOSXE_PEM`, Catalyst 9000 `PLATFORM_FEP`), module down (IOS XE `IOSXE_OIR` / `SPA_OIR` card and SPA offline / removed, cleared by `ONLINECARD`; Catalyst 3750 / 2975 `STACKMGR-4-SWITCH_REMOVED` / `SWITCH_READY`; Catalyst 6500 `C6KPWR-SP-4-DISABLED`), login failures | `SYS-5-CONFIG_I` | Link down, module down / online, `SYS-5-RELOAD`, `SYS-5-RESTART`, `SYS-6-BOOTTIME` | Yes | Classic Catalyst fans (`HARDWARE-2-FAN_ERROR`, 3750-X `PLATFORM_ENV-1-FAN` / `FRU_PS_FAN_FAILED`), 3750-X power supply signal (`PLATFORM_ENV-1-FRU_PS_SIGNAL_FAULTY`) and ISR G2 fans (`ENVMON-3-FAN_FAIL` / `FAN_OK`) are built in. Gap: ISR G2 power supply messages (no Cisco reference naming the mnemonics was found); Catalyst 9000 stack member messages (`STACKMGR` is not in the IOS XE system message guides; the classic form matches the IOS XE text seen in community logs, unconfirmed); Catalyst 4500 module messages; the Catalyst 6500 module power-off has no documented recovery or admin form (resolves after 24 hours). |
-| Cisco IOS XR | Interface flapping, OSPF and BGP neighbor down, login failures | `MGBL-CONFIG-6-DB_COMMIT` | Link down | Partial | Gap: power supply, fan, module (line card / RP) and reload messages (no IOS XR reference with their text was retrieved). |
-| Cisco NX-OS | Interface flapping, OSPF and BGP neighbor down, power supply, fan, module down (`MODULE-2-MOD_FAIL` / `MOD_FAILURE` / `MOD_NOT_ALIVE`, `PLATFORM-2-MOD_REMOVE` / `MOD_PWRDN` / `MOD_PWRFAIL` / `MOD_PWRDENY`, fabric `XBAR_REMOVE` / `XBAR_PWRDN` / `XBAR_PWRFAIL`, cleared by `MODULE-5-MOD_OK`, `ACTIVE_SUP_OK` / `STANDBY_SUP_OK`, `XBAR_OK`), login failures | `VSHD-5-VSHD_SYSLOG_CONFIG_I` | Link down, module down / online, `PLATFORM-2-PFM_SYSTEM_RESET` | Yes | Gap: `MOD_PWRDN` does not tell a CLI power-off apart; diagnostic failures (`MOD_DIAG_FAIL`) and the lower-case `XBAR_FAIL` forms are not built in. |
-| Cisco ASA | Interface flapping (`411002`), login failures (`113005`, `113015`, `605004`, `611102`) | `111008`, `111010` (not show commands) | Link down, `199001`, `199002` | Partial | Gap: ASA has no routing-neighbor rule here (OSPF / BGP on ASA log in other formats); FTD is not covered. |
-| Arista EOS | Interface flapping, OSPF and BGP neighbor down, power supply (`PWRMGMT-3-PSU_STATUS_FAILED` / `OK`, `INPUT_POWER_LOSS`), fan (`ENVMON-3-FANFAILED` / `FANOK`), login failures (`sshd` `Failed password for`) | `SYS-5-CONFIG_I` | Link down | Partial | Gap: reload messages; module (line card, supervisor) messages (the Arista System Message Guide could not be retrieved). |
-| Juniper Junos | Interface flapping, OSPF and BGP neighbor down, power supply and fan (`CHASSISD_SNMP_TRAP*`), module down (`CHASSISD_SNMP_TRAP*` `FRU removal` / `power off` / `failed` / `offline` of an FPC, PIC, RE, CB, SIB and other module FRUs, cleared by `FRU online`; not an operator's power off), login failures | `UI_COMMIT_COMPLETED` | Link down, module down / online, `UI_REBOOT_EVENT`, `SNMPD_TRAP_COLD_START` | Yes | Gap: chassisd's own FRU messages (`CHASSISD_FRU_*`) are not built in (their reference entries could not be retrieved); the trap forms cover the same events. |
-| Fortinet FortiOS | Interface down (`FGT-0100020099`), OSPF and BGP neighbor down (`FGT-0103020302`, `FGT-0103020300`), power supply (`FGT-0100022105`, `22114` / `22104`, `22115`), fan (`FGT-0100022108` / `22151`), login failures (`FGT-0100032002`) | `FGT-0100044544` to `FGT-0100044547` (path, object and attribute configured) | Link down, `FGT-0100032138` (Device rebooted), `FGT-0100032200` (Device shutdown), `FGT-0100032009` (FortiGate started) | Partial | `docs/syslog-rules.md`. Tagged `FGT-<logid>` from the key=value format (default or RFC 5424). Log ids from the FortiOS Log Message Reference (6.4 to 7.6), not yet checked against a live firewall. Gap: the reference gives no `msg` text, so the OSPF Down / Up and link-monitor wordings are unconfirmed; `20090` (Interface link status changed) is not built in; power supply and fan alerts are per firewall; no module / slot message was found in a reference, so the module down rule does not cover FortiOS. |
-| Palo Alto PAN-OS | Interface down (`link-change`), OSPF and BGP neighbor down (legacy routing engine `routed-OSPF-neighbor-down` / `-full`, `routed-BGP-peer-left-established` / `-enter-established`), power supply (`ps-failure`), fan (`fan-failure`), login failures (`auth-fail`) | A CONFIG log `commit` with result `Succeeded` (not candidate edits) | Link down | Partial | `docs/syslog-rules.md`. Tagged `PAN-SYSTEM-<event id>` / `PAN-CONFIG` / `PAN-<type>` from the default CSV format. Written from the PAN-OS syslog field descriptions and system log reference, not yet checked against a live firewall. Gap: Advanced Routing Engine events and reload / restart (the system log reference lists none), administrator logins not told apart from VPN / portal logins in `auth-fail`, custom log formats, module / slot events (none found in a reference; not covered by the module down rule). |
-| HPE Aruba AOS-CX | Interface down (`AOSCX-404`), OSPF neighbor down (`AOSCX-2401`, `AOSCX-2404`), BGP neighbor down (`AOSCX-2902` / `2901`), power supply (`AOSCX-304`), fan (`AOSCX-214`), login failures (`AOSCX-5210`, `AOSCX-5216`) | None | Link down, `AOSCX-706` / `707` (system reboot), `AOSCX-1206` / `1236` (module rebooted) | Partial | `docs/syslog-rules.md`. Tagged `AOSCX-<event id>` from the `Event\|<id>\|...` format. Ids from the AOS-CX 10.17 Event Log Message Reference. Gap: no configuration change event in the reference; power supply and fan faults have no documented recovery message (resolve after 24 hours); line / management module and VSF member down events are not built in (the event log reference could not be retrieved to confirm their ids and text). |
-| HPE Aruba AOS-Switch | Interface down (`AOSS-00077`), OSPF neighbor down (`AOSS-02703`), BGP neighbor down (`AOSS-03073` / `03072`, per switch), power supply (`AOSS-00071`, `AOSS-02797`), fan (`AOSS-00070`), login failures (`AOSS-00419`, `AOSS-03345`) | `AOSS-03125` (startup configuration saved) | Link down, `AOSS-00063` (SYSTEM went down), `AOSS-00066` (System Booted), `AOSS-00064` (crash reason) | Partial | `docs/syslog-rules.md`. Tagged `AOSS-<event id>` from the `<event id> <facility>:` format. Ids from the ArubaOS-Switch 16.09 Event Log Message Reference. Gap: an unsaved running configuration change logs nothing the reference lists; an administratively disabled port logs the same off-line message as a link failure; module and stack member down events are not built in (not confirmed in a retrievable reference). |
-| Netgear, APC (inventory) | None | None | None | No | Gap: their syslog formats have no built-in rule or trigger; custom rules only. APC UPS state changes arrive as SNMP traps instead (row above). |
+| Cisco IOS / IOS XE | Interface flapping, OSPF and BGP neighbor down, power supply and fan (IOS XE `IOSXE_PEM`, Catalyst 9000 `PLATFORM_FEP` and `PLATFORM_THERMAL` `FRU_FAN_FAILURE` / `FRU_FAN_RECOVERY`), module down (IOS XE `IOSXE_OIR` / `SPA_OIR` card and SPA offline / removed, cleared by `ONLINECARD`; Catalyst 3750 / 2975 `STACKMGR-4-SWITCH_REMOVED` / `SWITCH_READY`; Catalyst 6500 `C6KPWR-SP-4-DISABLED`; Catalyst 4500 `C4K_IOSMODPORTMAN` `MODULEREMOVED` / `MODULEOFFLINE`, cleared by `MODULEONLINE`), temperature (`ENVIRONMENTAL-1-ALERT` Temp sensors, Catalyst 9000 `PLATFORM_THERMAL`, classic `HARDWARE-*-THERMAL_*`, `ENVMON` overtemp, Catalyst 4500 `C4K_IOSMODPORTMAN` temp, each cleared by its normal form), HA switchover (`REDUNDANCY-3-SWITCHOVER` / `STANDBY_LOST`, classic stack `STACKMGR-4-MASTER_ELECTED`), device restarted (the reload / restart forms), login failures | `SYS-5-CONFIG_I` | Link down, module down / online, `SYS-5-RELOAD`, `SYS-5-RESTART`, `SYS-6-BOOTTIME` | Yes | Classic Catalyst fans (`HARDWARE-2-FAN_ERROR`, 3750-X `PLATFORM_ENV-1-FAN` / `FRU_PS_FAN_FAILED`), 3750-X power supply signal (`PLATFORM_ENV-1-FRU_PS_SIGNAL_FAULTY`) and ISR G2 fans (`ENVMON-3-FAN_FAIL` / `FAN_OK`) are built in. Gap: ISR G2 power supply messages (no ISR G2 guide retrievable; the Catalyst guide's `ENVMON-*-POWER_*` forms have a bare text that does not tell failure from recovery); Catalyst 9000 stack member and new active messages (`STACKMGR` is not in the IOS XE system message guides; the classic removed form matches the IOS XE text seen in community logs, unconfirmed); the Catalyst 6500 module power-off has no documented recovery or admin form (resolves after 24 hours). |
+| Cisco IOS XR | Interface flapping, OSPF and BGP neighbor down, power supply (`PLATFORM-PWR_MGMT` / `PWRMON` `MODULE_FAILURE`, `PLATFORM-ENVMON` `POWERSUPPLY_NONOP` / `_CLEAR`), fan (`PLATFORM-ENVMON` `FAN_FAIL` / `FANTRAY_FAIL` and their `_CLEAR`), module down (`INVMGR` / `OIRD` `OIROUT`, `SHELFMGR` node reset, shutdown and failed-load forms), temperature (`PLATFORM-ENVMON` `CHASSIS_OVERTEMP` / `CARD_OVERTEMP` and `_CLEAR`), HA switchover (`HA-REDCON-6-GO_ACTIVE`, `STANDBY_CONNECTION_DOWN`, `PLATFORM-REDDRV` `GO_ACTIVE` / `ROLE_CHANGE` to active), device restarted, login failures | `MGBL-CONFIG-6-DB_COMMIT` | Link down, module down, `INSTALL-INSTMGR-4-CALLING_PLATFORM_RELOAD_NODES_ALL`, `PLATFORM-SHELFMGR-6-SYSTEM_COLD_START` | Yes | Forms from the IOS XR System Error Message Reference 5.1.1 (32-bit IOS XR). Gap: the 64-bit IOS XR / XR7 message sets were not retrieved; no recovery message for a module (node state values undocumented, resolves after 24 hours); no reload command message in the reference. |
+| Cisco NX-OS | Interface flapping, OSPF and BGP neighbor down, power supply, fan, module down (`MODULE-2-MOD_FAIL` / `MOD_FAILURE` / `MOD_NOT_ALIVE`, `PLATFORM-2-MOD_REMOVE` / `MOD_PWRDN` / `MOD_PWRFAIL` / `MOD_PWRDENY`, fabric `XBAR_REMOVE` / `XBAR_PWRDN` / `XBAR_PWRFAIL`, cleared by `MODULE-5-MOD_OK`, `ACTIVE_SUP_OK` / `STANDBY_SUP_OK`, `XBAR_OK`), temperature (`PLATFORM` `MOD_TEMPMAJALRM` / `MINALRM` / `WARMALRM` / `SHUTDOWN`, `SYS_SHUTDOWN`, cleared by `MOD_TEMPOK` / `MOD_TEMPMAJOR_OK`), HA switchover (`SYSMGR` switchover, standby boot and redundancy heartbeat forms), device restarted, login failures | `VSHD-5-VSHD_SYSLOG_CONFIG_I` | Link down, module down / online, `PLATFORM-2-PFM_SYSTEM_RESET` | Yes | Gap: `MOD_PWRDN` does not tell a CLI power-off apart; diagnostic failures (`MOD_DIAG_FAIL`) and the lower-case `XBAR_FAIL` forms are not built in. |
+| Cisco ASA | Interface flapping (`411002`), power supply (`735004`, `735006` redundancy lost, cleared by `735003` / `735005`), fan (`735002`, `735012` power supply fan, cleared by `735001` / `735011`), temperature (`735007` / `735008` / `735015` / `735016` / `735018` / `735019` and the thermal shutdowns, cleared by `735017` / `735020` / `735021` / `735026`), HA failover (`104001` to `104003`, `104500` / `104501`, `103001`, `103004`, `105005`, `105011`, `105032`, `105043`, `105037`), device restarted (`199001`, `199002`), login failures (`113005`, `113015`, `605004`, `611102`) | `111008`, `111010` (not show commands) | Link down, `199001`, `199002` | Partial | Gap: ASA has no routing-neighbor rule here (OSPF / BGP on ASA log in other formats); failover alerts are per firewall and resolve by time (the polled failover state is the backstop); cluster (`747xxx`) messages are not built in. |
+| Cisco FTD | The ASA forms under `%FTD-<level>-<id>` (6.3 on): interface flapping (`411002`, FTD's `Interface ..., changed state to down` wording), power supply, fan, temperature, HA failover, device restarted, login failures (`113005`, `113015`, `611102`; `605004` is not in the FTD guide) | `111008`, `111010` (not show commands) | Link down, `199001`, `199002` | Partial | `docs/syslog-rules.md`. Ids from the Cisco Secure Firewall Threat Defense Syslog Messages guide; no parser change (the `%FTD-` tag is read like `%ASA-`). Gap: as ASA; FTD-managed devices also report through FMC, which sends no syslog to Plexus. |
+| Arista EOS | Interface flapping, OSPF and BGP neighbor down, power supply (`PWRMGMT-3-PSU_STATUS_FAILED` / `OK`, `INPUT_POWER_LOSS`), fan (`ENVMON-3-FANFAILED` / `FANOK`), module down (`HARDWARE` `CARD_LOST_POWER` / `CARD_LOST_COMMUNICATION` / `CARD_FAIL_TO_POWER_ON`, `FRU` `CARD_REMOVED` / `CARD_FAILURE`, cleared by `CARD_POWERED_ON`), temperature (`ENVMON` card, power supply and system overheat forms, cleared by their temperature-normal forms), HA switchover (`REDUNDANCY` switchover and disabled forms, MLAG inactive / peer link down, cleared by MLAG active), device restarted (`SYS-5-SYSTEM_RESTARTED`, `KERNEL_PANIC`, `WATCHDOG_ERROR`), login failures (`sshd` `Failed password for`) | `SYS-5-CONFIG_I` | Link down, module down / online, `SYS-5-SYSTEM_RESTARTED` and the reboot-reason forms | Partial | Gap: the forms come from the EOS System Message Guide 4.12.10 (2015), the only one retrievable; newer releases are unconfirmed; no message before a reload was found, only the restart after it. |
+| Juniper Junos | Interface flapping, OSPF and BGP neighbor down, power supply and fan (`CHASSISD_SNMP_TRAP*`), module down (`CHASSISD_SNMP_TRAP*` `FRU removal` / `power off` / `failed` / `offline` of an FPC, PIC, RE, CB, SIB and other module FRUs, cleared by `FRU online`; not an operator's power off), temperature (`CHASSISD` over-temperature, FRU and Routing Engine temperature forms, `CHASSISD_SNMP_TRAP*` `Over Temperature` / `Temperature back to normal`), HA switchover (`CHASSISD_LOST_MASTERSHIP`, `UI_MASTERSHIP_EVENT`, `JSRPD` redundancy group, SRG, control / fabric link and split brain forms), device restarted, login failures | `UI_COMMIT_COMPLETED` | Link down, module down / online, `UI_REBOOT_EVENT`, `SNMPD_TRAP_COLD_START`, `SNMPD_TRAP_WARM_START` | Yes | Gap: chassisd's own FRU messages (`CHASSISD_FRU_*`) are not built in (their reference entries could not be retrieved); the trap forms cover the same events. |
+| Fortinet FortiOS | Interface down (`FGT-0100020099`), OSPF and BGP neighbor down (`FGT-0103020302`, `FGT-0103020300`), power supply (`FGT-0100022105`, `22114` / `22104`, `22115`), fan (`FGT-0100022108` / `22151`), module down (`FGT-0100022111` / `22112`, FPC down / up due to a PSU action), temperature (`FGT-0100022109` / `22152`, cleared by `22153`), HA (`FGT-0108037892`, `37893`, `37898`, `37901`, `35013`, `35016`), device restarted, login failures (`FGT-0100032002`) | `FGT-0100044544` to `FGT-0100044547` (path, object and attribute configured) | Link down, `FGT-0100032138` (Device rebooted), `FGT-0100032200` (Device shutdown), `FGT-0100032545` (Scheduled daily reboot started), `FGT-0100032009` (FortiGate started) | Partial | `docs/syslog-rules.md`. Tagged `FGT-<logid>` from the key=value format (default or RFC 5424). Log ids from the FortiOS Log Message Reference (6.4 to 7.6), not yet checked against a live firewall. Gap: the reference gives no `msg` text, so the OSPF Down / Up and link-monitor wordings are unconfirmed; `20090` (Interface link status changed) is not built in; power supply, fan, temperature and HA alerts are per firewall; the module forms cover only FortiGate 6000 / 7000 FPCs. |
+| Palo Alto PAN-OS | Interface down (`link-change`), OSPF and BGP neighbor down (legacy routing engine `routed-OSPF-neighbor-down` / `-full`, `routed-BGP-peer-left-established` / `-enter-established`), power supply (`ps-failure`), fan (`fan-failure`), HA (`state-change` `HA Group <n>: Moved from state ...`, from a Palo Alto knowledge base example), login failures (`auth-fail`) | A CONFIG log `commit` with result `Succeeded` (not candidate edits) | Link down | Partial | `docs/syslog-rules.md`. Tagged `PAN-SYSTEM-<event id>` / `PAN-CONFIG` / `PAN-<type>` from the default CSV format. Written from the PAN-OS syslog field descriptions and system log reference, not yet checked against a live firewall. Gap: Advanced Routing Engine events and reload / restart (the system log reference lists none), administrator logins not told apart from VPN / portal logins in `auth-fail`, custom log formats, module / slot and temperature events (the reference has only messages without an event id for them). |
+| HPE Aruba AOS-CX | Interface down (`AOSCX-404`), OSPF neighbor down (`AOSCX-2401`, `AOSCX-2404`), BGP neighbor down (`AOSCX-2902` / `2901`), power supply (`AOSCX-304`), fan (`AOSCX-214`), module down (`AOSCX-3202` removed, `3207` failed, VSF `9913` lost member), temperature (`AOSCX-803`), HA (VSX `AOSCX-7001` ISL down, `7005` keepalive failed), device restarted, login failures (`AOSCX-5210`, `AOSCX-5216`) | None | Link down, module down, `AOSCX-706` / `707` (system reboot), `AOSCX-1206` / `1236` (module rebooted) | Partial | `docs/syslog-rules.md`. Tagged `AOSCX-<event id>` from the `Event\|<id>\|...` format. Ids from the AOS-CX 10.17 Event Log Message Reference; the module, VSF, VSX and temperature forms from search excerpts of the 10.13 to 10.15 references (the pages refuse automated reading). Gap: no configuration change event in the reference; power supply, fan, module, temperature and VSX faults have no recovery message with known text (resolve after 24 hours / 60 minutes). |
+| HPE Aruba AOS-Switch | Interface down (`AOSS-00077`), OSPF neighbor down (`AOSS-02703`), BGP neighbor down (`AOSS-03073` / `03072`, per switch), power supply (`AOSS-00071`, `AOSS-02797`), fan (`AOSS-00070`), module down (`AOSS-00402` stack member lost), temperature (`AOSS-00424` over-temperature, 16.10), HA (`AOSS-03278` commander elected), device restarted, login failures (`AOSS-00419`, `AOSS-03345`) | `AOSS-03125` (startup configuration saved) | Link down, module down, `AOSS-00063` (SYSTEM went down), `AOSS-00066` (System Booted), `AOSS-00064` (crash reason) | Partial | `docs/syslog-rules.md`. Tagged `AOSS-<event id>` from the `<event id> <facility>:` format. Ids from the ArubaOS-Switch 16.09 Event Log Message Reference; the stack, commander and temperature forms from search excerpts of the 16.10 / 16.11 references. Gap: an unsaved running configuration change logs nothing the reference lists; an administratively disabled port logs the same off-line message as a link failure; slot module events and the temperature-normal message were not retrieved with their text; ids differ between 16.08 and 16.10. |
+| Netgear, APC (inventory) | None | None | None | No | Gap: their syslog formats have no built-in rule or trigger; custom rules only. Netgear publishes no log message reference; APC documents event texts (`UPS: On battery due to an input power problem`, `System: Coldstart`) but not the syslog line that carries them. APC UPS state changes arrive as SNMP traps instead (row above). |
 | OPNsense (topology source; inventory host or not) | Login failures (`audit` `could not authenticate for`: web GUI, SSH) | Re-collection of the source (`config-event: new_config`, `changed configuration to`): config.xml backup and drift | Re-collection of the source on a gateway alarm, CARP transition or VPN up / down (the availability tracker raises the alerts) | Yes | `docs/opnsense-topology.md#syslog`, `docs/syslog-rules.md`. Matched by program (RFC 5424 APP-NAME / RFC 3164 tag); no other built-in alert, so gateway, tunnel and CARP alerts are not duplicated. Gap: WireGuard and IPsec phase 2 establishment. |
 | Cato, AWS, Azure, GCP, Cisco Meraki, Cisco FMC, Panorama, Appgate (API-collected) | Not applicable | Not applicable | Not applicable | No | API-polled platforms send no syslog to Plexus; their state comes from the scheduled collections (and Meraki's alert feed above). |
+
+#### Syslog event rule packs
+
+The layer 2, routing / tunnel neighbor and device health rules
+(`docs/syslog-rules.md#event-rule-packs`), raised and resolved on the
+server like the rules above.
+
+| Vendor / platform | Layer 2 | Routing and tunnel neighbors | Device health | Status | Gaps |
+|---|---|---|---|---|---|
+| Cisco IOS / IOS XE | STP root change, topology changes (5 in 10 min), root / loop guard and Bridge Assurance blocking, err-disabled port (every cause: BPDU guard, UDLD, port security, storm control ...), port security violation, traffic storm, MAC flapping (3 in 10 min), CDP duplex mismatch | HSRP failover, EIGRP neighbor down, IS-IS adjacency down, IPsec (crypto session) down, IP SLA tracked probe down | PoE fault, optic Rx / Tx power threshold, RADIUS server dead, NTP sync lost, Smart Licensing expiry, PKI certificate expiry / renewal failure, memory allocation failure and crash | Partial | TACACS+ dead (no form in the guide), tracebacks (appended to other messages), a confirmed RADIUS alive text on IOS XE 17; checked against invented samples only. |
+| Cisco NX-OS | None | EIGRP neighbor down, IS-IS adjacency down | Service crash (`SYSMGR-2-SERVICE_CRASHED`) | Partial | Gap: layer 2, HSRP, IP SLA, PoE, optics, AAA, NTP, license and certificate messages (not confirmed in the NX-OS references read). |
+| Cisco IOS XR, ASA / FTD | None | None | None | No | Gap: no message reference for these events was retrieved. |
+| Juniper Junos, Arista EOS, HPE Aruba AOS-CX / AOS-Switch | None | None | None | No | Gap: the system log references could not be retrieved; custom rules work on their messages. |
+| Fortinet FortiOS | None | None (IPsec through the `fgTrapVpnTunDown` / `Up` traps) | None | No | Gap: log id `37138` (IPsec connection status changed) documents no values for its `action` field. |
+| Palo Alto PAN-OS | None | None | None | No | Gap: no IPsec tunnel or Advanced Routing Engine event id in the system log reference. |
 
 ### SNMP traps (inventory hosts)
 
@@ -417,23 +550,30 @@ from the vendors' MIB texts) and stored with its name and decoded varbinds
 (Monitoring > Events). A trap from an inventory host that carries the
 host's stored community (SNMPv3: passes those checks; one that fails them
 is dropped and counted as `trap_dropped_v3`) is matched on the server against the built-in
-trap rules (`netcontrol/trap_rules.py`, the syslog rule engine with a
-second source), raised and resolved into `monitoring_alerts` and the
-notification channels as their own family (type `trap`, metric
-`trap_<rule>`: independent of the syslog and polled alerts), starts the
-syslog config backup and drift trigger (same debounce and cooldown) and
-re-polls the host on a state change. A trap from a source admitted only by
-an extra network or the `any` policy is stored, never acted on. Gap:
-SNMPv3 informs are stored undecoded and not answered (Plexus is not an
-SNMPv3 authoritative engine). See `docs/snmp-traps.md`. None of the
+trap rules and the operator's custom trap rules (by trap OID, OID prefix or
+name, with varbind conditions, an instance varbind and a clearing trap;
+unnamed traps included) (`netcontrol/trap_rules.py`, the syslog rule
+engine with a second source), raised and resolved into `monitoring_alerts`
+and the notification channels as their own family (type `trap`, metric
+`trap_<rule>` / `trap_custom_<id>`: independent of the syslog and polled
+alerts), starts the syslog config backup and drift trigger (same debounce
+and cooldown) and re-polls the host on a state change. A Cisco
+`clogMessageGenerated` trap is also run through the syslog rules and
+triggers as the syslog line it carries (syslog alerts, the syslog dedup
+key). The threshold counters are rebuilt from the stored traps at startup
+(SNMPv1 / v2c only). A trap from a source admitted only by
+an extra network or the `any` policy is stored, never acted on. SNMPv3
+informs from inventory hosts are authenticated against the trap receiver's
+own SNMPv3 engine and answered (engine ID discovery, time window Report,
+Response); not yet checked against a live device. See `docs/snmp-traps.md`. None of the
 forms below has been run against a live device: the samples in
 `tests/test_snmp_traps.py` are built from the MIB definitions.
 
 | Vendor / platform | Traps named (MIB) | Built-in alert rules | Config change trigger | Re-poll trigger | Status | Gaps |
 |---|---|---|---|---|---|---|
 | Every platform (standard MIBs) | SNMPv2-MIB `coldStart`, `warmStart`, `authenticationFailure`; IF-MIB `linkDown` / `linkUp`; ENTITY-MIB `entConfigChange`; ENTITY-STATE-MIB; BGP4-MIB; OSPF-TRAP-MIB neighbor / interface state, errors; BRIDGE-MIB `newRoot` / `topologyChange`; VRRP-MIB, VRRPV3-MIB; RMON-MIB alarms | Interface down, BGP and OSPF neighbor down, VRRP master change (HA), device or agent restarted, SNMP authentication failures (5 within 5 min, one alert per device) | None | Link down, BGP / OSPF state, restart | Yes | ENTITY-STATE-MIB and ENTITY-MIB traps are named but raise nothing (no entity class in the varbinds). |
-| Cisco IOS / IOS XE / IOS XR / NX-OS | CISCO-ENTITY-FRU-CONTROL-MIB (module status, FRU inserted / removed, power status, fan tray), CISCO-ENVMON-MIB (supply, fan, temperature, voltage, shutdown), CISCO-CONFIG-MAN-MIB, CISCO-STACKWISE-MIB, CISCO-RF-MIB, CISCO-BGP4-MIB (`cbgp*`, `cbgpPeer2*`), CISCO-ENTITY-SENSOR-MIB, CISCO-SYSLOG-MIB `clogMessageGenerated` | Module down, power supply, fan, temperature, BGP neighbor down, HA switchover (`ciscoRFSwactNotif`, `cswStackNewMaster`), plus the standard rules | `ciscoConfigManEvent` (destination running), `ccmCLIRunningConfigChanged` | Module, power, fan, temperature, BGP, switchover | Yes | `cefcPowerStatusChange`, voltage and `entSensorThreshold*` (no sensor type in the varbinds) are named only; `clogMessageGenerated` is stored, its syslog text not run through the syslog rules. |
-| Cisco ASA / FTD | The standard and Cisco MIB traps above that the platform sends | As above | As above | As above | Partial | Gap: no ASA failover notification in the Cisco MIBs retrieved (CISCO-FIREWALL-MIB has none); failover reaches Plexus as syslog. |
+| Cisco IOS / IOS XE / IOS XR / NX-OS | CISCO-ENTITY-FRU-CONTROL-MIB (module status, FRU inserted / removed, power status, fan tray), CISCO-ENVMON-MIB (supply, fan, temperature, voltage, shutdown), CISCO-CONFIG-MAN-MIB, CISCO-STACKWISE-MIB, CISCO-RF-MIB, CISCO-BGP4-MIB (`cbgp*`, `cbgpPeer2*`), CISCO-ENTITY-SENSOR-MIB, CISCO-SYSLOG-MIB `clogMessageGenerated` | Module down, power supply, fan, temperature, BGP neighbor down, HA switchover (`ciscoRFSwactNotif`, `cswStackNewMaster`), plus the standard rules | `ciscoConfigManEvent` (destination running), `ccmCLIRunningConfigChanged` | Module, power, fan, temperature, BGP, switchover | Yes | `cefcPowerStatusChange`, voltage and `entSensorThreshold*` (no sensor type in the varbinds) are named only. `clogMessageGenerated` goes through the syslog rules and triggers as the syslog line it carries (`%FACILITY-SEVERITY-MNEMONIC: text`, built from the CISCO-SYSLOG-MIB definitions, not checked against a live device). |
+| Cisco ASA / FTD | The standard and Cisco MIB traps above that the platform sends | As above | As above | As above | Partial | Gap: no ASA failover notification in the Cisco MIBs retrieved (CISCO-FIREWALL-MIB has none); failover reaches Plexus as syslog, and the poll reads the failover state ([HA and redundancy state](#ha-and-redundancy-state)). |
 | Juniper Junos | JUNIPER-MIB chassis traps and their OK forms (power supply, input, fan, temperature, FRU removal / insertion / power / failed / offline / online / check, redundancy switchover, hard disk, dying gasp), BGP4-V2-MIB-JUNIPER, JUNIPER-CFGMGMT-MIB, JUNIPER-CHASSIS-CLUSTER-MIB switchover, JUNIPER-VIRTUALCHASSIS-MIB member / port | Power supply, fan, temperature, module down (module FRU types; operator offline left out; Virtual Chassis member), BGP neighbor down, HA switchover, device restarted (dying gasp) | `jnxCmCfgChange` | Module, power, fan, temperature, BGP, switchover, reload | Yes | A v1 trap of a `jnxChassisTraps` notification arrives as `enterprise.0.specific` and is matched to its notification. |
 | Arista EOS | ARISTA-BGP4V2-MIB, ARISTA-ENTITY-SENSOR-MIB `aristaEntSensorAlarm`, and the standard MIBs | BGP neighbor down, plus the standard rules | None | BGP and the standard ones | Partial | `aristaEntSensorAlarm` is named only (no sensor type in the varbinds); no configuration change trap in the MIBs retrieved. |
 | Fortinet FortiOS | FORTINET-CORE-MIB (`fnTrap*`: CPU, memory, log disk, temperature, voltage, power supply, fan, IP change), FORTINET-FORTIGATE-MIB (`fgTrap*`: VPN tunnel, HA switch / state / heartbeat / member, FortiAnalyzer, per-CPU, load balancer, FortiSwitch, AP; `fgFmTrapConfChange`) | Fan (per device), temperature (per device), HA switchover and member down / up | `fgFmTrapConfChange` | Fan, temperature, HA | Partial | `fnTrapPowerSupply` reports a failure or a restore with the same OID and an undocumented message text: named only. Fan and temperature have no OK trap (resolve after 24 h). |
@@ -445,6 +585,18 @@ forms below has been run against a live device: the samples in
 | OPNsense | NET-SNMP-AGENT-MIB `nsNotifyStart` / `Shutdown` / `Restart`, UCD-SNMP-MIB `ucdStart` / `ucdShutdown`, and the standard MIBs | Device or agent restarted, plus the standard rules | None | Restart | Partial | The OPNsense re-collect trigger reacts to syslog only. |
 | APC UPS | PowerNet-MIB (its own handler, [apc-ups.md](apc-ups.md#snmp-traps)) | The UPS alerts, under the poll's keys | Not applicable | Yes | Yes | PowerNet-MIB traps are not part of the trap registry or the trap rules; the card's standard traps (`coldStart` ...) are. |
 | Cato, AWS, Azure, GCP, Cisco Meraki, Cisco FMC, Panorama, Appgate (API-collected) | Not applicable | Not applicable | Not applicable | Not applicable | No | API-polled platforms send no traps to Plexus. |
+
+#### Trap event rule packs
+
+The trap side of the event rule packs (`docs/snmp-traps.md#built-in-rules`).
+
+| Vendor / platform | Traps with a rule | Status | Gaps |
+|---|---|---|---|
+| Every platform (standard MIBs) | BRIDGE-MIB `newRoot` (root change) and `topologyChange` (5 in 10 min), per device; POWER-ETHERNET-MIB `pethPsePortOnOffNotification` (PoE fault / delivering power); ISIS-MIB `isisAdjacencyChange` (down / failed, cleared by up) | Yes | BRIDGE-MIB names no VLAN; a PoE port is named by its PSE group and port index. |
+| Cisco IOS / IOS XE / NX-OS | CISCO-ERR-DISABLE-MIB (err-disabled port), CISCO-PORT-SECURITY-MIB (violation), CISCO-MAC-NOTIFICATION-MIB `cmnMacMoveNotification` (3 in 10 min per VLAN), CISCO-HSRP-MIB `cHsrpStateChange`, CISCO-EIGRP-MIB `cEigrpNbrDownEvent`, CISCO-IETF-ISIS-MIB `ciiAdjacencyChange`, CISCO-IPSEC-FLOW-MONITOR-MIB `cikeTunnelStop` / `Start`, CISCO-RTTMON-MIB `rttMonNotification` (timeout, connection loss, verify error) | Partial | EIGRP has no up trap (24 h auto-resolve); IPsec SA traps are not used (one per rekey); no trap rule for optics, AAA, NTP, license, certificate or crash (syslog only). |
+| Fortinet FortiOS | `fgTrapVpnTunDown` / `fgTrapVpnTunUp` (IPsec tunnel) | Partial | Layer 2 and the other events have no FortiGate trap with a rule. |
+| Netgear | `stpInstanceNewRootTrap`, `stpInstanceTopologyChangeTrap` (per MST instance) | Partial | Other layer 2 traps are not named. |
+| Juniper Junos, Arista EOS, HPE Aruba, Palo Alto PAN-OS | The standard MIB traps above | Partial | Their vendor MIBs were not searched for layer 2, IS-IS, VPN or PoE notifications. |
 
 ### Security events (IDS / IPS)
 
@@ -512,3 +664,17 @@ Monitoring > Security (`GET /api/monitoring/security-events`).
    from the vendors' API references and sample answers; each page lists
    what was not checked against a live organization, account or
    subscription.
+10. Polled routing and optics gaps: IPsec tunnels on Cisco
+    (CISCO-IPSEC-FLOW-MONITOR-MIB lists active tunnels only, so a failed
+    tunnel looks like an idle one; needs the configured peers, from the
+    configuration or a crypto MIB with a configured-tunnel table), OSPFv3
+    neighbors, optics on FortiOS, AOS-CX and Netgear (no light-level table
+    in the MIBs retrieved), Juniper multi-lane optic alarms
+    (`jnxDomCurrentLaneTable`), and the PoE port of an interface (not in
+    POWER-ETHERNET-MIB).
+11. Event rule packs beyond Cisco: layer 2, routing / tunnel neighbor and
+    device health syslog rules for NX-OS (beyond EIGRP, IS-IS and service
+    crashes), IOS XR, ASA / FTD, Juniper, Arista, HPE Aruba, FortiOS and
+    PAN-OS, which need each vendor's system log reference; the matching
+    vendor trap MIBs (Juniper, Arista, HPE Aruba, PAN-OS). See the Known
+    gaps of `docs/syslog-rules.md` and `docs/snmp-traps.md`.

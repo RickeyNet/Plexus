@@ -12,7 +12,8 @@ acts on it:
   backup and drift check of that host, instead of waiting for the backup
   schedule.
 - **Faster down detection**: an interface-down, module down or back
-  online, reload or restart message starts a monitoring poll of that host
+  online, reload, restart, temperature or HA switchover message starts a
+  monitoring poll of that host
   within seconds, instead of waiting for the next poll.
 
 An OPNsense firewall's messages also act when it is no inventory host: a
@@ -21,8 +22,11 @@ starts a collection of the firewall's topology source within seconds (see
 [OPNsense re-collect trigger](#opnsense-re-collect-trigger)).
 
 The rules are set up under **Monitoring > Configure > Syslog Rules**. The
-same engine runs the built-in SNMP trap rules, listed in that tab below the
-syslog rules, as their own alert family: see [SNMP Traps](snmp-traps.md).
+same engine runs the SNMP trap rules (built-in and custom), listed in that
+tab below the syslog rules, as their own alert family: see
+[SNMP Traps](snmp-traps.md). A Cisco syslog message sent as an SNMP trap
+goes through the syslog rules too (see
+[below](#cisco-syslog-messages-sent-as-snmp-traps)).
 
 ## How a message becomes an alert
 
@@ -85,13 +89,16 @@ severity; the patterns, threshold and auto-resolve time are fixed.
 
 | Rule (metric) | Raised by | Resolved by | Threshold | Auto-resolve | Severity | Device families |
 |---|---|---|---|---|---|---|
-| Interface flapping (`syslog_link_flap`) | An interface going down: `LINK-3-UPDOWN` and `LINEPROTO-5-UPDOWN` ... `changed state to down`, IOS XR `PKT_INFRA-LINK-3-UPDOWN` / `PKT_INFRA-LINEPROTO-5-UPDOWN`, ASA `411002`, NX-OS `ETHPORT-5-IF_DOWN_LINK_FAILURE` / `IF_DOWN_ERROR_DISABLED` / `IF_DOWN_PORT_CHANNEL_MEMBERS_DOWN`, Junos `SNMP_TRAP_LINK_DOWN` with `ifAdminStatus up`, FortiOS `FGT-0100020099` (Interface status changed) `Interface <name> was turned down`, PAN-OS `link-change` `<port>: Down ...`, AOS-CX `AOSCX-404` `Link status for interface <name> is down`, AOS-Switch `AOSS-00077` `port <name> is now off-line` | Time only | 3 within 10 min, per interface | 30 min | warning | Cisco IOS / IOS XE, IOS XR, NX-OS, ASA, Arista EOS, Juniper Junos, Fortinet FortiOS, Palo Alto PAN-OS, HPE Aruba AOS-CX, AOS-Switch |
+| Interface flapping (`syslog_link_flap`) | An interface going down: `LINK-3-UPDOWN` and `LINEPROTO-5-UPDOWN` ... `changed state to down`, IOS XR `PKT_INFRA-LINK-3-UPDOWN` / `PKT_INFRA-LINEPROTO-5-UPDOWN`, ASA and FTD `411002`, NX-OS `ETHPORT-5-IF_DOWN_LINK_FAILURE` / `IF_DOWN_ERROR_DISABLED` / `IF_DOWN_PORT_CHANNEL_MEMBERS_DOWN`, Junos `SNMP_TRAP_LINK_DOWN` with `ifAdminStatus up`, FortiOS `FGT-0100020099` (Interface status changed) `Interface <name> was turned down`, PAN-OS `link-change` `<port>: Down ...`, AOS-CX `AOSCX-404` `Link status for interface <name> is down`, AOS-Switch `AOSS-00077` `port <name> is now off-line` | Time only | 3 within 10 min, per interface | 30 min | warning | Cisco IOS / IOS XE, IOS XR, NX-OS, ASA, FTD, Arista EOS, Juniper Junos, Fortinet FortiOS, Palo Alto PAN-OS, HPE Aruba AOS-CX, AOS-Switch |
 | OSPF neighbor down (`syslog_ospf_neighbor`) | `OSPF-5-ADJCHG` / `OSPFv3-5-ADJCHG` / IOS XR `ROUTING-OSPF-5-ADJCHG` ... `to DOWN`, NX-OS `OSPF-5-NBRSTATE` ... `to DOWN` and `OSPF-5-ADJCHANGE` ... `went DOWN`, EOS `OSPF-4-OSPF_ADJACENCY_TEARDOWN`, Junos `RPD_OSPF_NBRDOWN`, FortiOS `FGT-0103020302` (OSPF neighbor status changed) `ADJCHANGE: neighbor <if:local-remote> Down`, PAN-OS `routed-OSPF-neighbor-down` (one alert per firewall: the message names no neighbor), AOS-CX `AOSCX-2401` / `AOSCX-2404` `AdjChg: Nbr <router-id> on <interface>...: <state> -> Down`, AOS-Switch `AOSS-02703` `ADJCHG: Neighbor with Router ID <id> on <interface> moved to <state> state - adj lost` | The same tags ... `to FULL` / `went FULL`, EOS `OSPF_ADJACENCY_ESTABLISHED`, Junos `RPD_OSPF_NBRUP`, FortiOS `... neighbor <if:local-remote> Up`, PAN-OS `routed-OSPF-neighbor-full`, AOS-CX `... -> Full`, AOS-Switch `... - adj formed` | Every match, per neighbor | Clear message only | critical | Cisco IOS / IOS XE, IOS XR, NX-OS, Arista EOS, Juniper Junos, Fortinet FortiOS, Palo Alto PAN-OS, HPE Aruba AOS-CX, AOS-Switch |
 | BGP neighbor down (`syslog_bgp_neighbor`) | `BGP-5-ADJCHANGE` / IOS XR `ROUTING-BGP-5-ADJCHANGE` / FortiOS `FGT-0103020300` (BGP neighbor status changed) `neighbor X Down`, `BGP-5-NBR_RESET`, EOS `BGP-5-ADJCHANGE` `old state Established ... new state` other than Established, Junos `RPD_BGP_NEIGHBOR_STATE_CHANGED` `from Established to` another state, PAN-OS `routed-BGP-peer-left-established`, AOS-CX `AOSCX-2902` `<peer>: Peer down. ...`, AOS-Switch `AOSS-03073` `BGP: Peer down` (one alert per switch: the message names no peer) | `neighbor X Up`, EOS `new state Established`, Junos `to Established`, PAN-OS `routed-BGP-peer-enter-established`, AOS-CX `AOSCX-2901` `<peer>: Peer up. ...`, AOS-Switch `AOSS-03072` `BGP: Peer up` | Every match, per neighbor | Clear message only | critical | Cisco IOS / IOS XE, IOS XR, NX-OS, Arista EOS, Juniper Junos, Fortinet FortiOS, Palo Alto PAN-OS, HPE Aruba AOS-CX, AOS-Switch |
-| Power supply fault (`syslog_power_supply`) | IOS XE `IOSXE_PEM-3-PEMFAIL`, Catalyst 9000 `PLATFORM_FEP-1-FRU_PS_SIGNAL_FAULTY`, Catalyst 3750-X / 3560-X `PLATFORM_ENV-1-FRU_PS_SIGNAL_FAULTY`, NX-OS `PLATFORM-2-PS_FAIL`, EOS `PWRMGMT-3-PSU_STATUS_FAILED` and `PWRMGMT-4-INPUT_POWER_LOSS`, Junos `CHASSISD_SNMP_TRAP*` `Power Supply failed`, FortiOS `FGT-0100022105` (Power supply failed) and `FGT-0100022114` (Power supply failed warning), PAN-OS `ps-failure` `Alarm on Power Supply #<n>`, AOS-CX `AOSCX-304` `PSU <name> faulted`, AOS-Switch `AOSS-00071` `Power Supply failure: Supply: <Main or RPS>- ...` and `AOSS-02797` `Internal power supply <bay> is faulted` | `IOSXE_PEM-6-PEMOK`, `PLATFORM_FEP-6-FRU_PS_SIGNAL_OK`, `PLATFORM-2-PS_OK`, EOS `PWRMGMT-3-PSU_STATUS_OK`, Junos `Power Supply OK`, FortiOS `FGT-0100022104` (Power supply restored) and `FGT-0100022115` (Power supply restored notification), AOS-Switch `Power Supply OK: ...` and `Internal power supply <bay> is ok`; PAN-OS and AOS-CX by time only | Every match, per power supply (FortiOS and 3750-X: per device) | 24 h | critical | Cisco IOS XE (ASR 1000, ISR 4000, Catalyst 9000), Catalyst 3750-X / 3560-X, NX-OS, Arista EOS, Juniper Junos, Fortinet FortiOS, Palo Alto PAN-OS, HPE Aruba AOS-CX, AOS-Switch |
-| Fan fault (`syslog_fan`) | IOS XE `IOSXE_PEM-3-FANFAIL`, Catalyst 2960 / 3560 / 3750 `HARDWARE-2-FAN_ERROR`, Catalyst 3750-X / 3560-X `PLATFORM_ENV-1-FAN` and `PLATFORM_ENV-1-FRU_PS_FAN_FAILED`, ISR G2 `ENVMON-3-FAN_FAIL` (older ISRs `FAN_FAILED`), NX-OS `PLATFORM-2-FANMOD_FAN_FAIL`, EOS `ENVMON-3-FANFAILED`, Junos `CHASSISD_SNMP_TRAP*` `Fan/Blower failed`, PAN-OS `fan-failure` `Alarm on Fan Tray #<n>`, FortiOS `FGT-0100022108` (Fan anomaly), AOS-CX `AOSCX-214` `...: Fan <name> faulted, reason: ...`, AOS-Switch `AOSS-00070` `Fan failure: Fan: <n> ...` | `IOSXE_PEM-6-FANOK`, ISR G2 `ENVMON-3-FAN_OK`, `PLATFORM-2-FANMOD_FAN_OK`, EOS `ENVMON-3-FANOK`, Junos `Fan/Blower OK`, FortiOS `FGT-0100022151` (Fan normal), AOS-Switch `Fan OK: Fan: <n> ...`; the classic Catalyst, PAN-OS and AOS-CX forms by time only | Every match, per fan (FortiOS: per device) | 24 h | warning | Cisco IOS XE (ASR 1000, ISR 4000), Catalyst 2960 / 3560 / 3750 (classic IOS), ISR G2, NX-OS, Arista EOS, Juniper Junos, Fortinet FortiOS, Palo Alto PAN-OS, HPE Aruba AOS-CX, AOS-Switch |
-| Module down (`syslog_module`) | IOS XE `IOSXE_OIR-6-OFFLINECARD` `Card (<type>) offline in slot <slot>` and `IOSXE_OIR-6-REMCARD` `Card (<type>) removed from [chassis <n> ]slot <slot>`, SPAs and line card sub-modules `IOSXE_OIR-6-REMSPA` `SPA removed from subslot <s/b>, interfaces disabled`, `SPA_OIR-6-OFFLINECARD` `SPA (<type>) offline in subslot <s/b>` and `SPA_OIR-6-REMCARD` `Card removed from subslot <s/b>, interfaces disabled`, Catalyst 3750 / 2975 stack `STACKMGR-4-SWITCH_REMOVED` `Switch <n> has been REMOVED from the stack`, Catalyst 6500 `C6KPWR-SP-4-DISABLED` `power to module in slot <n> set off (<reason>)`, NX-OS `MODULE-2-MOD_FAIL`, `MODULE-2-MOD_FAILURE`, `MODULE-2-MOD_NOT_ALIVE`, `PLATFORM-2-MOD_REMOVE`, `PLATFORM-2-MOD_PWRDN`, `PLATFORM-2-MOD_PWRFAIL`, `PLATFORM-3-MOD_PWRFAIL_MULTI`, `PLATFORM-2-MOD_PWRDENY`, `PLATFORM-3-MOD_BRINGUP_MULTI_LIMIT` and, for fabric modules, `PLATFORM-2-XBAR_REMOVE`, `PLATFORM-5-XBAR_PWRDN`, `PLATFORM-3-XBAR_PWRFAIL`, Junos `CHASSISD_SNMP_TRAP*` `FRU removal` / `FRU power off` / `FRU failed` / `FRU offline` of an FPC, PIC, routing engine, control board, SIB, SFM, FEB, switch fabric board, line card chassis or adapter card (not when `jnxFruOfflineReason` is 5, 7 or 8: powered off in the configuration, by a CLI command or the offline button) | IOS XE `IOSXE_OIR-6-ONLINECARD` and `SPA_OIR-6-ONLINECARD` `... online in [chassis <n> ]slot / subslot ...`, stack `STACKMGR-5-SWITCH_READY` `Switch <n> is READY`, NX-OS `MODULE-5-MOD_OK` `Module <n> is online`, `MODULE-5-ACTIVE_SUP_OK` / `STANDBY_SUP_OK` `Supervisor <n> is active / standby`, `MODULE-5-XBAR_OK` `Xbar <n> is online`, Junos `FRU online`; the Catalyst 6500 form by time only | Every match, per slot / subslot (IOS XE `<chassis>/<slot>` on StackWise Virtual), stack member, NX-OS module or `Xbar <n>`, Junos `jnxFruName` | 24 h | critical | Cisco IOS XE (Catalyst 9400 / 9600, StackWise Virtual, ASR 1000, ISR 4000), Catalyst 3750 / 2975 stacks (classic IOS), Catalyst 6500 (classic IOS), NX-OS, Juniper Junos |
-| Repeated login failures (`syslog_auth_failure`) | `SEC_LOGIN-4-LOGIN_FAILED`, IOS XR `SECURITY-LOGIN-4-AUTHEN_FAILED`, NX-OS `AUTHPRIV-3-SYSTEM_MSG` with `Authentication failed`, ASA `113005`, `113015`, `605004`, `611102`, Junos `SSHD_LOGIN_FAILED`, `LOGIN_FAILED`, program `sshd` `Failed password for ...` / `Failed keyboard-interactive/pam for ...` (Arista EOS and other OpenSSH hosts), OPNsense program `audit` `user ... could not authenticate for ...` (web GUI, and SSH through the firewall's authentication), FortiOS `FGT-0100032002` (Admin login failed), PAN-OS `auth-fail` (not the ones about the authentication server: `Time clock does not match ...`, `Wrong realm ...`, `Server certificate: ...`, `KDC Spoofing ...`), AOS-CX `AOSCX-5210` and `AOSCX-5216` (SSH login failed), AOS-Switch `AOSS-00419` (invalid user name / password) and `AOSS-03345` (SSH login failed) | Time only | 5 within 5 min, per device (from any source) | 30 min | warning | Cisco IOS / IOS XE, IOS XR, NX-OS, ASA, Arista EOS, Juniper Junos, OPNsense, Fortinet FortiOS, Palo Alto PAN-OS, HPE Aruba AOS-CX, AOS-Switch |
+| Power supply fault (`syslog_power_supply`) | IOS XE `IOSXE_PEM-3-PEMFAIL`, Catalyst 9000 `PLATFORM_FEP-1-FRU_PS_SIGNAL_FAULTY`, Catalyst 3750-X / 3560-X `PLATFORM_ENV-1-FRU_PS_SIGNAL_FAULTY`, NX-OS `PLATFORM-2-PS_FAIL`, EOS `PWRMGMT-3-PSU_STATUS_FAILED` and `PWRMGMT-4-INPUT_POWER_LOSS`, Junos `CHASSISD_SNMP_TRAP*` `Power Supply failed`, FortiOS `FGT-0100022105` (Power supply failed) and `FGT-0100022114` (Power supply failed warning), PAN-OS `ps-failure` `Alarm on Power Supply #<n>`, AOS-CX `AOSCX-304` `PSU <name> faulted`, AOS-Switch `AOSS-00071` `Power Supply failure: Supply: <Main or RPS>- ...` and `AOSS-02797` `Internal power supply <bay> is faulted`, IOS XR `PLATFORM-PWR_MGMT-2-MODULE_FAILURE` / `PLATFORM-PWRMON-2-MODULE_FAILURE` `Power-module <name> failure condition ...` and `PLATFORM-ENVMON-2-POWERSUPPLY_NONOP` `<name> is Non-Operational`, ASA and FTD `735004` `Power Supply <n>: Failure Detected` and `735006` `Power Supply Unit Redundancy Lost` | `IOSXE_PEM-6-PEMOK`, `PLATFORM_FEP-6-FRU_PS_SIGNAL_OK`, `PLATFORM-2-PS_OK`, EOS `PWRMGMT-3-PSU_STATUS_OK`, Junos `Power Supply OK`, FortiOS `FGT-0100022104` (Power supply restored) and `FGT-0100022115` (Power supply restored notification), AOS-Switch `Power Supply OK: ...` and `Internal power supply <bay> is ok`, IOS XR `PLATFORM-ENVMON-6-POWERSUPPLY_NONOP_CLEAR` `<name> has become operational`, ASA and FTD `735003` `Power Supply <n>: OK` and `735005` `Power Supply Unit Redundancy OK`; PAN-OS, AOS-CX and the IOS XR `Power-module` forms by time only | Every match, per power supply (FortiOS and 3750-X: per device) | 24 h | critical | Cisco IOS XE (ASR 1000, ISR 4000, Catalyst 9000), Catalyst 3750-X / 3560-X, NX-OS, IOS XR, ASA, FTD, Arista EOS, Juniper Junos, Fortinet FortiOS, Palo Alto PAN-OS, HPE Aruba AOS-CX, AOS-Switch |
+| Fan fault (`syslog_fan`) | IOS XE `IOSXE_PEM-3-FANFAIL`, Catalyst 2960 / 3560 / 3750 `HARDWARE-2-FAN_ERROR`, Catalyst 3750-X / 3560-X `PLATFORM_ENV-1-FAN` and `PLATFORM_ENV-1-FRU_PS_FAN_FAILED`, ISR G2 `ENVMON-3-FAN_FAIL` (older ISRs `FAN_FAILED`), NX-OS `PLATFORM-2-FANMOD_FAN_FAIL`, EOS `ENVMON-3-FANFAILED`, Junos `CHASSISD_SNMP_TRAP*` `Fan/Blower failed`, PAN-OS `fan-failure` `Alarm on Fan Tray #<n>`, FortiOS `FGT-0100022108` (Fan anomaly), AOS-CX `AOSCX-214` `...: Fan <name> faulted, reason: ...`, AOS-Switch `AOSS-00070` `Fan failure: Fan: <n> ...`, IOS XR `PLATFORM-ENVMON-2-FAN_FAIL` `Fan failure on slot <slot>, fan <n>, RPM <rpm>` and `PLATFORM-ENVMON-2-FANTRAY_FAIL` `Fan tray failure on slot <slot>`, Catalyst 9000 `PLATFORM_THERMAL-1-FRU_FAN_FAILURE` `Switch <n>: System fan <n> failed`, ASA and FTD `735002` `Cooling Fan <n>: Failure Detected` and `735012` `Power Supply <n>: Fan Failure Detected` | `IOSXE_PEM-6-FANOK`, ISR G2 `ENVMON-3-FAN_OK`, `PLATFORM-2-FANMOD_FAN_OK`, EOS `ENVMON-3-FANOK`, Junos `Fan/Blower OK`, FortiOS `FGT-0100022151` (Fan normal), AOS-Switch `Fan OK: Fan: <n> ...`, IOS XR `PLATFORM-ENVMON-2-FAN_CLEAR` / `FANTRAY_CLEAR` `Fan [tray ]failure cleared on slot ...`, Catalyst 9000 `PLATFORM_THERMAL-6-FRU_FAN_RECOVERY` `Switch <n>: System fan <n> recovered to normal status`, ASA and FTD `735001` `Cooling Fan <n>: OK` and `735011` `Power Supply <n>: Fan OK`; the classic Catalyst, PAN-OS and AOS-CX forms by time only | Every match, per fan (FortiOS: per device; IOS XR `<slot>/<fan>` or the fan tray's slot; Catalyst 9000 `<switch>/<fan>`; ASA `Cooling Fan <n>` or the power supply whose fan it is) | 24 h | warning | Cisco IOS XE (ASR 1000, ISR 4000, Catalyst 9000), Catalyst 2960 / 3560 / 3750 (classic IOS), ISR G2, NX-OS, IOS XR, ASA, FTD, Arista EOS, Juniper Junos, Fortinet FortiOS, Palo Alto PAN-OS, HPE Aruba AOS-CX, AOS-Switch |
+| Module down (`syslog_module`) | IOS XE `IOSXE_OIR-6-OFFLINECARD` `Card (<type>) offline in slot <slot>` and `IOSXE_OIR-6-REMCARD` `Card (<type>) removed from [chassis <n> ]slot <slot>`, SPAs and line card sub-modules `IOSXE_OIR-6-REMSPA` `SPA removed from subslot <s/b>, interfaces disabled`, `SPA_OIR-6-OFFLINECARD` `SPA (<type>) offline in subslot <s/b>` and `SPA_OIR-6-REMCARD` `Card removed from subslot <s/b>, interfaces disabled`, Catalyst 3750 / 2975 stack `STACKMGR-4-SWITCH_REMOVED` `Switch <n> has been REMOVED from the stack`, Catalyst 6500 `C6KPWR-SP-4-DISABLED` `power to module in slot <n> set off (<reason>)`, NX-OS `MODULE-2-MOD_FAIL`, `MODULE-2-MOD_FAILURE`, `MODULE-2-MOD_NOT_ALIVE`, `PLATFORM-2-MOD_REMOVE`, `PLATFORM-2-MOD_PWRDN`, `PLATFORM-2-MOD_PWRFAIL`, `PLATFORM-3-MOD_PWRFAIL_MULTI`, `PLATFORM-2-MOD_PWRDENY`, `PLATFORM-3-MOD_BRINGUP_MULTI_LIMIT` and, for fabric modules, `PLATFORM-2-XBAR_REMOVE`, `PLATFORM-5-XBAR_PWRDN`, `PLATFORM-3-XBAR_PWRFAIL`, Junos `CHASSISD_SNMP_TRAP*` `FRU removal` / `FRU power off` / `FRU failed` / `FRU offline` of an FPC, PIC, routing engine, control board, SIB, SFM, FEB, switch fabric board, line card chassis or adapter card (not when `jnxFruOfflineReason` is 5, 7 or 8: powered off in the configuration, by a CLI command or the offline button), Catalyst 4500 `C4K_IOSMODPORTMAN-6-MODULEREMOVED` `Module <n> is removed`, `MODULEOFFLINE` `Module <n> is offline`, `C4K_CHASSIS-3-MODULEBRINGUPTIMEDOUT` and `INSUFFICIENTPOWERSHUTDOWN` `Holding module in slot <n> in reset, ...`, IOS XR `PLATFORM-INVMGR-5-OIROUT` / `PLATFORM-OIRD-5-OIROUT` `OIR: Node <node> removed`, `PLATFORM-SHELFMGR-3-NODE_RESET_BRINGDOWN`, `SHUTDOWN`, `FAILED_LOAD`, `INRESET_BRINGDOWN` and `SHUTDOWN_ON_ENVMON_ALARM` (`... node <node> ...`), EOS `HARDWARE-3-CARD_LOST_POWER`, `CARD_LOST_COMMUNICATION`, `CARD_FAIL_TO_POWER_ON` / `_FINAL`, `FRU-6-CARD_REMOVED` and `FRU-3-CARD_FAILURE`, FortiOS `FGT-0100022111` (FPC down due to PSU action), AOS-CX `AOSCX-3202` `<type> module <name> removed`, `AOSCX-3207` `<type> module <name> has failed: <reason>` and VSF `AOSCX-9913` `Lost member <id> with <reason>`, AOS-Switch `AOSS-00402` `Stack member <id> lost.` | IOS XE `IOSXE_OIR-6-ONLINECARD` and `SPA_OIR-6-ONLINECARD` `... online in [chassis <n> ]slot / subslot ...`, stack `STACKMGR-5-SWITCH_READY` `Switch <n> is READY`, NX-OS `MODULE-5-MOD_OK` `Module <n> is online`, `MODULE-5-ACTIVE_SUP_OK` / `STANDBY_SUP_OK` `Supervisor <n> is active / standby`, `MODULE-5-XBAR_OK` `Xbar <n> is online`, Junos `FRU online`, Catalyst 4500 `C4K_IOSMODPORTMAN-6-MODULEONLINE` `Module <n> (...) is online`, EOS `HARDWARE-6-CARD_POWERED_ON` `Card <name> has been powered on. ...`, FortiOS `FGT-0100022112` (FPC up due to PSU action); the Catalyst 6500, IOS XR, AOS-CX and AOS-Switch forms by time only | Every match, per slot / subslot (IOS XE `<chassis>/<slot>` on StackWise Virtual), stack member, NX-OS module or `Xbar <n>`, Junos `jnxFruName`, Catalyst 4500 module, IOS XR node, EOS card, AOS-CX module or VSF member (FortiOS: per chassis) | 24 h | critical | Cisco IOS XE (Catalyst 9400 / 9600, StackWise Virtual, ASR 1000, ISR 4000), Catalyst 3750 / 2975 stacks (classic IOS), Catalyst 6500 and 4500, NX-OS, IOS XR, Arista EOS, Juniper Junos, Fortinet FortiOS (FortiGate 6000 / 7000), HPE Aruba AOS-CX, AOS-Switch |
+| Temperature alarm (`syslog_temperature`) | IOS XE `ENVIRONMENTAL-1-ALERT` `Temp: <sensor>, Location: <slot>, State: <state>, Reading: ...` (the same mnemonic's voltage and fan sensors are not counted) and `... PVT temperature sensor on Asic: <n> ...`, `IOSXE_PEM-3-TEMPERATURE_RAISE`, Catalyst 9000 `PLATFORM_THERMAL-3-OVERTEMP`, `-4-SECONDARY_OVERTEMP`, `-2-OVERTEMP_SHUTDOWN`, `-3-UNDERTEMP`, `-2-UNDERTEMP_SHUTDOWN` `Switch <n>: ...`, classic Catalyst `HARDWARE-2-THERMAL_WARNING`, `HARDWARE-1-THERMAL_CRITICAL`, `HARDWARE-2/1-PSU_THERMAL_WARNING / CRITICAL`, `PLATFORM_ENV-1-TEMP`, `PLATFORM_ENV-2-THERMAL_WARNING`, `PLATFORM_ENV-1-THERMAL_CRITICAL`, `ENVMON` `CPU_WARNING_OVERTEMP`, `CPU_CRITICAL_OVERTEMP`, `IN_OUTLET_OVERTEMP`, `INTAKE_ABNORMTEMP`, `ONBOARD_OVERTEMP`, `MODULE_OVERTEMP`, `POWER_OVERTEMP` `Warning: <sensor> temperature <n>C exceeds ...`, Catalyst 4500 `C4K_IOSMODPORTMAN-4-TEMPHIGH`, `-2-CRITICALTEMP`, `MODULETEMPHIGH`, `MODULECRITICALTEMP`, `MODULESHUTDOWNTEMP` and `C4K_CHASSIS-2-OVERHEATINGSHUTDOWN`, NX-OS `PLATFORM-2-MOD_TEMPMAJALRM`, `MOD_TEMPMINALRM`, `PLATFORM-0-MOD_TEMPWARMALRM`, `PLATFORM-2-MOD_TEMPSHUTDOWN` and `PLATFORM-0-SYS_SHUTDOWN` `... due to major temperature alarm`, IOS XR `PLATFORM-ENVMON-2-CHASSIS_OVERTEMP`, `-2-CARD_OVERTEMP` and their `_SHUTDOWN` forms, ASA and FTD `735007`, `735008`, `735015`, `735016`, `735018`, `735019` `<sensor>: Temp: <n> C, Critical / Warm` and the thermal shutdowns `735022`, `735024`, `735027`, `735029`, EOS `ENVMON-0-CARDOVERHEATWARNING`, `CARDOVERHEATSHUTDOWN`, `POWERSUPPLY_OVERHEAT_WARNING` / `_CRITICAL`, `SYSTEMOVERHEATWARNING`, `SYSTEMOVERHEATSHUTDOWN`, Junos `CHASSISD_OVER_TEMP_CONDITION`, `CHASSISD_OVER_TEMP_SHUTDOWN_TIME`, `CHASSISD_HIGH_TEMP_CONDITION`, `CHASSISD_CHASSIS_FIRE_TEMP`, `CHASSISD_TEMP_HOT_NOTICE`, `CHASSISD_FRU_HIGH_TEMP_CONDITION`, `CHASSISD_FRU_OVER_TEMP_CONDITION`, `CHASSISD_FRU_SENSOR_TEMP_WARNING`, `CHASSISD_RE_WARM_TEMP_CONDITION`, `CHASSISD_RE_OVER_TEMP_*` and `CHASSISD_SNMP_TRAP*` `Over Temperature`, FortiOS `FGT-0100022109` (Temperature too high) and `FGT-0100022152` (Temperature too low), AOS-CX `AOSCX-803` `Over-temperature for sensor <name>, <n> degC`, AOS-Switch `AOSS-00424` `Over-temperature detected` | IOS XE `ENVIRONMENTAL-5-SENSOROK` `Temp: ... State: normal`, `PLATFORM_THERMAL-6-TEMP_NORMAL`, `HARDWARE-5-THERMAL_NORMAL`, `HARDWARE-5-PSU_THERMAL_NORMAL`, `ENVMON-6-CPU_TEMP_OK`, `IN_OUTLET_TEMP_OK`, `ONBOARD_TEMP_OK`, `MODULE_TEMP_OK`, `POWER_TEMP_OK` `<sensor> temperature normal`, Catalyst 4500 `TEMPOK`, `MODULETEMPOK`, `C4K_CHASSIS-4-OVERHEATINGOVER`, NX-OS `PLATFORM-2-MOD_TEMPOK` / `MOD_TEMPMAJOR_OK` (not `MOD_TEMPRECOVER`: a minor alarm is still pending), IOS XR `CHASSIS_OVERTEMP_CLEAR` / `CARD_OVERTEMP_CLEAR`, ASA and FTD `735017`, `735020`, `735021`, `735026` `<sensor>: Temp: <n> C, OK`, EOS `ENVMON-0-CARDTEMPNORMAL`, `POWERSUPPLY_TEMP_NORMAL`, `SYSTEMTEMPNORMAL`, Junos `CHASSISD_SNMP_TRAP*` `Temperature back to normal`, FortiOS `FGT-0100022153` (Temperature normal); the other Junos forms, AOS-CX and AOS-Switch by time only | Every match, per sensor (IOS XE `<sensor>/<slot>`, Catalyst 9000 switch, NX-OS `<module>/<sensor>`, IOS XR slot, ASA `CPU <n>` / `Chassis Ambient <n>` / ..., EOS card or power supply, Junos FRU or Routing Engine, AOS-CX sensor; FortiOS, classic Catalyst and AOS-Switch: per device) | 24 h | critical | Cisco IOS XE (ASR 1000, ISR 4000, Catalyst 9000), Catalyst 2960 / 3560 / 3750 (classic IOS), Catalyst 4500, NX-OS, IOS XR, ASA, FTD, Arista EOS, Juniper Junos, Fortinet FortiOS, HPE Aruba AOS-CX, AOS-Switch |
+| HA failover or switchover (`syslog_ha_switchover`) | IOS XE `REDUNDANCY-3-SWITCHOVER` `RP switchover <reason>` and `REDUNDANCY-3-STANDBY_LOST`, Catalyst 4500 `C4K_REDUNDANCY-6-SWITCHOVER`, Catalyst 3750 stack `STACKMGR-4-MASTER_ELECTED` `Switch <n> has been elected as MASTER of the stack`, NX-OS `SYSMGR-2-HASWITCHOVER_PRE_START`, `HASWITCHOVER_START`, `WARMSWITCHOVER_START`, `SWITCHOVER_OVER`, `SWITCHOVER_THRESHOLD_EXCEEDED`, `STANDBY_BOOT_FAILED`, `REDUNDANCY_HEARTBEAT_FAILURE`, IOS XR `HA-REDCON-6-GO_ACTIVE`, `HA-REDCON-6-STANDBY_CONNECTION_DOWN`, `PLATFORM-REDDRV-5-GO_ACTIVE` and `PLATFORM-REDDRV-7-ROLE_CHANGE` `... role change to ACTIVE ...`, ASA and FTD failover `104001` `Switching to ACTIVE`, `104002` `Switching to STANDBY`, `104003` `Switching to FAILED`, `104500` / `104501` (cloud HA), `103001` `No response from other firewall`, `103004` `Other firewall reports this firewall failed`, `105005` `Lost Failover communications with mate on interface ...`, `105011` `Failover cable communication failure`, `105032` `LAN Failover interface is down`, `105043` `Failover interface failed`, `105037` `Both units are switching back and forth ...`, EOS `REDUNDANCY-5-SWITCHOVER_START`, `SWITCHOVER_COMPLETE`, `REDUNDANCY-2-IS_DISABLED`, `OTHER_DISABLED` and MLAG `STATE_INACTIVE_CONNECTION_CLOSED`, `STATE_INACTIVE_HEARTBEAT_TIMEOUT`, `STATE_INACTIVE_LOCAL_INTERFACE_DOWN`, `STATE_PRIMARY_PEER_LINK_DOWN`, `PEER_EVENT_HEARTBEAT_TIMEOUT`, Junos `CHASSISD_LOST_MASTERSHIP`, `UI_MASTERSHIP_EVENT`, `JSRPD_RG_STATE_CHANGE` `Redundancy-group <n> transitioned from ...`, `JSRPD_HA_SRG_STATE_CHANGE`, `JSRPD_HA_CONTROL_LINK_DOWN`, `JSRPD_HA_FAB_LINK_DOWN`, `JSRPD_SPLIT_BRAIN`, FortiOS `FGT-0108037892` (Virtual cluster member state moved), `FGT-0108037893` (member dead), `FGT-0108037898` (HA device interface failed), `FGT-0108037901` (Heartbeat device interface down), `FGT-0108035013` (HA failover failed), `FGT-0108035016` (HA failover success), PAN-OS `state-change` `HA Group <n>: Moved from state <x> to state <y>`, AOS-CX `AOSCX-7001` `VSX ISL port <port> is down` and `AOSCX-7005` `VSX Keepalive failed`, AOS-Switch `AOSS-03278` `Member <id> elected as commander. ...` | EOS MLAG `STATE_PRIMARY`, `STATE_SECONDARY` `MLAG is active as ...`, `STATE_PRIMARY_PEER_LINK_UP`, Junos `JSRPD_HA_CONTROL_LINK_UP`, `JSRPD_HA_FAB_LINK_UP`; the others by time only | Every match, per device (EOS `MLAG`, Junos redundancy group, SRG, `control link` / `fabric link`, PAN-OS `HA Group <n>`, AOS-CX `VSX ISL` / `VSX Keepalive`, classic stack switch number) | 60 min | warning | Cisco IOS XE, Catalyst 3750 stacks, NX-OS, IOS XR, ASA, FTD, Arista EOS, Juniper Junos, Fortinet FortiOS, Palo Alto PAN-OS, HPE Aruba AOS-CX, AOS-Switch |
+| Device restarted (`syslog_device_restart`) | The reload and restart messages of the [re-poll trigger](#re-poll-trigger): a device announcing a reload or shutdown and a device back up | Time only | Every match, per device | 60 min | warning | Cisco IOS / IOS XE, IOS XR, NX-OS, ASA, FTD, Arista EOS, Juniper Junos, Fortinet FortiOS, HPE Aruba AOS-CX, AOS-Switch |
+| Repeated login failures (`syslog_auth_failure`) | `SEC_LOGIN-4-LOGIN_FAILED`, IOS XR `SECURITY-LOGIN-4-AUTHEN_FAILED`, NX-OS `AUTHPRIV-3-SYSTEM_MSG` with `Authentication failed`, ASA `113005`, `113015`, `605004`, `611102` (FTD the same but `605004`, which its guide does not list), Junos `SSHD_LOGIN_FAILED`, `LOGIN_FAILED`, program `sshd` `Failed password for ...` / `Failed keyboard-interactive/pam for ...` (Arista EOS and other OpenSSH hosts), OPNsense program `audit` `user ... could not authenticate for ...` (web GUI, and SSH through the firewall's authentication), FortiOS `FGT-0100032002` (Admin login failed), PAN-OS `auth-fail` (not the ones about the authentication server: `Time clock does not match ...`, `Wrong realm ...`, `Server certificate: ...`, `KDC Spoofing ...`), AOS-CX `AOSCX-5210` and `AOSCX-5216` (SSH login failed), AOS-Switch `AOSS-00419` (invalid user name / password) and `AOSS-03345` (SSH login failed) | Time only | 5 within 5 min, per device (from any source) | 30 min | warning | Cisco IOS / IOS XE, IOS XR, NX-OS, ASA, FTD, Arista EOS, Juniper Junos, OPNsense, Fortinet FortiOS, Palo Alto PAN-OS, HPE Aruba AOS-CX, AOS-Switch |
 
 A single interface down is not an alert: access ports go down all day. An
 interface an operator shut down (`LINK-5-CHANGED ... administratively
@@ -118,6 +125,96 @@ message; the SNMP poll's module check
 ([Hardware module health](monitoring.md#hardware-module-health), which
 the re-poll runs within seconds) keeps reporting a module that is still
 down.
+
+The temperature, HA and restart rules are the syslog side of the trap
+rules with the same keys (`trap_temperature`, `trap_ha_switchover`,
+`trap_device_restart`, see [SNMP Traps](snmp-traps.md#built-in-rules)), with
+the same severities and auto-resolve times, so a device that reports the
+event by syslog alerts the same way as one that sends the trap. The two
+are separate alert families: a suppression of one metric does not cover
+the other. A temperature alarm resolves when the same sensor reports
+normal again; a form without a documented recovery message resolves
+after 24 hours. Most HA messages report an event, not a state, so the HA
+alert resolves 60 minutes after the last one; the polled HA state
+([monitoring.md](monitoring.md#ha-and-redundancy-state)) reports a pair
+that stays degraded. The restart rule raises on every reload and restart
+message the re-poll trigger acts on, so a syslog-only device that reboots
+faster than the ping down threshold still raises an alert; the re-poll
+still runs.
+
+## Event rule packs
+
+Three groups of built-in rules cover layer 2 events, routing and tunnel
+neighbors beyond OSPF and BGP, and device health warnings. They are
+built-in rules like the ones above (turn each off or change its severity
+the same way) and today match Cisco forms only; the other vendors are in
+[Known gaps](#known-gaps). The SNMP trap side of the same events is in
+[snmp-traps.md](snmp-traps.md#built-in-rules).
+
+| Rule (metric) | Raised by | Resolved by | Instance | Threshold | Auto-resolve | Severity |
+|---|---|---|---|---|---|---|
+| Spanning tree root changed (`syslog_stp_root_change`) | `SPANTREE-5-ROOTCHANGE` `Root Changed for <vlan n>: ...` | Time only | `vlan <n>` | Every match | 60 min | warning |
+| Spanning tree topology changes (`syslog_stp_topology_change`) | `SPANTREE-5-TOPOTRAP` `Topology Change Trap for <vlan n>` | Time only | `vlan <n>` | 5 within 10 min | 30 min | warning |
+| Spanning tree guard blocking a port (`syslog_stp_guard`) | `SPANTREE-2-ROOTGUARD_BLOCK`, `LOOPGUARD_BLOCK` `... blocking port <port> on <vlan>`, `BRIDGE_ASSURANCE_BLOCK` | The matching `..._UNBLOCK` | `<port>/<vlan>` (Bridge Assurance: `<port>`) | Every match | 24 h | warning |
+| Port error-disabled (`syslog_port_err_disabled`) | `PM-4-ERR_DISABLE` (and `PM-SP-4-ERR_DISABLE`) `<cause> error detected on <port>, putting <port> in err-disable state`, `PM-4-ERR_DISABLE_VP` `... on <port> vlan <n>`: every cause, BPDU guard, UDLD, port security, storm control, link flap and loopback among them | Time only | `<port>` (`<port>/<vlan>`) | Every match | 24 h | warning |
+| Port security violation (`syslog_port_security`) | `PORT_SECURITY-2-PSECURE_VIOLATION` `Security violation occurred, caused by MAC address <mac> on port <port>.`, `PSECURE_VIOLATION_VLAN` | Time only | `<port>` | Every match | 60 min | warning |
+| Traffic storm (`syslog_storm_control`) | `STORM_CONTROL-3-FILTERED` `A <type> storm detected on <port>. ...`, `STORM_CONTROL-3-SHUTDOWN` / `STORM_CONTROL-2-SHUTDOWN` | `STORM_CONTROL-5-ABATED` `A <type> storm abated on <port>. ...` | `<port>` | Every match | 24 h | warning |
+| MAC address flapping (`syslog_mac_flap`) | `SW_MATM-4-MACFLAP_NOTIF` `Host <mac> in vlan <n> is flapping between port <a> and port <b>` | Time only | `vlan <n>` | 3 within 10 min | 30 min | warning |
+| Duplex mismatch (`syslog_duplex_mismatch`) | `CDP-4-DUPLEX_MISMATCH` `duplex mismatch discovered on <port> ...` | Time only | `<port>` | Every match | 60 min | warning |
+| HSRP failover (`syslog_hsrp_state`) | `HSRP-5-STATECHANGE` `<interface> Grp <n> state <old> -> <new>` and the older `STANDBY-6-STATECHANGE` `Standby: <n>: <interface> state <old> -> <new>`, when the group enters or leaves Active | Time only | `<interface>/<group>` | Every match | 60 min | warning |
+| EIGRP neighbor down (`syslog_eigrp_neighbor`) | `DUAL-5-NBRCHANGE`, NX-OS `EIGRP-5-NBRCHANGE_DUAL` `... Neighbor <address> (<interface>) is down: <reason>` | The same tags `... is up: ...` | The neighbor address | Every match | Clear message only | critical |
+| IS-IS adjacency down (`syslog_isis_adjacency`) | `CLNS-5-ADJCHANGE` `ISIS: Adjacency to <neighbor> (<interface>) Down, <reason>`, NX-OS `ISIS-5-ADJCHANGE` `... adj L<level> <neighbor> over <interface> - DOWN ...` | The same tags `Up` / `- UP` | `<neighbor>/<interface>` | Every match | Clear message only | critical |
+| IPsec tunnel down (`syslog_ipsec_tunnel`) | `CRYPTO-5-SESSION_STATUS` `Crypto session is DOWN. Peer <address>:<port> ...` (or `Crypto tunnel is DOWN`) | `... is UP. Peer ...` | `<address>:<port>` | Every match | Clear message only | critical |
+| IP SLA probe down (`syslog_ip_sla`) | `TRACK-6-STATE` `<track> ip sla <n> reachability Up -> Down` (or `state`) | `... Down -> Up` | `<track> ip sla <n>` | Every match | Clear message only | warning |
+| PoE fault (`syslog_poe_fault`) | `ILPOWER-3-CONTROLLER_PORT_ERR`, `ILPOWER-5-ILPOWER_POWER_DENY`, `ILPOWER-5-INVALID_IEEE_CLASS`, `ILPOWER-4-LOG_OVERDRAWN`, `ILPOWER-3-SHUT_OVERDRAWN` | `ILPOWER-5-POWER_GRANTED`, `ILPOWER-5-CLR_OVERDRAWN` | `<port>` | Every match | 24 h | warning |
+| Optic light level out of range (`syslog_optic_power`) | `SFF8472-5-THRESHOLD_VIOLATION` (any severity digit) `<port>: Rx power low alarm; ...`: Rx or Tx power, high or low, warning or alarm | Time only | `<port>` | Every match | 24 h | warning |
+| AAA server not responding (`syslog_aaa_server`) | `RADIUS-4-RADIUS_DEAD`, IOS XE `RADIUS_AUDIT_MESSAGE-6-RADIUS_DEAD` `... RADIUS server <address>:<ports> is not responding.` | `RADIUS-4-RADIUS_ALIVE` | `<address>:<ports>` | Every match | 24 h | warning |
+| NTP synchronization lost (`syslog_ntp_sync`) | `NTP-4-UNSYNC` `NTP sync is lost` | `NTP-5-PEERSYNC` | Per device | Every match | Clear message only | warning |
+| License expiring or expired (`syslog_license_expiry`) | Smart Licensing `SMART_LIC-4-EVAL_WILL_EXPIRE_WARNING`, `SMART_LIC-3-EVAL_EXPIRED`, `EVAL_EXPIRED_WARNING`, `SMART_LIC-5-AUTHORIZATION_EXPIRED`, `SMART_LIC-3-AUTH_RENEW_FAILED`, `ID_CERT_EXPIRED`, `ID_CERT_EXPIRED_WARNING` | Time only | Per device | Every match | 24 h | warning |
+| Certificate expiring or expired (`syslog_certificate_expiry`) | `PKI-4-CERT_EXPIRY_WARNING`, `PKI-1-CERT_EXPIRY_ALERT`, `PKI-2-CERT_RENEW_FAIL` `... for trustpoint <name> ...`, `PKI-3-CERTIFICATE_INVALID_EXPIRED` `... certificate SN: <serial> has expired.` | Time only | The trustpoint or serial, else per device | Every match | 24 h | warning |
+| Software crash or memory failure (`syslog_software_fault`) | `SYS-2-MALLOCFAIL`, `PLATFORM-1-CRASHED`, NX-OS `SYSMGR-2-SERVICE_CRASHED` `Service "<name>" (PID <n>) hasn't caught signal <n> ...` | Time only | The NX-OS service, else per device | Every match | 24 h | critical |
+
+Device families: Cisco IOS / IOS XE for every rule; Cisco NX-OS also for
+EIGRP, IS-IS and software crashes.
+
+- **Err-disable** is one rule for every cause, since a port that BPDU
+  guard, UDLD, port security or storm control disables logs
+  `PM-4-ERR_DISABLE` with the cause. `PM-4-ERR_RECOVER` only says a
+  recovery is attempted, so it resolves nothing: a port that fails again
+  logs `ERR_DISABLE` again and keeps the alert open, and the alert resolves
+  24 hours after the last one. A port security violation in `shutdown`
+  mode opens both a port security and an err-disable alert.
+- **Noisy events** count towards a threshold: topology changes (5 within
+  10 minutes per VLAN) and MAC moves (3 within 10 minutes per VLAN; a
+  loop moves many hosts, so the alert is per VLAN, not per MAC address). A
+  root change raises at once. `SPANTREE-5-TOPOTRAP` is logged when the
+  switch sends its spanning tree topology change trap.
+- **HSRP**: a group entering Active (this router took over) or leaving it
+  (it gave the role up) raises the alert on that router; moves between
+  Speak, Standby and Listen do not. It resolves after 60 minutes, as the
+  HA switchover rules do.
+- **Expiry warnings** repeat while the condition lasts (Smart Licensing
+  sends them daily or weekly; CDP repeats a duplex mismatch every CDP
+  interval), so each alert stays open while they keep coming and resolves
+  after the auto-resolve time once they stop.
+
+**Sources.** The tags and the template of each message are from the Cisco
+System Message Guide for Catalyst Series Switches, IOS XE 17.3.x (and
+16.12.x), and the Nexus 9000 NX-OS System Routing Messages Reference
+10.6(2)F (EIGRP, IS-IS). The sample texts the patterns are written from:
+the Catalyst 3750 ... 2960 Switch System Message Guide (`SPANTREE-5-ROOTCHANGE`,
+`TOPOTRAP`), the Cisco TechNotes "Errdisable Port State Recovery on the
+Cisco IOS Platforms" (`PM-4-ERR_DISABLE`), "Troubleshoot MAC Address Flap
+Notifications" (`SW_MATM`), "Understand and Troubleshoot HSRP Problems"
+(`HSRP` / `STANDBY`), the EIGRP neighbor TechNote 118974 (`DUAL`),
+"Troubleshoot IS-IS Adjacency Issues" (`CLNS`), the IOS "IP Security VPN
+Monitoring" configuration guide (`CRYPTO-5-SESSION_STATUS`), "Understand
+AAA Dead Detection" (`RADIUS_AUDIT_MESSAGE-6-RADIUS_DEAD`) and Cisco Field
+Notice FN64180 (`SYSMGR-2-SERVICE_CRASHED`). Where no Cisco document showed
+the full text, the form was taken from log samples on the Cisco Community
+(`PORT_SECURITY-2-PSECURE_VIOLATION`, `SFF8472-5-THRESHOLD_VIOLATION`,
+`RADIUS-4-RADIUS_ALIVE`, `NTP-5-PEERSYNC`) or the ipSpace.net reliable
+static routing article (`TRACK-6-STATE`).
 
 ## Custom rules
 
@@ -174,7 +271,7 @@ messages received in the last 24 hours (or up to 7 days):
   new custom rule from that group.
 - **Related**: a hint that an unmatched group looks like the subject of a
   built-in rule or trigger (an OSPF, BGP, link, power supply, fan, module,
-  login, configuration or reload message), from keywords in its tag (or program
+  temperature, HA, login, configuration or reload message), from keywords in its tag (or program
   and sample). A related group is worth a look: it may be a form of the
   message the built-in rule misses. The hint is a keyword guess, not a
   match; most unmatched messages are routine and need no rule.
@@ -224,7 +321,7 @@ These messages start a backup and drift check of the host:
 | Cisco IOS / IOS XE, Arista EOS | `SYS-5-CONFIG_I` |
 | Cisco NX-OS | `VSHD-5-VSHD_SYSLOG_CONFIG_I` |
 | Cisco IOS XR | `MGBL-CONFIG-6-DB_COMMIT` |
-| Cisco ASA | `111008` (a configuration command); `111010` except `show`, `ping`, `traceroute`, `more` and `dir` |
+| Cisco ASA, Cisco FTD | `111008` (a configuration command); `111010` except `show`, `ping`, `traceroute`, `more` and `dir` (FTD logs them as `%FTD-5-111008` / `111010`) |
 | Juniper Junos | `UI_COMMIT_COMPLETED` |
 | Fortinet FortiOS | `FGT-0100044544` (Path configured), `FGT-0100044545` (Object configured), `FGT-0100044546` (Attribute configured), `FGT-0100044547` (Object attribute configured): FortiOS applies each change at once. `44548` (Action performed, an `execute` command) is no change |
 | Palo Alto PAN-OS | A CONFIG log of a `commit` whose result is `Succeeded`, or the SYSTEM log `Commit job succeeded` that ends the commit job (`PAN-SYSTEM-GENERAL`). Candidate edits (`set`, `edit`, `delete` ...) change nothing until the commit, and a `Submitted` or `Failed` commit is left out |
@@ -257,8 +354,16 @@ The configuration change trigger does not depend on monitoring being on.
 |---|---|
 | An interface going down (every form in the Interface flapping row above, from the first one) | 5 s |
 | A module down or back online (every raise and clear form in the Module down row above) | 5 s |
-| Reload: `SYS-5-RELOAD`, ASA `199001`, NX-OS `PLATFORM-2-PFM_SYSTEM_RESET`, Junos `UI_REBOOT_EVENT`, FortiOS `FGT-0100032138` (Device rebooted) and `FGT-0100032200` (Device shutdown), AOS-Switch `AOSS-00063` (SYSTEM went down), AOS-CX `AOSCX-706` (Initiating system reboot) and `AOSCX-707` (Initiating chassis thermal reboot) | 30 s (the device logs it before it goes down) |
-| Restart: `SYS-5-RESTART`, `SYS-6-BOOTTIME`, ASA `199002`, Junos `SNMPD_TRAP_COLD_START`, FortiOS `FGT-0100032009` (FortiGate started), AOS-Switch `AOSS-00066` (System Booted) and `AOSS-00064` (the crash reason of a switch that went down), AOS-CX `AOSCX-1206` (Module rebooted) and `AOSCX-1236` (Module unexpected reboot) | 5 s |
+| Reload: `SYS-5-RELOAD`, ASA and FTD `199001`, NX-OS `PLATFORM-2-PFM_SYSTEM_RESET`, IOS XR `INSTALL-INSTMGR-4-CALLING_PLATFORM_RELOAD_NODES_ALL`, Junos `UI_REBOOT_EVENT`, FortiOS `FGT-0100032138` (Device rebooted), `FGT-0100032200` (Device shutdown) and `FGT-0100032545` (Scheduled daily reboot started), AOS-Switch `AOSS-00063` (SYSTEM went down), AOS-CX `AOSCX-706` (Initiating system reboot) and `AOSCX-707` (Initiating chassis thermal reboot) | 30 s (the device logs it before it goes down) |
+| Restart: `SYS-5-RESTART`, `SYS-6-BOOTTIME`, ASA and FTD `199002`, IOS XR `PLATFORM-SHELFMGR-6-SYSTEM_COLD_START`, EOS `SYS-5-SYSTEM_RESTARTED`, `SYS-3-KERNEL_PANIC` and `HARDWARE-4-WATCHDOG_ERROR` (`Reboot due to ...`), Junos `SNMPD_TRAP_COLD_START` and `SNMPD_TRAP_WARM_START`, FortiOS `FGT-0100032009` (FortiGate started), AOS-Switch `AOSS-00066` (System Booted) and `AOSS-00064` (the crash reason of a switch that went down), AOS-CX `AOSCX-1206` (Module rebooted) and `AOSCX-1236` (Module unexpected reboot) | 5 s |
+| A temperature alarm or its recovery (every raise and clear form in the Temperature alarm row above) | 5 s |
+| An HA switchover, failover or peer / link loss, or its documented recovery (every raise and clear form in the HA failover or switchover row above) | 5 s |
+
+The reload and restart messages also raise the **Device restarted** rule
+(`syslog_device_restart`); turning that rule off leaves the re-poll.
+The temperature and HA rows re-poll as the trap rules of the same keys do
+(`trap_temperature` as a module change, which also reads the hardware
+components again; `trap_ha_switchover` as a state change).
 
 A re-poll is the full monitoring poll of that one host, so its state,
 availability, charts and poll alerts catch up. A host is re-polled at most
@@ -312,6 +417,37 @@ default). These messages start that collection within seconds instead:
 
 The trigger does not depend on monitoring being on. Setting up the
 firewall: [OPNsense in the Topology Map](opnsense-topology.md#syslog).
+
+## Cisco syslog messages sent as SNMP traps
+
+A Cisco device can send its syslog messages as CISCO-SYSLOG-MIB
+`clogMessageGenerated` traps (`snmp-server enable traps syslog`). For such
+a trap from an inventory host that carries the host's SNMP community (or
+is authenticated with its SNMPv3 user), Plexus builds the line it carries
+from its varbinds, `%<clogHistFacility>-<clogHistSeverity - 1>-<clogHistMsgName>: <clogHistMsgText>`
+(`%SYS-5-CONFIG_I: Configured from console by admin on vty0`), and hands it
+to the syslog rules as a message of that host: the built-in and custom
+rules, the configuration change trigger and the re-poll trigger. The trap
+itself is still stored as a trap ([SNMP Traps](snmp-traps.md#cisco-syslog-messages-sent-as-traps)).
+
+The alerts are syslog alerts with the syslog alert key, so the same
+message received as syslog and as a trap meets in one alert. The
+switches below apply to it (**Raise alerts from syslog rules**, not the
+trap alerts switch); **Act on UDP messages** does not, since the trap was
+believed by its community or SNMPv3 user.
+
+**Threshold counters when both arrive.** Each copy is a match of the rule
+for the same host and instance. Two matches less than 5 seconds apart
+count once (step 4 of [How a message becomes an alert](#how-a-message-becomes-an-alert)),
+so a device that sends the message both ways at once counts it once, and
+a rule with a threshold of one raises one alert, not a bump. Copies more
+than 5 seconds apart (a delayed trap, a queue on the device) count twice:
+a threshold rule (Interface flapping, Repeated login failures, a custom
+rule with a threshold) can then raise early. Send the messages one way
+only when that matters: either syslog (`logging host`) or the trap
+(`snmp-server enable traps syslog` with `logging history`), not both. The
+configuration change and re-poll triggers are debounced and rate limited
+per host, so a message received twice starts one run.
 
 ## Switches
 
@@ -521,8 +657,9 @@ with `logging source-interface` on Cisco IOS.
   are stored only (except the OPNsense re-collect trigger, which also
   knows the firewalls of OPNsense sources by their collected addresses).
 - **Vendor rules not yet seen on a live device**: the Fortinet FortiOS,
-  Palo Alto PAN-OS, HPE Aruba AOS-CX and AOS-Switch forms, and the classic
-  Catalyst, ISR G2 and Arista EOS power supply and fan forms, were written
+  Palo Alto PAN-OS, HPE Aruba AOS-CX and AOS-Switch forms, the classic
+  Catalyst, ISR G2 and Arista EOS power supply and fan forms, and the
+  temperature, HA, Cisco FTD, IOS XR and Catalyst 4500 forms, were written
   from the vendors' log message references and checked against invented
   samples only. **Received messages** under Monitoring > Configure >
   Syslog Rules shows whether your devices' messages match them (a **Tag
@@ -549,8 +686,9 @@ with `logging source-interface` on Cisco IOS.
   system log reference lists no event ids of the Advanced Routing Engine,
   so its neighbor changes are not built in. A failed power supply or fan
   tray has no recovery event in the reference, so those alerts resolve
-  after 24 hours. The reference lists no reload or restart event, so none
-  is built in. `auth-fail` is logged for every authentication the firewall
+  after 24 hours. The reference lists no reload or restart event, so
+  neither the re-poll trigger nor the **Device restarted** rule covers
+  PAN-OS. `auth-fail` is logged for every authentication the firewall
   rejects, VPN and portal users as well as administrators, with the same
   event id and subtype; its description names the auth profile, vsys and
   admin role but nothing the reference defines as telling an
@@ -582,11 +720,13 @@ with `logging source-interface` on Cisco IOS.
   link down.
 - **Classic Cisco hardware**: the classic Catalyst fan and power supply
   forms have no recovery message (their alerts resolve after 24 hours),
-  and ISR G2 power supply messages are not built in: no Cisco reference
-  that names their `ENVMON` power supply mnemonics was found (the ISR G2
-  troubleshooting guide and the Cisco IOS system message guides could not
-  be retrieved). Write a custom **Tag** rule for the power supply message
-  your routers log.
+  and ISR G2 power supply messages are not built in: no ISR G2 or IOS
+  15M&T system message guide could be retrieved (Cisco has retired them).
+  The Catalyst guide 17.3.x lists `ENVMON-1-POWER_WARNING`,
+  `ENVMON-3-POWER_ERROR` and `ENVMON-5-POWER_NOTICE` for the CGS 2520 and
+  1900 components with the bare template `: <text>`, which does not tell
+  a failure from a recovery, so they are not built in. Write a custom
+  **Tag** rule for the power supply message your routers log.
 - **Module down**: the forms come from the Cisco System Message Guide for
   Catalyst Series Switches (IOS XE 17.3.x and 16.12.x: `IOSXE_OIR`,
   `SPA_OIR`), the Cisco TechNote "Troubleshoot Hardware Failure on
@@ -610,8 +750,9 @@ with `logging source-interface` on Cisco IOS.
     too, and no reference gives a recovery message (the classic `OIR`
     `REMCARD` / `INSCARD` forms appear only in community logs), so the
     alert resolves after 24 hours.
-  - **Catalyst 4500** (`C4K_CHASSIS`, `C4K_IOSMODPORTMAN`): no reference
-    giving the module removed / failed message text was retrieved.
+  - **Catalyst 4500**: the forms follow the Catalyst 4500 System Message
+    Guide 15.1(1)SG. `MODULEOFFLINE` does not say why, so a module an
+    operator took offline counts too.
   - **NX-OS**: `PLATFORM-2-MOD_PWRDN` does not say why a module was
     powered down; one powered off from the CLI also logs
     `PLATFORM-2-PFM_MODULE_POWER_OFF` (not counted) and may log
@@ -625,17 +766,155 @@ with `logging source-interface` on Cisco IOS.
     the Junos System Log Messages Reference entries for chassisd's own
     FRU messages (`CHASSISD_FRU_OFFLINE_NOTICE`, `CHASSISD_FRU_ONLINE` and
     similar) could not be retrieved, so only the trap forms are built in.
-  - **Cisco IOS XR, Arista EOS, HPE Aruba AOS-CX and AOS-Switch, Fortinet
-    FortiOS, Palo Alto PAN-OS**: no module, line card or stack member
-    message form was confirmed in a reference (the IOS XR system error
-    message reference, the Arista EOS System Message Guide and the HPE
-    Aruba event log references could not be retrieved, and no FortiOS or
-    PAN-OS log reference entry for a module or slot event was found). AOS-CX `AOSCX-1206` /
-    `AOSCX-1236` (Module rebooted) stay restart re-poll triggers. Write a
-    custom **Tag** rule for the module messages your devices log; the
-    polled module check covers Cisco and Juniper over SNMP.
+  - **Cisco IOS XR**: the forms follow the IOS XR System Error Message
+    Reference 5.1.1 (32-bit IOS XR on ASR 9000, CRS, XR 12000); the
+    64-bit IOS XR and XR7 message sets (NCS) were not retrieved. The node
+    state change messages (`SHELFMGR-6-NODE_STATE_CHANGE`,
+    `INVMGR-6-NODE_STATE_CHANGE`) give no state values, so there is no
+    recovery message: the alerts resolve after 24 hours.
+  - **Arista EOS**: the only EOS System Message Guide that could be
+    retrieved is 4.12.10 (2015); newer releases may name more forms. That
+    guide prints the multi-word mnemonics without their underscores; they
+    are written with them (`CARD_LOST_POWER`), as EOS logs show for the
+    fan and power supply mnemonics. `CARD_POWERED_OFF` is also logged for
+    an operator's power off and is not counted.
+  - **HPE Aruba AOS-CX and AOS-Switch**: the HPE Aruba event log reference
+    pages refuse automated reading, so the module (`3202`, `3207`), VSF
+    (`9913`) and stack member (`AOS-Switch 402`) forms were taken from the
+    search excerpts of those pages; no recovery message text was found, so
+    the alerts resolve after 24 hours. AOS-CX `AOSCX-1206` / `AOSCX-1236`
+    (Module rebooted) are restart forms (the **Device restarted** rule).
+  - **Fortinet FortiOS**: only `22111` / `22112` (FPC down / up due to a
+    PSU action, FortiGate 6000 / 7000) are in the reference, without msg
+    text, so one alert per chassis.
+  - **Palo Alto PAN-OS**: the system log reference has no event id for a
+    slot or card failure (only messages without an id, such as `Thermal
+    alarm on slot <id>`), so none is built in.
+  - The polled module check covers Cisco and Juniper over SNMP, and the
+    polled HA check covers stack and VSF members (Cisco StackWise, AOS-CX
+    VSF: [monitoring.md](monitoring.md#ha-and-redundancy-state)). Write a
+    custom **Tag** rule for other module messages your devices log.
+- **Temperature alarm**: the forms come from the Cisco System Message Guide
+  for Catalyst Series Switches (IOS XE 17.3.x and 16.12.x), the System
+  Message Guide for Catalyst Switches 15.2(6)E2 (classic Catalyst), the
+  Catalyst 4500 guide 15.1(1)SG, the Nexus 9000 System Messages Reference
+  10.6(2)F, the IOS XR reference 5.1.1, the ASA and FTD syslog message
+  guides, the EOS System Message Guide 4.12.10, the Junos System Log
+  Explorer, the FortiOS 7.6 Log Message Reference and the HPE Aruba event
+  log references (search excerpts, as above). Not built in or limited:
+  - The IOS XE `ENVIRONMENTAL-1-ALERT` text is matched in the form of the
+    Cisco TechNotes (`Temp: Inlet 1, Location: R0, State: ...`); the guide
+    shows the template without commas, which matches too.
+  - The `ENVMON` temperature mnemonics are listed in the Catalyst guide for
+    the CGS 2520 and 3900 components; no ISR G2 guide could be retrieved
+    to confirm them on the 1900 / 2900 / 3900.
+  - NX-OS `MOD_TEMPRECOVER` (major alarm recovered, minor pending) and
+    `MOD_TEMPFAIL` (sensor failed), IOS XR `DIE_OVERTEMP_*` and
+    `ENVMON-2-TEMP` (their wording does not say rising or falling), Arista
+    `XCVR_OVERHEAT_*` (transceivers, no recovery message) and
+    `HARDWARE-4-POWER_SUPPLY_OVERHEAT_WARNING` (it names the supply in
+    another form than its recovery message) are not built in.
+  - Junos: the reference gives no recovery message for the `CHASSISD_*`
+    temperature forms, so they resolve after 24 hours. The
+    `CHASSISD_SNMP_TRAP*` `Over Temperature` / `Temperature back to normal`
+    wording is taken from a public Junos log sample; the System Log
+    Explorer gives only the generic trap template.
+  - FortiOS `22109` / `22152` / `22153` have no msg text in the reference:
+    one alert per firewall. AOS-CX `802` (critical temperature shutdown),
+    `804` (back to safe temperature) and `806` (ambient), and AOS-Switch
+    `556` (temperature normal) and the 16.08 ids (`553` / `557`) were not
+    retrieved with their text and are not built in; their alerts resolve
+    after 24 hours.
+  - **Palo Alto PAN-OS**: temperature appears only as messages without an
+    event id (`Thermal alarm on slot <id>`, `Shutting down ... for thermal
+    temperature`); none is built in.
+- **HA failover or switchover**: from the same references as the
+  temperature alarm. Most forms report an event, so one alert per device
+  that resolves 60 minutes after the last one (the polled HA state is the
+  backstop). Not built in or limited:
+  - **Cisco ASA / FTD**: the failover link and interface recovery messages
+    (`105031`, `105042`, `105004`, `104004`) are not clears, since the
+    alert is per firewall and they would also resolve a switchover.
+    Monitored interface failures (`105007`, `105009 ... Failed`) are left
+    to the interface rule, and the legacy serial failover cable messages
+    (`101001` to `101005`) and the cluster messages (`747xxx`; the FTD
+    guide's entries could not be read) are not built in. A unit that
+    boots as active also logs `104001`.
+  - **Catalyst 9000 stacks**: no Cisco reference with the IOS XE message of
+    a new active switch was found (`STACKMGR` is not in the IOS XE guides).
+  - **Arista EOS**: names are from the 4.12.10 guide, as for the module
+    forms. A switchover has no recovery message; MLAG back to active
+    resolves the `MLAG` alert.
+  - **Juniper Junos**: `JSRPD_RG_STATE_CHANGE` is counted for every
+    transition, a normal start included. Virtual Chassis master changes
+    have no tag in the System Log Explorer.
+  - **Fortinet FortiOS**: the HA ids are those of the 7.6 reference with the
+    `0108` prefix of the Fortinet community samples; their msg names no
+    member in a documented form. `37910` (Heartbeat packet lost) is not
+    built in (one lost packet is no failover); `37894` (member joined) and
+    `37902` (heartbeat interface up) are not clears, as the alert is per
+    firewall.
+  - **Palo Alto PAN-OS**: the system log reference has no HA section. The
+    `state-change` event id and its `HA Group <n>: Moved from state ...`
+    text come from a Palo Alto knowledge base example that shows the event
+    id truncated (`state-c`); HA1 / HA2 port down messages are the
+    `link-change` forms of the interface rule.
+  - **HPE Aruba**: VSX `7001` / `7005` and AOS-Switch `3278` come from the
+    search excerpts of the event log reference; the recovery messages
+    (`7002`, `7006`) and the AOS-CX VSF conductor election (`9915`) were
+    not retrieved with their text.
+- **Device restarted**: the rule raises on the reload and restart forms
+  of the re-poll trigger. IOS XR has no documented reload command message
+  in the 5.1.1 reference (only the install reload and the cold start are
+  built in). PAN-OS lists no reload, restart or shutdown event in its
+  system log reference. AOS-CX `1206` / `1236` report a module reboot,
+  which on a fixed switch is the switch itself.
+- **Event rule packs** ([Event rule packs](#event-rule-packs)): checked
+  against invented samples only. Not built in:
+  - **Cisco forms without a confirmed text**: `RADIUS-4-RADIUS_ALIVE` is
+    matched by the classic text (`RADIUS server <address>:<ports> is being
+    marked alive`, from community logs; the guide gives no text), and no
+    reference shows an IOS XE `RADIUS_AUDIT_MESSAGE` alive form, so those
+    alerts resolve after 24 hours. TACACS+ has no dead / alive message in
+    the IOS XE guide. `NTP-4-PEERUNREACH` / `PEERREACH` (one peer) are not
+    built in, only the loss of synchronization. The NX-OS IS-IS form gives
+    no state values: `- DOWN` / `- UP` are assumed. Bridge Assurance names
+    the port and VLAN in a form the guide does not separate, so its alert
+    is per port. `UDLD-4-UDLD_PORT_DISABLED` and the storm control
+    shutdown are counted through the `PM-4-ERR_DISABLE` message they come
+    with; `SPANTREE-2-BLOCK_BPDUGUARD` names the port in its long form
+    (`GigabitEthernet4/1`) while `ERR_DISABLE` uses the short one
+    (`Gi4/1`), so it is left to `ERR_DISABLE` to avoid two alerts.
+  - **Tracebacks**: a traceback is appended to another message
+    (`-Traceback= ...`), not a message of its own; the rules match by tag,
+    so it is not built in. A `SYS-2-MALLOCFAIL` with a traceback raises the
+    software fault rule.
+  - **Cisco NX-OS** layer 2, HSRP, IP SLA, PoE, optics, AAA, NTP, license
+    and certificate messages; **IOS XR** IS-IS, EIGRP and the health
+    messages; **ASA / FTD** VPN tunnels: the NX-OS System Messages
+    Reference (non-routing) and the IOS XR and ASA message references
+    were not searched far enough to confirm the texts.
+  - **Juniper Junos** (`RPD_ISIS_ADJDOWN`, `KMD_VPN_DOWN_ALARM_USER`,
+    `L2ALD_MAC_MOVE_*`, BPDU block, `NTPD`, `CHASSISD` optic and PoE
+    messages), **Arista EOS** (`ETH-4-HOSTFLAP`, `SPANTREE`, IS-IS),
+    **HPE Aruba** AOS-CX and AOS-Switch: the vendors' system log references
+    could not be retrieved (only third-party samples were found).
+  - **Fortinet FortiOS** IPsec: log id `37138` (IPsec connection status
+    changed) lists an `action` field but no values for tunnel up and down,
+    so no form is built in (as for `20090`); the VPN tunnel traps cover it
+    ([snmp-traps.md](snmp-traps.md#built-in-rules)).
+  - **Palo Alto PAN-OS**: no IPsec tunnel or Advanced Routing Engine event
+    id was confirmed in the system log reference.
 - **Netgear and APC** send syslog in their own formats; no built-in rule
-  or trigger matches them. Custom rules work on them.
+  or trigger matches them. Netgear publishes no log message reference for
+  its managed switches (the M4200 / M4300 / M4350 manuals describe the
+  `environment trap` settings but no message text). APC (Schneider)
+  documents event texts such as `UPS: On battery due to an input power
+  problem` (event `0x0109`) and `System: Coldstart` / `System:
+  Warmstart`, but not the syslog line they are sent in (the NMC user
+  guide could not be read), so no tag or program to match them is known.
+  Custom **Contains** rules work on them; APC UPS state changes also
+  arrive as SNMP traps.
 - API-polled platforms (Cato, AWS, Azure, GCP, Meraki, Cisco FMC,
   Panorama, Appgate) send no syslog to Plexus; their state comes from the
   scheduled collections and, for Meraki, its alert feed

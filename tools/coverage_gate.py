@@ -29,20 +29,33 @@ DEFAULT_RULES = {
     "netcontrol/module_health.py": 95.0,
     # The poll's other state-based SNMP health checks on the same shape:
     # the shared table reader and raise/clear (snmp_health), power supplies,
-    # fans and temperature per vendor (environment_health), BGP peers and
-    # OSPF neighbors (routing_health), the per-device-type plan and the
-    # empty-table memory (health_checks). Measured by
-    # tests/test_environment_health.py, tests/test_routing_health.py and
-    # tests/test_health_checks.py (99-100%); do not lower them to land a
-    # change.
+    # fans, temperature and optics per vendor (environment_health), PoE
+    # ports, power sources and budgets (poe_health), BGP peers, OSPF, EIGRP
+    # and IS-IS neighbors and IP SLA probes (routing_health), the
+    # per-device-type plan and the empty-table memory (health_checks).
+    # Measured by tests/test_environment_health.py, tests/test_poe_health.py,
+    # tests/test_routing_health.py and tests/test_health_checks.py
+    # (99-100%); do not lower them to land a change.
     "netcontrol/snmp_health.py": 95.0,
     "netcontrol/environment_health.py": 95.0,
+    "netcontrol/poe_health.py": 95.0,
     "netcontrol/routing_health.py": 95.0,
     "netcontrol/health_checks.py": 95.0,
+    # HA / redundancy state on the same shape (failover units, redundancy
+    # peers, stacks, clusters, VRRP / HSRP, role changes) and the restart
+    # told from the polled uptime. Measured by tests/test_ha_health.py;
+    # do not lower them to land a change.
+    "netcontrol/ha_health.py": 95.0,
+    "netcontrol/device_restart.py": 95.0,
     # SNMPv3 trap decoding: the keyless header read, USM authentication,
     # decryption and the timeliness window on untrusted datagrams. Measured
     # by tests/test_snmpv3_traps.py (100%); do not lower it to land a change.
     "netcontrol/snmpv3_traps.py": 95.0,
+    # The trap receiver's stored SNMPv3 engine (inform engine ID and boots)
+    # and replay record. Measured by tests/test_snmpv3_engine_state.py
+    # (100%); do not lower it to land a change.
+    "netcontrol/snmpv3_engine.py": 95.0,
+    "routes/db/snmp_engine.py": 95.0,
     # Floor from tests/test_jobs.py (param coercion, queue ordering,
     # dependency gating, event writer). The runner itself is untested.
     "netcontrol/routes/jobs.py": 25.0,

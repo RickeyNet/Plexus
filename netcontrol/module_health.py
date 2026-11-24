@@ -38,10 +38,10 @@ Sources, checked against the MIB texts:
     jnxFruState            1.3.6.1.4.1.2636.3.1.15.1.8
     jnxFruOfflineReason    1.3.6.1.4.1.2636.3.1.15.1.10
 
-Not read (see docs/vendor-monitoring-coverage.md): other vendors, a module
-that left the table without ever reading not-OK (needs a stored baseline),
-stack members (CISCO-STACKWISE-MIB) and supervisor redundancy
-(CISCO-RF-MIB).
+Not read (see docs/vendor-monitoring-coverage.md): other vendors, and a
+module that left the table without ever reading not-OK (needs a stored
+baseline). Stack members (CISCO-STACKWISE-MIB) and supervisor redundancy
+(CISCO-RF-MIB) are read by the HA checks (``ha_health``), not here.
 """
 
 from __future__ import annotations

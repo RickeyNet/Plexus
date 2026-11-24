@@ -1,4 +1,4 @@
-"""BGP peer and OSPF neighbor state in the monitoring poll
+"""BGP peer, OSPF, EIGRP and IS-IS neighbor and IP SLA state in the monitoring poll
 (netcontrol/routing_health.py on netcontrol/snmp_health.py).
 
 Invented peers and neighbors in the documentation address ranges; the
@@ -162,6 +162,158 @@ def test_a_healthy_neighbor_gone_from_the_table_is_down_until_forgotten():
     assert "192.0.2.6.0" not in _classes(later)
     assert sh.cleared_keys(rh.OSPF, 3, later, ["3:ospf_neighbor_down:192.0.2.6.0"]) == ["3:ospf_neighbor_down:192.0.2.6.0"]
     assert rh.settle_ospf(3, None) is None
+
+
+# ── BGP peers in VRFs: cbgpPeer3Table ───────────────────────────────────────
+
+
+async def test_cisco_vrf_peers_name_their_vrf():
+    peer3 = rh.CISCO_BGP_VRF_PEERS
+    vrf = f"3.{V4}"
+    agent = Agent(
+        {f"{peer3.state_oid}.0.{V6}": 6, f"{peer3.state_oid}.{vrf}": 3},
+        {
+            f"{peer3.remote_as_oid}.{vrf}": 64501,
+            f"{peer3.transitions_oid}.{vrf}": 2,
+            f"1.3.6.1.4.1.9.9.187.1.2.9.1.4.{vrf}": "blue",
+        },
+    )
+    status = sh.select(rh.BGP, await peer3.read(agent.get, agent.walk, 1))
+    assert [(i["name"], i["class"]) for i in status["items"]] == [
+        ("BGP peer 2001:db8::1", sh.OK),
+        ("BGP peer 192.0.2.1", sh.DOWN),
+    ]
+    assert [c["message"] for c in sh.alert_checks(rh.BGP, 1, status)] == ["BGP peer 192.0.2.1 (AS 64501, VRF blue) is active"]
+    # The VRF table is tried first on a Cisco device; cbgpPeer2Table after it.
+    chain = next(c for c in health_checks.plan_for_device("cisco_xe") if rh.KIND_BGP in c.kinds)
+    assert chain.sources == (rh.CISCO_BGP_VRF_PEERS, rh.CISCO_BGP_PEERS, rh.BGP4_PEERS)
+
+
+# ── EIGRP ────────────────────────────────────────────────────────────────────
+
+EIGRP_ADDR = rh.EIGRP_PEER_ADDR
+
+
+async def _eigrp(agent: Agent, host_id: int = 1) -> dict:
+    return sh.select(rh.EIGRP, await rh.EIGRP_PEERS.read(agent.get, agent.walk, host_id))
+
+
+async def test_an_eigrp_peer_gone_is_down_at_the_second_poll(monkeypatch):
+    clock = [0.0]
+    monkeypatch.setattr(rh.time, "monotonic", lambda: clock[0])
+    agent = Agent(
+        {
+            f"{EIGRP_ADDR}.0.100.1": bytes([192, 0, 2, 1]),
+            f"{EIGRP_ADDR}.0.100.2": bytes.fromhex("20010db8000000000000000000000002"),
+            f"{EIGRP_ADDR}.0.100.3": "No Such Instance currently exists at this OID",
+        }
+    )
+    first = await _eigrp(agent)
+    assert [(i["index"], i["name"], i["class"]) for i in first["items"]] == [
+        ("0.100.192.0.2.1", "EIGRP neighbor 192.0.2.1", sh.OK),
+        ("0.100." + ".".join(str(b) for b in bytes.fromhex("20010db8000000000000000000000002")), "EIGRP neighbor 2001:db8::2", sh.OK),
+    ]
+    # The peer to 192.0.2.1 drops; it comes back later under another handle.
+    del agent.rows[f"{EIGRP_ADDR}.0.100.1"]
+    clock[0] = 60.0
+    assert _classes(await _eigrp(agent))["0.100.192.0.2.1"] == sh.TRANSITIONAL
+    clock[0] = 120.0
+    second = await _eigrp(agent)
+    assert [c["message"] for c in sh.alert_checks(rh.EIGRP, 1, second)] == [
+        "EIGRP neighbor 192.0.2.1 (AS 100) is gone from the neighbor table"
+    ]
+    agent.rows[f"{EIGRP_ADDR}.0.100.9"] = bytes([192, 0, 2, 1])
+    assert _classes(await _eigrp(agent))["0.100.192.0.2.1"] == sh.OK
+
+
+async def test_eigrp_table_not_read_or_empty():
+    assert sh.is_empty(await rh.EIGRP_PEERS.read(Agent({}).get, Agent({}).walk, 7))
+    cut = Agent({}, cut={EIGRP_ADDR})
+    assert await rh.EIGRP_PEERS.read(cut.get, cut.walk, 7) is None
+    assert rh.address_text(None) == "" and rh.address_text(b"\x01\x02") == "0102"
+
+
+# ── IS-IS ────────────────────────────────────────────────────────────────────
+
+ISIS_STATE = rh.ISIS_ADJACENCIES.state_oid
+ISIS_SYSID = rh.ISIS_ADJACENCIES.system_id_oid
+SYSID_A = bytes.fromhex("00000c000001")
+SYSID_B = bytes.fromhex("00000c000002")
+KEY_A = "5.0.0.12.0.0.1"
+KEY_B = "7.0.0.12.0.0.2"
+
+
+async def test_isis_adjacencies_keyed_by_circuit_and_system_id():
+    agent = Agent(
+        {
+            f"{ISIS_STATE}.5.1": 3,
+            f"{ISIS_STATE}.5.2": 1,  # the same neighbor at another level, down
+            f"{ISIS_STATE}.6.1": 2,
+            f"{ISIS_STATE}.7.1": 9,  # a state the MIB does not list
+            f"{ISIS_STATE}.8.1": "No Such Instance currently exists at this OID",
+            f"{ISIS_SYSID}.5.1": SYSID_A,
+            f"{ISIS_SYSID}.5.2": SYSID_A,
+            f"{ISIS_SYSID}.7.1": SYSID_B,
+        }
+    )
+    first = sh.select(rh.ISIS, await rh.ISIS_ADJACENCIES.read(agent.get, agent.walk, 1))
+    assert _classes(first) == {KEY_A: sh.TRANSITIONAL, "6.1": sh.TRANSITIONAL, KEY_B: sh.TRANSITIONAL}
+    second = sh.select(rh.ISIS, await rh.ISIS_ADJACENCIES.read(agent.get, agent.walk, 1))
+    assert [c["message"] for c in sh.alert_checks(rh.ISIS, 1, second)] == [
+        "IS-IS neighbor 0000.0c00.0001 (circuit 5) is down",
+        "IS-IS adjacency 6.1 (circuit 6) is initializing",
+    ]
+
+
+async def test_isis_reads_fall_back_and_cut_walks():
+    assert sh.is_empty(await rh.CISCO_ISIS_ADJACENCIES.read(Agent({}).get, Agent({}).walk, 2))
+    for cut in (ISIS_STATE, ISIS_SYSID):
+        agent = Agent({f"{ISIS_STATE}.5.1": 3}, cut={cut})
+        assert await rh.ISIS_ADJACENCIES.read(agent.get, agent.walk, 2) is None
+    chain = next(c for c in health_checks.plan_for_device("cisco_xr") if rh.KIND_ISIS in c.kinds)
+    assert chain.sources == (rh.ISIS_ADJACENCIES, rh.CISCO_ISIS_ADJACENCIES)
+    assert rh.system_id_text(SYSID_B) == "0000.0c00.0002"
+
+
+# ── IP SLA ───────────────────────────────────────────────────────────────────
+
+SENSE = rh.RTT_LATEST_SENSE
+
+
+async def _ip_sla(agent: Agent, host_id: int = 1) -> dict:
+    return sh.select(rh.IP_SLA, await rh.IP_SLA_PROBES.read(agent.get, agent.walk, host_id))
+
+
+async def test_ip_sla_probes_alert_at_the_second_failed_poll():
+    agent = Agent(
+        {f"{SENSE}.10": 4, f"{SENSE}.11": 3, f"{SENSE}.12": 1, f"{SENSE}.13": 4, f"{SENSE}.14": 0},
+        {
+            f"{rh.RTT_ADMIN_TAG}.10": "wan-primary",
+            f"{rh.RTT_ECHO_TARGET}.10": bytes([198, 51, 100, 1]),
+            f"{rh.RTT_OPER_STATE}.10": 6,
+            f"{rh.RTT_OPER_STATE}.13": 5,  # inactive: its last result is stale
+        },
+    )
+    first = await _ip_sla(agent, host_id=4)
+    assert _classes(first) == {"10": sh.TRANSITIONAL, "11": sh.TRANSITIONAL, "12": sh.OK, "13": sh.ADMIN_DOWN, "14": sh.TRANSITIONAL}
+    second = await _ip_sla(agent, host_id=4)
+    assert [(c["message"], c["severity"]) for c in sh.alert_checks(rh.IP_SLA, 4, second)] == [
+        ("IP SLA 10 (wan-primary, target 198.51.100.1) is timing out", "critical"),
+        ("IP SLA 11 is over its threshold", "warning"),
+    ]
+    # Every sense code the TC lists is classified.
+    assert set(rh.RTT_SENSES) == set(range(0, 39))
+    # All probes removed: the table read empty clears them at once.
+    agent.rows = {}
+    assert (await _ip_sla(agent, host_id=4))["items"] == []
+    assert sh.is_empty(await rh.IP_SLA_PROBES.read(agent.get, agent.walk, 4))
+
+
+def test_forget_all_clears_every_neighbor_memory():
+    rh._EIGRP_MEMORY.seen[1] = {"0.1.192.0.2.1": ("x", "", 0.0)}
+    rh._IP_SLA_MEMORY.pending[1] = {"10"}
+    rh.forget_all()
+    assert rh._EIGRP_MEMORY.seen == {} and rh._IP_SLA_MEMORY.pending == {}
 
 
 # ── Wiring ───────────────────────────────────────────────────────────────────

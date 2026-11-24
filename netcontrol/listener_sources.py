@@ -30,7 +30,7 @@ the syslog TLS receiver compares with a client certificate.
 
 A dropped datagram is counted per listener and reason (``source``, ``rate``,
 ``community`` for a trap whose community is wrong, and ``v3`` for an SNMPv3
-trap from an inventory host that fails its USM checks) and logged at most
+trap or inform from an inventory host that fails its USM checks) and logged at most
 once per ``DROP_LOG_INTERVAL_SECONDS`` per listener.
 
 The settings are persisted in ``auth_settings("listener_sources")`` and
@@ -191,7 +191,10 @@ async def refresh_inventory() -> int:
         _inventory_loaded_at = _clock()
         return len(INVENTORY_ADDRESSES)
     INVENTORY_ADDRESSES.clear()
-    INVENTORY_ADDRESSES.update(mapping)
+    # Keyed in canonical form, so an IPv6 host address matches the source
+    # address the socket reports however the host's address was written.
+    for address, host_id in mapping.items():
+        INVENTORY_ADDRESSES.setdefault(canonical_address(address), host_id)
     INVENTORY_HOSTNAMES.clear()
     INVENTORY_HOSTNAMES.update(hostnames)
     _inventory_loaded_at = _clock()
@@ -213,11 +216,24 @@ def _maybe_refresh(now: float) -> None:
     _refresh_task = loop.create_task(refresh_inventory())
 
 
-def _canonical(address: str) -> str:
-    """An IPv4-mapped IPv6 source (``::ffff:192.0.2.1``) as its IPv4 address."""
-    if address.startswith("::ffff:") and "." in address:
-        return address[7:]
-    return address
+def canonical_address(address: str) -> str:
+    """A source or inventory address in one comparable form: an
+    IPv4-mapped IPv6 address (``::ffff:192.0.2.1``, any spelling) as its
+    IPv4 address, any other IPv6 address in its compressed lower-case form
+    (a zone, ``%eth0``, kept). An IPv4 address, or text that is no address,
+    is returned as given (stripped)."""
+    address = str(address or "").strip()
+    if ":" not in address:
+        return address
+    try:
+        parsed = ipaddress.IPv6Address(address)
+    except ValueError:
+        return address
+    mapped = parsed.ipv4_mapped
+    return str(mapped) if mapped is not None else str(parsed)
+
+
+_canonical = canonical_address
 
 
 def inventory_host_id(address: str) -> int | None:
@@ -346,7 +362,7 @@ _REASON_TEXT = {
     "source": "not an inventory host or allowed network",
     "rate": "over the per-source rate limit",
     "community": "wrong SNMP community",
-    "v3": "SNMPv3 trap not from the host's SNMPv3 user (authentication, level, time window or replay)",
+    "v3": "SNMPv3 trap or inform not from the host's SNMPv3 user (authentication, level, time window or replay)",
 }
 
 GUARDS: dict[str, SourceGuard] = {name: SourceGuard(name) for name in LISTENERS}

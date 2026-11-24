@@ -19,10 +19,28 @@ resolves ``{{secret.NAME}}`` references the way the poll does.
 * ``trap_v3_credentials`` / ``resolve_trap_v3_credentials`` -- the stored
   poll credentials of a host, as the trap decoder needs them.
 
-InformRequest is not answered: a receiver of an inform is the authoritative
-engine, which needs its own engine ID and an snmpEngineBoots that survives a
-restart (RFC 3414 section 2.2.2). A message with the reportable flag set, or
-an InformRequest PDU, is refused as ``V3Failure.INFORM``.
+For an InformRequest the roles turn round (RFC 3414 section 1.5.1): the
+receiver is the authoritative engine, and the inform carries the
+*receiver's* engine ID, boots and time, with keys localized to it. That
+side is ``LocalEngine`` (its engine ID and boots are stored by
+``netcontrol.snmpv3_engine``):
+
+* ``engine_discovery_report`` -- the usmStatsUnknownEngineIDs Report that
+  answers a discovery probe (RFC 3414 section 4), keyless.
+* ``decode_snmpv3_inform`` -- the same user, level and digest checks as a
+  trap, the authoritative time window (section 3.2 step 7a; a stale
+  message gets the authenticated usmStatsNotInTimeWindows Report the sender
+  resynchronizes with), decryption, and the Response PDU (RFC 3416 section
+  4.2.7) built with the local engine ID, boots and time at the request's
+  security level.
+
+No Report is sent for an unknown user, a wrong security level, a wrong
+digest or a decryption failure: a standard sender needs only the two above,
+and the others would tell an off-path sender which user names exist. Every
+reply is refused when it is more than ``MAX_REPLY_FACTOR`` times the
+request's size. ``decode_snmpv3_trap`` (the non-authoritative path) still
+refuses a message with the reportable flag, or an InformRequest PDU, as
+``V3Failure.INFORM``.
 
 Key derivation (password to key, key localization, AES key extension) and
 the ciphers are pysnmp's own USM services; this module frames the message
@@ -34,18 +52,20 @@ from __future__ import annotations
 
 import enum
 import hmac
+import secrets
 import threading
 import time
 from collections import OrderedDict, deque
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from functools import lru_cache
 from typing import Any
 
-from pyasn1.codec.ber import decoder as ber_decoder
+from pyasn1.codec.ber import decoder as ber_decoder, encoder as ber_encoder
 from pyasn1.type import univ
 from pysnmp.entity import config as usm
-from pysnmp.proto import api as snmp_api
+from pysnmp.proto import api as snmp_api, rfc3411
 from pysnmp.proto.mpmod.rfc3412 import ScopedPDU
 from pysnmp.proto.secmod.rfc3414.service import SnmpUSMSecurityModel
 
@@ -91,6 +111,30 @@ _FLAG_REPORTABLE = 0x04
 _TAG_INTEGER = 0x02
 _TAG_OCTET_STRING = 0x04
 _TAG_SEQUENCE = 0x30
+
+# A reply (Report or Response) is never more than this many times the size
+# of the datagram it answers: the receiver must not amplify forged traffic.
+MAX_REPLY_FACTOR = 3
+
+# RFC 3411 SnmpEngineID: the first bit set, a 31-bit IANA enterprise number,
+# a format octet (5: octets, administratively assigned) and 1..27 octets.
+# The enterprise is pysnmp's (20408), the SNMP engine Plexus is built on;
+# the rest is random, generated once (``new_engine_id``).
+_ENGINE_ID_ENTERPRISE = 20408
+_ENGINE_ID_FORMAT_OCTETS = 5
+_ENGINE_ID_RANDOM_OCTETS = 12
+
+# SNMP-USER-BASED-SM-MIB usmStats (RFC 3414 section 5): the counters a
+# Report carries, by the names ``LocalEngine.stats`` keeps them under.
+_USM_STATS = "1.3.6.1.6.3.15.1.1"
+USM_STATS_OIDS = {
+    "unsupported_sec_levels": f"{_USM_STATS}.1.0",
+    "not_in_time_windows": f"{_USM_STATS}.2.0",
+    "unknown_user_names": f"{_USM_STATS}.3.0",
+    "unknown_engine_ids": f"{_USM_STATS}.4.0",
+    "wrong_digests": f"{_USM_STATS}.5.0",
+    "decryption_errors": f"{_USM_STATS}.6.0",
+}
 
 # RFC 3411 securityLevel names.
 NO_AUTH_NO_PRIV = "noAuthNoPriv"
@@ -170,10 +214,12 @@ REFUSED = frozenset(
 class PendingV3Trap:
     """An SNMPv3 datagram queued by the receiver for the keyed decode in its
     batch writer: the whole datagram (at most ``MAX_V3_MESSAGE_SIZE``), its
-    unauthenticated header already read."""
+    unauthenticated header already read. ``reply_to`` is the socket address
+    it came from, set for an inform (a datagram the batch writer answers)."""
 
     data: bytes = field(repr=False)
     header: V3Header
+    reply_to: tuple | None = None
 
 
 @dataclass(frozen=True)
@@ -225,11 +271,14 @@ class V3Header:
 @dataclass(frozen=True)
 class TrapV3Result:
     """``trap`` (the decoded trap) when accepted, else ``failure``.
-    ``header`` is set whenever the datagram was well-formed SNMPv3."""
+    ``header`` is set whenever the datagram was well-formed SNMPv3.
+    ``reply`` (informs only) is the datagram to send back to the sender: the
+    Response of an accepted inform, or a Report."""
 
     trap: dict | None = None
     failure: V3Failure | None = None
     header: V3Header | None = None
+    reply: bytes | None = field(default=None, repr=False)
 
     @property
     def ok(self) -> bool:
@@ -404,7 +453,10 @@ class ReplayGuard:
     a receiver has no other reference. Within the window, a message whose
     digest was already accepted (an exact replay) is refused too.
 
-    The state is in memory: a restart forgets every engine. Thread safe.
+    The timelines (not the recent digests) can be saved and restored across
+    a restart: ``take_changed`` gives the ones that moved since the last
+    call, ``restore`` loads saved ones, with the engine's clock advanced by
+    the wall-clock time that passed since. Thread safe.
     """
 
     def __init__(
@@ -412,17 +464,78 @@ class ReplayGuard:
         max_engines: int = 4096,
         recent_per_engine: int = 256,
         clock: Callable[[], float] = time.monotonic,
+        wall_clock: Callable[[], float] = time.time,
     ) -> None:
         self._max_engines = max(1, int(max_engines))
         self._recent_per_engine = max(1, int(recent_per_engine))
         self._clock = clock
+        self._wall_clock = wall_clock
         self._timelines: OrderedDict[tuple[str, bytes], _Timeline] = OrderedDict()
+        # Keys whose timeline started or moved since ``take_changed``.
+        self._changed: set[tuple[str, bytes]] = set()
         self._lock = threading.Lock()
 
     @property
     def size(self) -> int:
         """How many (source, engine ID) timelines are held."""
         return len(self._timelines)
+
+    @property
+    def max_engines(self) -> int:
+        return self._max_engines
+
+    def take_changed(self) -> list[tuple[str, str, int, int, str]]:
+        """The timelines that started or moved since the last call, as
+        ``(source, engine ID hex, boots, engine time, seen_at)`` rows:
+        ``seen_at`` is the UTC wall-clock time (``YYYY-MM-DD HH:MM:SS``) at
+        which the engine's time was ``engine time``. Clears the set."""
+        with self._lock:
+            now, wall = self._clock(), self._wall_clock()
+            rows = []
+            for key in self._changed:
+                entry = self._timelines.get(key)
+                if entry is None:
+                    continue
+                anchored_wall = wall - max(0.0, now - entry.anchored)
+                rows.append((key[0], key[1].hex(), entry.boots, entry.engine_time, _utc_text(anchored_wall)))
+            self._changed.clear()
+        return sorted(rows)
+
+    def restore(self, rows: Iterable[dict]) -> int:
+        """Load saved timelines (``take_changed`` rows as dicts: ``source``,
+        ``engine_id``, ``boots``, ``engine_time``, ``seen_at``), newest
+        first, at most ``max_engines``. A timeline already held is kept; a
+        row that does not parse is skipped. The engine's clock is taken to
+        have run since ``seen_at`` (never backwards). Returns how many were
+        loaded."""
+        loaded = 0
+        with self._lock:
+            now, wall = self._clock(), self._wall_clock()
+            for row in reversed(list(rows)[: self._max_engines]):
+                try:
+                    source = str(row["source"])
+                    engine_id = bytes.fromhex(str(row["engine_id"]))
+                    boots, engine_time = int(row["boots"]), int(row["engine_time"])
+                    seen = datetime.strptime(str(row["seen_at"]), "%Y-%m-%d %H:%M:%S").replace(tzinfo=UTC).timestamp()
+                except KeyError, TypeError, ValueError:
+                    continue
+                if not (
+                    source
+                    and _ENGINE_ID_MIN <= len(engine_id) <= _ENGINE_ID_MAX
+                    and 0 <= boots <= MAX_ENGINE_VALUE
+                    and 0 <= engine_time <= MAX_ENGINE_VALUE
+                ):
+                    continue
+                key = (source, engine_id)
+                if key in self._timelines:
+                    continue
+                anchored = now - max(0.0, wall - seen)
+                self._timelines[key] = _Timeline(
+                    boots=boots, engine_time=engine_time, latest_received=engine_time, anchored=anchored
+                )
+                loaded += 1
+            self._evict()
+        return loaded
 
     def admit(self, source: str, engine_id: bytes, boots: int, engine_time: int, digest: bytes) -> V3Failure | None:
         """Record an authenticated message; None when it is timely and new,
@@ -437,6 +550,7 @@ class ReplayGuard:
                     return V3Failure.NOT_IN_TIME_WINDOW
                 entry = _Timeline(boots=boots, engine_time=engine_time, latest_received=engine_time, anchored=now)
                 self._timelines[key] = entry
+                self._changed.add(key)
                 self._evict()
             else:
                 self._timelines.move_to_end(key)
@@ -449,6 +563,7 @@ class ReplayGuard:
                     entry.engine_time = engine_time
                     entry.latest_received = engine_time
                     entry.anchored = now
+                    self._changed.add(key)
                 local_time = min(MAX_ENGINE_VALUE, entry.engine_time + int(max(0.0, now - entry.anchored)))
                 # 3.2.7 b: outside the time window.
                 if (
@@ -467,7 +582,12 @@ class ReplayGuard:
 
     def _evict(self) -> None:
         while len(self._timelines) > self._max_engines:
-            self._timelines.popitem(last=False)
+            key, _entry = self._timelines.popitem(last=False)
+            self._changed.discard(key)
+
+
+def _utc_text(epoch: float) -> str:
+    return datetime.fromtimestamp(epoch, UTC).strftime("%Y-%m-%d %H:%M:%S")
 
 
 # ── Keys ─────────────────────────────────────────────────────────────────────
@@ -540,6 +660,15 @@ def _decrypt(data: bytes, header: V3Header, credentials: TrapV3Credentials) -> A
     """RFC 3414 3.2.8: the decrypted ScopedPDU, or None when it does not
     decrypt to one under the configured privacy protocol (or, for AES-192 /
     AES-256, the other key-extension variant)."""
+    found = _decrypt_with_protocol(data, header, credentials)
+    return found[0] if found is not None else None
+
+
+def _decrypt_with_protocol(
+    data: bytes, header: V3Header, credentials: TrapV3Credentials
+) -> tuple[Any, tuple[int, ...]] | None:
+    """``_decrypt``, with the privacy protocol (key-extension variant) that
+    decrypted it: a Response is encrypted the same way."""
     priv_protocol = credentials.priv_protocol
     if priv_protocol is None or len(header.priv_params) != _PRIV_PARAMS_LEN:
         return None
@@ -559,7 +688,7 @@ def _decrypt(data: bytes, header: V3Header, credentials: TrapV3Credentials) -> A
         try:
             key = _localized_priv_key(candidate, credentials, header.engine_id)
             plaintext = bytes(service.decrypt_data(key, params, ciphertext))
-            return _decode_scoped_pdu(plaintext, _MAX_PLAINTEXT_PADDING)
+            return _decode_scoped_pdu(plaintext, _MAX_PLAINTEXT_PADDING), candidate
         except Exception:  # nosec B112 - a wrong key decrypts to garbage: try the next variant
             continue
     return None
@@ -569,11 +698,15 @@ def _varbinds(pdu: Any) -> list[tuple[str, str]]:
     return [(oid.prettyPrint(), value.prettyPrint()) for oid, value in _V2C.apiTrapPDU.get_varbinds(pdu)]
 
 
-def _trap(header: V3Header, scoped: Any) -> TrapV3Result:
+def _trap(header: V3Header, scoped: Any, inform: bool = False) -> TrapV3Result:
+    """The decoded notification of an accepted ScopedPDU: an SNMPv2-Trap
+    (``inform`` False, the trap path) or an InformRequest (``inform`` True,
+    the authoritative path); any other PDU is refused."""
     pdu = scoped.getComponentByName("data").getComponent()
-    if pdu.isSameTypeWith(_V2C.InformRequestPDU()):
+    is_inform = pdu.isSameTypeWith(_V2C.InformRequestPDU())
+    if is_inform and not inform:
         return TrapV3Result(failure=V3Failure.INFORM, header=header)
-    if not pdu.isSameTypeWith(_V2C.SNMPv2TrapPDU()):
+    if not (is_inform if inform else pdu.isSameTypeWith(_V2C.SNMPv2TrapPDU())):
         return TrapV3Result(failure=V3Failure.NOT_A_TRAP, header=header)
     varbinds = _varbinds(pdu)
     trap = {
@@ -582,7 +715,7 @@ def _trap(header: V3Header, scoped: Any) -> TrapV3Result:
         "trap_oid": next((value for oid, value in varbinds if oid == SNMP_TRAP_OID), ""),
         "agent_address": "",
         "varbinds": varbinds,
-        "pdu": "trap",
+        "pdu": "inform" if inform else "trap",
         "request_id": int(_V2C.apiPDU.get_request_id(pdu)),
         "user": header.user,
         "engine_id": header.engine_id_hex,
@@ -590,6 +723,25 @@ def _trap(header: V3Header, scoped: Any) -> TrapV3Result:
         "context_name": bytes(scoped.getComponentByName("contextName").asOctets()).decode("utf-8", "replace"),
     }
     return TrapV3Result(trap=trap, header=header)
+
+
+def _check_user(data: bytes, header: V3Header, credentials: TrapV3Credentials | None) -> V3Failure | None:
+    """RFC 3414 3.2.4 - 3.2.6, the same for a trap and an inform: None when
+    the message is from the host's user at exactly its level, correctly
+    signed. May raise for an unusable credential (a failed check)."""
+    # 3.2.4: the user must be the host's configured user.
+    if credentials is None or not hmac.compare_digest(header.user_name, credentials.user_name):
+        return V3Failure.UNKNOWN_USER
+    # 3.2.5: the message's level must be the user's. A weaker message
+    # (noAuthNoPriv / authNoPriv for an authPriv user) would let anyone who
+    # can spoof the source address inject a trap; a stronger one names a
+    # privacy protocol the user does not have.
+    if header.security_level != credentials.security_level:
+        return V3Failure.SECURITY_LEVEL
+    # 3.2.6.
+    if not _authenticated(data, header, credentials):
+        return V3Failure.AUTHENTICATION
+    return None
 
 
 def decode_snmpv3_trap(
@@ -620,18 +772,9 @@ def decode_snmpv3_trap(
         # RFC 3414 3.2.3: an empty engine ID asks for discovery.
         if not header.engine_id:
             return TrapV3Result(failure=V3Failure.UNKNOWN_ENGINE_ID, header=header)
-        # RFC 3414 3.2.4: the user must be the host's configured user.
-        if credentials is None or not hmac.compare_digest(header.user_name, credentials.user_name):
-            return TrapV3Result(failure=V3Failure.UNKNOWN_USER, header=header)
-        # RFC 3414 3.2.5: the message's level must be the user's. A weaker
-        # message (noAuthNoPriv / authNoPriv for an authPriv user) would let
-        # anyone who can spoof the source address inject a trap; a stronger
-        # one names a privacy protocol the user does not have.
-        if header.security_level != credentials.security_level:
-            return TrapV3Result(failure=V3Failure.SECURITY_LEVEL, header=header)
-        # RFC 3414 3.2.6.
-        if not _authenticated(data, header, credentials):
-            return TrapV3Result(failure=V3Failure.AUTHENTICATION, header=header)
+        refused_user = _check_user(data, header, credentials)
+        if refused_user is not None or credentials is None:
+            return TrapV3Result(failure=refused_user or V3Failure.UNKNOWN_USER, header=header)
         # RFC 3414 3.2.7 b.
         refused = replay_guard.admit(source, header.engine_id, header.engine_boots, header.engine_time, header.auth_params)
         if refused is not None:
@@ -656,6 +799,319 @@ def decode_snmpv3_trap(
         return _trap(header, scoped)
     except Exception:  # noqa: BLE001 - untrusted network input
         return TrapV3Result(failure=V3Failure.MALFORMED, header=header)
+
+
+# ── The authoritative engine (informs) ───────────────────────────────────────
+
+
+def new_engine_id() -> bytes:
+    """A new snmpEngineID in the RFC 3411 format: the enterprise with its
+    first bit set, format 5 (octets) and ``_ENGINE_ID_RANDOM_OCTETS`` random
+    octets. Generated once and stored (``netcontrol.snmpv3_engine``)."""
+    prefix = (0x80000000 | _ENGINE_ID_ENTERPRISE).to_bytes(4, "big") + bytes([_ENGINE_ID_FORMAT_OCTETS])
+    return prefix + secrets.token_bytes(_ENGINE_ID_RANDOM_OCTETS)
+
+
+class LocalEngine:
+    """The trap receiver's own SNMPv3 engine, the authoritative side of an
+    inform: its snmpEngineID, its snmpEngineBoots (incremented and stored
+    each time the receiver starts) and its snmpEngineTime, the seconds since
+    then (RFC 3414 section 2.2.2). ``stats`` are the usmStats counters a
+    Report carries (``USM_STATS_OIDS``), ``responses`` and ``reports`` the
+    replies built. Not thread safe: used from the event loop only."""
+
+    def __init__(self, engine_id: bytes, boots: int, clock: Callable[[], float] = time.monotonic) -> None:
+        engine_id = bytes(engine_id)
+        if not _ENGINE_ID_MIN <= len(engine_id) <= _ENGINE_ID_MAX:
+            raise ValueError("an snmpEngineID is 5 to 32 octets")
+        self.engine_id = engine_id
+        self.boots = max(0, min(MAX_ENGINE_VALUE, int(boots)))
+        self._clock = clock
+        self._started = clock()
+        self.stats: dict[str, int] = dict.fromkeys(USM_STATS_OIDS, 0)
+        self.responses = 0
+        self.reports = 0
+
+    @property
+    def engine_time(self) -> int:
+        """snmpEngineTime: whole seconds since this boot, at most 2^31-1."""
+        return min(MAX_ENGINE_VALUE, int(max(0.0, self._clock() - self._started)))
+
+    @property
+    def latched(self) -> bool:
+        """RFC 3414 section 2.2.2: at boots 2^31-1 no message is timely."""
+        return self.boots >= MAX_ENGINE_VALUE
+
+    def count(self, stat: str) -> int:
+        """Increment one usmStats counter; its new value (a Counter32)."""
+        self.stats[stat] = (self.stats[stat] + 1) % (1 << 32)
+        return self.stats[stat]
+
+
+# The usmStats counter each refusal of an inform increments (RFC 3414 3.2).
+_FAILURE_STAT = {
+    V3Failure.UNKNOWN_USER: "unknown_user_names",
+    V3Failure.SECURITY_LEVEL: "unsupported_sec_levels",
+    V3Failure.AUTHENTICATION: "wrong_digests",
+}
+
+
+def _ber(tag: int, value: bytes) -> bytes:
+    """One definite-length BER TLV (X.690 8.1.3)."""
+    size = len(value)
+    if size < 0x80:
+        length = bytes([size])
+    else:
+        raw = size.to_bytes((size.bit_length() + 7) // 8, "big")
+        length = bytes([0x80 | len(raw)]) + raw
+    return bytes([tag]) + length + value
+
+
+def _ber_integer(value: int) -> bytes:
+    return bytes(ber_encoder.encode(univ.Integer(value)))
+
+
+def _scoped_pdu_octets(context_engine_id: bytes, context_name: bytes, pdu: Any) -> bytes:
+    scoped = ScopedPDU()
+    scoped.setComponentByPosition(0, context_engine_id)
+    scoped.setComponentByPosition(1, context_name)
+    scoped.setComponentByPosition(2)
+    scoped.getComponentByPosition(2).setComponentByType(
+        pdu.tagSet, pdu, verifyConstraints=False, matchTags=False, matchConstraints=False
+    )
+    return bytes(ber_encoder.encode(scoped))
+
+
+def _encode_reply(
+    request: V3Header,
+    engine: LocalEngine,
+    scoped: bytes,
+    credentials: TrapV3Credentials | None = None,
+    priv_protocol: tuple[int, ...] | None = None,
+) -> bytes:
+    """An SNMPv3 message from ``engine`` answering ``request`` (RFC 3412
+    section 7.1, RFC 3414 section 3.1): the request's msgID and user name,
+    the local engine ID, boots and time (3.1 step 6), reportableFlag 0.
+    With ``credentials`` it is signed with the user's key localized to the
+    local engine ID (authNoPriv), with ``priv_protocol`` too encrypted
+    (authPriv); without, noAuthNoPriv."""
+    boots, engine_time = engine.boots, engine.engine_time
+    flags, salt, msg_data, digest_length = 0, b"", scoped, 0
+    if credentials is not None:
+        flags |= _FLAG_AUTH
+        digest_length = int(_AUTH_SERVICES[credentials.auth_protocol].digest_length)
+        if priv_protocol is not None:
+            flags |= _FLAG_PRIV
+            service: Any = _PRIV_SERVICES[priv_protocol]
+            key = _localized_priv_key(priv_protocol, credentials, engine.engine_id)
+            ciphertext, salt_octets = service.encrypt_data(key, (boots, engine_time, None), scoped)
+            msg_data, salt = _ber(_TAG_OCTET_STRING, bytes(ciphertext)), bytes(salt_octets)
+    security_parameters = _ber(
+        _TAG_SEQUENCE,
+        _ber(_TAG_OCTET_STRING, engine.engine_id)
+        + _ber_integer(boots)
+        + _ber_integer(engine_time)
+        + _ber(_TAG_OCTET_STRING, request.user_name)
+        + _ber(_TAG_OCTET_STRING, bytes(digest_length))
+        + _ber(_TAG_OCTET_STRING, salt),
+    )
+    header_data = _ber(
+        _TAG_SEQUENCE,
+        _ber_integer(request.msg_id)
+        + _ber_integer(MAX_V3_MESSAGE_SIZE)
+        + _ber(_TAG_OCTET_STRING, bytes([flags]))
+        + _ber_integer(_USM),
+    )
+    whole = _ber(
+        _TAG_SEQUENCE, _ber_integer(_SNMP_V3) + header_data + _ber(_TAG_OCTET_STRING, security_parameters) + msg_data
+    )
+    if credentials is not None:
+        # RFC 3414 6.3.1 / 7.3.1 (RFC 7860 4.2.1): the HMAC of the whole
+        # message with the digest zeroed, written in its place.
+        start, end = _parse_header(whole).auth_params_span
+        key = _localized_auth_key(credentials, engine.engine_id)
+        digest = hmac.new(key, whole, _HMAC_DIGEST[credentials.auth_protocol]).digest()[:digest_length]
+        whole = whole[:start] + digest + whole[end:]
+    return whole
+
+
+def _bounded(reply: bytes, request: bytes, header: V3Header) -> bytes | None:
+    """``reply``, or None when it is more than ``MAX_REPLY_FACTOR`` times
+    the request or larger than the sender accepts (msgMaxSize)."""
+    if len(reply) > MAX_REPLY_FACTOR * len(request) or len(reply) > header.msg_max_size:
+        return None
+    return reply
+
+
+def _plaintext_pdu(data: bytes, header: V3Header) -> tuple[Any, Any] | None:
+    """The (ScopedPDU, PDU) of an unencrypted message; None when encrypted
+    or not a ScopedPDU."""
+    if header.priv:
+        return None
+    start, end = header.msg_data_span
+    try:
+        scoped = _decode_scoped_pdu(data[start:end], 0)
+        return scoped, scoped.getComponentByName("data").getComponent()
+    except Exception:  # noqa: BLE001 - untrusted network input: the PDU class is unknown
+        return None
+
+
+def _report(
+    data: bytes, header: V3Header, engine: LocalEngine, stat: str, credentials: TrapV3Credentials | None = None
+) -> bytes | None:
+    """The Report PDU carrying usmStats counter ``stat`` (RFC 3412 section
+    7.1 step 3), or None when none may be sent: the reportable flag is
+    clear, or the request's PDU can be read and is not of the Confirmed
+    Class (3b). request-id is the request's when its PDU can be read, else
+    0 (3c); the context is the request's for an unknown engine ID (as
+    pysnmp does), else the local engine ID and the default context (3d).
+    noAuthNoPriv, or authNoPriv with ``credentials`` (RFC 3414 3.2 step
+    7a: a notInTimeWindow Report is authenticated)."""
+    if not header.reportable:
+        return None
+    request_id, context_engine_id, context_name = 0, engine.engine_id, b""
+    found = _plaintext_pdu(data, header)
+    if found is not None:
+        scoped, pdu = found
+        if pdu.tagSet not in rfc3411.CONFIRMED_CLASS_PDUS:
+            return None
+        request_id = int(_V2C.apiPDU.get_request_id(pdu))
+        if stat == "unknown_engine_ids":
+            context_engine_id = bytes(scoped.getComponentByName("contextEngineId").asOctets())
+            context_name = bytes(scoped.getComponentByName("contextName").asOctets())
+    report = _V2C.ReportPDU()
+    _V2C.apiPDU.set_defaults(report)
+    _V2C.apiPDU.set_request_id(report, request_id)
+    _V2C.apiPDU.set_varbinds(report, [(USM_STATS_OIDS[stat], _V2C.Counter32(engine.stats[stat]))])
+    reply = _bounded(
+        _encode_reply(header, engine, _scoped_pdu_octets(context_engine_id, context_name, report), credentials),
+        data,
+        header,
+    )
+    if reply is not None:
+        engine.reports += 1
+    return reply
+
+
+def engine_discovery_report(data: bytes, engine: LocalEngine) -> bytes | None:
+    """RFC 3414 section 3.2 step 3b and section 4: a reportable message
+    whose msgAuthoritativeEngineID is not ``engine``'s (empty, for a
+    discovery probe) counts usmStatsUnknownEngineIDs and is answered with
+    a noAuthNoPriv Report that carries the local engine ID, boots and time.
+    None (nothing to send) for anything else, or when ``_report`` sends
+    none. Needs no key; never raises."""
+    header = parse_snmpv3_header(data)
+    if header is None or not header.reportable or header.engine_id == engine.engine_id:
+        return None
+    engine.count("unknown_engine_ids")
+    try:
+        return _report(bytes(data), header, engine, "unknown_engine_ids")
+    except Exception:  # noqa: BLE001 - untrusted network input: no answer
+        return None
+
+
+def decode_snmpv3_inform(
+    data: bytes,
+    credentials: TrapV3Credentials | None,
+    engine: LocalEngine,
+    replay_guard: ReplayGuard,
+    source: str,
+) -> TrapV3Result:
+    """Authenticate, check, decrypt and decode an SNMPv3 InformRequest sent
+    to the local ``engine`` by ``source``, with that host's ``credentials``
+    (as for a trap), and build its answer.
+
+    The checks are the trap's (``_check_user``: user, exact security level,
+    digest, keys localized to the local engine ID), then the authoritative
+    time window (RFC 3414 3.2 step 7a: the local boots, the message's boots
+    equal to it, its time within 150 seconds of the local time), an exact
+    copy of an accepted message (``replay_guard``, per source), decryption
+    and the PDU, which must be an InformRequest.
+
+    On success ``result.trap`` is shaped as ``decode_snmpv3_trap``'s with
+    ``pdu`` "inform", and ``result.reply`` is the Response (RFC 3416 4.2.7:
+    the same request-id and varbinds, error-status 0) at the request's
+    security level, or None when it would be too large (``_bounded``).
+    Otherwise ``result.failure`` says why; ``result.reply`` is the Report
+    for an unknown engine ID or a message outside the time window, and None
+    for every other failure (no Report for an unknown user, level, digest
+    or decryption failure). Never raises."""
+    header = parse_snmpv3_header(data)
+    if header is None:
+        return TrapV3Result(failure=V3Failure.NOT_V3)
+    data = bytes(data)
+    if not header.reportable:
+        return TrapV3Result(failure=V3Failure.NOT_A_TRAP, header=header)
+    if header.engine_id != engine.engine_id:
+        return TrapV3Result(
+            failure=V3Failure.UNKNOWN_ENGINE_ID, header=header, reply=engine_discovery_report(data, engine)
+        )
+    try:
+        refused_user = _check_user(data, header, credentials)
+        if refused_user is not None or credentials is None:
+            failure = refused_user or V3Failure.UNKNOWN_USER
+            engine.count(_FAILURE_STAT[failure])
+            return TrapV3Result(failure=failure, header=header)
+        # RFC 3414 3.2 step 7a: the local engine is authoritative.
+        if (
+            engine.latched
+            or header.engine_boots != engine.boots
+            or abs(header.engine_time - engine.engine_time) > TIME_WINDOW_SECONDS
+        ):
+            engine.count("not_in_time_windows")
+            return TrapV3Result(
+                failure=V3Failure.NOT_IN_TIME_WINDOW,
+                header=header,
+                reply=_report(data, header, engine, "not_in_time_windows", credentials),
+            )
+        refused = replay_guard.admit(
+            source, engine.engine_id, header.engine_boots, header.engine_time, header.auth_params
+        )
+        if refused is not None:
+            return TrapV3Result(failure=refused, header=header)
+    except Exception:  # noqa: BLE001 - a bad credential (an unencodable passphrase) is a failed check
+        engine.count("wrong_digests")
+        return TrapV3Result(failure=V3Failure.AUTHENTICATION, header=header)
+    priv_protocol: tuple[int, ...] | None = None
+    if header.priv:
+        try:
+            found = _decrypt_with_protocol(data, header, credentials)
+        except Exception:  # noqa: BLE001 - untrusted network input
+            found = None
+        if found is None:
+            engine.count("decryption_errors")
+            return TrapV3Result(failure=V3Failure.DECRYPTION, header=header)
+        scoped, priv_protocol = found
+    else:
+        plain = _plaintext_pdu(data, header)
+        if plain is None:
+            return TrapV3Result(failure=V3Failure.MALFORMED, header=header)
+        scoped = plain[0]
+    try:
+        result = _trap(header, scoped, inform=True)
+        if result.trap is None:
+            return result
+        request = scoped.getComponentByName("data").getComponent()
+        response = _V2C.apiPDU.get_response(request)
+        _V2C.apiPDU.set_varbinds(response, _V2C.apiPDU.get_varbinds(request))
+        context_engine_id = bytes(scoped.getComponentByName("contextEngineId").asOctets())
+        context_name = bytes(scoped.getComponentByName("contextName").asOctets())
+        reply = _bounded(
+            _encode_reply(
+                header,
+                engine,
+                _scoped_pdu_octets(context_engine_id, context_name, response),
+                credentials,
+                priv_protocol,
+            ),
+            data,
+            header,
+        )
+    except Exception:  # noqa: BLE001 - untrusted network input
+        return TrapV3Result(failure=V3Failure.MALFORMED, header=header)
+    if reply is not None:
+        engine.responses += 1
+    return TrapV3Result(trap=result.trap, header=header, reply=reply)
 
 
 # ── Credentials ──────────────────────────────────────────────────────────────

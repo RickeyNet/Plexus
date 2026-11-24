@@ -27,7 +27,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 import netcontrol.routes.state as state
-from netcontrol import hardware_components, health_checks, snmp_health
+from netcontrol import device_restart, ha_health, hardware_components, health_checks, monitoring_repoll, snmp_health
 from netcontrol.drivers import supports_cli
 from netcontrol.integrations.apc import snmp as apc_snmp
 from netcontrol.integrations.availability import ENTITY_TYPES as TOPOLOGY_ENTITY_TYPES
@@ -52,6 +52,7 @@ from netcontrol.routes import opnsense_health as opnsense_health_poll, topology_
 from netcontrol.routes.icmp import ICMP_AVAILABLE, ping_host
 from netcontrol.routes.maintenance_windows import _parse_iso
 from netcontrol.routes.metrics_engine import (
+    _parse_db_time,
     emit_metric_samples_from_poll,
     run_retention_cleanup as metrics_retention_cleanup,
     store_interface_error_metrics_from_poll,
@@ -600,11 +601,11 @@ async def _poll_host_monitoring(host: dict, cred: dict, snmp_cfg: dict) -> dict:
             result["if_details"] = if_details
 
             # State-based health (netcontrol/health_checks.py): hardware
-            # modules, power supplies, fans, temperature, BGP peers and OSPF
-            # neighbors, one walk of each status table the device type has,
-            # names only for the items down. Not asked of a device that
-            # answered none of the walks above: it would only wait out more
-            # timeouts.
+            # modules, power supplies, fans, temperature, BGP peers, OSPF
+            # neighbors, HA / redundancy units and links, VRRP / HSRP groups,
+            # one walk of each status table the device type has, names only
+            # for the items down. Not asked of a device that answered none of
+            # the walks above: it would only wait out more timeouts.
             if uptime_vals or if_oper:
                 result.update(await health_checks.read_health(host["id"], device_type, _get, _walk_table))
                 # Hardware components with serials (netcontrol/hardware_components.py):
@@ -970,10 +971,10 @@ async def _evaluate_alerts_for_poll(
         await db.resolve_monitoring_alerts(opnsense_health.alert_dedup_key(host_id, metric))
 
     # State-based health checks (modules, power supplies, fans, temperature,
-    # BGP peers, OSPF neighbors): one alert per item that is down, each
-    # cleared when its item reads OK, is disabled by an operator or left the
-    # table. A poll that read no table of a check clears nothing (and costs
-    # no query).
+    # BGP peers, OSPF neighbors, HA units and links, VRRP / HSRP groups): one
+    # alert per item that is down, each cleared when its item reads OK, is
+    # disabled by an operator or left the table. A poll that read no table of
+    # a check clears nothing (and costs no query).
     for check in health_checks.CHECKS:
         check_status = res.get(check.result_key) or {}
         built_in_checks.extend(snmp_health.alert_checks(check, host_id, check_status))
@@ -981,6 +982,17 @@ async def _evaluate_alerts_for_poll(
             open_keys = await db.list_open_monitoring_alert_keys(host_id, check.metric)
             for key in snmp_health.cleared_keys(check, host_id, check_status, open_keys):
                 await db.resolve_monitoring_alerts(key)
+
+    # Events the poll saw (one alert per host each, resolved an hour after
+    # the last one by _resolve_expired_poll_events): the uptime says the
+    # device or its agent restarted; an HA unit or VRRP / HSRP group changed
+    # role.
+    for event in (
+        device_restart.alert_check(host_id, res.get("restart")),
+        ha_health.role_change_check(host_id, res.get(ha_health.ROLE_CHANGES_KEY) or []),
+    ):
+        if event is not None:
+            built_in_checks.append(event)
 
     # Fire built-in checks with dedup + suppression
     for chk in built_in_checks:
@@ -1155,6 +1167,34 @@ async def _run_retention_cleanup_throttled() -> None:
         LOGGER.warning("monitoring: retention cleanup failed: %s", redact_value(_exc_text(exc)))
 
 
+# How many of a host's last polls are searched for one with an uptime (the
+# polls in between failed or read no SNMP).
+_RESTART_LOOKBACK_POLLS = 20
+
+
+async def _restart_since_last_poll(host_id: int, uptime_seconds: int) -> dict | None:
+    """The restart the new uptime shows against the host's last stored poll
+    that read one (``netcontrol.device_restart``); None for none, or on the
+    host's first poll."""
+    history = await db.get_monitoring_poll_history(host_id, limit=_RESTART_LOOKBACK_POLLS)
+    previous = next((p for p in history if p.get("uptime_seconds") is not None), None)
+    if previous is None:
+        return None
+    polled_at = _parse_db_time(str(previous.get("polled_at") or ""))
+    return device_restart.detect(previous, int(uptime_seconds), datetime.now(UTC), polled_at)
+
+
+async def _resolve_expired_poll_events() -> int:
+    """Resolve the poll's event alerts (a restart, an HA role change) not
+    seen again for ``device_restart.RESOLVE_MINUTES``."""
+    resolved = 0
+    for metric in (device_restart.METRIC, ha_health.ROLE_CHANGE_METRIC):
+        resolved += await db.resolve_stale_monitoring_alerts(
+            device_restart.ALERT_TYPE, metric, device_restart.RESOLVE_MINUTES, "auto-resolved (no new event)"
+        )
+    return resolved
+
+
 async def _process_poll_result(
     h: dict,
     res: dict,
@@ -1169,6 +1209,17 @@ async def _process_poll_result(
     rather than running as a serial tail after every device has been polled.
     """
     alerts_created = 0
+
+    # A restart told from the uptime, against the host's last stored poll
+    # (read before this one is stored); a restart may follow a module swap,
+    # so the next poll reads the hardware components too.
+    if res.get("uptime_seconds") is not None:
+        try:
+            res["restart"] = await _restart_since_last_poll(res["host_id"], res["uptime_seconds"])
+        except Exception as exc:
+            LOGGER.debug("monitoring: restart check failed for host %s: %s", res["host_id"], redact_value(str(exc)))
+        if res.get("restart"):
+            monitoring_repoll.mark_hardware_stale(res["host_id"])
 
     # Store poll result
     poll_id = await db.create_monitoring_poll(
@@ -1408,6 +1459,10 @@ async def _run_monitoring_poll_once(*, force: bool = False, host_ids: frozenset[
                 "monitoring: post-process error for %s: %s", h.get("hostname", "?"), redact_value(_exc_text(exc))
             )
 
+    try:
+        await _resolve_expired_poll_events()
+    except Exception as exc:
+        LOGGER.warning("monitoring: resolving expired poll events failed: %s", redact_value(_exc_text(exc)))
     await _run_retention_cleanup_throttled()
 
     LOGGER.info(

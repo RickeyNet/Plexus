@@ -53,18 +53,30 @@ _RELATED: tuple[tuple[str, re.Pattern[str]], ...] = tuple(
             "module",
             r"\bMODULES?\b|\bMOD\b|\bLINE ?CARDS?\b|\bOIR\b|\bSPA\b|\bSTACKMGR\b|\bSUP(?:ERVISOR\w*)?\b|\bXBAR\b|\bFRU\b",
         ),
+        (
+            "temperature",
+            r"\bTEMP(?!LATE|OR)\w*|\b\w*(?:OVER|UNDER|CRITICAL|MODULE)TEMP\w*|\bTHERMAL\b|\b\w*OVERHEAT\w*",
+        ),
+        (
+            "ha_switchover",
+            r"\bREDUNDANCY\b|\b\w*SWITCHOVER\w*|\bFAILOVER\b|\bREDCON\b|\bREDDRV\b|\bMLAG\b|\bJSRPD\b|\bMASTERSHIP\b"
+            r"|\bVSX\b|\bHA\b",
+        ),
         ("link_flap", r"\bLINK\b|\bLINEPROTO\b|\bUPDOWN\b|\bETHPORT\b|\bIF DOWN\b|\bPORT STATE\b"),
         ("auth_failure", r"\bLOGIN\w*|\bAUTH\w*|\bFAILED PASSWORD\b|\bSSHD?\b.*\bFAIL\w*"),
         ("config_change", r"\bCONFIG\w*|\bCOMMIT\w*"),
-        ("repoll", r"\bRELOAD\w*|\bRESTART\w*|\bREBOOT\w*|\bBOOTTIME\b|\bCOLD START\b"),
+        # The reload / restart forms belong to the device_restart rule (which
+        # shares them with the re-poll trigger, as ``syslog_rules.tag_owner``
+        # reports).
+        ("device_restart", r"\bRELOAD\w*|\bRESTART\w*|\bREBOOT\w*|\bBOOTTIME\b|\bCOLD START\b"),
     )
 )
 _WORD = re.compile(r"[A-Za-z0-9]+")
 
 
 def related_rule(tag: str, program: str = "", sample: str = "", raw_tag: str = "") -> str:
-    """A hint, not a match: the key of the built-in rule (or ``config_change``
-    / ``repoll`` trigger) an unmatched message group looks like the subject
+    """A hint, not a match: the key of the built-in rule (or the
+    ``config_change`` trigger) an unmatched message group looks like the subject
     of, from keywords in its ``tag`` and ``raw_tag`` (a numeric vendor tag
     such as ``FGT-0100032002`` says nothing, its ``raw_tag``, the FortiOS
     log description, does; an untagged group: its ``program`` and

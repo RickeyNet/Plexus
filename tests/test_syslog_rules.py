@@ -386,6 +386,39 @@ SAMPLES = [
         "clear",
         "FPC: Example 3D @ 1/*/*",
     ),
+    # temperature: the raise and clear of one sensor name the same instance.
+    (
+        "%ENVIRONMENTAL-1-ALERT: Temp: Inlet 1, Location: R0, State: Critical, Reading: 60 Celsius",
+        "temperature",
+        "raise",
+        "Inlet 1/R0",
+    ),
+    ("%ENVIRONMENTAL-5-SENSOROK: Temp: Inlet 1, Location: R0, State: normal", "temperature", "clear", "Inlet 1/R0"),
+    (
+        "%PLATFORM-2-MOD_TEMPMAJALRM: Module 1 reported Major temperature alarm. Sensor=3 Temperature=80 "
+        "MajThreshold=75",
+        "temperature",
+        "raise",
+        "Module 1/3",
+    ),
+    (
+        "%PLATFORM-2-MOD_TEMPMAJOR_OK: Module 1 recovered from major temperature alarm. Sensor=3 Temperature=60 "
+        "MajThreshold=75",
+        "temperature",
+        "clear",
+        "Module 1/3",
+    ),
+    # ha_switchover (one alert per device).
+    ("%REDUNDANCY-3-SWITCHOVER: RP switchover (PEER_DOWN_INTERRUPT)", "ha_switchover", "raise", ""),
+    ("%SYSMGR-2-HASWITCHOVER_START: Supervisor 2 is becoming active.", "ha_switchover", "raise", ""),
+    # device_restart: the reload and restart forms of the re-poll trigger.
+    (
+        "%SYS-5-RELOAD: Reload requested by ops on vty0 (192.0.2.50). Reload Reason: Reload Command.",
+        "device_restart",
+        "raise",
+        "",
+    ),
+    ("%SYS-5-RESTART: System restarted --", "device_restart", "raise", ""),
     # auth_failure (no instance: failures from any source count together).
     (
         "%SEC_LOGIN-4-LOGIN_FAILED: Login failed [user: ops] [Source: 192.0.2.50] [localport: 22] "
@@ -466,6 +499,14 @@ def test_each_builtin_rule_matches_its_samples(message, key, action, instance):
         "jnxFruSlot 1)",
         "chassisd[1500]: CHASSISD_SNMP_TRAP7: SNMP trap generated: FRU removal (jnxFruContentsIndex 2, "
         "jnxFruL1Index 1, jnxFruL2Index 0, jnxFruL3Index 0, jnxFruName PEM 1, jnxFruType 7, jnxFruSlot 1)",
+        # The IOS XE environmental alert of a voltage or fan sensor is no
+        # temperature alarm; an NX-OS major alarm recovered with a minor one
+        # pending resolves nothing; a standby found is no switchover.
+        "%ENVIRONMENTAL-1-ALERT: V: PEM Out, Location: P0, State: Warning, Reading: 0 mV",
+        "%ENVIRONMENTAL-1-ALERT: RPM: fan3, Location: P2, State: Warning, Reading: 999 RPM",
+        "%PLATFORM-2-MOD_TEMPRECOVER: Module 1 recovered from major temperature alarm. Minor temperature alarm "
+        "pending. Sensor=3 Temperature=70 MajThreshold=75 MinThresh=65",
+        "%REDUNDANCY-5-PEER_MONITOR_EVENT: Active detected a standby insertion (raw-event=PEER_FOUND(4))",
     ],
 )
 def test_other_messages_raise_nothing(message):
@@ -474,7 +515,9 @@ def test_other_messages_raise_nothing(message):
 
 
 def test_every_builtin_is_covered_by_a_sample():
-    assert {key for _m, key, _a, _i in SAMPLES} == set(sr.BUILTIN_BY_KEY)
+    # The event rule packs have their samples in test_syslog_event_packs.py.
+    packs = {r.key for r in (*sr._LAYER2_RULES, *sr._NEIGHBOR_RULES, *sr._HEALTH_RULES)}
+    assert {key for _m, key, _a, _i in SAMPLES} == set(sr.BUILTIN_BY_KEY) - packs
     for rule in sr.BUILTIN_RULES:
         assert rule.severity in sr.SEVERITIES and rule.families
 

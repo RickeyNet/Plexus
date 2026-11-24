@@ -250,7 +250,8 @@ async def test_matches_per_rule_and_trigger(fresh_rules):
     assert (out["scanned"], out["matched"], out["unmatched"], out["unknown_source"]) == (6, 6, 0, 0)
     assert out["truncated"] is False and out["limit"] == activity.SCAN_LIMIT and out["hours"] == 24
     rules = {r["key"]: r for r in out["rules"]}
-    assert set(rules) == {"link_flap", "ospf_neighbor"}
+    # The reload message also raises the device_restart rule.
+    assert set(rules) == {"link_flap", "ospf_neighbor", "device_restart"}
     assert (rules["link_flap"]["raised"], rules["link_flap"]["cleared"], rules["link_flap"]["hosts"]) == (2, 0, 2)
     assert (rules["ospf_neighbor"]["raised"], rules["ospf_neighbor"]["cleared"]) == (0, 1)
     # The newest down (200 s ago) is older than the OSPF clear (150 s ago).
@@ -310,7 +311,7 @@ async def test_a_tag_a_builtin_handles_is_marked_known(fresh_rules):
         "ASA-111010": ("config_change", True),
         "BGP-NEXTHOP_CHANGE": ("bgp_neighbor", False),
     }
-    assert sr.tag_owner("SYS-RESTART") == "repoll" and sr.tag_owner("CHASSISD_SNMP_TRAP6") == "power_supply"
+    assert sr.tag_owner("SYS-RESTART") == "device_restart" and sr.tag_owner("CHASSISD_SNMP_TRAP6") == "power_supply"
     assert sr.tag_owner("") == "" and sr.tag_owner("SEC-IPACCESSLOGP") == ""
 
 
@@ -407,8 +408,22 @@ async def test_the_window(fresh_rules):
         ("PARSER-CFGLOG_LOGGEDCMD", "", "", ""),
         ("SYS-CONFIG_R", "", "", "config_change"),
         ("UI_COMMIT_PROGRESS", "", "", "config_change"),
-        ("SYS-RESTART_X", "", "", "repoll"),
-        ("UI_REBOOT_X", "", "", "repoll"),
+        # Reload / restart words point at the device_restart rule, which
+        # owns those tags (sr.tag_owner).
+        ("SYS-RESTART_X", "", "", "device_restart"),
+        ("UI_REBOOT_X", "", "", "device_restart"),
+        # Temperature and HA words.
+        ("ENVIRONMENTAL-SENSORFAIL_TEMP", "", "", "temperature"),
+        ("PLATFORM-ENVMON-DIE_OVERTEMP_MAJOR", "", "", "temperature"),
+        ("ENVMON-XCVR_OVERHEAT_WARNING", "", "", "temperature"),
+        ("C4K_IOSMODPORTMAN-CRITICALTEMP_X", "", "", "temperature"),
+        ("PLATFORM_THERMAL-TEMP_NOT_FUNCTIONAL", "", "", "temperature"),
+        ("REDUNDANCY-RELOADING_STANDBY", "", "", "ha_switchover"),
+        ("JSRPD_NODE_STATE_CHANGE", "", "", "ha_switchover"),
+        ("ASA-747016", "", "", ""),
+        # A template or a temporary state is no temperature.
+        ("SYS-TEMPLATE_APPLIED", "", "", ""),
+        ("SYS-TEMPORARY_X", "", "", ""),
         ("", "kernel", "kernel: ix0: link state changed to DOWN", "link_flap"),
         # Word boundaries: no accidental hits inside other words.
         ("MCAST-FANOUT_LIMIT", "", "", ""),
@@ -424,6 +439,9 @@ def test_a_numeric_vendor_tag_is_hinted_by_its_description():
     assert activity.related_rule("FGT-0100032021", "", "") == ""
     assert activity.related_rule("FGT-0100032021", "", "", "Admin login disabled") == "auth_failure"
     assert activity.related_rule("AOSCX-404", "", "", "Event|404|LOG_INFO") == ""
+    # A FortiOS HA id the rules leave out is hinted by its description.
+    assert activity.related_rule("FGT-0108037910", "", "", "Heartbeat packet lost") == ""
+    assert activity.related_rule("FGT-0108037911", "", "", "HA activity information") == "ha_switchover"
 
 
 # ── API ──────────────────────────────────────────────────────────────────────

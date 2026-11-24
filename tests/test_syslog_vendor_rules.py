@@ -251,6 +251,12 @@ def test_cisco_and_junos_messages_keep_their_tags():
         ("<187>123: *Mar  1 00:01:02.123: %LINK-3-UPDOWN: Interface Gi0/1, changed state to down", "LINK-UPDOWN"),
         ("000045: sw-a1: Jan 10 10:00:00.000 UTC: %SYS-5-CONFIG_I: Configured from console by ops", "SYS-CONFIG_I"),
         ("mib2d[1234]: SNMP_TRAP_LINK_DOWN: ifIndex 526, ifAdminStatus up(1), ifName ge-0/0/1", "SNMP_TRAP_LINK_DOWN"),
+        # FTD (6.3 on) writes the ASA ids under its own prefix, from 7.0.5 /
+        # 7.2 after a colon; IOS XR facilities have a category first.
+        ("<161>Jan 10 10:00:00 fw3 : %FTD-1-104001: (Primary) Switching to ACTIVE - x.", "FTD-104001"),
+        ("%FTD-4-411002: Line protocol on Interface inside, changed state to down", "FTD-411002"),
+        ("%PLATFORM-ENVMON-2-FAN_FAIL : Fan failure on slot 0/FT0/SP, fan 2, RPM 0", "PLATFORM-ENVMON-FAN_FAIL"),
+        ("%HA-REDCON-6-GO_ACTIVE : this card going active", "HA-REDCON-GO_ACTIVE"),
     ]:
         assert sr.parse_syslog_message(message).tag == tag
 
@@ -647,6 +653,309 @@ SAMPLES = [
         "raise",
         "PIC: Example-PIC @ 1/0/*",
     ),
+    # module: Catalyst 4500, IOS XR, Arista EOS, FortiOS, AOS-CX, AOS-Switch.
+    ("%C4K_IOSMODPORTMAN-6-MODULEREMOVED: Module 3 is removed", "module", "raise", "3"),
+    (
+        "%C4K_CHASSIS-3-INSUFFICIENTPOWERSHUTDOWN: Holding module in slot 3 in reset, due to insufficient power",
+        "module",
+        "raise",
+        "3",
+    ),
+    (
+        "%C4K_IOSMODPORTMAN-6-MODULEONLINE: Module 3 (EX-LC-48 S/N: EXA0000C3 Hw: 1.0) is online",
+        "module",
+        "clear",
+        "3",
+    ),
+    ("%PLATFORM-INVMGR-5-OIROUT : OIR: Node 0/1/CPU0 removed", "module", "raise", "0/1/CPU0"),
+    (
+        "%PLATFORM-SHELFMGR-3-NODE_RESET_BRINGDOWN : Reset node 0/2/CPU0 due to heartbeat loss",
+        "module",
+        "raise",
+        "0/2/CPU0",
+    ),
+    (
+        "Fru: %HARDWARE-3-CARD_LOST_POWER: Linecard3 unexpectedly lost power. POWER GOOD signal deasserted. "
+        "model: EX-LC rev: 01 serial number: EXA0000L3",
+        "module",
+        "raise",
+        "Linecard3",
+    ),
+    (
+        "Fru: %FRU-6-CARD_REMOVED: Card Linecard3 has been removed. model: EX-LC rev: 01 serial number: EXA0000L3",
+        "module",
+        "raise",
+        "Linecard3",
+    ),
+    (
+        "Fru: %HARDWARE-6-CARD_POWERED_ON: Card Linecard3 has been powered on. model: EX-LC rev: 01 serial "
+        "number: EXA0000L3",
+        "module",
+        "clear",
+        "Linecard3",
+    ),
+    (fgt("0100022111", "system", "error", "FPC down due to PSU action", 'msg="FPC down"'), "module", "raise", ""),
+    (
+        aoscx(3207, "LOG_ERR", "Line module 1/3 has failed: example reason", daemon="hpe-cardd"),
+        "module",
+        "raise",
+        "1/3",
+    ),
+    (aoscx(3202, "LOG_WARN", "Line module 1/3 removed", daemon="hpe-cardd"), "module", "raise", "1/3"),
+    (aoscx(9913, "LOG_WARN", "Lost member 2 with Loss of communication", daemon="vsfd"), "module", "raise", "2"),
+    (aoss("00402", "stacking", "Stack member 2 lost."), "module", "raise", "2"),
+    # power_supply and fan: IOS XR.
+    (
+        "%PLATFORM-PWR_MGMT-2-MODULE_FAILURE : Power-module 0/PS0/M1/SP failure condition raised: Output voltage",
+        "power_supply",
+        "raise",
+        "0/PS0/M1/SP",
+    ),
+    ("%PLATFORM-ENVMON-2-POWERSUPPLY_NONOP : 0/PS0/M1/SP is Non-Operational", "power_supply", "raise", "0/PS0/M1/SP"),
+    (
+        "%PLATFORM-ENVMON-6-POWERSUPPLY_NONOP_CLEAR : 0/PS0/M1/SP has become operational",
+        "power_supply",
+        "clear",
+        "0/PS0/M1/SP",
+    ),
+    ("%PLATFORM-ENVMON-2-FAN_FAIL : Fan failure on slot 0/FT0/SP, fan 2, RPM 0", "fan", "raise", "0/FT0/SP/2"),
+    (
+        "%PLATFORM-ENVMON-2-FAN_CLEAR : Fan failure cleared on slot 0/FT0/SP, fan 2, RPM 5000",
+        "fan",
+        "clear",
+        "0/FT0/SP/2",
+    ),
+    ("%PLATFORM-ENVMON-2-FANTRAY_FAIL : Fan tray failure on slot 0/FT1/SP", "fan", "raise", "0/FT1/SP"),
+    ("%PLATFORM-ENVMON-2-FANTRAY_CLEAR : Fan tray failure cleared on slot 0/FT1/SP", "fan", "clear", "0/FT1/SP"),
+    # power_supply and fan: ASA / FTD 735xxx, Catalyst 9000 system fans.
+    ("%ASA-1-735004: Power Supply 1: Failure Detected", "power_supply", "raise", "Power Supply 1"),
+    ("%FTD-1-735003: Power Supply 1: OK", "power_supply", "clear", "Power Supply 1"),
+    ("%ASA-1-735006: Power Supply Unit Redundancy Lost", "power_supply", "raise", "Power Supply Unit Redundancy"),
+    ("%ASA-1-735005: Power Supply Unit Redundancy OK", "power_supply", "clear", "Power Supply Unit Redundancy"),
+    ("%FTD-1-735002: Cooling Fan 2: Failure Detected", "fan", "raise", "Cooling Fan 2"),
+    ("%FTD-1-735001: Cooling Fan 2: OK", "fan", "clear", "Cooling Fan 2"),
+    ("%ASA-1-735012: Power Supply 1: Fan Failure Detected", "fan", "raise", "Power Supply 1"),
+    ("%ASA-1-735011: Power Supply 1: Fan OK", "fan", "clear", "Power Supply 1"),
+    ("%PLATFORM_THERMAL-1-FRU_FAN_FAILURE: Switch 2: System fan 1 failed", "fan", "raise", "2/1"),
+    (
+        "%PLATFORM_THERMAL-6-FRU_FAN_RECOVERY: Switch 2: System fan 1 recovered to normal status",
+        "fan",
+        "clear",
+        "2/1",
+    ),
+    # link_flap and auth_failure: Cisco FTD.
+    ("%FTD-4-411002: Line protocol on Interface inside, changed state to down", "link_flap", "raise", "inside"),
+    (
+        "%FTD-6-113015: AAA user authentication Rejected : reason = Invalid password : local database : "
+        "user = ops : user IP = 192.0.2.50",
+        "auth_failure",
+        "raise",
+        "",
+    ),
+    # temperature.
+    ("%ASA-1-735007: CPU 0: Temp: 85 C, Critical", "temperature", "raise", "CPU 0"),
+    ("%FTD-4-735016: Chassis Ambient 1: Temp: 45 C, Warm", "temperature", "raise", "Chassis Ambient 1"),
+    ("%FTD-1-735020: CPU 0: Temp: 50 C, OK", "temperature", "clear", "CPU 0"),
+    (
+        "%ASA-1-735022: CPU0 is running beyond the max thermal operating temperature and the device will be "
+        "shutting down immediately to prevent permanent damage to the CPU.",
+        "temperature",
+        "raise",
+        "",
+    ),
+    ("%PLATFORM_THERMAL-3-OVERTEMP: Switch 2: Temperature above threshold", "temperature", "raise", "2"),
+    (
+        "%PLATFORM_THERMAL-6-TEMP_NORMAL: Switch 2: temperature is within the normal limit.",
+        "temperature",
+        "clear",
+        "2",
+    ),
+    ("%HARDWARE-1-THERMAL_CRITICAL: Temperature has reached critical threshold", "temperature", "raise", ""),
+    ("%HARDWARE-5-THERMAL_NORMAL: Temperature is within the acceptable limit", "temperature", "clear", ""),
+    (
+        "%ENVMON-2-IN_OUTLET_OVERTEMP: Warning: Inlet Temperature 50C Exceeds 45C.  Please resolve system cooling "
+        "to prevent system damage.",
+        "temperature",
+        "raise",
+        "Inlet",
+    ),
+    ("%ENVMON-6-IN_OUTLET_TEMP_OK: Inlet temperature normal", "temperature", "clear", "Inlet"),
+    (
+        "%C4K_IOSMODPORTMAN-4-MODULETEMPHIGH: Module 2 Sensor Air Outlet temperature is at or over threshold",
+        "temperature",
+        "raise",
+        "2/Air Outlet",
+    ),
+    (
+        "%C4K_IOSMODPORTMAN-6-MODULETEMPOK: Module 2 Sensor Air Outlet temperature is now ok - CurrentTemp: 40C, "
+        "Threshold: 65C",
+        "temperature",
+        "clear",
+        "2/Air Outlet",
+    ),
+    (
+        "%C4K_IOSMODPORTMAN-4-TEMPHIGH: Chassis temperature is at or over threshold - CurrentTemp: 50C, Threshold: 45C",
+        "temperature",
+        "raise",
+        "Chassis",
+    ),
+    (
+        "%PLATFORM-ENVMON-2-CARD_OVERTEMP : Slot 0/1/CPU0 temperature 80.0C at or above rising T4 threshold 75.0C",
+        "temperature",
+        "raise",
+        "0/1/CPU0",
+    ),
+    (
+        "%PLATFORM-ENVMON-2-CARD_OVERTEMP_CLEAR : Slot 0/1/CPU0 temperature 70.0C returned below falling T4 "
+        "threshold 72.0C",
+        "temperature",
+        "clear",
+        "0/1/CPU0",
+    ),
+    ("Thermostat: %ENVMON-0-CARDOVERHEATWARNING: Linecard3 is overheating", "temperature", "raise", "Linecard3"),
+    (
+        "Thermostat: %ENVMON-0-CARDTEMPNORMAL: Linecard3 temperature has returned to normal",
+        "temperature",
+        "clear",
+        "Linecard3",
+    ),
+    ("Thermostat: %ENVMON-0-SYSTEMOVERHEATWARNING: The system is overheating", "temperature", "raise", ""),
+    (
+        "chassisd[1500]: CHASSISD_FRU_HIGH_TEMP_CONDITION: FPC 0 temp-sensor-1 temperature 70 over 65 degrees C "
+        "(example)",
+        "temperature",
+        "raise",
+        "FPC 0 temp-sensor-1",
+    ),
+    (
+        "chassisd[1500]: CHASSISD_RE_OVER_TEMP_CONDITION: Routing Engine 0 temperature (85 C) over 80 degrees C",
+        "temperature",
+        "raise",
+        "Routing Engine 0",
+    ),
+    (
+        "chassisd[1500]: CHASSISD_SNMP_TRAP6: SNMP trap generated: Over Temperature! (jnxContentsContainerIndex 9, "
+        "jnxContentsL1Index 1, jnxContentsL2Index 0, jnxContentsL3Index 0, jnxContentsDescr Routing Engine, "
+        "jnxOperatingState/Temp 90)",
+        "temperature",
+        "raise",
+        "Routing Engine",
+    ),
+    (
+        "chassisd[1500]: CHASSISD_SNMP_TRAP6: SNMP trap generated: Temperature back to normal "
+        "(jnxContentsContainerIndex 9, jnxContentsL1Index 1, jnxContentsL2Index 0, jnxContentsL3Index 0, "
+        "jnxContentsDescr Routing Engine, jnxOperatingState/Temp 40)",
+        "temperature",
+        "clear",
+        "Routing Engine",
+    ),
+    (
+        fgt("0100022109", "system", "warning", "Temperature too high", 'msg="Temperature too high"'),
+        "temperature",
+        "raise",
+        "",
+    ),
+    (
+        fgt("0100022153", "system", "notice", "Temperature normal", 'msg="Temperature normal"'),
+        "temperature",
+        "clear",
+        "",
+    ),
+    (
+        aoscx(803, "LOG_WARN", "Over-temperature for sensor LC-1-Inlet, 70 degC", daemon="hpe-tempd"),
+        "temperature",
+        "raise",
+        "LC-1-Inlet",
+    ),
+    (aoss("00424", "chassis", "Over-temperature detected. Failures: 1"), "temperature", "raise", ""),
+    # ha_switchover.
+    ("%ASA-1-104001: (Primary) Switching to ACTIVE - HELLO not heard from mate.", "ha_switchover", "raise", ""),
+    ("%FTD-1-104002: (Secondary) Switching to STANDBY - Other unit wants me Standby", "ha_switchover", "raise", ""),
+    ("%FTD-1-105043: (Secondary) Failover interface failed", "ha_switchover", "raise", ""),
+    ("%HA-REDCON-6-GO_ACTIVE : this card going active", "ha_switchover", "raise", ""),
+    (
+        "%PLATFORM-REDDRV-7-ROLE_CHANGE : Detected role change to ACTIVE state due to peer going away",
+        "ha_switchover",
+        "raise",
+        "",
+    ),
+    ("%STACKMGR-4-MASTER_ELECTED: Switch 1 has been elected as MASTER of the stack", "ha_switchover", "raise", "1"),
+    ("Sysdb: %REDUNDANCY-5-SWITCHOVER_START: Stateful switchover started", "ha_switchover", "raise", ""),
+    (
+        "Mlag: %MLAG-3-STATE_INACTIVE_HEARTBEAT_TIMEOUT: MLAG is inactive with peer 198.51.100.20 because it "
+        "stopped receiving heartbeats from the peer",
+        "ha_switchover",
+        "raise",
+        "MLAG",
+    ),
+    (
+        "Mlag: %MLAG-6-STATE_PRIMARY: MLAG is active as primary with peer 198.51.100.20 and peer link Port-Channel10",
+        "ha_switchover",
+        "clear",
+        "MLAG",
+    ),
+    (
+        "jsrpd[1700]: JSRPD_RG_STATE_CHANGE: Redundancy-group 1 transitioned from 'primary' to 'secondary-hold' "
+        "state due to Manual failover",
+        "ha_switchover",
+        "raise",
+        "Redundancy-group 1",
+    ),
+    (
+        "jsrpd[1700]: JSRPD_HA_CONTROL_LINK_DOWN: HA control link monitor status is marked down",
+        "ha_switchover",
+        "raise",
+        "control link",
+    ),
+    (
+        "jsrpd[1700]: JSRPD_HA_CONTROL_LINK_UP: HA control link monitor status is marked up",
+        "ha_switchover",
+        "clear",
+        "control link",
+    ),
+    (
+        fgt("0108037893", "ha", "critical", "Virtual cluster member dead", 'msg="Virtual cluster member dead"'),
+        "ha_switchover",
+        "raise",
+        "",
+    ),
+    (
+        pan_system("ha", "state-change", "critical", "HA Group 1: Moved from state Active to state Non-Functional"),
+        "ha_switchover",
+        "raise",
+        "HA Group 1",
+    ),
+    (aoscx(7005, "LOG_WARN", "VSX Keepalive failed", daemon="hpe-vsx"), "ha_switchover", "raise", "VSX Keepalive"),
+    (aoscx(7001, "LOG_INFO", "VSX ISL port lag256 is down", daemon="hpe-vsx"), "ha_switchover", "raise", "VSX ISL"),
+    (aoss("03278", "stacking", "Member 2 (1) elected as commander. Reason: Election"), "ha_switchover", "raise", ""),
+    # device_restart.
+    (
+        "%FTD-5-199001: Reloaded at 10:00:00 UTC Jan 10 2026 by ops. Reload reason: Reload command",
+        "device_restart",
+        "raise",
+        "",
+    ),
+    ("Launcher: %SYS-5-SYSTEM_RESTARTED: System restarted", "device_restart", "raise", ""),
+    (
+        aoscx(1206, "LOG_INFO", "Module rebooted. Reason: Reboot requested by user, Boot-ID: 1a2b", daemon="hpe-x"),
+        "device_restart",
+        "raise",
+        "",
+    ),
+    (
+        fgt("0100032545", "system", "critical", "Scheduled daily reboot started", 'msg="Scheduled daily reboot"'),
+        "device_restart",
+        "raise",
+        "",
+    ),
+    (
+        "%INSTALL-INSTMGR-4-CALLING_PLATFORM_RELOAD_NODES_ALL : Install manager is about to request a router "
+        "reload to complete the install operation",
+        "device_restart",
+        "raise",
+        "",
+    ),
+    ("snmpd[900]: SNMPD_TRAP_WARM_START: trap_generate_warm: SNMP trap: warm start", "device_restart", "raise", ""),
     # auth_failure.
     (FGT_LOGIN_FAILED, "auth_failure", "raise", ""),
     (
@@ -758,8 +1067,8 @@ def test_each_vendor_form_matches_its_rule(message, key, action, instance):
         aoss("02796", "chassis", "Internal power supply 2 removed. Total fault count: 1."),
         aoss("03079", "bgp", "BGP: Peer deleted"),
         # A stack member added (not yet ready), a module powered back on, a
-        # fan tray FRU (the fan rule's), a diagnostic failure on a module
-        # that may stay online, and an AOS-CX module reboot (a restart).
+        # fan tray FRU (the fan rule's) and a diagnostic failure on a module
+        # that may stay online.
         "%STACKMGR-4-SWITCH_ADDED: Switch 2 has been ADDED to the stack.",
         "%C6KPWR-SP-4-ENABLED: power to module in slot 2 set on",
         "%PLATFORM-5-XBAR_PWRUP: Xbar 22 powered up (Serial number EXA0000X2)",
@@ -770,7 +1079,21 @@ def test_each_vendor_form_matches_its_rule(message, key, action, instance):
         "chassisd[1500]: CHASSISD_SNMP_TRAP10: SNMP trap generated: FRU power off (jnxFruContentsIndex 7, "
         "jnxFruL1Index 2, jnxFruL2Index 0, jnxFruL3Index 0, jnxFruName FPC: Example 3D @ 1/*/*, jnxFruType 3, "
         "jnxFruSlot 1, jnxFruOfflineReason 5, jnxFruLastPowerOff 1000, jnxFruLastPowerOn 900)",
-        aoscx(1206, "LOG_INFO", "Module rebooted. Reason: Reboot requested by user, Boot-ID: 1a2b", daemon="hpe-x"),
+        # ASA / FTD: failover monitoring that is only testing, a failover LAN
+        # link that is up, the start of a boot (199002 ends it).
+        "%ASA-1-105003: (Primary) Monitoring on interface inside waiting",
+        "%FTD-1-105031: Failover LAN interface is up",
+        "%ASA-6-199005: Startup begin",
+        # Arista: a card an operator powered off, the other supervisor
+        # becoming standby; Junos: a Virtual Chassis adjacency.
+        "Fru: %HARDWARE-6-CARD_POWERED_OFF: Card Linecard3 has been powered off. model: EX-LC rev: 01 serial "
+        "number: EXA0000L3",
+        "Sysdb: %REDUNDANCY-5-OTHER_STANDBY: Other supervisor became standby",
+        "vccpd[1300]: VCCPD_PROTOCOL_ADJUP: New adjacency to 0011.2233.4455s on vcp-255/1/0",
+        # PAN-OS: another HA-subtype text under the same event id; AOS-Switch:
+        # a stack member chosen as standby.
+        pan_system("ha", "state-change", "informational", "HA Group 1: Link group 'lg1' changed"),
+        aoss("03279", "stacking", "Member 2 (1) chosen as standby. Reason: Election"),
     ],
 )
 def test_near_misses_raise_nothing(message):
@@ -796,6 +1119,17 @@ def test_the_families_name_the_new_vendors():
     assert any(f.startswith("Cisco IOS XE") for f in module.families)
     # One form (Catalyst 6500) has no documented recovery message.
     assert (module.severity, module.auto_resolve_minutes) == ("critical", 1440)
+    assert {"Cisco IOS XR", "Arista EOS", "HPE Aruba AOS-CX", "HPE Aruba AOS-Switch"} <= set(module.families)
+    for key in ("link_flap", "auth_failure", "temperature", "ha_switchover", "device_restart"):
+        assert "Cisco FTD" in sr.BUILTIN_BY_KEY[key].families
+    # The rules the trap side has: the same keys and severities as the trap
+    # rules (netcontrol/trap_rules.py), so the two sides read alike.
+    from netcontrol import trap_rules as tr
+
+    traps = {r.key: r for r in tr.TRAP_RULES}
+    for key in ("temperature", "ha_switchover", "device_restart"):
+        rule = sr.BUILTIN_BY_KEY[key]
+        assert (rule.severity, rule.auto_resolve_minutes) == (traps[key].severity, traps[key].auto_resolve_minutes)
 
 
 @pytest.mark.parametrize(
@@ -819,11 +1153,31 @@ def test_the_families_name_the_new_vendors():
         ("PAN-SYSTEM-AUTH-FAIL", "auth_failure"),
         ("FGT-0100044547", "config_change"),
         ("PAN-CONFIG", "config_change"),
-        ("FGT-0100032138", "repoll"),
-        ("AOSS-00064", "repoll"),
-        ("AOSS-00066", "repoll"),
-        ("AOSCX-706", "repoll"),
-        ("AOSCX-1236", "repoll"),
+        # Reload and restart forms belong to the device_restart rule, which
+        # shares them with the re-poll trigger.
+        ("FGT-0100032138", "device_restart"),
+        ("AOSS-00064", "device_restart"),
+        ("AOSS-00066", "device_restart"),
+        ("AOSCX-706", "device_restart"),
+        ("AOSCX-1236", "device_restart"),
+        ("FTD-199002", "device_restart"),
+        ("SYS-SYSTEM_RESTARTED", "device_restart"),
+        ("FTD-111010", "config_change"),
+        ("FTD-411002", "link_flap"),
+        ("ASA-735020", "temperature"),
+        ("FGT-0100022153", "temperature"),
+        ("AOSCX-803", "temperature"),
+        ("FTD-104001", "ha_switchover"),
+        ("MLAG-STATE_PRIMARY", "ha_switchover"),
+        ("PAN-SYSTEM-STATE-CHANGE", "ha_switchover"),
+        ("C4K_IOSMODPORTMAN-MODULEONLINE", "module"),
+        ("PLATFORM-INVMGR-OIROUT", "module"),
+        ("AOSCX-9913", "module"),
+        ("PLATFORM-ENVMON-FAN_CLEAR", "fan"),
+        ("PLATFORM-ENVMON-POWERSUPPLY_NONOP", "power_supply"),
+        ("FTD-735005", "power_supply"),
+        ("ASA-735011", "fan"),
+        ("PLATFORM_THERMAL-FRU_FAN_RECOVERY", "fan"),
         ("AOSS-03125", "config_change"),
         ("AOSCX-2404", "ospf_neighbor"),
         ("AOSS-02703", "ospf_neighbor"),
@@ -869,6 +1223,9 @@ def test_tag_owner_knows_the_vendor_tags(tag, owner):
         pan_system("general", "general", "informational", "Commit job succeeded for user ops"),
         # AOS-Switch: the startup configuration saved.
         aoss("03125", "mgr", "new Startup Config Seq Num = 12 by CLI."),
+        # FTD logs the ASA configuration messages under its own prefix.
+        "%FTD-5-111008: User 'ops' executed the 'interface GigabitEthernet0/1' command.",
+        "%FTD-5-111010: User 'ops', running 'CLI' from IP 192.0.2.50, executed 'write memory'",
     ],
 )
 def test_vendor_configuration_changes(message):
@@ -885,6 +1242,7 @@ def test_vendor_configuration_changes(message):
         pan_config("commit", "Failed"),
         pan_system("general", "general", "informational", "Commit job failed for user ops"),
         pan_system("general", "general", "informational", "Commit job enqueued for user ops"),
+        "%FTD-5-111010: User 'ops', running 'CLI' from IP 192.0.2.50, executed 'show running-config'",
         # An execute command.
         fgt("0100044548", "system", "information", "Action performed", 'action="execute"'),
         aoscx(404, "LOG_INFO", "Link status for interface 1/1/7 is down"),
@@ -957,6 +1315,25 @@ def test_vendor_messages_that_are_no_configuration_change(message):
             "jnxFruSlot 1)",
             "module",
         ),
+        ("%FTD-5-199001: Reloaded at 10:00:00 UTC Jan 10 2026 by ops. Reload reason: Reload command", "reload"),
+        ("%FTD-6-199002: Startup completed. Beginning operation.", "restart"),
+        ("Launcher: %SYS-5-SYSTEM_RESTARTED: System restarted", "restart"),
+        ("%PLATFORM-SHELFMGR-6-SYSTEM_COLD_START : System cold start detected. Resetting Line Cards.", "restart"),
+        ("%FTD-4-411002: Line protocol on Interface inside, changed state to down", "interface_down"),
+        ("%PLATFORM-INVMGR-5-OIROUT : OIR: Node 0/1/CPU0 removed", "module"),
+        (aoscx(9913, "LOG_WARN", "Lost member 2 with Loss of communication", daemon="vsfd"), "module"),
+        # Temperature and HA messages re-poll as their trap rules do:
+        # temperature as a module change, an HA switchover as a state change.
+        ("%ASA-1-104001: (Primary) Switching to ACTIVE - HELLO not heard from mate.", "state_change"),
+        ("Mlag: %MLAG-3-STATE_INACTIVE_HEARTBEAT_TIMEOUT: MLAG is inactive with peer 198.51.100.20", "state_change"),
+        ("%ASA-1-735007: CPU 0: Temp: 85 C, Critical", "module"),
+        ("%FTD-1-735020: CPU 0: Temp: 50 C, OK", "module"),
+        ("%ENVIRONMENTAL-5-SENSOROK: Temp: Inlet 1, Location: R0, State: normal", "module"),
+        # An HA recovery re-polls too, as a clearing trap of ha_switchover does.
+        (
+            "jsrpd[1700]: JSRPD_HA_CONTROL_LINK_UP: HA control link monitor status is marked up",
+            "state_change",
+        ),
         ("%STACKMGR-4-SWITCH_ADDED: Switch 2 has been ADDED to the stack.", ""),
         (aoss("00076", "ports", "port 3 is now on-line"), ""),
         (aoscx(1235, "LOG_INFO", "Switch boot count is : 4", daemon="hpe-x"), ""),
@@ -1023,6 +1400,32 @@ async def test_aruba_bgp_peer_and_fan_raise_and_clear(engine):
         "resolved"
     ] == 1
     assert fan_key not in await _open(switch_id)
+
+
+async def test_firewall_failover_temperature_and_restart_alerts(engine):
+    clock, repolls, _changes = engine
+    _gid, host_id = await _host("fw3", "192.0.2.27", "cisco_ftd")
+    # A failover: one alert per firewall, and a re-poll as the trap rule
+    # ha_switchover starts (state_change, the normal delay).
+    out = await sr.process_syslog_batch(
+        [(host_id, "<161>Jan 10 10:00:00 fw3 : %FTD-1-104001: (Primary) Switching to ACTIVE - Interface check.")]
+    )
+    assert out["raised"] == 1 and out["repolls"] == 1
+    assert repolls[-1] == (host_id, sr.REPOLL_DELAY_SECONDS, sr.REPOLL_MIN_INTERVAL_SECONDS)
+    alert = (await _open(host_id))[f"syslog:ha_switchover:{host_id}:"]
+    assert (alert["metric"], alert["severity"]) == ("syslog_ha_switchover", "warning")
+    # A sensor over its threshold and back to normal.
+    clock.t += 10
+    assert (await sr.process_syslog_batch([(host_id, "%FTD-1-735007: CPU 0: Temp: 85 C, Critical")]))["raised"] == 1
+    temp_key = f"syslog:temperature:{host_id}:CPU 0"
+    assert (await _open(host_id))[temp_key]["severity"] == "critical"
+    assert (await sr.process_syslog_batch([(host_id, "%FTD-1-735020: CPU 0: Temp: 50 C, OK")]))["resolved"] == 1
+    assert temp_key not in await _open(host_id)
+    # A restart raises its alert and still re-polls.
+    clock.t += 10
+    out = await sr.process_syslog_batch([(host_id, "%FTD-6-199002: Startup completed. Beginning operation.")])
+    assert out["raised"] == 1 and out["repolls"] == 1 and repolls[-1][0] == host_id
+    assert f"syslog:device_restart:{host_id}:" in await _open(host_id)
 
 
 async def test_vendor_triggers_reach_the_engine(engine):

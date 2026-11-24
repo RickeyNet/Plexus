@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import netcontrol.routes.metrics_engine as me
 import netcontrol.routes.state as state
+import netcontrol.snmpv3_engine as se
 import netcontrol.snmpv3_traps as v3
 import pytest
 import routes.database as db
@@ -74,7 +75,9 @@ def v3_receiver(monkeypatch):
     monkeypatch.setattr(apc_traps, "REPOLL_DELAY_SECONDS", 0.0)
     monkeypatch.setattr(me, "_V3_REPLAY_GUARD", v3.ReplayGuard())
     monkeypatch.setattr(me, "_v3_pending", 0)
+    monkeypatch.setattr(me, "_v3_replies_waiting", 0)
     monkeypatch.setattr(me, "_trap_event_writer_task", _BusyWriter())
+    se.reset()
     repoll._repoll_waiting.clear()
     me._trap_event_buffer.clear()
     me._host_ip_cache.clear()
@@ -83,6 +86,7 @@ def v3_receiver(monkeypatch):
     me._trap_event_buffer.clear()
     ls.guard("trap").reset()
     sr.reset_state()
+    se.reset()
 
 
 class _BusyWriter:
@@ -235,7 +239,10 @@ async def test_credentials_that_fail_to_resolve_count_as_no_user(v3_receiver, mo
 # ── Kept undecoded ───────────────────────────────────────────────────────────
 
 
-async def test_an_inform_from_an_inventory_host_is_stored_undecoded(v3_receiver, monkeypatch):
+async def test_an_inform_without_a_started_engine_is_stored_undecoded(v3_receiver, monkeypatch):
+    """The receiver's SNMPv3 engine did not start (no database at start):
+    an inform is stored with its size, as before informs were answered."""
+    assert se.LOCAL is None
     host_id = await _host(monkeypatch, "v3-sw10", "192.0.2.160")
     await _receive("192.0.2.160", message(pdu=module_failed(), flags=0x07))
     stored = await _stored("192.0.2.160")
@@ -290,3 +297,183 @@ def test_a_v3_dict_is_never_believed_on_its_own():
     assert not me._trap_believed(trap, {"id": 1, "group_id": None})
     assert me._trap_believed(trap, {"id": 1, "group_id": None}, True)
 
+
+
+# ── Informs answered by the receiver's own engine ────────────────────────────
+
+LOCAL_ID = bytes.fromhex("80004fb805102030405060708090a0b0c0")  # invented
+
+
+def as_inform(trap) -> object:
+    """The same varbinds in an InformRequest."""
+    inform = P.InformRequestPDU()
+    P.apiPDU.set_defaults(inform)
+    P.apiPDU.set_varbinds(inform, P.apiPDU.get_varbinds(trap))
+    return inform
+
+
+@pytest.fixture
+def engine(v3_receiver, monkeypatch):
+    """A started receiver engine; every answer the receiver sends recorded
+    as ``(datagram, address)``."""
+    sent: list[tuple[bytes, tuple]] = []
+    monkeypatch.setattr(se, "LOCAL", v3.LocalEngine(LOCAL_ID, 3))
+    monkeypatch.setattr(me, "_send_reply", lambda data, addr: sent.append((data, addr)))
+    return sent
+
+
+def inform_to_local(**kwargs) -> bytes:
+    eng = se.LOCAL
+    kwargs.setdefault("pdu", as_inform(module_failed()))
+    kwargs.setdefault("flags", 0x07)
+    return message(engine=eng.engine_id, boots=eng.boots, engine_time=eng.engine_time, **kwargs)
+
+
+async def _receive_from(source: str, *datagrams: bytes) -> tuple:
+    addr = (source, 50162)
+    protocol = me._TrapSyslogProtocol("trap")
+    for data in datagrams:
+        protocol._handle_trap(data, source, addr)
+    await me._flush_trap_syslog_batch(me._take_trap_event_batch())
+    return addr
+
+
+async def test_a_discovery_probe_is_answered_at_once_and_not_stored(engine, monkeypatch):
+    await _host(monkeypatch, "v3-inf1", "192.0.2.170")
+    protocol = me._TrapSyslogProtocol("trap")
+    protocol._handle_trap(
+        message(auth=None, priv=None, engine=b"", user="", flags=0x04, pdu=trap_get()),
+        "192.0.2.170",
+        ("192.0.2.170", 50162),
+    )
+    assert me._trap_event_buffer == []
+    ((report, addr),) = engine
+    assert addr == ("192.0.2.170", 50162)
+    assert v3.parse_snmpv3_header(report).engine_id == LOCAL_ID
+    assert me.event_receiver_snapshot()["trap_usm_unknown_engine_ids"] == 1
+    assert _v3_drops() == 0
+
+
+def trap_get() -> object:
+    get = P.GetRequestPDU()
+    P.apiPDU.set_defaults(get)
+    P.apiPDU.set_varbinds(get, [])
+    return get
+
+
+async def test_an_inform_is_answered_stored_named_and_raises_its_rule(engine, monkeypatch):
+    host_id = await _host(monkeypatch, "v3-inf2", "192.0.2.171")
+    data = inform_to_local()
+    addr = await _receive_from("192.0.2.171", data)
+    stored = await _stored("192.0.2.171")
+    assert len(stored) == 1 and stored[0]["message"].startswith("cefcModuleStatusChange: cefcModuleOperStatus failed")
+    assert list(await _open(host_id)) == [f"trap:module:{host_id}:entPhysicalIndex 1001"]
+    ((response, to),) = engine
+    assert to == addr
+    header = v3.parse_snmpv3_header(response)
+    assert header.msg_id == v3.parse_snmpv3_header(data).msg_id and header.security_level == "authPriv"
+    snapshot = me.event_receiver_snapshot()
+    assert snapshot["trap_v3_informs_answered"] == 1 and snapshot["trap_engine_id"] == LOCAL_ID.hex()
+    assert _v3_drops() == 0
+
+
+async def test_the_inform_reaches_the_rules_as_an_inform(engine, monkeypatch):
+    await _host(monkeypatch, "v3-inf3", "192.0.2.172")
+    seen: list[tuple] = []
+
+    async def record(batch):
+        seen.extend(batch)
+
+    monkeypatch.setattr(tr, "process_trap_batch", record)
+    await _receive_from("192.0.2.172", inform_to_local())
+    ((_host_id, named),) = seen
+    assert named.trap["pdu"] == "inform" and named.trap["version"] == "v3"
+
+
+async def test_a_time_synchronization_inform_gets_its_report_and_is_not_stored(engine, monkeypatch):
+    await _host(monkeypatch, "v3-inf4", "192.0.2.173")
+    await _receive_from(
+        "192.0.2.173", message(engine=LOCAL_ID, boots=0, engine_time=0, flags=0x07, pdu=as_inform(module_failed()))
+    )
+    assert await _stored("192.0.2.173") == []
+    ((report, _addr),) = engine
+    assert v3.parse_snmpv3_header(report).security_level == "authNoPriv"
+    assert _v3_drops() == 0
+    assert me.event_receiver_snapshot()["trap_usm_not_in_time_windows"] == 1
+
+
+@pytest.mark.parametrize(
+    "kwargs", [{"auth_pass": "not-the-auth-passphrase"}, {"user": "someone-else"}, {"priv": None, "flags": 0x05}]
+)
+async def test_a_refused_inform_is_dropped_counted_and_not_answered(engine, monkeypatch, kwargs):
+    await _host(monkeypatch, "v3-inf5", "192.0.2.174")
+    await _receive_from("192.0.2.174", inform_to_local(**kwargs))
+    assert await _stored("192.0.2.174") == [] and engine == []
+    assert _v3_drops() == 1
+
+
+async def test_an_inform_from_a_non_inventory_source_is_stored_undecoded_and_not_answered(engine):
+    await _receive_from("203.0.113.175", inform_to_local())
+    await _receive_from("203.0.113.175", message(auth=None, priv=None, engine=b"", user="", flags=0x04, pdu=trap_get()))
+    assert engine == []
+    assert len(await _stored("203.0.113.175")) == 2 and _v3_drops() == 0
+
+
+async def test_informs_past_the_pending_limit_are_stored_undecoded(engine, monkeypatch):
+    await _host(monkeypatch, "v3-inf6", "192.0.2.176")
+    monkeypatch.setattr(me, "_V3_PENDING_MAX", 1)
+    protocol = me._TrapSyslogProtocol("trap")
+    for _ in range(2):
+        protocol._handle_trap(inform_to_local(), "192.0.2.176", ("192.0.2.176", 50162))
+    assert [isinstance(row[7], v3.PendingV3Trap) for row in me._trap_event_buffer] == [True, False]
+    assert me._v3_replies_waiting == 1
+    me._take_trap_event_batch()
+    assert me._v3_replies_waiting == 0
+
+
+async def test_the_writer_flushes_early_for_an_inform(engine, monkeypatch):
+    import asyncio
+
+    await _host(monkeypatch, "v3-inf7", "192.0.2.177")
+    monkeypatch.setattr(me, "_TRAP_EVENT_FLUSH_SECONDS", 30.0)
+    monkeypatch.setattr(me, "_TRAP_EVENT_REPLY_SECONDS", 0.01)
+    persisted: list[bool] = []
+
+    async def persist(_guard, **_kwargs):
+        persisted.append(True)
+        return 0
+
+    monkeypatch.setattr(se, "persist_replay", persist)
+    me._TrapSyslogProtocol("trap")._handle_trap(inform_to_local(), "192.0.2.177", ("192.0.2.177", 50162))
+    task = asyncio.ensure_future(me._trap_event_writer_loop())
+    try:
+        for _ in range(300):
+            if engine and persisted:
+                break
+            await asyncio.sleep(0.01)
+    finally:
+        task.cancel()
+    assert len(engine) == 1 and persisted
+
+
+async def test_shutdown_writes_the_replay_record_only_with_an_engine(engine, monkeypatch):
+    calls: list[dict] = []
+
+    async def persist(_guard, **kwargs):
+        calls.append(kwargs)
+        return 2
+
+    monkeypatch.setattr(se, "persist_replay", persist)
+    assert await me.flush_v3_state() == 2 and calls == [{"force": True}]
+    monkeypatch.setattr(se, "LOCAL", None)
+    assert await me.flush_v3_state() == 0
+
+
+async def test_an_ipv4_mapped_source_is_its_ipv4_host(v3_receiver, monkeypatch):
+    host_id = await _host(monkeypatch, "v3-inf8", "192.0.2.178")
+    monkeypatch.setattr(ls, "_inventory_loaded_at", float("inf"))
+    protocol = me._TrapSyslogProtocol("trap")
+    protocol.datagram_received(message(pdu=module_failed()), ("::ffff:192.0.2.178", 50162, 0, 0))
+    await me._flush_trap_syslog_batch(me._take_trap_event_batch())
+    assert len(await _stored("192.0.2.178")) == 1
+    assert list(await _open(host_id)) == [f"trap:module:{host_id}:entPhysicalIndex 1001"]

@@ -2,7 +2,9 @@
  * Syslog alert rule hooks. Backend: /api/monitoring/syslog-rules
  * (netcontrol/routes/syslog_rules.py). One merged list of the built-in rules
  * (only enabled and severity change) and the custom rules (full CRUD), and a
- * test endpoint that explains what a sample message would do.
+ * test endpoint that explains what a sample message would do. The SNMP trap
+ * rules (/api/monitoring/trap-rules) have the same shape: built-in and custom
+ * rules, and a test endpoint for a stored trap or an OID with varbinds.
  */
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
@@ -16,7 +18,7 @@ export interface SyslogRule {
   id: number | null;
   /** Names the rule in the alert metric (`syslog_<key>`, `trap_<key>`) and dedup key. */
   key: string;
-  /** `syslog`, or `trap` for a built-in SNMP trap rule (/monitoring/trap-rules). */
+  /** `syslog`, or `trap` for an SNMP trap rule (/monitoring/trap-rules). */
   source?: 'syslog' | 'trap';
   metric: string;
   name: string;
@@ -24,7 +26,7 @@ export interface SyslogRule {
   builtin: boolean;
   enabled: boolean;
   severity: string;
-  /** `builtin` for a built-in rule. */
+  /** `builtin` for a built-in rule, `trap` for a custom trap rule. */
   match_type: string;
   pattern: string;
   clear_pattern: string;
@@ -39,18 +41,47 @@ export interface SyslogRule {
   created_by: string;
   created_at: string;
   updated_at: string;
+  /** A custom trap rule's varbind conditions and instance. */
+  trap_match?: TrapMatch;
 }
 
-export interface SyslogRuleBody {
+export type TrapConditionOp = 'equals' | 'contains' | 'regex';
+
+/** A varbind (registry object name or OID) whose value equals / contains / matches `value`. */
+export interface TrapCondition {
+  object: string;
+  op: TrapConditionOp;
+  value: string;
+}
+
+export interface TrapMatch {
+  conditions: TrapCondition[];
+  clear_conditions: TrapCondition[];
+  /** The varbind naming the instance (`object` empty: one alert per device), by its value or its index. */
+  instance: { object: string; part: 'value' | 'index' };
+}
+
+/** The settings every custom rule (syslog or trap) has. */
+export interface RuleSettingsBody {
   name: string;
   enabled?: boolean;
-  match_type: SyslogMatchType;
-  pattern: string;
-  clear_pattern?: string;
   severity: SyslogSeverity;
   threshold_count: number;
   threshold_window_seconds: number;
   auto_resolve_minutes: number;
+}
+
+export interface SyslogRuleBody extends RuleSettingsBody {
+  match_type: SyslogMatchType;
+  pattern: string;
+  clear_pattern?: string;
+}
+
+/** A custom trap rule: `pattern` / `clear_pattern` are trap OIDs, `<OID>.*` prefixes or trap names. */
+export interface TrapRuleBody extends RuleSettingsBody {
+  pattern: string;
+  clear_pattern?: string;
+  trap_match: TrapMatch;
 }
 
 export interface SyslogMatch {
@@ -80,49 +111,70 @@ const PATH = '/monitoring/syslog-rules';
 const KEY = ['syslog-rules'];
 const ACTIVITY_KEY = ['syslog-rules-activity'];
 
+// The create / update / delete / built-in patch of either rule family, by its
+// path and query key (`also`: another query a new rule makes stale).
+
+function useCreateRuleAt<B>(path: string, key: string[], also?: string[]) {
+  const qc = useQueryClient();
+  return useMutation<SyslogRule, Error, B>({
+    mutationFn: (data) => apiRequest(path, { method: 'POST', body: data }),
+    onSuccess: () => {
+      // Without holding the save open for it.
+      if (also) void qc.invalidateQueries({ queryKey: also });
+      return qc.invalidateQueries({ queryKey: key });
+    },
+  });
+}
+
+function useUpdateRuleAt<B>(path: string, key: string[]) {
+  const qc = useQueryClient();
+  return useMutation<SyslogRule, Error, { id: number; data: Partial<B> }>({
+    mutationFn: ({ id, data }) => apiRequest(`${path}/${id}`, { method: 'PUT', body: data }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: key }),
+  });
+}
+
+function useDeleteRuleAt(path: string, key: string[]) {
+  const qc = useQueryClient();
+  return useMutation<{ ok: boolean; alerts_resolved: number }, Error, number>({
+    mutationFn: (id) => apiRequest(`${path}/${id}`, { method: 'DELETE' }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: key }),
+  });
+}
+
+function usePatchBuiltinAt(path: string, key: string[]) {
+  const qc = useQueryClient();
+  return useMutation<SyslogRule, Error, { key: string; data: { enabled?: boolean; severity?: string } }>({
+    mutationFn: ({ key: rule, data }) => apiRequest(`${path}/builtin/${encodeURIComponent(rule)}`, { method: 'PATCH', body: data }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: key }),
+  });
+}
+
 export function useSyslogRules() {
   return useQuery<SyslogRule[]>({ queryKey: KEY, queryFn: () => apiRequest(PATH) });
 }
 
 export function useCreateSyslogRule() {
-  const qc = useQueryClient();
-  return useMutation<SyslogRule, Error, SyslogRuleBody>({
-    mutationFn: (data) => apiRequest(PATH, { method: 'POST', body: data }),
-    onSuccess: () => {
-      // A new rule changes what counts as unmatched: scan again, without
-      // holding the save open for it.
-      void qc.invalidateQueries({ queryKey: ACTIVITY_KEY });
-      return qc.invalidateQueries({ queryKey: KEY });
-    },
-  });
+  // A new rule changes what counts as unmatched: scan again.
+  return useCreateRuleAt<SyslogRuleBody>(PATH, KEY, ACTIVITY_KEY);
 }
 
 export function useUpdateSyslogRule() {
-  const qc = useQueryClient();
-  return useMutation<SyslogRule, Error, { id: number; data: Partial<SyslogRuleBody> }>({
-    mutationFn: ({ id, data }) => apiRequest(`${PATH}/${id}`, { method: 'PUT', body: data }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: KEY }),
-  });
+  return useUpdateRuleAt<SyslogRuleBody>(PATH, KEY);
 }
 
 export function useDeleteSyslogRule() {
-  const qc = useQueryClient();
-  return useMutation<{ ok: boolean; alerts_resolved: number }, Error, number>({
-    mutationFn: (id) => apiRequest(`${PATH}/${id}`, { method: 'DELETE' }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: KEY }),
-  });
+  return useDeleteRuleAt(PATH, KEY);
 }
 
 export function usePatchBuiltinSyslogRule() {
-  const qc = useQueryClient();
-  return useMutation<SyslogRule, Error, { key: string; data: { enabled?: boolean; severity?: string } }>({
-    mutationFn: ({ key, data }) => apiRequest(`${PATH}/builtin/${encodeURIComponent(key)}`, { method: 'PATCH', body: data }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: KEY }),
-  });
+  return usePatchBuiltinAt(PATH, KEY);
 }
 
-// --- Built-in SNMP trap rules (/api/monitoring/trap-rules, netcontrol/trap_rules.py) ---
-// The same shape as a built-in syslog rule: `tags` / `clear_tags` are the trap names.
+// --- SNMP trap rules (/api/monitoring/trap-rules, netcontrol/trap_rules.py) ---
+// The same shape as a syslog rule: a built-in rule's `tags` / `clear_tags` are
+// the trap names; a custom rule's `pattern` / `clear_pattern` its traps and
+// `trap_match` its varbind conditions and instance.
 
 const TRAP_PATH = '/monitoring/trap-rules';
 const TRAP_KEY = ['trap-rules'];
@@ -132,10 +184,58 @@ export function useTrapRules() {
 }
 
 export function usePatchBuiltinTrapRule() {
-  const qc = useQueryClient();
-  return useMutation<SyslogRule, Error, { key: string; data: { enabled?: boolean; severity?: string } }>({
-    mutationFn: ({ key, data }) => apiRequest(`${TRAP_PATH}/builtin/${encodeURIComponent(key)}`, { method: 'PATCH', body: data }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: TRAP_KEY }),
+  return usePatchBuiltinAt(TRAP_PATH, TRAP_KEY);
+}
+
+export function useCreateTrapRule() {
+  return useCreateRuleAt<TrapRuleBody>(TRAP_PATH, TRAP_KEY);
+}
+
+export function useUpdateTrapRule() {
+  return useUpdateRuleAt<TrapRuleBody>(TRAP_PATH, TRAP_KEY);
+}
+
+export function useDeleteTrapRule() {
+  return useDeleteRuleAt(TRAP_PATH, TRAP_KEY);
+}
+
+/** One varbind of a tested trap, as the registry names it. */
+export interface TrapVarbind {
+  oid: string;
+  /** The registry object; '' when unknown. */
+  name: string;
+  index: string;
+  value: string;
+  label: string;
+}
+
+export interface TrapTestResult {
+  /** The registry name; '' for a trap it does not know. */
+  name: string;
+  trap_oid: string;
+  message: string;
+  varbinds: TrapVarbind[];
+  matches: (SyslogMatch & { key: string; name: string; builtin: boolean; enabled: boolean })[];
+  draft: SyslogMatch | null;
+  config_change: boolean;
+  /** The trap starts an immediate re-poll. */
+  repoll: boolean;
+  /** A clogMessageGenerated trap: the syslog line it carries, and what the syslog rules do with it. */
+  syslog_line: string;
+  syslog: SyslogTestResult | null;
+}
+
+export interface TrapTestRequest {
+  /** A stored trap (its id in Monitoring -> Events), or `trap_oid` with `varbinds`. */
+  event_id?: number;
+  trap_oid?: string;
+  varbinds?: [string, string][];
+  rule?: TrapRuleBody;
+}
+
+export function useTestTrap() {
+  return useMutation<TrapTestResult, Error, TrapTestRequest>({
+    mutationFn: (data) => apiRequest(`${TRAP_PATH}/test`, { method: 'POST', body: data }),
   });
 }
 

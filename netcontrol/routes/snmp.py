@@ -33,6 +33,7 @@ try:
         ObjectIdentity,
         ObjectType,
         SnmpEngine,
+        Udp6TransportTarget,
         UdpTransportTarget,
         UsmUserData,
         bulk_walk_cmd,
@@ -59,6 +60,7 @@ except Exception:
     ObjectType = None
     SnmpEngine = None
     UdpTransportTarget = None
+    Udp6TransportTarget = None
     UsmUserData = None
     get_cmd = None
     walk_cmd = None
@@ -477,6 +479,36 @@ def usm_protocols(v3: dict) -> tuple[Any, Any]:
     )
 
 
+# ── SNMP transport ───────────────────────────────────────────────────────────
+
+
+async def snmp_transport_target(address: str, port: int, timeout_seconds: float, retries: int) -> Any:
+    """The pysnmp UDP transport for an SNMP request to ``address``, used by
+    every request Plexus sends (poll, discovery, profile tests, vendor
+    readers): ``Udp6TransportTarget`` for an IPv6 address,
+    ``UdpTransportTarget`` (IPv4) for anything else, a host name included
+    (resolved to IPv4, as before). An IPv4-mapped IPv6 address
+    (``::ffff:192.0.2.1``) goes over IPv4. A scoped address
+    (``fe80::1%eth0``) raises ``ValueError``: pysnmp's IPv6 transport drops
+    the zone when it sends, so a link-local agent cannot be reached."""
+    text = str(address or "").strip()
+    try:
+        parsed = ipaddress.ip_address(text)
+    except ValueError:
+        parsed = None
+    if isinstance(parsed, ipaddress.IPv6Address):
+        if parsed.ipv4_mapped is not None:
+            return await UdpTransportTarget.create(
+                (str(parsed.ipv4_mapped), port), timeout=timeout_seconds, retries=retries
+            )
+        if parsed.scope_id:
+            raise ValueError(f"SNMP to a scoped IPv6 address is not supported: {text}")
+        if Udp6TransportTarget is None:
+            raise RuntimeError("pysnmp library is not available")
+        return await Udp6TransportTarget.create((str(parsed), port), timeout=timeout_seconds, retries=retries)
+    return await UdpTransportTarget.create((text, port), timeout=timeout_seconds, retries=retries)
+
+
 # ── SNMP Get ─────────────────────────────────────────────────────────────────
 
 
@@ -562,7 +594,7 @@ async def _snmp_get(ip_address: str, timeout_seconds: float, snmp_config: dict) 
         """One SNMP GET of ``oids``: (error_indication, error_status, var_binds)."""
         engine = SnmpEngine()
         try:
-            transport = await UdpTransportTarget.create((ip_address, port), timeout=timeout, retries=retries)
+            transport = await snmp_transport_target(ip_address, port, timeout, retries)
             error_indication, error_status, _error_index, var_binds = await get_cmd(
                 engine, auth, transport, ContextData(), *(ObjectType(ObjectIdentity(oid)) for oid in oids)
             )
@@ -799,7 +831,7 @@ async def _snmp_walk(
     own_engine = engine is None
     if own_engine:
         engine = SnmpEngine()
-    transport = await UdpTransportTarget.create((ip_address, port), timeout=timeout, retries=retries)
+    transport = await snmp_transport_target(ip_address, port, timeout, retries)
     results: dict[str, str] = {}
     row_count = 0
     error_text: str | None = None
@@ -892,7 +924,7 @@ async def _snmp_get_values(
     if own_engine:
         engine = SnmpEngine()
     try:
-        transport = await UdpTransportTarget.create((ip_address, port), timeout=timeout, retries=retries)
+        transport = await snmp_transport_target(ip_address, port, timeout, retries)
         error_indication, error_status, _error_index, var_binds = await get_cmd(
             engine, auth_data, transport, ContextData(), *(ObjectType(ObjectIdentity(oid)) for oid in oids)
         )
