@@ -122,6 +122,40 @@ def test_sanitize_accepts_ordinary_git_names():
     assert out["git_branch"] == "release/1.2-hotfix"
 
 
+# ── stored configuration ─────────────────────────────────────────────────
+
+
+def test_stored_config_is_filled_from_the_defaults(env):
+    env.store[au._SETTING_KEY] = {"channel": "edge", "git_branch": "release/1.2"}
+
+    cfg = asyncio.run(au._load_config())
+
+    assert cfg == {**au._DEFAULT_CONFIG, "channel": "edge", "git_branch": "release/1.2"}
+
+
+@pytest.mark.parametrize(
+    "stored",
+    [
+        {"channel": "git", "git_remote": "--upload-pack=touch /tmp/x"},
+        {"channel": "git", "git_branch": "-c"},
+        {"channel": "release", "image_repo": "registry.example.com/plexus:latest"},
+        {"channel": "nightly"},
+        "git",
+    ],
+)
+def test_stored_config_that_fails_the_checks_turns_updates_off(env, stored):
+    """A value an older release or a database edit stored is checked like a
+    saved one: its names never reach git or the registry."""
+    env.store[au._SETTING_KEY] = stored
+    _install_agent(env)
+    _seed_check("git", "main")
+
+    assert asyncio.run(au._load_config()) == {**au._DEFAULT_CONFIG, "channel": "disabled"}
+    with pytest.raises(HTTPException):
+        asyncio.run(au.apply_update({"target": "main"}, _FakeRequest()))
+    assert not (env.dir / "request.json").exists()
+
+
 # ── apply guards ─────────────────────────────────────────────────────────
 
 

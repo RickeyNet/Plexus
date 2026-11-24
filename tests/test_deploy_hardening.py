@@ -319,3 +319,21 @@ def test_updater_git_ref_cannot_start_with_a_dash():
         assert pattern.fullmatch(ref), ref
     for ref in ("-f", "--force", "-", "", "a b", "a;b", "x" * 129):
         assert not pattern.fullmatch(ref), ref
+
+
+def test_upgrade_script_refuses_a_ref_that_reads_as_an_option_or_shell():
+    """``upgrade.sh`` is also run by hand, without the updater's check: the
+    ref goes to ``git checkout`` through ``eval``."""
+    script = _read(DEPLOY / "upgrade.sh")
+    match = re.search(r'if \[\[ -n "\$\{REF\}" && ! "\$\{REF\}" =~ (\S+) \]\]; then', script)
+    assert match, "git ref check not found in upgrade.sh"
+    pattern = re.compile(match.group(1))
+    for ref in ("main", "release/1.2", "v1.2.3", "origin/main", "HEAD~1", "v1.2.3^", "0a1b2c3"):
+        assert pattern.fullmatch(ref), ref
+    for ref in ("-f", "--upload-pack=x", "-", "a b", "a;b", "a'b", "$(id)", "`id`", "x" * 201):
+        assert not pattern.fullmatch(ref), ref
+    # The check runs before the first git or docker command.
+    assert script.index(match.group(0)) < script.index("preflight()")
+    # The recorded rollback ref is a commit id, checked and quoted.
+    assert '[[ "${PREV_REF:-}" =~ ^[0-9a-f]{7,64}$ ]] || die' in script
+    assert "git checkout ${PREV_REF}" not in script

@@ -57,7 +57,14 @@ from typing import Any
 
 import httpx
 
-from netcontrol.routes.outbound_http import OutboundRequestError, guard_host, guard_url, send_request, tls_verify
+from netcontrol.routes.outbound_http import (
+    DELIVERY_RESPONSE_MAX_BYTES,
+    OutboundRequestError,
+    guard_host,
+    guard_url,
+    send_request,
+    tls_verify,
+)
 from netcontrol.secret_fields import (
     NOTIFICATION_CHANNEL_SECRET_FIELDS,
     SECRET_MASK,
@@ -560,7 +567,14 @@ async def _deliver_webhook(cfg: ChannelConfig, alert: dict) -> None:
         headers[cfg.webhook_auth_header] = cfg.webhook_auth_value
     await _guard_url(cfg.webhook_url)
     resp = await send_request(
-        "POST", cfg.webhook_url, json=body, headers=headers, verify=_httpx_verify(cfg), timeout_s=DEFAULT_HTTP_TIMEOUT
+        "POST",
+        cfg.webhook_url,
+        json=body,
+        headers=headers,
+        verify=_httpx_verify(cfg),
+        timeout_s=DEFAULT_HTTP_TIMEOUT,
+        max_bytes=DELIVERY_RESPONSE_MAX_BYTES,
+        truncate=True,
     )
     if resp.status_code >= 400:
         raise RuntimeError(f"webhook HTTP {resp.status_code}: {resp.text[:200]}")
@@ -570,7 +584,13 @@ async def _deliver_teams(cfg: ChannelConfig, alert: dict) -> None:
     body = format_teams(alert)
     await _guard_url(cfg.teams_webhook_url)
     resp = await send_request(
-        "POST", cfg.teams_webhook_url, json=body, verify=_httpx_verify(cfg), timeout_s=DEFAULT_HTTP_TIMEOUT
+        "POST",
+        cfg.teams_webhook_url,
+        json=body,
+        verify=_httpx_verify(cfg),
+        timeout_s=DEFAULT_HTTP_TIMEOUT,
+        max_bytes=DELIVERY_RESPONSE_MAX_BYTES,
+        truncate=True,
     )
     # Teams connectors return 200 with body "1" on success.
     if resp.status_code >= 400:

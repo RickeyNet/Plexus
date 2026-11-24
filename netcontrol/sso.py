@@ -26,7 +26,7 @@ from urllib.parse import urlsplit
 
 import httpx
 
-from netcontrol.routes.outbound_http import OutboundRequestError, send_request
+from netcontrol.routes.outbound_http import OutboundRequestError, ResponseTooLargeError, send_request
 
 # Codes a sign-in failure may put in ``/login?sso_error=``. The login page
 # maps each to a fixed sentence; nothing else from the provider is echoed.
@@ -165,10 +165,11 @@ async def provider_request(
     typed and every endpoint a provider document names.
 
     TLS is verified (with ``ca_cert_file`` for a private CA), redirects are
-    not followed, 10 s timeout. ``transport`` replaces the network in tests.
-    Raises ``error(code)`` for a refused address, ``error("provider")`` for
-    a CA file that does not load, and the ``httpx`` error on a transport
-    failure."""
+    not followed, 10 s timeout, and at most ``MAX_RESPONSE_BYTES`` of the
+    answer are read. ``transport`` replaces the network in tests.
+    Raises ``error(code)`` for a refused address or an answer past that
+    size, ``error("provider")`` for a CA file that does not load, and the
+    ``httpx`` error on a transport failure."""
     verify: ssl.SSLContext | bool = True
     if ca_cert_file and transport is None:
         try:
@@ -184,6 +185,9 @@ async def provider_request(
             verify=verify,
             timeout_s=HTTP_TIMEOUT_SECONDS,
             transport=transport,
+            max_bytes=MAX_RESPONSE_BYTES,
         )
     except OutboundRequestError as exc:
         raise error(code, f"the identity provider address is not allowed ({exc})") from exc
+    except ResponseTooLargeError as exc:
+        raise error(code, "the identity provider answer is too large") from exc

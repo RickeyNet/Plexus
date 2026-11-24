@@ -48,7 +48,12 @@ from netcontrol.routes.net_guard import (
     OutboundRequestError,
     validate_outbound_host,
 )
-from netcontrol.routes.outbound_http import MAX_PINNED_ADDRESSES, send_request, tls_verify
+from netcontrol.routes.outbound_http import (
+    DELIVERY_RESPONSE_MAX_BYTES,
+    MAX_PINNED_ADDRESSES,
+    send_request,
+    tls_verify,
+)
 from netcontrol.secret_fields import SECRET_MASK
 from netcontrol.telemetry import configure_logging
 from netcontrol.tls_pem import load_cert_chain_pem
@@ -539,6 +544,8 @@ async def _deliver_https(sink: SinkConfig, message: str) -> None:
             verify=verify,
             timeout_s=DEFAULT_HTTPS_TIMEOUT,
             transport=HTTP_TRANSPORT,
+            max_bytes=DELIVERY_RESPONSE_MAX_BYTES,
+            truncate=True,
         )
     except OutboundRequestError as exc:
         raise RuntimeError(f"siem sink {sink.id}: target rejected: {exc}") from exc

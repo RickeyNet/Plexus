@@ -243,8 +243,6 @@ class OidcClient:
             )
         except httpx.HTTPError as exc:
             raise OidcError(code, f"{what} request failed ({type(exc).__name__})") from exc
-        if len(resp.content) > MAX_RESPONSE_BYTES:
-            raise OidcError(code, f"{what} response is too large")
         try:
             body = resp.json()
         except ValueError:

@@ -65,7 +65,13 @@ from routes.db.change_events import (
 
 from netcontrol.intended_config import Renderer, check_syntax
 from netcontrol.mcp.redact import redact_value
-from netcontrol.routes.outbound_http import OutboundRequestError, guard_url, send_request, tls_verify
+from netcontrol.routes.outbound_http import (
+    DELIVERY_RESPONSE_MAX_BYTES,
+    OutboundRequestError,
+    guard_url,
+    send_request,
+    tls_verify,
+)
 from netcontrol.routes.shared import _audit, _corr_id, _session_user
 from netcontrol.secret_fields import (
     SECRET_MASK as REDACTION_MASK,
@@ -473,6 +479,8 @@ async def deliver_once(cfg: WebhookConfig, job: DeliveryJob, *, allow_retry: boo
                 headers=headers,
                 verify=tls_verify(cfg.verify_tls, cfg.ca_bundle),
                 timeout_s=cfg.timeout_seconds,
+                max_bytes=DELIVERY_RESPONSE_MAX_BYTES,
+                truncate=True,
             )
         except OutboundRequestError as exc:
             outcome = DeliveryOutcome(False, False, "blocked", error=f"target rejected: {exc}"[:ERROR_KEEP])

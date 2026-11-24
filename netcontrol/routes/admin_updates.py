@@ -110,12 +110,23 @@ _HTTP_TIMEOUT = 10.0
 
 
 async def _load_config() -> dict[str, Any]:
+    """The stored update configuration, checked like one being saved.
+
+    A stored value that fails the checks (written by an older release or
+    straight into the database) is not used: its names would reach git and
+    the registry unchecked. The configuration then reads as the defaults
+    with the channel disabled, until an admin saves one."""
     stored = await db.get_auth_setting(_SETTING_KEY)
     if not stored:
         return dict(_DEFAULT_CONFIG)
-    cfg = dict(_DEFAULT_CONFIG)
-    cfg.update(stored)
-    return cfg
+    reason = "it is not an object"
+    if isinstance(stored, dict):
+        try:
+            return _sanitize_config(stored)
+        except HTTPException as exc:
+            reason = str(exc.detail)
+    LOGGER.warning("updates: the stored configuration is refused (%s); updates are off until it is saved again", reason)
+    return {**_DEFAULT_CONFIG, "channel": "disabled"}
 
 
 def _sanitize_config(body: dict[str, Any]) -> dict[str, Any]:

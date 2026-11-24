@@ -65,6 +65,15 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+# The ref is passed to git as an argument, through `run` (eval): it must
+# not read as an option or carry shell syntax. Branch, tag and commit names
+# and the HEAD~1 / tag^ forms pass; plexus-updater.sh applies a narrower
+# check of its own before it calls this script.
+if [[ -n "${REF}" && ! "${REF}" =~ ^[A-Za-z0-9._/][A-Za-z0-9._/@~^+-]{0,199}$ ]]; then
+    echo "ERROR: --ref '${REF}' is not a git ref this script accepts" >&2
+    exit 2
+fi
+
 # ── Helpers ───────────────────────────────────────────────────────────
 log() { echo "[$(date -Iseconds)] $*"; }
 run() {
@@ -125,8 +134,10 @@ do_rollback() {
     # shellcheck disable=SC1090
     source "${ROLLBACK_FILE}"
     if [[ "${PREV_MODE:-}" == "git" ]]; then
+        # record_rollback writes the commit id of `git rev-parse HEAD`.
+        [[ "${PREV_REF:-}" =~ ^[0-9a-f]{7,64}$ ]] || die "the recorded git ref is not a commit id - check ${ROLLBACK_FILE}"
         log "Restoring git ref ${PREV_REF}"
-        run "git checkout ${PREV_REF}"
+        run "git checkout '${PREV_REF}'"
         run "compose build plexus"
     else
         log "Restoring image ${PREV_IMAGE}"

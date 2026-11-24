@@ -4,7 +4,8 @@ Usage (from repo root):
     python scripts/reset_admin_password.py --username admin --password "TempPass123!"
 
 If --password is omitted, PLEXUS_DEFAULT_ADMIN_PASSWORD is used when set,
-else a random password; either way it is printed once.
+else a random password. Only a generated password is printed (once): one
+the operator supplied is already known to them and is not repeated.
 """
 
 from __future__ import annotations
@@ -45,10 +46,15 @@ async def _run(username: str, password: str | None) -> int:
     await db.init_db()
 
     username = _sanitize_username(username)
+    source = "--password"
     if not password:
+        password = os.getenv("PLEXUS_DEFAULT_ADMIN_PASSWORD", "").strip()
+        source = "PLEXUS_DEFAULT_ADMIN_PASSWORD"
+    generated = not password
+    if generated:
         # No shared fallback: a fixed default would let anyone who knows it
         # sign in as admin until the operator changes it.
-        password = os.getenv("PLEXUS_DEFAULT_ADMIN_PASSWORD", "").strip() or secrets.token_urlsafe(16)
+        password = secrets.token_urlsafe(16)
 
     salt = secrets.token_hex(16)
     pw_hash = _hash_password(password, salt)
@@ -83,11 +89,14 @@ async def _run(username: str, password: str | None) -> int:
 
     print("[ok]", action)
     print("[ok] username:", username)
-    # codeql[py/clear-text-logging-sensitive-data]: break-glass CLI run by an
-    # operator on the host. The whole point is to display the new password so
-    # the operator can use it for first login. Output goes to the operator's
-    # terminal, not to a log file.
-    print("[ok] password:", password)
+    if generated:
+        # codeql[py/clear-text-logging-sensitive-data]: break-glass CLI run by
+        # an operator on the host. A generated password exists nowhere else,
+        # so it is shown once for the first sign-in. Output goes to the
+        # operator's terminal, not to a log file.
+        print("[ok] password:", password)
+    else:
+        print(f"[ok] password: as supplied ({source}); not shown")
     print("[ok] must_change_password: false")
     print("[info] admins_before:", len(admins))
 

@@ -224,8 +224,6 @@ async def fetch_metadata(url: str, ca_cert_file: str = "", transport: httpx.Asyn
         raise SamlError("provider", f"IdP metadata request failed ({type(exc).__name__})") from exc
     if resp.status_code != 200:
         raise SamlError("provider", f"IdP metadata URL answered HTTP {resp.status_code}")
-    if len(resp.content) > MAX_RESPONSE_BYTES:
-        raise SamlError("provider", "the IdP metadata is too large")
     return resp.text
 
 

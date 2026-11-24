@@ -15,6 +15,8 @@ import pytest
 from netcontrol import saml, sso
 from netcontrol.routes import net_guard, outbound_http
 from netcontrol.routes.outbound_http import (
+    DEFAULT_MAX_RESPONSE_BYTES,
+    ExchangeTimeoutError,
     OutboundRequestError,
     PinnedTransport,
     ResponseTooLargeError,
@@ -306,7 +308,75 @@ async def test_total_timeout_ends_a_response_that_trickles(monkeypatch):
 
     transport = _answering(lambda request: httpx.Response(200, content=trickle()))
 
-    with pytest.raises(TimeoutError):
+    with pytest.raises(TimeoutError) as ended:
         await send_request(
             "GET", "https://peer.example.com/api", transport=transport, max_bytes=1_000_000, total_timeout_s=0.2
         )
+    # Also an httpx timeout, so a caller's transport-failure handling covers it.
+    assert isinstance(ended.value, ExchangeTimeoutError)
+    assert isinstance(ended.value, httpx.TimeoutException)
+    assert ended.value.request.url.host == "peer.example.com"
+
+
+def _endless(sent: dict, chunk: int = 1024):
+    async def body():
+        while True:
+            sent["chunks"] += 1
+            yield b"x" * chunk
+
+    return _answering(lambda request: httpx.Response(200, content=body()))
+
+
+@pytest.mark.asyncio
+async def test_a_caller_that_names_no_limit_gets_the_default_one(monkeypatch):
+    monkeypatch.setattr(net_guard, "_getaddrinfo", _rebinding_resolver(["192.0.2.10"]))
+    sent = {"chunks": 0}
+    chunk = 64 * 1024
+
+    with pytest.raises(ResponseTooLargeError):
+        await send_request("POST", "https://hooks.example.com/in", transport=_endless(sent, chunk))
+
+    assert sent["chunks"] <= DEFAULT_MAX_RESPONSE_BYTES // chunk + 2
+
+
+@pytest.mark.asyncio
+async def test_truncate_cuts_a_long_answer_and_keeps_the_status(monkeypatch):
+    """A sender that only delivers does not fail a delivered message over
+    the size of the answer; it stops reading at the limit."""
+    monkeypatch.setattr(net_guard, "_getaddrinfo", _rebinding_resolver(["192.0.2.10"]))
+    sent = {"chunks": 0}
+
+    resp = await send_request(
+        "POST", "https://hooks.example.com/in", transport=_endless(sent), max_bytes=4096, truncate=True
+    )
+
+    assert resp.status_code == 200
+    assert resp.content == b"x" * 4096
+    assert sent["chunks"] <= 6
+
+
+@pytest.mark.asyncio
+async def test_an_exchange_without_a_deadline_of_its_own_still_ends(monkeypatch):
+    monkeypatch.setattr(net_guard, "_getaddrinfo", _rebinding_resolver(["192.0.2.10"]))
+    monkeypatch.setattr(outbound_http, "MIN_TOTAL_TIMEOUT_SECONDS", 0.1)
+    monkeypatch.setattr(outbound_http, "TOTAL_TIMEOUT_FACTOR", 2)
+
+    async def trickle():
+        while True:
+            await asyncio.sleep(0.01)
+            yield b"x"
+
+    transport = _answering(lambda request: httpx.Response(200, content=trickle()))
+
+    with pytest.raises(ExchangeTimeoutError, match="0.2 seconds"):
+        await send_request("GET", "https://hooks.example.com/in", transport=transport, timeout_s=0.1)
+
+
+@pytest.mark.asyncio
+async def test_an_identity_provider_answer_past_the_limit_is_refused(monkeypatch):
+    monkeypatch.setattr(net_guard, "_getaddrinfo", _rebinding_resolver(["192.0.2.21"]))
+    big = _answering(lambda request: httpx.Response(200, content=b"x" * (sso.MAX_RESPONSE_BYTES + 1)))
+
+    with pytest.raises(sso.SsoError, match="too large") as refused:
+        await sso.provider_request("GET", "https://idp.example.com/jwks", transport=big, code="token")
+    assert refused.value.code == "token"

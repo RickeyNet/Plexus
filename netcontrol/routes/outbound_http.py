@@ -26,6 +26,9 @@ import httpx
 from netcontrol.routes.net_guard import IPAddress, OutboundRequestError, validate_outbound_host, validate_outbound_url
 
 __all__ = [
+    "DEFAULT_MAX_RESPONSE_BYTES",
+    "DELIVERY_RESPONSE_MAX_BYTES",
+    "ExchangeTimeoutError",
     "OutboundRequestError",
     "PinnedTransport",
     "ResponseTooLargeError",
@@ -36,8 +39,26 @@ __all__ = [
 ]
 
 
+# The most decoded response body ``send_request`` reads when the caller
+# names no limit of its own.
+DEFAULT_MAX_RESPONSE_BYTES = 4 * 1024 * 1024
+# For a sender that only delivers (a notification, a log event, a webhook)
+# and keeps the status and a short excerpt of the answer.
+DELIVERY_RESPONSE_MAX_BYTES = 64 * 1024
+# Without a ``total_timeout_s`` the whole exchange gets this many times
+# ``timeout_s``, and at least the floor.
+TOTAL_TIMEOUT_FACTOR = 6
+MIN_TOTAL_TIMEOUT_SECONDS = 30.0
+
+
 class ResponseTooLargeError(httpx.HTTPError):
     """The target answered with more than the caller's ``max_bytes``."""
+
+
+class ExchangeTimeoutError(httpx.TimeoutException, TimeoutError):
+    """The whole exchange took longer than its deadline. Both an ``httpx``
+    timeout, so a caller's transport-failure handling covers it, and a
+    ``TimeoutError``."""
 
 
 async def guard_url(url: str) -> list[IPAddress]:
@@ -143,8 +164,9 @@ async def send_request(
     verify: Any = True,
     timeout_s: float = 10.0,
     transport: httpx.AsyncBaseTransport | None = None,
-    max_bytes: int | None = None,
+    max_bytes: int | None = DEFAULT_MAX_RESPONSE_BYTES,
     total_timeout_s: float | None = None,
+    truncate: bool = False,
 ) -> httpx.Response:
     """Guard ``url``, then send one request to an address the guard
     approved (``PinnedTransport``); redirects are never followed.
@@ -156,13 +178,24 @@ async def send_request(
     ``httpx.MockTransport``); nothing is pinned then, as nothing connects.
     A request sent through an environment proxy is not pinned either.
 
-    ``max_bytes`` bounds the decoded response body: it is read in chunks
-    and ``ResponseTooLargeError`` (an ``httpx.HTTPError``) is raised past
-    the limit, before the rest is read. ``timeout_s`` is httpx's timeout
-    per connect / read / write, so a target that sends a byte now and
-    then never trips it; ``total_timeout_s`` bounds the whole exchange
-    (``TimeoutError``). A caller that reads a body it does not control
-    in size passes both."""
+    ``max_bytes`` bounds the decoded response body
+    (``DEFAULT_MAX_RESPONSE_BYTES`` unless the caller names a limit; ``None``
+    reads it whole): it is read in chunks and ``ResponseTooLargeError`` (an
+    ``httpx.HTTPError``) is raised past the limit, before the rest is read.
+    With ``truncate`` the body is cut at the limit instead and the response
+    is returned: for a sender that judges the status and keeps an excerpt,
+    where a long answer to a delivered message is not a failure.
+
+    ``timeout_s`` is httpx's timeout per connect / read / write, so a target
+    that sends a byte now and then never trips it; ``total_timeout_s``
+    bounds the whole exchange (``ExchangeTimeoutError``). Left out, it is
+    ``TOTAL_TIMEOUT_FACTOR`` times ``timeout_s`` and at least
+    ``MIN_TOTAL_TIMEOUT_SECONDS``."""
+    deadline = (
+        total_timeout_s
+        if total_timeout_s is not None
+        else max(MIN_TOTAL_TIMEOUT_SECONDS, timeout_s * TOTAL_TIMEOUT_FACTOR)
+    )
     ips = await guard_url(url)
     if transport is None and ips and not _env_proxy_applies(url):
         host = httpx.URL(url).host
@@ -173,21 +206,31 @@ async def send_request(
         request = client.build_request(
             method.upper(), url, content=content, data=data, json=json, headers=headers
         )
-        async with asyncio.timeout(total_timeout_s):
-            if max_bytes is None:
-                return await client.send(request)
-            return await _send_bounded(client, request, max_bytes)
+        try:
+            async with asyncio.timeout(deadline):
+                if max_bytes is None:
+                    return await client.send(request)
+                return await _send_bounded(client, request, max_bytes, truncate)
+        except TimeoutError as exc:
+            # httpx's own timeouts are not ``TimeoutError``: this is the deadline.
+            raise ExchangeTimeoutError(f"No complete answer within {deadline:g} seconds", request=request) from exc
 
 
-async def _send_bounded(client: httpx.AsyncClient, request: httpx.Request, max_bytes: int) -> httpx.Response:
-    """Send ``request`` and read at most ``max_bytes`` of decoded body."""
+async def _send_bounded(
+    client: httpx.AsyncClient, request: httpx.Request, max_bytes: int, truncate: bool = False
+) -> httpx.Response:
+    """Send ``request`` and read at most ``max_bytes`` of decoded body: past
+    it the response is refused, or cut there with ``truncate``."""
     streamed = await client.send(request, stream=True)
     try:
         body = bytearray()
         async for chunk in streamed.aiter_bytes():
             body += chunk
             if len(body) > max_bytes:
-                raise ResponseTooLargeError(f"The response is larger than {max_bytes} bytes")
+                if not truncate:
+                    raise ResponseTooLargeError(f"The response is larger than {max_bytes} bytes")
+                del body[max_bytes:]
+                break
     finally:
         await streamed.aclose()
     # The body above is already decoded: drop the headers that describe
