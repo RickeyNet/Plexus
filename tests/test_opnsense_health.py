@@ -580,6 +580,28 @@ async def test_the_collection_notes_the_inventory_host(firewall_source):
     assert rows[-2][1].endswith("stored with the monitoring poll of fw-edge-1.example.com")
 
 
+async def test_the_collection_sets_the_platform_of_its_inventory_host(firewall_source):
+    from netcontrol.routes.opnsense_collection import adopt_firewall_host
+
+    raw = build_sample_raw()
+    # No inventory host: nothing to set.
+    assert await adopt_firewall_host(build_snapshot(raw)) is None
+
+    group = await db.create_group("opn-health-platform")
+    host_id = await db.add_host(group, "fw-edge-1.example.com", "192.0.2.1", "cisco_ios")
+    snapshot = build_snapshot(raw)
+    adopted = await adopt_firewall_host(snapshot)
+    assert adopted is not None and int(adopted["id"]) == host_id
+    assert (await db.get_host(host_id))["device_type"] == "opnsense"
+    rows = dict(_section(snapshot, "Inventory platform")["rows"])
+    assert rows["Platform"] == "Set to OPNsense (was cisco_ios)"
+
+    # Already OPNsense: left alone, no section.
+    snapshot = build_snapshot(raw)
+    assert await adopt_firewall_host(snapshot) is None
+    assert not any(s.get("title") == "Inventory platform" for n in snapshot["nodes"] for s in n.get("sections") or [])
+
+
 async def test_a_backup_policy_finds_the_source_of_its_firewall_whatever_the_poll_options(firewall_source):
     """``source_of_host`` reads the same snapshot summary as the poll's host
     map, without the health, VPN and IDS options the poll needs."""

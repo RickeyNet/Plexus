@@ -68,6 +68,7 @@ __all__ = [
     "update_host_status",
     "update_host_device_info",
     "update_host_serial",
+    "set_host_device_type",
     "get_all_hosts_for_export",
 ]
 
@@ -1073,6 +1074,21 @@ async def update_host_serial(host_id: int, serial_number: str) -> None:
             (serial_number, host_id),
         )
         await db.commit()
+    finally:
+        await db.close()
+
+
+@tracks_changes("host", "update", id_arg="host_id")
+async def set_host_device_type(host_id: int, device_type: str) -> bool:
+    """Set the device type (platform) of a host. True when it changed."""
+    db = await _dbcore.get_db()
+    try:
+        cur = await db.execute(
+            "UPDATE hosts SET device_type = ? WHERE id = ? AND device_type IS DISTINCT FROM ?",
+            (device_type, host_id, device_type),
+        )
+        await db.commit()
+        return (cur.rowcount or 0) > 0
     finally:
         await db.close()
 

@@ -21,6 +21,9 @@ export const DEVICE_TYPES: readonly { value: string; label: string }[] = [
   { value: 'netgear_smart', label: 'Netgear smart switch (SNMP only, the switch has no SSH)' },
   { value: 'netgear_ap', label: 'Netgear access point (SNMP only)' },
   { value: 'apc_ups', label: 'APC Smart-UPS (NMC, SNMP only)' },
+  // Read over its OPNsense source's API (backup, health) and SNMP; no SSH.
+  // A source collection sets it on the inventory host it matches.
+  { value: 'opnsense', label: 'OPNsense firewall (API and SNMP, no SSH)' },
   { value: 'icmp_only', label: 'ICMP-only (ping liveness, no SNMP/SSH)' },
 ];
 

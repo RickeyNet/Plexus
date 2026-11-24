@@ -135,7 +135,7 @@ from netcontrol.integrations.software.versions import canonical_version, snapsho
 from netcontrol.routes.dhcp_adapters import DHCP_PROVIDER_OPNSENSE
 from netcontrol.routes.ipam_adapters import IPAM_PROVIDER_OPNSENSE
 from netcontrol.routes.opnsense_backup import store_firewall_backup
-from netcontrol.routes.opnsense_masking import BACKUP_CAPTURE_METHOD
+from netcontrol.routes.opnsense_masking import BACKUP_CAPTURE_METHOD, OPNSENSE_DEVICE_TYPE
 from netcontrol.routes.route_capture import store_route_snapshot
 from netcontrol.telemetry import configure_logging
 
@@ -143,6 +143,7 @@ LOGGER = configure_logging("plexus.opnsense")
 
 CAPTURE_METHOD = BACKUP_CAPTURE_METHOD
 SECTION_CONFIG_BACKUP = "Config backup"
+SECTION_INVENTORY_PLATFORM = "Inventory platform"
 NOT_IMPORTED_MESSAGE = (
     "config.xml was read but not stored: this firewall is not an inventory host yet. "
     "Import it into the inventory (Map sources, Import devices) to keep its configuration backups."
@@ -532,6 +533,10 @@ async def after_collection(raw: dict, snapshot: dict, org_ref: int) -> None:
     routing table as the route capture, for one collection of source
     ``org_ref``. Never raises."""
     try:
+        await adopt_firewall_host(snapshot)
+    except Exception as exc:  # noqa: BLE001 - the snapshot is stored anyway
+        LOGGER.warning("opnsense: platform of the inventory host not set: %s", type(exc).__name__)
+    try:
         if (raw.get("options") or {}).get("config_backup", True):
             await store_config_backup(raw, snapshot, org_ref=org_ref)
     finally:
@@ -590,6 +595,38 @@ async def after_collection(raw: dict, snapshot: dict, org_ref: int) -> None:
         # The alerts are stored as security events, never in the snapshot.
         raw.pop("ids_alerts", None)
         raw.pop("ids_state", None)
+
+
+async def adopt_firewall_host(snapshot: dict) -> dict | None:
+    """Give the inventory host that is the collected firewall the OPNsense
+    platform (device type), so it is backed up over this source's API and
+    never read over SSH. The collection matched it by its address (or
+    another address of the firewall), so whatever platform it had was a
+    guess. Returns the host when its platform was changed."""
+    host = await matching_host(snapshot)
+    if host is None or str(host.get("device_type") or "") == OPNSENSE_DEVICE_TYPE:
+        return None
+    if not await db.set_host_device_type(int(host["id"]), OPNSENSE_DEVICE_TYPE):
+        return None
+    LOGGER.info(
+        "opnsense: inventory host %s set to platform %s (was %r)",
+        host["id"],
+        OPNSENSE_DEVICE_TYPE,
+        host.get("device_type"),
+    )
+    firewall = _firewall(snapshot)
+    if firewall is not None:
+        _add(
+            firewall["sections"],
+            kv_section(
+                SECTION_INVENTORY_PLATFORM,
+                [
+                    ("Inventory host", host.get("hostname") or host.get("ip_address")),
+                    ("Platform", f"Set to OPNsense (was {host.get('device_type') or 'none'})"),
+                ],
+            ),
+        )
+    return {**host, "device_type": OPNSENSE_DEVICE_TYPE}
 
 
 async def note_health_host(raw: dict, snapshot: dict, org_ref: int) -> dict | None:

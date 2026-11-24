@@ -816,6 +816,14 @@ inventory first** (the **Import devices** step after adding the source, or
 **Sources > Import devices** later). Until then config.xml is read but not
 stored, and the collection has a warning that says to import the firewall.
 
+A host you added by hand (with another **Platform**) is matched the same
+way. Each collection sets the matched host's platform to **OPNsense
+firewall**: the firewall is backed up over this source's API, never over
+SSH, so a backup policy needs no credential for it. The firewall's
+**Inventory platform** section says when a collection changed it, and the
+host's change history records the change. The platform can also be picked
+by hand in the host dialog (**OPNsense firewall (API and SNMP, no SSH)**).
+
 config.xml holds password hashes, private keys, certificates and
 pre-shared keys. It is never put in the topology snapshot. The Config
 Backups table keeps it in two forms:
