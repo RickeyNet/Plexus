@@ -6,7 +6,7 @@ import routes.database as db_module
 @pytest.mark.asyncio
 async def test_authenticate_login_identity_local_provider(monkeypatch):
     monkeypatch.setattr(
-        app_module,
+        app_module.state,
         "AUTH_CONFIG",
         {
             "provider": "local",
@@ -36,7 +36,7 @@ async def test_authenticate_login_identity_local_provider(monkeypatch):
 @pytest.mark.asyncio
 async def test_authenticate_login_identity_radius_accept(monkeypatch):
     monkeypatch.setattr(
-        app_module,
+        app_module.state,
         "AUTH_CONFIG",
         {
             "provider": "radius",
@@ -72,7 +72,7 @@ async def test_authenticate_login_identity_radius_accept(monkeypatch):
 @pytest.mark.asyncio
 async def test_authenticate_login_identity_radius_reject_no_fallback(monkeypatch):
     monkeypatch.setattr(
-        app_module,
+        app_module.state,
         "AUTH_CONFIG",
         {
             "provider": "radius",
@@ -103,7 +103,7 @@ async def test_authenticate_login_identity_radius_reject_no_fallback(monkeypatch
 @pytest.mark.asyncio
 async def test_authenticate_login_identity_radius_error_with_local_fallback(monkeypatch):
     monkeypatch.setattr(
-        app_module,
+        app_module.state,
         "AUTH_CONFIG",
         {
             "provider": "radius",
@@ -134,7 +134,7 @@ async def test_authenticate_login_identity_radius_error_with_local_fallback(monk
 @pytest.mark.asyncio
 async def test_authenticate_login_identity_radius_reject_with_override_fallback(monkeypatch):
     monkeypatch.setattr(
-        app_module,
+        app_module.state,
         "AUTH_CONFIG",
         {
             "provider": "radius",

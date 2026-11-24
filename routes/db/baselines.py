@@ -544,11 +544,16 @@ async def get_latest_upgrade_operation(campaign_id, phase=None, statuses=None):
 
 
 async def add_upgrade_device(campaign_id, host_id, ip_address, hostname):
+    """Add a device to a campaign. ``from_inventory`` records that it was
+    added as an inventory host (``host_id`` given): it stays set when the
+    host is deleted later and ``host_id`` becomes NULL, so the device is
+    not taken for an address typed into the campaign."""
     db = await _dbcore.get_db()
     try:
         cursor = await db.execute(
-            "INSERT INTO upgrade_devices (campaign_id, host_id, ip_address, hostname) VALUES (?, ?, ?, ?)",
-            (campaign_id, host_id, ip_address, hostname),
+            "INSERT INTO upgrade_devices (campaign_id, host_id, ip_address, hostname, from_inventory)"
+            " VALUES (?, ?, ?, ?, ?)",
+            (campaign_id, host_id, ip_address, hostname, 1 if host_id is not None else 0),
         )
         await db.commit()
         return cursor.lastrowid

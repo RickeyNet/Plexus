@@ -93,7 +93,10 @@ ntp:
 
 A group or host name must match exactly one record. Unknown `_metadata`
 keys, unknown ids and data larger than 65536 characters are skipped with a
-warning. The merged context of a host is
+warning. A YAML context that uses anchors and aliases (`&name` / `*name`,
+`<<: *name`) is skipped with "not valid YAML": a few lines of aliases can
+expand into far more data than the file holds, so write repeated values
+out. Playbooks may use them; Plexus stores a playbook as text. The merged context of a host is
 `GET /api/intended-config/hosts/{host_id}/variables`, as for contexts
 written in Plexus.
 

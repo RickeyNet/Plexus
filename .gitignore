@@ -6,6 +6,13 @@ netcontrol/converter_sessions/*
 # Sensitive Files - CRITICAL: Never commit these!
 # ═══════════════════════════════════════════════════════════════════════════════
 
+# Internal findings belong outside this repository, not in public commits.
+/SECURITY_AUDIT.md
+/SECURITY_ENHANCEMENTS.md
+/potentialbugs.md
+/potentialbugs-backend.md
+/private-findings/
+
 # Encryption key (contains Fernet key for credential decryption)
 **/netcontrol.key
 netcontrol.key

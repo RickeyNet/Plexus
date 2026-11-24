@@ -102,3 +102,43 @@ async def test_peer_without_token_may_move(monkeypatch, request):
     peer_id = resp.json()["id"]
     resp = client.put(f"/api/federation/peers/{peer_id}", json={"url": "https://open2.example.com"})
     assert resp.status_code == 200
+
+
+# ── A peer's answers are bounded ─────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_oversized_peer_answer_fails_its_section_only(monkeypatch):
+    """A peer that answers with more than the cap loses that section (the
+    sync is Partial); the rest of the sync still runs."""
+    monkeypatch.setattr(federation_module, "_PEER_RESPONSE_MAX_BYTES", 2048)
+    asked: list[str] = []
+
+    def answer(request: httpx.Request) -> httpx.Response:
+        asked.append(request.url.path)
+        if request.url.path == "/api/inventory/hosts":
+            return httpx.Response(200, json=[{"status": "up", "pad": "x" * 64}] * 200)
+        if request.url.path == "/api/admin/capabilities":
+            return httpx.Response(200, json={"version": "9" * 500})
+        return httpx.Response(200, json=[])
+
+    monkeypatch.setattr(federation_module, "HTTP_TRANSPORT", httpx.MockTransport(answer))
+    peer = {"name": "Site-R", "url": "https://peer-r.example.com", "api_token_enc": "", "tls_verify": 1}
+
+    data = await federation_module._fetch_peer_data(peer)
+
+    assert list(data["errors"]) == ["hosts"]
+    assert "larger than 2048 bytes" in data["errors"]["hosts"]
+    assert data["devices"]["total"] == 0
+    assert "/api/admin/capabilities" in asked
+    # The version is stored and shown: kept short whatever the peer sends.
+    assert data["version"] == "9" * 64
+    assert federation_module._sync_status_from(data)[0] == "partial"
+
+
+def test_peer_version_is_a_short_string():
+    assert federation_module._peer_version({"version": "1.4.2"}) == "1.4.2"
+    assert federation_module._peer_version({"version": ["a"] * 100}) == str(["a"] * 100)[:64]
+    assert federation_module._peer_version({"version": None}, "unknown") == "unknown"
+    assert federation_module._peer_version({}, "unknown") == "unknown"
+    assert federation_module._peer_version(["not", "a", "dict"]) == ""

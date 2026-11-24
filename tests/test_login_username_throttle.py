@@ -59,7 +59,7 @@ def env(monkeypatch):
         audits.append((action, user, detail))
 
     monkeypatch.setattr(app_module, "_hash_password", counting_hash)
-    monkeypatch.setattr(app_module, "AUTH_CONFIG", {"provider": "local"})
+    monkeypatch.setattr(app_module.state, "AUTH_CONFIG", {"provider": "local"})
     monkeypatch.setattr(app_module, "LOGIN_ATTEMPTS", {})
     monkeypatch.setattr(app_module, "LOCKED_OUT", {})
     failures = BoundedDict(1000, state.username_failures_expired)
@@ -136,7 +136,9 @@ async def test_breakglass_path_also_hashes_for_unknown_usernames(env, monkeypatc
     unknown = len(env.calls)
     env.calls.clear()
     await _fail("alice", ip="192.0.2.12")
-    assert unknown == len(env.calls) == 2
+    # Break-glass and the local check share one hash per attempt, for a known
+    # and an unknown name alike.
+    assert unknown == len(env.calls) == 1
 
 
 # ── Per-username progressive delay ──────────────────────────────────────────

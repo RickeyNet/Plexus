@@ -21,6 +21,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from routes.db.inventory import _tree_ordered
 
 import netcontrol.routes.state as state
+from netcontrol.account_rules import API_TOKEN_USER
 from netcontrol.bulk_import import host_csv_header, host_csv_row, host_export_records
 from netcontrol.data_validation import enforce as enforce_validation_rules, pick as rule_values
 from netcontrol.device_categories import DEVICE_CATEGORIES
@@ -31,7 +32,13 @@ from netcontrol.integrations.apc import nmc_cli
 from netcontrol.integrations.apc.firmware import DEVICE_TYPE as APC_UPS_DEVICE_TYPE
 from netcontrol.integrations.meraki.enrich import load_inventory_index
 from netcontrol.integrations.software.versions import classify_host
-from netcontrol.managed_targets import unmanaged_addresses
+from netcontrol.managed_targets import (
+    ADDRESS_AWAITING_CONFIRMATION,
+    address_confirmed as host_address_confirmed,
+    caller_confirms_addresses,
+    same_address,
+    unmanaged_addresses,
+)
 from netcontrol.object_scope import (
     READ_ONLY_DETAIL,
     ObjectScope,
@@ -64,6 +71,7 @@ from netcontrol.routes.host_identity import host_ip_problem, is_placeholder_host
 from netcontrol.routes.icmp import _probe_discovery_target_icmp
 from netcontrol.routes.ipam_push import push_inventory_host_allocation
 from netcontrol.routes.shared import (
+    DISCOVERY_RUNS,
     _audit,
     _corr_id,
     _get_session,
@@ -71,6 +79,7 @@ from netcontrol.routes.shared import (
     _run_show_commands,
     _session_user_id,
     caller_is_admin,
+    fan_out,
     require_credential_access,
     service_credential,
     supervise_task,
@@ -261,8 +270,16 @@ class HostSnmpProfileAssign(BaseModel):
     snmp_profile_id: str = ""
 
 
+# Most CIDR entries one discovery request may name: max_hosts is at most
+# 4096, so more entries than that can only repeat or overlap each other.
+DISCOVERY_MAX_CIDRS = 4096
+# Most addresses _expand_scan_targets walks for one request, repeats and
+# overlaps included (the largest single CIDR it accepts).
+DISCOVERY_MAX_EXPANDED_ADDRESSES = 65536
+
+
 class DiscoveryScanRequest(BaseModel):
-    cidrs: list[str] = Field(default_factory=list)
+    cidrs: list[str] = Field(default_factory=list, max_length=DISCOVERY_MAX_CIDRS)
     timeout_seconds: float = Field(default=state.DISCOVERY_DEFAULT_TIMEOUT_SECONDS, ge=0.05, le=5.0)
     max_hosts: int = Field(default=state.DISCOVERY_DEFAULT_MAX_HOSTS, ge=1, le=4096)
     device_type: str = "unknown"
@@ -297,17 +314,34 @@ class DiscoveryOnboardRequest(BaseModel):
 
 
 def _expand_scan_targets(cidrs: list[str], max_hosts: int) -> list[str]:
-    targets: list[str] = []
-    seen: set[str] = set()
+    """The host addresses of ``cidrs`` in order, each once, at most
+    ``max_hosts``. Runs on the event loop before a scan starts, so its work
+    is bounded whatever the input: a CIDR named twice is expanded once, and
+    at most ``max(max_hosts * 10, DISCOVERY_MAX_EXPANDED_ADDRESSES)``
+    addresses are walked in all (ValueError past that, as for one CIDR
+    that large)."""
+    budget = max(max_hosts * 10, DISCOVERY_MAX_EXPANDED_ADDRESSES)
+    networks: dict[ipaddress.IPv4Network | ipaddress.IPv6Network, str] = {}
     for cidr in cidrs:
         network = ipaddress.ip_network(cidr, strict=False)
         # Reject absurdly large subnets early to avoid CPU spin
-        if network.num_addresses > max(max_hosts * 10, 65536):
+        if network.num_addresses > budget:
             raise ValueError(
-                f"CIDR {cidr} contains {network.num_addresses:,} addresses - "
-                f"maximum allowed is {max(max_hosts * 10, 65536):,}"
+                f"CIDR {cidr} contains {network.num_addresses:,} addresses - maximum allowed is {budget:,}"
             )
+        networks.setdefault(network, cidr)
+
+    targets: list[str] = []
+    seen: set[str] = set()
+    walked = 0
+    for network in networks:
         for host in network.hosts():
+            walked += 1
+            if walked > budget:
+                raise ValueError(
+                    f"The CIDR list repeats or overlaps itself too much: more than {budget:,} addresses "
+                    "to walk. Remove the overlapping entries."
+                )
             ip_str = str(host)
             if ip_str in seen:
                 continue
@@ -577,6 +611,27 @@ async def _require_service_targets(request: Request | None, targets: list[str]) 
         raise HTTPException(403, SERVICE_CREDENTIAL_TARGETS_DETAIL.format(count=len(outside), shown=shown))
 
 
+SNMP_WITHHELD_REASON = (
+    "The group's SNMP settings are sent only to the addresses of confirmed inventory hosts you can change; "
+    "the other addresses were probed without SNMP (TCP and ICMP). An admin can scan them with SNMP."
+)
+
+
+async def _snmp_withheld_targets(
+    request: Request | None, body: DiscoveryScanRequest, targets: list[str]
+) -> tuple[frozenset[str], dict]:
+    """The ``targets`` probed without the group's SNMP config (communities
+    and SNMPv3 keys are admin-only secrets) and the ``snmp_withheld``
+    summary reported with the result. An admin (or the API token) sends it
+    to every target; anyone else only to the address of a confirmed
+    inventory host they may change (``managed_targets.unmanaged_addresses``).
+    Worked out in the route handler, where the request is at hand."""
+    withheld: frozenset[str] = frozenset()
+    if body.use_snmp and targets and not await caller_is_admin(request):
+        withheld = frozenset(await unmanaged_addresses(targets, request))
+    return withheld, {"count": len(withheld), "reason": SNMP_WITHHELD_REASON if withheld else ""}
+
+
 async def _group_credential(group: dict, session: dict | None, *, unattended: bool) -> tuple[dict | None, str]:
     """The credential ``group`` remembers for discovery, if the caller may use
     it, and a note when one is remembered but cannot be used."""
@@ -625,7 +680,7 @@ async def _remember_group_credential(
     await _audit(
         "inventory",
         "group.discovery_credential",
-        user=session["user"] if session and session.get("user") else "api-token",
+        user=session["user"] if session and session.get("user") else API_TOKEN_USER,
         detail=f"group_id={group_id} credential_id={new_id or 'service'} previous={old_id or 'service'}",
         correlation_id=correlation_id,
     )
@@ -788,17 +843,21 @@ async def _scan_target(
     snmp_config: dict,
     probe_slots: asyncio.Semaphore,
     credential: dict | None,
+    *,
+    snmp_withheld: frozenset[str] = frozenset(),
 ) -> dict | None:
     """Probe one target (SNMP, TCP 22/443, ICMP) inside the probe fan-out
     cap, then, outside it, read ``show version`` over SSH when a credential
-    was resolved. Every discovery entry point scans through this."""
+    was resolved. Every discovery entry point scans through this. A target
+    in ``snmp_withheld`` (``_snmp_withheld_targets``) is probed without
+    SNMP."""
     async with probe_slots:
         host = await _probe_discovery_target(
             ip_address=ip_address,
             timeout_seconds=body.timeout_seconds,
             device_type=body.device_type,
             hostname_prefix=body.hostname_prefix,
-            use_snmp=body.use_snmp,
+            use_snmp=body.use_snmp and ip_address not in snmp_withheld,
             snmp_config=snmp_config,
             use_icmp=body.use_icmp,
         )
@@ -812,13 +871,14 @@ async def _discover_hosts(
     group_id: int | None = None,
     *,
     credential: dict | None = None,
+    snmp_withheld: frozenset[str] = frozenset(),
 ) -> tuple[int, list[dict]]:
     targets = _expand_scan_targets(request.cidrs, request.max_hosts)
     semaphore = asyncio.Semaphore(max(1, state.DISCOVERY_MAX_CONCURRENT_PROBES))
     snmp_cfg = state._resolve_snmp_discovery_config(group_id)
 
     discovered_raw = await asyncio.gather(
-        *[_scan_target(ip, request, snmp_cfg, semaphore, credential) for ip in targets]
+        *[_scan_target(ip, request, snmp_cfg, semaphore, credential, snmp_withheld=snmp_withheld) for ip in targets]
     )
     discovered = [item for item in discovered_raw if item is not None]
     discovered.sort(key=lambda item: ipaddress.ip_address(item["ip_address"]))
@@ -1059,13 +1119,21 @@ async def _sync_group_hosts(
     remove_absent: bool = False,
     *,
     interface_ip_resolver=None,
+    address_confirmed: bool | None = None,
 ) -> dict:
     """Reconcile discovered devices into inventory, deduplicating a
     multi-interface device into a single host (see _build_discovery_plan).
 
     ``interface_ip_resolver`` is an injectable ``async (ip) -> list[str]`` used
     only in tests; in production the device's SNMP ipAddrTable is walked.
+
+    ``address_confirmed``: whether the addresses this sync adds or changes
+    count as confirmed by an admin (``managed_targets``); ``None``: as the
+    acting user of the request decides (an admin or the API token: yes).
+    Unconfirmed, the group's SNMP config is walked only on the addresses of
+    hosts an admin already confirmed.
     """
+    confirmed = address_confirmed if address_confirmed is not None else await caller_confirms_addresses()
     existing_hosts = await db.get_hosts_for_group(group_id)
     existing_by_id = {h["id"]: h for h in existing_hosts}
     existing_ip_index = await db.get_host_ip_index(group_id)
@@ -1087,6 +1155,10 @@ async def _sync_group_hosts(
             if e["snmp_reachable"]:
                 reps.setdefault(e["serial"] or e["sys_name_norm"] or e["ip"], e["ip"])
         targets = list(reps.values())
+        if not confirmed:
+            # The shared SNMP config goes only to a confirmed address.
+            trusted = {str(h.get("ip_address") or "").strip() for h in existing_hosts if host_address_confirmed(h)}
+            targets = [ip for ip in targets if ip in trusted]
         sem = asyncio.Semaphore(max(1, state.DISCOVERY_MAX_CONCURRENT_PROBES))
 
         async def _walk(ip: str) -> list[str]:
@@ -1128,7 +1200,9 @@ async def _sync_group_hosts(
     for item in plan["update"]:
         existing = existing_by_id.get(item["host_id"], {})
         if existing.get("hostname") != item["hostname"] or existing.get("device_type") != item["device_type"]:
-            await db.update_host(item["host_id"], item["hostname"], item["ip"], item["device_type"])
+            await db.update_host(
+                item["host_id"], item["hostname"], item["ip"], item["device_type"], address_confirmed=confirmed
+            )
             await push_inventory_host_allocation(
                 hostname=item["hostname"],
                 ip_address=item["ip"],
@@ -1142,7 +1216,9 @@ async def _sync_group_hosts(
     for item in plan["add"]:
         _validate_host_ip(item["ip"])
         try:
-            new_id = await db.add_host(group_id, item["hostname"], item["ip"], item["device_type"])
+            new_id = await db.add_host(
+                group_id, item["hostname"], item["ip"], item["device_type"], address_confirmed=confirmed
+            )
         except ValueError:
             # Race/duplicate within the payload - reconciled on the next pass.
             continue
@@ -1237,7 +1313,11 @@ async def _run_discovery_sync_once() -> dict:
             # a user's personal credential: there is no session to check).
             credential, _ = await _resolve_discovery_ssh(body, None, group=group, unattended=True)
             _, discovered = await _discover_hosts(body, group_id=group_id, credential=credential)
-            result = await _sync_group_hosts(group_id, discovered, remove_absent=body.remove_absent)
+            # The profiles are an admin's (``/api/admin/discovery-sync``): the
+            # addresses this run finds in their ranges count as confirmed.
+            result = await _sync_group_hosts(
+                group_id, discovered, remove_absent=body.remove_absent, address_confirmed=True
+            )
             synced_groups += 1
             LOGGER.info(
                 "discovery sync: group_id=%s discovered=%s added=%s updated=%s removed=%s",
@@ -1304,6 +1384,54 @@ async def admin_update_discovery_sync_config(body: dict):
 async def admin_run_discovery_sync_now():
     result = await _run_discovery_sync_once()
     return {"ok": True, "result": result}
+
+
+class HostAddressConfirm(BaseModel):
+    """The hosts whose addresses an admin confirms: ``host_ids``, the hosts
+    of ``group_id``, or both."""
+
+    host_ids: list[int] = Field(default_factory=list, max_length=10000)
+    group_id: int | None = None
+
+
+async def _confirm_addresses(request: Request, host_ids: list[int]) -> dict:
+    """Confirm the addresses of ``host_ids`` (``managed_targets``): shared
+    secrets may then go to them. Audited with each host and its address."""
+    hosts = {int(h["id"]): h for h in await db.get_hosts_by_ids(sorted(set(host_ids)))}
+    confirmed = await db.confirm_host_addresses(list(hosts))
+    if confirmed:
+        session = _get_session(request)
+        shown = ", ".join(f"{hid}={hosts[hid].get('ip_address', '')}" for hid in confirmed[:50])
+        await _audit(
+            "inventory",
+            "host.address_confirmed",
+            user=session["user"] if session else API_TOKEN_USER,
+            detail=f"confirmed={len(confirmed)} hosts: {shown}" + (" ..." if len(confirmed) > 50 else ""),
+            correlation_id=_corr_id(request),
+        )
+    return {"ok": True, "confirmed": confirmed, "already_confirmed": sorted(set(hosts) - set(confirmed))}
+
+
+@admin_router.post("/api/admin/hosts/{host_id}/confirm-address")
+async def admin_confirm_host_address(host_id: int, request: Request):
+    """Confirm one host's address (admin only)."""
+    if await db.get_host(host_id) is None:
+        raise HTTPException(404, "Host not found")
+    return await _confirm_addresses(request, [host_id])
+
+
+@admin_router.post("/api/admin/hosts/confirm-address")
+async def admin_confirm_host_addresses(body: HostAddressConfirm, request: Request):
+    """Confirm the addresses of a list of hosts and/or every host of a
+    group (admin only)."""
+    ids = list(body.host_ids)
+    if body.group_id is not None:
+        if await db.get_group(body.group_id) is None:
+            raise HTTPException(404, "Group not found")
+        ids += [int(h["id"]) for h in await db.get_hosts_for_group(body.group_id)]
+    if not ids:
+        raise HTTPException(400, "Give host_ids or group_id")
+    return await _confirm_addresses(request, ids)
 
 
 @admin_router.get("/api/admin/snmp-discovery")
@@ -1709,13 +1837,15 @@ async def _group_hosts(group_id: int, request: Request) -> list[dict]:
     return hosts
 
 
-async def _insert_host(group_id: int, body: HostCreate) -> int:
+async def _insert_host(group_id: int, body: HostCreate, *, address_confirmed: bool) -> int:
     """Validate and insert one host, then run the per-host follow-ups.
 
     Shared by the single and bulk add routes. Raises ``HTTPException`` for an
     invalid address, instance ID, SNMP profile or device model id and
     ``ValueError`` when the group already has a host with that IP. The caller
     invalidates the topology cache and audits the device values.
+    ``address_confirmed``: the caller is an admin or the API token
+    (``managed_targets.caller_confirms_addresses``).
     """
     _validate_host_ip(body.ip_address)
     aws_instance_id = _validate_aws_instance_id(body.aws_instance_id) or ""
@@ -1742,6 +1872,7 @@ async def _insert_host(group_id: int, body: HostCreate) -> int:
         vlan_id=str(body.vlan_id or ""),
         aws_instance_id=aws_instance_id,
         snmp_profile_id=snmp_profile_id,
+        address_confirmed=address_confirmed,
     )
     if device_values:
         await db.set_host_device_fields(hid, device_values, lock=True)
@@ -1777,7 +1908,7 @@ async def add_host(group_id: int, body: HostCreate, request: Request):
     if (await request_scope(request)).restricted:
         await require_group(request, group_id, write=True)
     try:
-        hid = await _insert_host(group_id, body)
+        hid = await _insert_host(group_id, body, address_confirmed=await caller_confirms_addresses(request))
     except ValueError:
         raise HTTPException(409, "A host with that IP address already exists in this group")
     device_values = sent_device_values(body)
@@ -1820,6 +1951,7 @@ async def _bulk_add(entries: list[HostBulkEntry], default_group_id: int | None, 
     groups_created: list[dict] = []
     id_by_path: dict[tuple[str, ...], int] = {}
     index = await load_inventory_index()
+    confirms = await caller_confirms_addresses(request)
 
     async def group_for(path: tuple[str, ...]) -> int:
         if path in id_by_path:
@@ -1895,7 +2027,7 @@ async def _bulk_add(entries: list[HostBulkEntry], default_group_id: int | None, 
                     LOGGER.warning("inventory: bulk add could not create group %r: %s", label, exc)
                     errors.append({**names, "error": f"Could not create group {label!r}"})
                     continue
-            hid = await _insert_host(group_id, entry)
+            hid = await _insert_host(group_id, entry, address_confirmed=confirms)
             if entry.serial_number:
                 await db.update_host_serial(hid, entry.serial_number)
         except HTTPException as exc:
@@ -2001,6 +2133,8 @@ async def update_host(host_id: int, body: HostUpdate, request: Request):
         vlan_id=body.vlan_id,
         aws_instance_id=aws_instance_id,
         snmp_profile_id=snmp_profile_id,
+        # Used only when the address changes (managed_targets).
+        address_confirmed=await caller_confirms_addresses(request),
     )
     if device_values and await db.set_host_device_fields(host_id, device_values, lock=True):
         await audit_device_write(request, "host_update", f"host={host_id} {describe_values(device_values)}")
@@ -2298,24 +2432,35 @@ async def discovery_scan(group_id: int, body: DiscoveryScanRequest, request: Req
     The SSE variant at .../discovery/scan/stream is unchanged.
     """
     group = await require_group(request, group_id, write=True)
-    try:
-        targets = _expand_scan_targets(body.cidrs, body.max_hosts)
-    except ValueError as exc:
-        raise HTTPException(400, str(exc))
-    credential, ssh_base = await _resolve_discovery_ssh(
-        body, _get_session(request), group=group, correlation_id=_corr_id(request), request=request, targets=targets
-    )
+    with DISCOVERY_RUNS.claim(request) as slot:
+        try:
+            targets = _expand_scan_targets(body.cidrs, body.max_hosts)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+        credential, ssh_base = await _resolve_discovery_ssh(
+            body, _get_session(request), group=group, correlation_id=_corr_id(request), request=request, targets=targets
+        )
+        snmp_withheld, snmp_summary = await _snmp_withheld_targets(request, body, targets)
 
-    job = background_jobs.create_job(
-        "discovery-scan",
-        {"group_id": group_id, "scanned": 0, "total": len(targets), "found": 0},
-    )
-    supervise_task(
-        asyncio.create_task(
-            _run_discovery_scan_job(job["job_id"], group_id, body, targets, credential=credential, ssh_base=ssh_base)
-        ),
-        "discovery-scan",
-    )
+        job = background_jobs.create_job(
+            "discovery-scan",
+            {"group_id": group_id, "scanned": 0, "total": len(targets), "found": 0},
+        )
+        task = asyncio.create_task(
+            _run_discovery_scan_job(
+                job["job_id"],
+                group_id,
+                body,
+                targets,
+                credential=credential,
+                ssh_base=ssh_base,
+                snmp_withheld=snmp_withheld,
+                snmp_summary=snmp_summary,
+            )
+        )
+        # The caller's discovery slot is held until the job ends.
+        slot.release_when_done(task)
+        supervise_task(task, "discovery-scan")
     return {"job_id": job["job_id"], "status": "running", "group_id": group_id, "total_targets": len(targets)}
 
 
@@ -2327,21 +2472,29 @@ async def _run_discovery_scan_job(
     *,
     credential: dict | None = None,
     ssh_base: dict | None = None,
+    snmp_withheld: frozenset[str] = frozenset(),
+    snmp_summary: dict | None = None,
 ) -> None:
-    """Background task: probe every target, tracking progress on the job."""
+    """Background task: probe every target, tracking progress on the job.
+    ``snmp_withheld`` / ``snmp_summary``: from ``_snmp_withheld_targets``,
+    worked out by the route for its caller."""
     semaphore = asyncio.Semaphore(max(1, state.DISCOVERY_MAX_CONCURRENT_PROBES))
     snmp_cfg = state._resolve_snmp_discovery_config(group_id)
 
-    tasks = [asyncio.create_task(_scan_target(ip, body, snmp_cfg, semaphore, credential)) for ip in targets]
     try:
         discovered: list[dict] = []
         scanned = 0
-        for coro in asyncio.as_completed(tasks):
-            result = await coro
-            scanned += 1
-            if result is not None:
-                discovered.append(result)
-            background_jobs.update_progress(job_id, scanned=scanned, found=len(discovered))
+        # fan_out cancels the probes still pending when this fails or the
+        # job task is cancelled (shutdown).
+        async with fan_out(
+            _scan_target(ip, body, snmp_cfg, semaphore, credential, snmp_withheld=snmp_withheld) for ip in targets
+        ) as finished:
+            for coro in finished:
+                result = await coro
+                scanned += 1
+                if result is not None:
+                    discovered.append(result)
+                background_jobs.update_progress(job_id, scanned=scanned, found=len(discovered))
         discovered.sort(key=lambda item: ipaddress.ip_address(item["ip_address"]))
         background_jobs.finish_job(
             job_id,
@@ -2352,15 +2505,11 @@ async def _run_discovery_scan_job(
                 "discovered_count": len(discovered),
                 "discovered_hosts": discovered,
                 "ssh_enrichment": _ssh_enrichment_summary(ssh_base or {}, discovered),
+                "snmp_withheld": snmp_summary or {"count": 0, "reason": ""},
             },
         )
     except Exception as exc:
         LOGGER.exception("inventory: discovery scan job %s failed", job_id)
-        # Reap the still-pending probes so their results/exceptions are
-        # consumed instead of warning "Task exception was never retrieved".
-        for t in tasks:
-            t.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
         background_jobs.finish_job(job_id, "failed", error=str(exc))
 
 
@@ -2386,47 +2535,53 @@ async def get_discovery_scan_job(job_id: str, request: Request = None):
 async def discovery_scan_stream(group_id: int, body: DiscoveryScanRequest, request: Request):
     """SSE streaming scan -- yields per-host results as they complete."""
     group = await require_group(request, group_id, write=True)
+    # Held until the stream ends (released at once if this handler fails).
+    with DISCOVERY_RUNS.claim(request) as slot:
+        try:
+            targets = _expand_scan_targets(body.cidrs, body.max_hosts)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+        total = len(targets)
+        semaphore = asyncio.Semaphore(max(1, state.DISCOVERY_MAX_CONCURRENT_PROBES))
+        snmp_cfg = state._resolve_snmp_discovery_config(group_id)
+        credential, ssh_base = await _resolve_discovery_ssh(
+            body, _get_session(request), group=group, correlation_id=_corr_id(request), request=request, targets=targets
+        )
+        snmp_withheld, snmp_summary = await _snmp_withheld_targets(request, body, targets)
 
-    try:
-        targets = _expand_scan_targets(body.cidrs, body.max_hosts)
-    except ValueError as exc:
-        raise HTTPException(400, str(exc))
-    total = len(targets)
-    semaphore = asyncio.Semaphore(max(1, state.DISCOVERY_MAX_CONCURRENT_PROBES))
-    snmp_cfg = state._resolve_snmp_discovery_config(group_id)
-    credential, ssh_base = await _resolve_discovery_ssh(
-        body, _get_session(request), group=group, correlation_id=_corr_id(request), request=request, targets=targets
-    )
+        async def _scan_one(ip_address: str) -> tuple[str, dict | None]:
+            return ip_address, await _scan_target(
+                ip_address, body, snmp_cfg, semaphore, credential, snmp_withheld=snmp_withheld
+            )
 
-    async def _scan_one(ip_address: str) -> tuple[str, dict | None]:
-        return ip_address, await _scan_target(ip_address, body, snmp_cfg, semaphore, credential)
+        async def event_generator():
+            # Send initial metadata
+            start = {"type": "start", "total": total, "ssh_enrichment": ssh_base, "snmp_withheld": snmp_summary}
+            yield f"data: {json.dumps(start)}\n\n"
 
-    async def event_generator():
-        # Send initial metadata
-        yield f"data: {json.dumps({'type': 'start', 'total': total, 'ssh_enrichment': ssh_base})}\n\n"
+            scanned = 0
+            discovered = []
+            # A client that goes away cancels the probes still pending.
+            async with fan_out(_scan_one(ip) for ip in targets) as finished:
+                for coro in finished:
+                    ip_address, result = await coro
+                    scanned += 1
+                    if result is not None:
+                        discovered.append(result)
+                    yield f"data: {json.dumps({'type': 'progress', 'scanned': scanned, 'total': total, 'ip': ip_address, 'found': result is not None, 'host': result})}\n\n"
 
-        scanned = 0
-        discovered = []
-        tasks = [asyncio.create_task(_scan_one(ip)) for ip in targets]
+            discovered.sort(key=lambda item: ipaddress.ip_address(item["ip_address"]))
+            done = {
+                "type": "done",
+                "scanned_hosts": total,
+                "discovered_count": len(discovered),
+                "discovered_hosts": discovered,
+                "ssh_enrichment": _ssh_enrichment_summary(ssh_base, discovered),
+                "snmp_withheld": snmp_summary,
+            }
+            yield f"data: {json.dumps(done)}\n\n"
 
-        for coro in asyncio.as_completed(tasks):
-            ip_address, result = await coro
-            scanned += 1
-            if result is not None:
-                discovered.append(result)
-            yield f"data: {json.dumps({'type': 'progress', 'scanned': scanned, 'total': total, 'ip': ip_address, 'found': result is not None, 'host': result})}\n\n"
-
-        discovered.sort(key=lambda item: ipaddress.ip_address(item["ip_address"]))
-        done = {
-            "type": "done",
-            "scanned_hosts": total,
-            "discovered_count": len(discovered),
-            "discovered_hosts": discovered,
-            "ssh_enrichment": _ssh_enrichment_summary(ssh_base, discovered),
-        }
-        yield f"data: {json.dumps(done)}\n\n"
-
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
+        return slot.stream(event_generator())
 
 
 @router.get("/api/inventory/{group_id}/snmp-discovery-profile")
@@ -2450,13 +2605,6 @@ async def update_group_snmp_discovery_profile(group_id: int, body: dict, request
     return mask_secret_fields(profile, SNMP_SECRET_FIELDS)
 
 
-def _same_address(a: str, b: str) -> bool:
-    try:
-        return ipaddress.ip_address(a) == ipaddress.ip_address(b)
-    except ValueError:
-        return a.strip().lower() == b.strip().lower()
-
-
 @router.post("/api/inventory/{group_id}/snmp-discovery-profile/test")
 @scoped("group")
 async def test_group_snmp_profile(group_id: int, body: dict, request: Request):
@@ -2470,7 +2618,9 @@ async def test_group_snmp_profile(group_id: int, body: dict, request: Request):
     if not await caller_is_admin(request):
         writable = await readable_host_ids(request, write=True)
         if not any(
-            _same_address(str(h.get("ip_address") or ""), target_ip) and (writable is None or int(h["id"]) in writable)
+            same_address(h.get("ip_address"), target_ip)
+            and (writable is None or int(h["id"]) in writable)
+            and host_address_confirmed(h)
             for h in await db.get_hosts_for_group(group_id)
         ):
             raise HTTPException(
@@ -2493,6 +2643,9 @@ async def test_host_snmp_profile(host_id: int, request: Request):
     target_ip = str(host.get("ip_address") or "").strip()
     if not target_ip:
         raise HTTPException(400, "Host has no IP address")
+    # The SNMP config is shared: only to a confirmed address, unless an admin asks.
+    if not host_address_confirmed(host) and not await caller_is_admin(request):
+        raise HTTPException(403, f"The SNMP test cannot run: the host's {ADDRESS_AWAITING_CONFIRMATION}")
     snmp_config = state._resolve_host_snmp_config(host)
     if not snmp_config.get("enabled"):
         raise HTTPException(400, "SNMP is not enabled for this host (its own profile or its group's)")
@@ -2534,18 +2687,27 @@ async def discovery_sync(group_id: int, body: DiscoverySyncRequest, request: Req
             raise HTTPException(400, "Group has no hosts to sync. Add hosts first or provide CIDR targets.")
         body.cidrs = host_ips
 
-    try:
-        targets = _expand_scan_targets(body.cidrs, body.max_hosts)
-    except ValueError as exc:
-        raise HTTPException(400, str(exc))
-    session = _get_session(request)
-    credential, ssh_base = await _resolve_discovery_ssh(
-        body, session, group=group, correlation_id=_corr_id(request), request=request, targets=targets
+    with DISCOVERY_RUNS.claim(request):
+        try:
+            targets = _expand_scan_targets(body.cidrs, body.max_hosts)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+        session = _get_session(request)
+        credential, ssh_base = await _resolve_discovery_ssh(
+            body, session, group=group, correlation_id=_corr_id(request), request=request, targets=targets
+        )
+        snmp_withheld, snmp_summary = await _snmp_withheld_targets(request, body, targets)
+        scanned_count, discovered = await _discover_hosts(
+            body, group_id=group_id, credential=credential, snmp_withheld=snmp_withheld
+        )
+    sync_result = await _sync_group_hosts(
+        group_id,
+        discovered,
+        remove_absent=body.remove_absent,
+        address_confirmed=await caller_confirms_addresses(request),
     )
-    scanned_count, discovered = await _discover_hosts(body, group_id=group_id, credential=credential)
-    sync_result = await _sync_group_hosts(group_id, discovered, remove_absent=body.remove_absent)
     await _software_changed()
-    audit_user = session["user"] if session else "api-token"
+    audit_user = session["user"] if session else API_TOKEN_USER
 
     await _audit(
         "inventory",
@@ -2564,6 +2726,7 @@ async def discovery_sync(group_id: int, body: DiscoverySyncRequest, request: Req
         "discovered_count": len(discovered),
         "sync": sync_result,
         "ssh_enrichment": _ssh_enrichment_summary(ssh_base, discovered),
+        "snmp_withheld": snmp_summary,
     }
 
 
@@ -2584,66 +2747,77 @@ async def discovery_sync_stream(group_id: int, body: DiscoverySyncRequest, reque
             raise HTTPException(400, "Group has no hosts to sync. Add hosts first or provide CIDR targets.")
         body.cidrs = host_ips
 
-    try:
-        targets = _expand_scan_targets(body.cidrs, body.max_hosts)
-    except ValueError as exc:
-        raise HTTPException(400, str(exc))
-    total = len(targets)
-    semaphore = asyncio.Semaphore(max(1, state.DISCOVERY_MAX_CONCURRENT_PROBES))
-    snmp_cfg = state._resolve_snmp_discovery_config(group_id)
-    session = _get_session(request)
-    credential, ssh_base = await _resolve_discovery_ssh(
-        body, session, group=group, correlation_id=_corr_id(request), request=request, targets=targets
-    )
-
-    async def _scan_one(ip_address: str) -> tuple[str, dict | None]:
-        return ip_address, await _scan_target(ip_address, body, snmp_cfg, semaphore, credential)
-
-    audit_user = session["user"] if session else "api-token"
-    corr_id = _corr_id(request)
-
-    async def event_generator():
-        yield f"data: {json.dumps({'type': 'start', 'total': total, 'ssh_enrichment': ssh_base})}\n\n"
-
-        scanned = 0
-        discovered = []
-        tasks = [asyncio.create_task(_scan_one(ip)) for ip in targets]
-
-        for coro in asyncio.as_completed(tasks):
-            ip_address, result = await coro
-            scanned += 1
-            if result is not None:
-                discovered.append(result)
-            yield f"data: {json.dumps({'type': 'progress', 'scanned': scanned, 'total': total, 'ip': ip_address, 'found': result is not None, 'host': result})}\n\n"
-
-        discovered.sort(key=lambda item: ipaddress.ip_address(item["ip_address"]))
-
-        # Persisting phase: probing is done, now reconcile with the DB.
-        yield f"data: {json.dumps({'type': 'syncing', 'discovered_count': len(discovered)})}\n\n"
-        sync_result = await _sync_group_hosts(group_id, discovered, remove_absent=body.remove_absent)
-        await _software_changed()
-
-        await _audit(
-            "inventory",
-            "discovery.sync",
-            user=audit_user,
-            detail=(
-                f"group_id={group_id} scanned={total} discovered={len(discovered)} "
-                f"added={sync_result['added']} updated={sync_result['updated']} removed={sync_result['removed']}"
-            ),
-            correlation_id=corr_id,
+    # Held until the stream ends (released at once if this handler fails).
+    with DISCOVERY_RUNS.claim(request) as slot:
+        try:
+            targets = _expand_scan_targets(body.cidrs, body.max_hosts)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+        total = len(targets)
+        semaphore = asyncio.Semaphore(max(1, state.DISCOVERY_MAX_CONCURRENT_PROBES))
+        snmp_cfg = state._resolve_snmp_discovery_config(group_id)
+        session = _get_session(request)
+        credential, ssh_base = await _resolve_discovery_ssh(
+            body, session, group=group, correlation_id=_corr_id(request), request=request, targets=targets
         )
+        snmp_withheld, snmp_summary = await _snmp_withheld_targets(request, body, targets)
+        # Decided here, where the request is at hand, not in the generator.
+        confirms = await caller_confirms_addresses(request)
 
-        done = {
-            "type": "done",
-            "scanned_hosts": total,
-            "discovered_count": len(discovered),
-            "sync": sync_result,
-            "ssh_enrichment": _ssh_enrichment_summary(ssh_base, discovered),
-        }
-        yield f"data: {json.dumps(done)}\n\n"
+        async def _scan_one(ip_address: str) -> tuple[str, dict | None]:
+            return ip_address, await _scan_target(
+                ip_address, body, snmp_cfg, semaphore, credential, snmp_withheld=snmp_withheld
+            )
 
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
+        audit_user = session["user"] if session else API_TOKEN_USER
+        corr_id = _corr_id(request)
+
+        async def event_generator():
+            start = {"type": "start", "total": total, "ssh_enrichment": ssh_base, "snmp_withheld": snmp_summary}
+            yield f"data: {json.dumps(start)}\n\n"
+
+            scanned = 0
+            discovered = []
+            # A client that goes away cancels the probes still pending.
+            async with fan_out(_scan_one(ip) for ip in targets) as finished:
+                for coro in finished:
+                    ip_address, result = await coro
+                    scanned += 1
+                    if result is not None:
+                        discovered.append(result)
+                    yield f"data: {json.dumps({'type': 'progress', 'scanned': scanned, 'total': total, 'ip': ip_address, 'found': result is not None, 'host': result})}\n\n"
+
+            discovered.sort(key=lambda item: ipaddress.ip_address(item["ip_address"]))
+
+            # Persisting phase: probing is done, now reconcile with the DB.
+            yield f"data: {json.dumps({'type': 'syncing', 'discovered_count': len(discovered)})}\n\n"
+            sync_result = await _sync_group_hosts(
+                group_id, discovered, remove_absent=body.remove_absent, address_confirmed=confirms
+            )
+            await _software_changed()
+
+            await _audit(
+                "inventory",
+                "discovery.sync",
+                user=audit_user,
+                detail=(
+                    f"group_id={group_id} scanned={total} discovered={len(discovered)} "
+                    f"added={sync_result['added']} updated={sync_result['updated']} removed={sync_result['removed']}"
+                ),
+                correlation_id=corr_id,
+            )
+
+            done = {
+                "type": "done",
+                "scanned_hosts": total,
+                "discovered_count": len(discovered),
+                "sync": sync_result,
+                "ssh_enrichment": _ssh_enrichment_summary(ssh_base, discovered),
+                "snmp_withheld": snmp_summary,
+            }
+            yield f"data: {json.dumps(done)}\n\n"
+
+        return slot.stream(event_generator())
 
 
 @router.post("/api/inventory/{group_id}/discovery/onboard")
@@ -2653,10 +2827,15 @@ async def discovery_onboard(group_id: int, body: DiscoveryOnboardRequest, reques
     if not body.discovered_hosts:
         raise HTTPException(400, "No discovered hosts provided")
 
-    sync_result = await _sync_group_hosts(group_id, body.discovered_hosts, remove_absent=False)
+    sync_result = await _sync_group_hosts(
+        group_id,
+        body.discovered_hosts,
+        remove_absent=False,
+        address_confirmed=await caller_confirms_addresses(request),
+    )
     await _software_changed()
     session = _get_session(request)
-    audit_user = session["user"] if session else "api-token"
+    audit_user = session["user"] if session else API_TOKEN_USER
     await _audit(
         "inventory",
         "discovery.onboard",

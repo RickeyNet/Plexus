@@ -26,6 +26,7 @@ from routes.crypto import decrypt
 
 import netcontrol.routes.state as state
 from netcontrol.approvals import ApprovalDecision, decision_audit_detail, require_different_approver
+from netcontrol.managed_targets import ADDRESS_AWAITING_CONFIRMATION, may_send_credential, name_hosts
 from netcontrol.object_scope import (
     READ_ONLY_DETAIL,
     ObjectScope,
@@ -42,12 +43,14 @@ from netcontrol.routes.intended_config import RemediationTargets, remediation_fo
 from netcontrol.routes.maintenance_windows import evaluate_change_gate
 from netcontrol.routes.risk_analysis import require_risk_analysis
 from netcontrol.routes.shared import (
+    LIVE_STREAMS,
     _audit,
     _compute_config_diff,
     _corr_id,
     _get_session,
     _push_config_to_device,
     is_owner_or_admin,
+    limit_websocket,
     require_credential_access,
     require_owner_or_admin,
     supervise_task,
@@ -666,8 +669,16 @@ async def _run_rollback_job(
     hosts: list[dict],
     credentials: dict,
     user: str,
+    *,
+    credential_row: dict | None = None,
 ):
-    """Background task: restore pre-deployment configs to roll back a deployment."""
+    """Background task: restore pre-deployment configs to roll back a deployment.
+
+    ``credential_row``: the stored credential ``credentials`` came from.
+    When it is shared (the service or default credential), a host of
+    ``hosts`` (stored rows) whose address awaits an admin's confirmation is
+    not connected to: it is recorded as a failed rollback with the reason,
+    and the others are rolled back."""
     try:
         await db.update_deployment_status(deployment_id, "rolling-back", rollback_status="in_progress")
         await _broadcast_deploy_line(
@@ -708,6 +719,19 @@ async def _run_rollback_job(
                     check_type="config_restore",
                     host_id=host["id"],
                 )
+
+                if not may_send_credential(host, credential_row):
+                    rollback_failures += 1
+                    reason = f"Not signed in with the shared credential: {ADDRESS_AWAITING_CONFIRMATION}"
+                    await _broadcast_deploy_line(
+                        job_id,
+                        f"[{datetime.now(UTC).strftime('%H:%M:%S')}] ROLLBACK SKIPPED for {hostname}: {reason}. "
+                        "An admin confirms the address on the Inventory page.\n",
+                    )
+                    await db.update_deployment_checkpoint(
+                        cp_id, "failed", json.dumps({"error": reason, "skipped": ADDRESS_AWAITING_CONFIRMATION})
+                    )
+                    return
 
                 try:
                     # Capture current config and compute diff to find what to revert
@@ -1268,6 +1292,27 @@ async def execute_deployment(deployment_id: int, request: Request):
     if not hosts:
         raise HTTPException(status_code=400, detail="No target hosts found")
 
+    # A shared credential (the service or default credential) goes only to a
+    # confirmed address. Checked on the stored rows before any device is
+    # touched: a partly pushed config is worse than none.
+    awaiting = [h for h in hosts if not may_send_credential(h, cred)]
+    if awaiting:
+        await _audit(
+            "deployments",
+            "deployment.execute_blocked",
+            user=user,
+            detail=f"id={deployment_id} reason=address_awaiting_confirmation hosts={len(awaiting)}",
+            correlation_id=_corr_id(request),
+        )
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Deployment not started: it runs with a shared credential, and {len(awaiting)} target "
+                f"host(s) have an {ADDRESS_AWAITING_CONFIRMATION}: {name_hosts(awaiting)}. An admin confirms "
+                "the address on the Inventory page."
+            ),
+        )
+
     commands = [line for line in dep["proposed_commands"].splitlines() if line.strip()]
 
     # Atomically claim the deployment so two concurrent execute calls cannot
@@ -1439,7 +1484,7 @@ async def rollback_deployment(deployment_id: int, request: Request):
     _deployment_job_sockets[job_id] = []
 
     supervise_task(
-        asyncio.create_task(_run_rollback_job(job_id, deployment_id, hosts, credentials, user)),
+        asyncio.create_task(_run_rollback_job(job_id, deployment_id, hosts, credentials, user, credential_row=cred)),
         f"rollback job {job_id}",
     )
 
@@ -1500,13 +1545,14 @@ async def get_deployment_job_status(job_id: str, request: Request):
 
 @ws_router.websocket("/ws/deployment/{job_id}")
 @scoped("deployment")
+@limit_websocket(LIVE_STREAMS)
 async def ws_deployment(websocket: WebSocket, job_id: str):
     """WebSocket for streaming deployment/rollback job output."""
     token = websocket.cookies.get("session")
     if not token:
         await websocket.close(code=1008)
         return
-    session = await verify_ws_session(token)
+    session = await verify_ws_session(token, websocket)
     if not session:
         await websocket.close(code=1008)
         return

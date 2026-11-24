@@ -214,6 +214,59 @@ def test_username_sources(idp):
     assert _parse(idp, transient).identity.sub == "alice"
 
 
+def test_subject_attribute(idp):
+    attrs = {"uid": ["alice"], "employeeNumber": ["E-0042"]}
+    resp = idp.response(REQ, attributes=attrs, name_id_format=saml.NAMEID_TRANSIENT, name_id="_t-1")
+    # The account is bound to the stable attribute, not to the NameID or the username.
+    assert _parse(idp, resp, subject_attribute="employeeNumber").identity.sub == "E-0042"
+    missing = _error(idp, resp, subject_attribute="objectGUID")
+    assert missing.code == "claims" and "objectGUID" in missing.step
+
+
+def test_attribute_name_wins_over_friendly_name(idp):
+    oid = "urn:oid:0.9.2342.19200300.100.1.1"
+    # An attribute merely labelled "uid" or "groups" never stands in for, or
+    # adds to, the attribute that has that Name.
+    attrs = {"uid": ["alice"], "nickname": ["root"], "groups": ["netops"], "clubs": ["plexus-admins"]}
+    spoofed = idp.response(REQ, attributes=attrs, friendly_names={"nickname": "uid", "clubs": "groups"})
+    result = _parse(idp, spoofed)
+    assert result.identity.username == "alice"
+    assert result.identity.groups == ["netops"]
+    # With no attribute of that Name, the FriendlyName still finds it.
+    labelled = idp.response(REQ, attributes={oid: ["bob"]}, friendly_names={oid: "uid"})
+    assert _parse(idp, labelled).identity.username == "bob"
+    assert _parse(idp, labelled, username_attribute=oid).identity.username == "bob"
+
+
+def test_required_authentication_context(idp):
+    mfa = "urn:oasis:names:tc:SAML:2.0:ac:classes:TimeSyncToken"
+    password_only = idp.response(REQ)
+    assert _parse(idp, password_only).identity.username == "alice"
+    refused = _error(idp, password_only, required_authn_context=(mfa,))
+    assert refused.code == "claims" and "authentication context" in refused.step
+    with_mfa = idp.response(REQ, authn_context=mfa)
+    assert _parse(idp, with_mfa, required_authn_context=("urn:example:other", mfa)).identity.username == "alice"
+
+
+def test_authn_request_asks_for_the_required_context():
+    import zlib
+
+    def request_xml(**over) -> etree._Element:
+        url = saml.authn_request_url(
+            IDP_SSO_URL, request_id=REQ, sp_entity_id=SP_ENTITY_ID, acs_url=ACS_URL, relay_state="", now=0, **over
+        )
+        raw = parse_qs(urlsplit(url).query)["SAMLRequest"][0]
+        return etree.fromstring(zlib.decompress(base64.b64decode(raw), -15))
+
+    ns_samlp = "urn:oasis:names:tc:SAML:2.0:protocol"
+    assert request_xml().find(f"{{{ns_samlp}}}RequestedAuthnContext") is None
+    requested = request_xml(authn_context=("urn:example:mfa", "urn:example:<other>")).find(
+        f"{{{ns_samlp}}}RequestedAuthnContext"
+    )
+    assert requested.get("Comparison") == "exact"
+    assert [ref.text for ref in requested] == ["urn:example:mfa", "urn:example:<other>"]
+
+
 def test_unsigned_assertion_is_refused(idp):
     resp = encode(build_response(build_assertion(request_id=REQ), request_id=REQ))
     assert "not signed" in _error(idp, resp).step
@@ -412,6 +465,7 @@ def env(monkeypatch, request, idp):
     monkeypatch.setitem(state.AUTH_CONFIG, "saml", _saml_cfg(idp))
     monkeypatch.setattr(app_module, "LOGIN_ATTEMPTS", {})
     monkeypatch.setattr(app_module, "LOCKED_OUT", {})
+    monkeypatch.setattr(state, "SSO_FAILURE_AUDITS", {})
     return admin, idp
 
 
@@ -556,12 +610,50 @@ def test_disabled(env, monkeypatch):
 
 
 def test_failures_count_toward_lockout(env, monkeypatch):
+    """A refused account (a valid response, so only the browser that signed
+    in at the IdP can cause it) counts like a wrong password."""
     monkeypatch.setitem(state.LOGIN_RULES, "max_attempts", 2)
     monkeypatch.setitem(state.LOGIN_RULES, "rate_limit_max", 10)
-    for _ in range(2):
-        assert _error_code(_browser().post(ACS, data={"SAMLResponse": "x"})) == "state"
     _, idp = env
-    assert _error_code(_sign_in(_browser(), idp)) == "denied"
+    assert _sign_in(_browser(), idp).status_code == 303
+    for n in range(2):
+        resp = _sign_in(_browser(), idp, name_id="someone-else@example.com", assertion_id=f"_other-{n}")
+        assert _error_code(resp) == "account"
+    assert "testclient" in app_module.LOCKED_OUT
+    failures = len(_audit_details("login.failure"))
+    assert _error_code(_sign_in(_browser(), idp, assertion_id="_a9")) == "denied"
+    # Refused by the lockout: no audit row, like the password form's 429.
+    assert len(_audit_details("login.failure")) == failures
+
+
+def test_posts_any_site_can_cause_never_lock_the_address(env, monkeypatch):
+    """Another site can post to the ACS, with the ``saml_tx`` cookie too
+    (it is SameSite=None over HTTPS). A response that does not validate
+    never counts toward the lockout, and its audit rows are bounded."""
+    _, idp = env
+    monkeypatch.setitem(state.LOGIN_RULES, "max_attempts", 2)
+    monkeypatch.setitem(state.LOGIN_RULES, "rate_limit_max", 10)
+    before = len(_audit_details("login.failure"))
+    # No transaction cookie: not counted, not audited.
+    for _ in range(4):
+        assert _error_code(_browser().post(ACS, data={"SAMLResponse": "x"})) == "state"
+    assert len(_audit_details("login.failure")) == before
+    # A forged response with a real transaction cookie: not counted,
+    # audited for the first ``max_attempts`` only.
+    for _ in range(4):
+        browser = _browser()
+        _start(browser)
+        assert _error_code(browser.post(ACS, data={"SAMLResponse": "x"})) != "denied"
+    assert len(_audit_details("login.failure")) == before + 2
+    # SAML switched off: not counted, not audited.
+    monkeypatch.setitem(state.AUTH_CONFIG, "saml", _saml_cfg(idp, enabled=False))
+    for _ in range(4):
+        assert _error_code(_browser().post(ACS, data={"SAMLResponse": "x"})) == "disabled"
+    assert len(_audit_details("login.failure")) == before + 2
+    assert not app_module.LOCKED_OUT and not app_module.LOGIN_ATTEMPTS
+    # The address can still sign in.
+    monkeypatch.setitem(state.AUTH_CONFIG, "saml", _saml_cfg(idp))
+    assert _sign_in(_browser(), idp).status_code == 303
 
 
 def test_admin_group_and_access_group_mapping(env, monkeypatch):
@@ -591,6 +683,34 @@ def test_subject_mismatch_is_refused(env):
     resp = _sign_in(_browser(), idp, name_id="someone-else@example.com", assertion_id="_a2")
     assert _error_code(resp) == "account"
     assert _user("alice")["external_id"] == "alice@example.com"
+
+
+def test_a_renamed_person_keeps_their_account(env):
+    _, idp = env
+    assert _sign_in(_browser(), idp).status_code == 303
+    first = _user("alice")
+    # The IdP now sends another username for the same subject (NameID).
+    renamed = {"uid": ["alice.example"], "displayName": ["Alice Example"], "groups": ["netops"]}
+    browser = _browser()
+    resp = _sign_in(browser, idp, attributes=renamed, assertion_id="_a2")
+    assert resp.status_code == 303 and "sso_error" not in resp.headers["location"]
+    # Signed in to the bound account, under its stored name; no second account.
+    assert browser.get("/api/auth/status").json()["username"] == "alice"
+    assert _user("alice.example") is None
+    assert _user("alice")["id"] == first["id"]
+    (detail,) = _audit_details("login.sso_username_changed")
+    assert "alice.example" in detail and "account='alice'" in detail
+
+
+def test_required_authentication_context_through_the_app(env, monkeypatch):
+    _, idp = env
+    mfa = "urn:oasis:names:tc:SAML:2.0:ac:classes:TimeSyncToken"
+    monkeypatch.setitem(state.AUTH_CONFIG, "saml", _saml_cfg(idp, required_authn_context=[mfa]))
+    assert _error_code(_sign_in(_browser(), idp)) == "claims"
+    assert _user("alice") is None
+    resp = _sign_in(_browser(), idp, authn_context=mfa, assertion_id="_a2")
+    assert resp.status_code == 303 and "sso_error" not in resp.headers["location"]
+    assert _user("alice")["auth_provider"] == "saml"
 
 
 def test_local_admin_name_collision_is_refused(env):

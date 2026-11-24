@@ -7,7 +7,8 @@ thin HTTP layer over it:
    item), keys normalised to snake case (``"IP Address"`` -> ``ip_address``)
    and every value text. A CSV cell that the export guarded against formulas
    (``'=x``) loses its apostrophe here, so export -> edit -> import is
-   lossless. YAML is read with ``yaml.safe_load`` only.
+   lossless. YAML is read with ``yaml_safe.safe_load_no_alias`` only (safe
+   loader, aliases refused).
 2. ``plan_import``: each record checked against the database by the adapter
    of its object type (hosts, groups, prefixes, addresses, VLANs, VRFs):
    references are resolved by name, the record is matched to an existing
@@ -50,9 +51,11 @@ from netcontrol.csv_cells import CSV_FORMULA_PREFIXES, csv_text_cell
 from netcontrol.custom_fields import TEXT_MAX, CustomFieldError, check_object_values, clean_tag_name, typed_value
 from netcontrol.data_validation import CUSTOM_FIELD_PREFIX, pick, validate_object
 from netcontrol.device_model import LOCATION_DETAIL_MAX
+from netcontrol.managed_targets import caller_confirms_addresses
 from netcontrol.network_objects import clean_description, clean_rd, clean_vid, clean_vlan_name, clean_vrf_name
 from netcontrol.object_scope import READ_ONLY_DETAIL, ObjectScope
 from netcontrol.routes.host_identity import host_ip_problem
+from netcontrol.yaml_safe import safe_load_no_alias
 
 # ── Limits ───────────────────────────────────────────────────────────────────
 
@@ -270,15 +273,22 @@ def _parse_csv(text: str) -> list[Record]:
     return records
 
 
+def _too_many_rows(count: int) -> str:
+    return f"The file has {count} rows; at most {MAX_IMPORT_ROWS} can be imported at once."
+
+
 def _parse_structured(text: str, fmt: str) -> list[Record]:
     try:
-        data = json.loads(text) if fmt == "json" else yaml.safe_load(text)
+        data = json.loads(text) if fmt == "json" else safe_load_no_alias(text)
     except (ValueError, yaml.YAMLError) as exc:
         raise BulkImportError(f"The file is not valid {fmt.upper()}: {str(exc).splitlines()[0]}") from exc
     if isinstance(data, dict) and len(data) == 1 and isinstance(next(iter(data.values())), list):
         data = next(iter(data.values()))
     if not isinstance(data, list):
         raise BulkImportError(f"The {fmt.upper()} must be a list of objects.")
+    # Before a record is built: each one costs a visit per key.
+    if len(data) > MAX_IMPORT_ROWS:
+        raise BulkImportError(_too_many_rows(len(data)))
     records: list[Record] = []
     for index, item in enumerate(data, start=1):
         if not isinstance(item, dict):
@@ -312,7 +322,7 @@ def parse_records(text: str, fmt: str) -> list[Record]:
     if not records:
         raise BulkImportError("The file has no rows to import.")
     if len(records) > MAX_IMPORT_ROWS:
-        raise BulkImportError(f"The file has {len(records)} rows; at most {MAX_IMPORT_ROWS} can be imported at once.")
+        raise BulkImportError(_too_many_rows(len(records)))
     return records
 
 
@@ -859,6 +869,9 @@ class HostAdapter(Adapter):
         plan = res.plan
         assert plan is not None  # nosec B101 - only planned rows are applied
         cur = res.existing
+        # An address from the file counts as confirmed only for an admin or
+        # the API token (``managed_targets``); a sync job confirms nothing.
+        confirmed = await caller_confirms_addresses()
         if cur is None:
             host_id = await db.add_host(
                 plan["group_id"],
@@ -867,6 +880,7 @@ class HostAdapter(Adapter):
                 plan["platform"],
                 vrf_name=plan["vrf"] or "",
                 vlan_id=plan["vlan"] or "",
+                address_confirmed=confirmed,
             )
             prior_ip = ""
         else:
@@ -881,6 +895,7 @@ class HostAdapter(Adapter):
                     plan["platform"],
                     vrf_name=plan["vrf"],
                     vlan_id=plan["vlan"],
+                    address_confirmed=confirmed,
                 )
             if plan["group_id"] != cur.get("group_id"):
                 await db.move_hosts([host_id], int(plan["group_id"]))

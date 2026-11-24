@@ -35,6 +35,10 @@ def test_shared_approval_rules():
     assert exc.value.status_code == 403
     assert "requester" in exc.value.detail
     require_different_approver("bob", "alice")
+    # A directory matches both spellings to one person.
+    for approver, requester in (("ALICE", "alice"), ("alice", "Alice "), ("Stra\u00dfe", "STRASSE")):
+        with pytest.raises(HTTPException):
+            require_different_approver(approver, requester)
     # The API token has no user name: nothing to compare.
     require_different_approver("", "alice")
     assert decision_audit_detail("id=7", "") == "id=7"

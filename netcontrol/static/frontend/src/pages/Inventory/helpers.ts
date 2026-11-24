@@ -3,6 +3,7 @@ import type {
   InventoryGroupFull,
   InventoryHost,
   SnmpTestResponse,
+  SnmpWithheldSummary,
   SshEnrichmentSummary,
 } from '@/api/inventory';
 import { credentialIdFromChoice, SETTINGS_SERVICE_CREDENTIAL } from '@/lib/credentialChoice';
@@ -262,6 +263,17 @@ export function describeSshEnrichment(summary: SshEnrichmentSummary | null | und
     (failed ? `, ${failed} failed.` : '.') +
     note
   );
+}
+
+/**
+ * One line on the scan targets probed without the group's SNMP settings
+ * (the server's `snmp_withheld`), e.g. "SNMP: 3 addresses probed without
+ * SNMP. <reason>". '' when every target got them.
+ */
+export function describeSnmpWithheld(summary: SnmpWithheldSummary | null | undefined): string {
+  if (!summary || !summary.count) return '';
+  const n = summary.count;
+  return `SNMP: ${n} address${n === 1 ? '' : 'es'} probed without SNMP. ${summary.reason}`.trim();
 }
 
 /**

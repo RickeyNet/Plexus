@@ -70,10 +70,12 @@ signing certificates, then **Save**), or fill the fields by hand:
 | IdP Entity ID | | Must equal the `Issuer` of the IdP's assertions |
 | IdP SSO URL | | The HTTP-Redirect `SingleSignOnService` location (`https`) |
 | IdP Signing Certificates | | PEM blocks (or the bare base64 from metadata), up to 5 so a rollover can overlap. Stored as PEM; the form shows the saved certificates' SHA-256 fingerprints and expiry dates. An expired certificate is refused. |
-| Username Attribute | empty | Attribute (`Name` or `FriendlyName`) that becomes the Plexus username. Empty uses the email attribute, else the NameID. Trimmed, 1 to 150 characters, no control characters. |
+| Username Attribute | empty | Attribute that becomes the Plexus username. Empty uses the email attribute, else the NameID. Trimmed, 1 to 150 characters, no control characters. Every attribute setting is matched against the attributes' `Name`; a `FriendlyName` is used only when no attribute in the assertion has that `Name`. |
 | Email Attribute | empty | Used as the username when the username attribute is empty or missing from the assertion. Plexus accounts have no separate email field. |
 | Display Name Attribute | empty | |
 | Groups Attribute | `groups` | Every value of the attribute is a group |
+| Subject Attribute | empty | Attribute that identifies the person for good (an employee number, an object GUID); the account is bound to its first value. Empty binds to the NameID. Set it when the IdP sends a transient NameID. A sign-in without the attribute is refused. |
+| Required Authentication Context | empty | `AuthnContextClassRef` values, one per line (at most 10). Plexus asks the IdP for one of them (`RequestedAuthnContext`, exact) and refuses an assertion that names none of them, for example to require multi-factor sign-in. Empty accepts whatever the IdP used. |
 | Admin Groups, Default Role, Default Access Groups, Sync access groups, Group Mappings | | As for OIDC ([sso-oidc.md](sso-oidc.md#2-configure-plexus)), with groups attribute values instead of group claim values |
 | Button Label | `Sign in with SAML` | At most 60 characters |
 | Lead with SSO on the login page | off | Display only: the SSO buttons come first and the password form folds behind "Use a local account" |
@@ -92,7 +94,15 @@ with the account managed by `saml`:
 - The first SAML sign-in of a username creates a local shadow account;
   the `NameID` is stored on the account (`users.external_id`) and a later
   sign-in for that account with another NameID is refused. With a
-  transient NameID the account is bound to the username instead.
+  Subject Attribute the account is bound to that attribute instead. With
+  a transient NameID and no Subject Attribute the account is bound to the
+  username: the binding then adds nothing, and a username the IdP gives
+  to a new person signs in to the previous person's account. Map a
+  Subject Attribute in that case.
+- The bound subject finds the account: when the IdP later sends another
+  username for the same subject, the person signs in to their existing
+  account under its Plexus username (`auth` /
+  `login.sso_username_changed`), as for OIDC.
 - An existing account is used only when it is managed by `saml`. A local
   account (admin or not) or one another provider manages is never
   adopted: the sign-in fails and is audited as `auth` / `login.adopt_refused`.
@@ -137,9 +147,14 @@ with the account managed by `saml`:
    admin must save the SAML settings once). The audit log records `login.failure`
    with `source=saml` and the step; the assertion is never logged.
 
-Failures count toward the per-IP login rate limit and lockout like wrong
-passwords. The ACS takes no CSRF token (the IdP's POST cannot carry one);
-the signed response and the `saml_tx` cookie authenticate it.
+The ACS takes no CSRF token (the IdP's POST cannot carry one); the signed
+response and the `saml_tx` cookie authenticate it. Because another site can
+post to it, a response that does not validate never counts toward the
+per-IP login lockout: a POST without the `saml_tx` cookie, or while SAML is
+off, is logged only, and a response that fails validation is audited (at
+most **Max attempts** rows per address per **Lockout time**). A replayed
+assertion and a refused account do count, like a wrong password, and a
+locked-out address is refused (`denied`, logged, not audited).
 
 ### Replay cache
 

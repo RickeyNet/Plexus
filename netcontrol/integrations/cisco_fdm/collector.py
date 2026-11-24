@@ -24,6 +24,7 @@ import routes.database as db
 import netcontrol.routes.state as state
 from netcontrol.integrations.cisco_fdm.client import FdmApiError, FdmClient
 from netcontrol.integrations.cisco_fdm.normalize import build_poll_result, error_result
+from netcontrol.managed_targets import ADDRESS_AWAITING_CONFIRMATION, split_by_confirmation
 from netcontrol.telemetry import configure_logging, redact_value
 
 LOGGER = configure_logging("plexus.cisco_fdm")
@@ -153,9 +154,20 @@ async def run_fdm_poll_once(*, force: bool = False) -> dict:
     # importing it at module load would create a cycle (app wires both).
     from netcontrol.routes.monitoring import _process_poll_result
 
-    hosts = await db.get_fdm_hosts()
+    # The collector signs in with a service credential: never to a host whose
+    # address awaits an admin's confirmation (``managed_targets``). Such a
+    # host is not polled, so nothing (no "down" result) is stored for it.
+    hosts, awaiting = split_by_confirmation(await db.get_fdm_hosts())
+    if awaiting:
+        LOGGER.info("cisco_fdm: not polling %d host(s), %s", len(awaiting), ADDRESS_AWAITING_CONFIRMATION)
     if not hosts:
-        return {"enabled": True, "hosts_polled": 0, "alerts_created": 0, "errors": 0}
+        return {
+            "enabled": True,
+            "hosts_polled": 0,
+            "alerts_created": 0,
+            "errors": 0,
+            "awaiting_confirmation": len(awaiting),
+        }
 
     alert_rules_cache = await db.get_alert_rules(enabled_only=True)
     max_concurrency = max(1, _as_int(_cfg("poll_concurrency")))
@@ -186,7 +198,13 @@ async def run_fdm_poll_once(*, force: bool = False) -> dict:
             LOGGER.warning("cisco_fdm: post-process error for %s: %s", h.get("hostname", "?"), redact_value(str(exc)))
 
     LOGGER.info("cisco_fdm: poll complete - %d hosts, %d alerts, %d errors", polled, alerts, errors)
-    return {"enabled": True, "hosts_polled": polled, "alerts_created": alerts, "errors": errors}
+    return {
+        "enabled": True,
+        "hosts_polled": polled,
+        "alerts_created": alerts,
+        "errors": errors,
+        "awaiting_confirmation": len(awaiting),
+    }
 
 
 async def close_all_clients() -> None:

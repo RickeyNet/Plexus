@@ -203,13 +203,46 @@ deletions count as **Removed**.
   come from you, so one of them could be a device you control. For a user
   who is not an admin, the Plexus service credential is used only when
   every address of the scan or sync is the address of an inventory host
-  you may change (a sync with no ranges re-reads the group's own hosts, so
-  it qualifies). Otherwise the scan or sync is refused with `403` and a
+  you may change and whose address an admin confirmed (a sync with no
+  ranges re-reads the group's own hosts, so it qualifies when they are
+  confirmed). Otherwise the scan or sync is refused with `403` and a
   message naming the addresses: pick one of your own credentials, untick
   **Read model/serial/version over SSH**, or ask an admin to run it. Admins and the server
   API token are not limited.
+- **The group's SNMP settings and new addresses.** The communities and
+  SNMPv3 keys of the group's SNMP settings are admin-only secrets. For a
+  user who is not an admin, a scan or sync sends them only to the address
+  of an inventory host you may change and whose address an admin
+  confirmed. Every other address is still probed, without SNMP (SSH and
+  HTTPS ports, and ping when **ICMP** is on), and the result says how many
+  addresses were probed that way and why (`snmp_withheld` in the API: the
+  scan job result, the `start` and `done` events of a streamed scan or
+  sync, and the sync response). Admins, the server API token and the
+  scheduled discovery sync send them to every address.
+- **Hosts added by a non-admin await confirmation.** A host that a sync or
+  onboard by a user who is not an admin adds, or whose address it changes,
+  is marked **Awaiting admin confirmation**: Plexus sends it no service
+  credential, default credential or shared SNMP secret (and does not walk
+  its interface addresses with the group's SNMP profile) until an admin
+  confirms the address on the Inventory page. The scheduled discovery sync
+  is an admin's, so the hosts it adds are confirmed.
 - **Large ranges are refused.** A range with more than 65,536 addresses, or
   more than ten times **Max Hosts** if that is larger, is rejected.
+- **At most 4,096 ranges per request.** A range listed twice is scanned
+  once. A list whose ranges overlap so much that more than that same number
+  of addresses (65,536, or ten times **Max Hosts**) would have to be walked
+  is refused with `400`; remove the overlapping entries.
+- **At most 3 discovery runs per user at once.** A scan or sync (streamed,
+  inline or as a background job) and a topology neighbor discovery each
+  count until they finish or the browser closes the stream; the server
+  runs at most 12 in all. Past either limit a new one is refused with
+  `429` and a message saying which limit was hit. Admins and the server API
+  token (one identity, however many clients use it) have the same limit.
+  The server settings `APP_DISCOVERY_RUNS_PER_USER` and
+  `APP_DISCOVERY_RUNS_TOTAL` change the numbers.
+- **Closing the progress stream stops the scan.** When the browser leaves a
+  streamed scan, sync or topology discovery, the probes and SSH sign-ins
+  still pending are cancelled.
 - **At most 64 probes run at once** by default. The server setting
   `APP_DISCOVERY_MAX_CONCURRENT_PROBES` changes it.
 - **SSH reads time out after 45 seconds** per device.
@@ -242,7 +275,9 @@ deletions count as **Removed**.
 | See SNMP profiles | The `inventory` feature (names and settings only; the community strings and v3 keys are shown to admins only) |
 | Create, change or delete SNMP profiles | Admin |
 | Use a stored credential for SSH | Access to that credential (your own, or any as admin) |
-| Read new addresses over SSH with the Plexus service credential | Admin (others: only addresses of inventory hosts they may change) |
+| Read new addresses over SSH with the Plexus service credential | Admin (others: only addresses of inventory hosts they may change whose address an admin confirmed) |
+| Probe new addresses with the group's SNMP settings | Admin (others: only addresses of inventory hosts they may change whose address an admin confirmed; other addresses are probed without SNMP) |
+| Confirm a host address | Admin |
 | See which credential a group remembers | The `inventory` feature and read access to the group |
 | Forget a group's credential | The `inventory` feature and write access to the group |
 | Set scheduled discovery | Admin |

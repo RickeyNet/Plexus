@@ -27,12 +27,14 @@ from netcontrol.object_scope import (
 from netcontrol.routes import opnsense_masking
 from netcontrol.routes.device_config import get_device_config
 from netcontrol.routes.shared import (
+    LIVE_STREAMS,
     _audit,
     _compute_config_diff,
     _corr_id,
     _get_session,
     _push_config_to_device,
     is_owner_or_admin,
+    limit_websocket,
     require_credential_access,
     supervise_task,
     verify_ws_session,
@@ -1067,10 +1069,11 @@ async def get_capture_job(job_id: str, request: Request):
 
 @ws_router.websocket("/ws/config-capture/{job_id}")
 @scoped("job")
+@limit_websocket(LIVE_STREAMS)
 async def websocket_config_capture(websocket: WebSocket, job_id: str):
     """Stream config capture job output in real-time."""
     token = websocket.cookies.get("session")
-    session = await verify_ws_session(token)
+    session = await verify_ws_session(token, websocket)
     if not session:
         await websocket.close(code=1008)
         return
@@ -1375,10 +1378,11 @@ async def revert_drift_event(body: ConfigDriftRevertRequest, request: Request):
 
 @ws_router.websocket("/ws/config-revert/{job_id}")
 @scoped("job")
+@limit_websocket(LIVE_STREAMS)
 async def ws_config_revert(websocket: WebSocket, job_id: str):
     """WebSocket for streaming revert job output."""
     token = websocket.cookies.get("session")
-    session = await verify_ws_session(token)
+    session = await verify_ws_session(token, websocket)
     if not session:
         await websocket.close(code=1008)
         return

@@ -38,6 +38,7 @@ from netcontrol.drivers import DriverCapabilityError, get_driver
 from netcontrol.drivers.show_version import classify_show_version_os, parse_show_version
 from netcontrol.integrations.apc import upgrade as apc_upgrade
 from netcontrol.integrations.software.versions import version_tokens
+from netcontrol.managed_targets import ADDRESS_AWAITING_CONFIRMATION, recorded_address_refusal
 from netcontrol.object_scope import (
     READ_ONLY_DETAIL,
     WRITE_SCOPE_DETAIL,
@@ -54,11 +55,13 @@ from netcontrol.object_scope import (
 from netcontrol.routes.device_config import store_device_config
 from netcontrol.routes.shared import (
     FILE_UPLOAD_OPENAPI,
+    LIVE_STREAMS,
     _audit,
     _corr_id,
     _get_session,
     _read_device_configs,
     caller_is_admin,
+    limit_websocket,
     require_credential_access,
     require_owner_or_admin,
     resolve_state_root,
@@ -478,6 +481,7 @@ async def rehydrate_scheduled_upgrades():
             _imap=image_map,
             _opts=options,
             _opid=operation_id,
+            _cred_row=cred,
         ):
             try:
                 delay_seconds = (_sat - datetime.now(UTC)).total_seconds()
@@ -496,7 +500,9 @@ async def rehydrate_scheduled_upgrades():
                     started_at=_utc_now_iso(),
                 )
                 await _emit(_cid, None, "info", "Starting activate phase now")
-                await _run_phase(_cid, "activate", _devs, _creds, _imap, _opts, operation_id=_opid)
+                await _run_phase(
+                    _cid, "activate", _devs, _creds, _imap, _opts, operation_id=_opid, credential_row=_cred_row
+                )
             except asyncio.CancelledError:
                 raise
             except Exception:
@@ -1619,6 +1625,7 @@ async def execute_phase(campaign_id: int, body: CampaignPhaseRequest, request: R
                     image_map,
                     options,
                     operation_id=operation_id,
+                    credential_row=cred,
                 )
             except asyncio.CancelledError:
                 raise
@@ -1649,6 +1656,7 @@ async def execute_phase(campaign_id: int, body: CampaignPhaseRequest, request: R
                 image_map,
                 options,
                 operation_id=operation_id,
+                credential_row=cred,
             )
         )
     _running_campaigns[campaign_id] = task
@@ -1843,6 +1851,7 @@ async def confirm_device_logic_reset(campaign_id: int, device_id: int, request: 
 
 @ws_router.websocket("/ws/upgrades/{campaign_id}")
 @scoped("campaign")
+@limit_websocket(LIVE_STREAMS)
 async def upgrade_websocket(ws: WebSocket, campaign_id: int):
     """Stream upgrade events to the browser in real-time."""
     # Verify auth before accepting the connection. The token comes from the
@@ -1854,7 +1863,7 @@ async def upgrade_websocket(ws: WebSocket, campaign_id: int):
     if not token:
         await ws.close(code=4001, reason="Unauthorized")
         return
-    session = await verify_ws_session(token)
+    session = await verify_ws_session(token, ws)
     if not session:
         await ws.close(code=4001, reason="Unauthorized")
         return
@@ -1950,8 +1959,19 @@ async def _run_phase(
     image_map,
     options,
     operation_id=None,
+    *,
+    credential_row: dict | None = None,
 ):
-    """Orchestrate a phase across all devices with concurrency control."""
+    """Orchestrate a phase across all devices with concurrency control.
+
+    ``credential_row``: the stored credential ``credentials`` came from.
+    When it is shared (the service or default credential), a device of an
+    inventory host is signed in to only when the host's stored row, read
+    as the device's turn comes, holds its address as confirmed
+    (``managed_targets.recorded_address_refusal``); otherwise the device
+    fails with the reason and the others continue. A device added from
+    inventory whose host was deleted since (``from_inventory``) fails the
+    same way; an address typed into the campaign is not checked."""
     max_workers = min(options.get("parallel", 4), 8)
     status_key = _phase_status_key(phase)
     phase_name = _phase_label(phase)
@@ -1987,6 +2007,25 @@ async def _run_phase(
                         host=dev["ip_address"],
                     )
                     return
+                # A device added as an inventory host stays one when the host
+                # is deleted (host_id NULL); only an address typed into the
+                # campaign is exempt.
+                if dev.get("host_id") is not None or dev.get("from_inventory"):
+                    refusal = await recorded_address_refusal(dev.get("host_id"), dev["ip_address"], credential_row)
+                    if refusal:
+                        hint = (
+                            "An admin confirms the address on the Inventory page."
+                            if refusal == ADDRESS_AWAITING_CONFIRMATION
+                            else "Edit the campaign so its devices match the inventory."
+                        )
+                        await _fail_upgrade_device(
+                            campaign_id,
+                            dev["id"],
+                            dev["ip_address"],
+                            f"Not signed in with the shared credential: {refusal}. {hint}",
+                            status_keys=(status_key,),
+                        )
+                        return
                 if await apc_upgrade.is_ups_device(dev):
                     # APC Smart-UPS: same phases through the NMC CLI + SCP.
                     await apc_upgrade.run_device_phase(phase, campaign_id, dev, credentials, image_map, options)

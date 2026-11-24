@@ -53,6 +53,22 @@ export interface InventoryHost {
   tenant?: { id: number; name: string } | null;
   /** The host's own SNMP profile ('' or absent: it uses its group's profile). */
   snmp_profile_id?: string;
+  /**
+   * 1 when an admin set or confirmed the host's address, 0 while it awaits
+   * an admin's confirmation (no shared credential or SNMP secret is sent to
+   * it, and it is not polled). Absent on rows from an older server.
+   */
+  address_confirmed?: number | boolean | null;
+}
+
+/** Whether a host's address awaits an admin's confirmation. */
+export function addressAwaitingConfirmation(host: Pick<InventoryHost, 'address_confirmed'>): boolean {
+  return host.address_confirmed === 0 || host.address_confirmed === false;
+}
+
+/** The ids of the hosts among `hosts` whose address awaits an admin's confirmation. */
+export function awaitingHostIds(hosts: InventoryHost[]): number[] {
+  return hosts.filter(addressAwaitingConfirmation).map((h) => h.id);
 }
 
 export interface HostHardwareRef {
@@ -183,12 +199,19 @@ export interface SshEnrichmentSummary {
   failures?: { ip_address: string; error: string }[];
 }
 
+/** How many scan targets were probed without the group's SNMP settings, and why ('' when none). */
+export interface SnmpWithheldSummary {
+  count: number;
+  reason: string;
+}
+
 export interface DiscoverySyncResult {
   scanned_hosts?: number;
   discovered_count?: number;
   discovered_hosts?: DiscoveredHost[];
   sync?: { added?: number; updated?: number; removed?: number };
   ssh_enrichment?: SshEnrichmentSummary;
+  snmp_withheld?: SnmpWithheldSummary;
 }
 
 export interface DiscoveryScanResult {
@@ -196,6 +219,7 @@ export interface DiscoveryScanResult {
   discovered_count?: number;
   discovered_hosts?: DiscoveredHost[];
   ssh_enrichment?: SshEnrichmentSummary;
+  snmp_withheld?: SnmpWithheldSummary;
 }
 
 export interface DiscoveryOptions {
@@ -229,6 +253,7 @@ export interface ScanStreamEvent {
   discovered_count?: number;
   sync?: DiscoverySyncResult['sync'];
   ssh_enrichment?: SshEnrichmentSummary;
+  snmp_withheld?: SnmpWithheldSummary;
 }
 
 /** The credential discovery uses for SSH by default. */
@@ -635,6 +660,29 @@ export function useBulkDeleteHosts() {
       apiRequest('/hosts/bulk-delete', {
         method: 'POST',
         body: { host_ids: hostIds },
+      }),
+    onSuccess: () => invalidateHosts(qc),
+  });
+}
+
+export interface ConfirmHostAddressesResult {
+  ok: boolean;
+  /** The hosts whose address was awaiting confirmation and now is confirmed. */
+  confirmed: number[];
+  already_confirmed: number[];
+}
+
+/**
+ * Admin only: confirm the addresses of `hostIds` and/or every host of
+ * `groupId`, so the service credential and shared SNMP secrets may go to them.
+ */
+export function useConfirmHostAddresses() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ hostIds, groupId }: { hostIds?: number[]; groupId?: number }) =>
+      apiRequest<ConfirmHostAddressesResult>('/admin/hosts/confirm-address', {
+        method: 'POST',
+        body: { host_ids: hostIds ?? [], ...(groupId !== undefined ? { group_id: groupId } : {}) },
       }),
     onSuccess: () => invalidateHosts(qc),
   });

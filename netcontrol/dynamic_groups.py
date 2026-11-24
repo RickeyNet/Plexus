@@ -40,6 +40,7 @@ from typing import Any
 import routes.database as db
 from routes.user_regex import compile_user_regex
 
+from netcontrol.account_rules import API_TOKEN_USER
 from netcontrol.device_model import DEVICE_FILTER_KEYS, NONE_FILTER, parse_device_filters
 from netcontrol.object_scope import NO_ACCESS, UNRESTRICTED, ObjectScope, scope_for_user
 from netcontrol.routes.custom_fields import canonical_filter_values
@@ -78,9 +79,6 @@ MEMBER_COLUMNS: tuple[str, ...] = (
     "model",
     "software_version",
 )
-
-# Username the server API token acts as (``require_auth``).
-API_TOKEN_USER = "api-token"
 
 
 class DynamicGroupFilterError(ValueError):

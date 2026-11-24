@@ -224,7 +224,7 @@ sending the mask back on `PUT` keeps the stored secret.
 
 | Symptom | Likely cause |
 |---|---|
-| `TACACS+ authentication service unavailable` | TCP/49 blocked, wrong PSN, Device Admin service not enabled on that PSN, or the Plexus IP isn't a registered network device (ISE silently drops unknown clients). |
+| Login page: "Sign-in is temporarily unavailable"; audit entry `auth` / `login.failure` with `TACACS+ authentication service unavailable` | TCP/49 blocked, wrong PSN, Device Admin service not enabled on that PSN, or the Plexus IP isn't a registered network device (ISE silently drops unknown clients). |
 | ISE live log: *Invalid TACACS+ shared secret* / packet decode errors | Secret mismatch. |
 | Auth passes in ISE, Plexus says invalid credentials | Authorization hit DenyAccess (no shell profile). Check the authz rule conditions and the Live Log's "Authorization Failed" detail. |
 | Everyone lands as `user` | Shell profile lacks the `plexus-role` attribute *and* Default Privilege < `Admin priv-lvl`; or `Authorize` is off. |

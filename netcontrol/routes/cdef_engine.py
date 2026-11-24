@@ -15,10 +15,11 @@ host (read and write scope of its inventory group).
 from __future__ import annotations
 
 import math
+from typing import Annotated
 
 import routes.database as db
 from fastapi import APIRouter, HTTPException, Query, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from netcontrol.object_scope import (
     require_host,
@@ -34,6 +35,14 @@ from netcontrol.telemetry import configure_logging
 router = APIRouter()  # graph-templates; changes need graph-templates.write
 read_router = APIRouter()  # graph-templates: POST routes that only read (evaluate)
 LOGGER = configure_logging("plexus.cdef_engine")
+
+# Limits of POST /api/cdefs/evaluate. The evaluator runs on the event loop
+# and costs one step per token per data point, so the request is bounded
+# in each dimension and the evaluator refuses more than MAX_EVAL_STEPS.
+MAX_EXPRESSION_CHARS = 1024
+MAX_EVAL_SERIES = 26
+MAX_EVAL_POINTS = 10_000
+MAX_EVAL_STEPS = 200_000
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -54,8 +63,9 @@ class CdefUpdate(BaseModel):
 
 
 class CdefEvaluateRequest(BaseModel):
-    expression: str
-    data: dict[str, list[float]]  # {"a": [1,2,3], "b": [4,5,6]}
+    expression: str = Field(max_length=MAX_EXPRESSION_CHARS)
+    # {"a": [1,2,3], "b": [4,5,6]}
+    data: dict[str, Annotated[list[float], Field(max_length=MAX_EVAL_POINTS)]] = Field(max_length=MAX_EVAL_SERIES)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -124,6 +134,11 @@ def evaluate_cdef_expression(expression: str, data_map: dict[str, list[float]]) 
         max_len = 1
 
     tokens = [t.strip() for t in expr.split(",") if t.strip()]
+    if len(tokens) * max_len > MAX_EVAL_STEPS:
+        raise ValueError(
+            f"The expression has {len(tokens)} tokens over {max_len} data points; "
+            f"at most {MAX_EVAL_STEPS} steps (tokens x points) are evaluated"
+        )
     result: list[float] = []
 
     for i in range(max_len):

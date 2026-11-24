@@ -9,6 +9,7 @@ config-backups, compliance, monitoring, SNMP) remain in app.py for now.
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import secrets
 import sys
@@ -18,17 +19,20 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 import netcontrol.routes.state as state
-from netcontrol import lab_images, listener_sources, oidc, saml
+from netcontrol import account_rules, lab_images, listener_sources, oidc, saml
 from netcontrol.object_scope import scope_for_user
 from netcontrol.routes.auth import (
     _oidc_redirect_uri,
+    _session_cookie_secure,
     oidc_default_redirect_uri,
     saml_acs_url,
     saml_default_sp_urls,
     saml_sp_entity_id,
+    unknown_password_hash,
+    username_taken,
 )
 from netcontrol.routes.outbound_http import OutboundRequestError, guard_host
-from netcontrol.routes.shared import _audit, _corr_id, _get_session, _session_user
+from netcontrol.routes.shared import _audit, _corr_id, _get_session, _session_user, request_session
 from netcontrol.routes.state import _env_flag
 from netcontrol.secret_fields import (
     SECRET_MASK,
@@ -37,6 +41,7 @@ from netcontrol.secret_fields import (
     refuse_secret_reuse,
     url_origin,
 )
+from netcontrol.sso import DISPLAY_NAME_MAX_LENGTH, clean_display_name
 from netcontrol.telemetry import configure_logging, configure_syslog_logging, syslog_logging_enabled
 
 LOGGER = configure_logging("plexus.admin")
@@ -80,16 +85,21 @@ def init_admin(
 class AdminUserCreateRequest(BaseModel):
     username: str
     password: str
-    display_name: str = ""
+    display_name: str = Field(default="", max_length=DISPLAY_NAME_MAX_LENGTH)
     role: str = "user"
     group_ids: list[int] = []
+    # The admin knows this password: true makes the user replace it at the
+    # first sign-in.
+    must_change_password: bool = False
 
 
 class AdminUserUpdateRequest(BaseModel):
     username: str | None = None
-    display_name: str | None = None
+    display_name: str | None = Field(default=None, max_length=DISPLAY_NAME_MAX_LENGTH)
     role: str | None = None
     session_never_expires: bool | None = None
+    # Switch the account off (or back on) without deleting it.
+    disabled: bool | None = None
     # Which sign-in provider the account belongs to (ACCOUNT_PROVIDERS).
     auth_provider: str | None = None
 
@@ -113,6 +123,8 @@ def _requested_account_provider(value: str | None) -> str | None:
 
 class AdminUserPasswordResetRequest(BaseModel):
     new_password: str
+    # True makes the user replace this password at the next sign-in.
+    must_change_password: bool = False
 
 
 class AdminUserGroupAssignmentRequest(BaseModel):
@@ -392,10 +404,56 @@ async def _admin_user_payload(user: dict) -> dict:
         "group_ids": group_ids,
         "feature_access": features,
         "session_never_expires": bool(user.get("session_never_expires")),
+        "disabled": bool(user.get("disabled")),
         "object_scope_restricted": (await scope_for_user(user)).restricted,
         # The provider whose sign-ins use this account ("local": its own password).
         "auth_provider": user.get("auth_provider") or "local",
     }
+
+
+def _sign_in_provider_warnings(auth_config: dict) -> list[str]:
+    """Security-check warnings for the enabled sign-in providers: settings
+    that leave a password or a sign-in decision unprotected on the network,
+    or that make every directory user an admin."""
+    warnings: list[str] = []
+    radius = auth_config.get("radius") or {}
+    if radius.get("enabled") and not radius.get("enforce_message_authenticator"):
+        warnings.append(
+            "RADIUS is enabled without Message-Authenticator enforcement: a reply can be forged on the network "
+            "path to the server (CVE-2024-3596). Turn on 'Require Message-Authenticator' once the server sends it."
+        )
+    ldap = auth_config.get("ldap") or {}
+    if ldap.get("enabled"):
+        if not (ldap.get("use_ssl") or ldap.get("use_starttls")):
+            warnings.append(
+                "LDAP is enabled without TLS: the bind password and every user's password cross the network "
+                "in clear text. Turn on 'Use SSL' or 'Use STARTTLS'."
+            )
+        elif str(ldap.get("tls_verify") or "demand") != "demand":
+            warnings.append(
+                "LDAP certificate verification is below 'demand': the connection is encrypted but the server "
+                "is not authenticated."
+            )
+        user_filter = str(ldap.get("user_search_filter") or "")
+        if user_filter.count("{username}") > 1 and not ldap.get("username_attribute"):
+            warnings.append(
+                "The LDAP user search filter matches the sign-in name against more than one attribute and no "
+                "'Username attribute' is set: one person gets one Plexus account per way of typing their name."
+            )
+    oidc_cfg = auth_config.get("oidc") or {}
+    if oidc_cfg.get("enabled") and oidc_cfg.get("username_claim") == "email" and oidc_cfg.get("allow_unverified_email"):
+        warnings.append(
+            "OIDC names accounts by email and accepts addresses the provider does not mark verified: use a "
+            "username claim people cannot edit, or turn off 'Allow unverified email'."
+        )
+    labels = {"tacacs": "TACACS+", "ldap": "LDAP", "oidc": "OIDC", "saml": "SAML"}
+    for key, label in labels.items():
+        block = auth_config.get(key) or {}
+        if block.get("enabled") and block.get("default_role") == "admin":
+            warnings.append(
+                f"{label} default role is admin: every account that signs in through it becomes an administrator."
+            )
+    return warnings
 
 
 def _security_check_payload() -> dict:
@@ -427,6 +485,13 @@ def _security_check_payload() -> dict:
         warnings.append("APP_REQUIRE_API_TOKEN is false: non-session API calls are not forced to present an API token.")
     if not _api_token:
         warnings.append("APP_API_TOKEN is not set: token-based API auth cannot be used.")
+    cookie_secure = _session_cookie_secure()
+    if not cookie_secure:
+        warnings.append(
+            "The session cookie is issued without Secure (APP_HTTPS and APP_COOKIE_SECURE are both false): "
+            "set APP_COOKIE_SECURE=true when TLS ends at a reverse proxy."
+        )
+    warnings.extend(_sign_in_provider_warnings(state.AUTH_CONFIG))
 
     return {
         "ok": True,
@@ -437,7 +502,7 @@ def _security_check_payload() -> dict:
             "hsts_max_age": max(0, _hsts_age),
         },
         "cookies": {
-            "session_cookie_secure": _https,
+            "session_cookie_secure": cookie_secure,
             "session_cookie_httponly": True,
             "session_cookie_samesite": "strict",
         },
@@ -596,19 +661,27 @@ async def admin_list_users():
 @router.post("/api/admin/users", status_code=201)
 async def admin_create_user(body: AdminUserCreateRequest, request: Request):
     username = body.username.strip()
-    if len(username) < 3:
-        raise HTTPException(status_code=400, detail="Username must be at least 3 characters")
-    if len(body.password) < 8:
-        raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
+    problem = account_rules.username_problem(username) or account_rules.password_problem(body.password, username)
+    if problem:
+        raise HTTPException(status_code=400, detail=problem)
     if body.role is not None and body.role not in {"admin", "user"}:
         raise HTTPException(status_code=400, detail="role must be 'admin' or 'user'")
     role = body.role or "user"
+    if await username_taken(username):
+        raise HTTPException(status_code=400, detail=f"Username '{username}' already exists.")
 
     salt = secrets.token_hex(16)
     pw_hash = await asyncio.to_thread(_hash_password_fn, body.password, salt)
-    display = body.display_name.strip() if body.display_name else username.title()
+    display = clean_display_name(body.display_name) or username.title()
     try:
-        user_id = await db.create_user(username, pw_hash, salt, display_name=display, role=role)
+        user_id = await db.create_user(
+            username,
+            pw_hash,
+            salt,
+            display_name=display,
+            role=role,
+            must_change_password=body.must_change_password,
+        )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     if body.group_ids:
@@ -638,8 +711,12 @@ async def admin_update_user(user_id: int, body: AdminUserUpdateRequest, request:
         raise HTTPException(status_code=404, detail="User not found")
 
     username = body.username.strip() if body.username is not None else None
-    if username is not None and len(username) < 3:
-        raise HTTPException(status_code=400, detail="Username must be at least 3 characters")
+    if username is not None and username != (target.get("username") or ""):
+        problem = account_rules.username_problem(username)
+        if problem:
+            raise HTTPException(status_code=400, detail=problem)
+        if await username_taken(username, except_user_id=user_id):
+            raise HTTPException(status_code=400, detail="Username already exists")
     if body.role is not None and body.role not in {"admin", "user"}:
         raise HTTPException(status_code=400, detail="role must be 'admin' or 'user'")
     role = body.role if body.role in {"admin", "user"} else None
@@ -647,34 +724,63 @@ async def admin_update_user(user_id: int, body: AdminUserUpdateRequest, request:
     session = _get_session(request)
     if role == "user" and session and int(session["user_id"]) == user_id:
         raise HTTPException(status_code=400, detail="You cannot remove your own admin role")
+    if body.disabled and session and int(session["user_id"]) == user_id:
+        raise HTTPException(status_code=400, detail="You cannot disable your own account")
+    was_disabled = bool(target.get("disabled"))
+    now_disabled = was_disabled if body.disabled is None else bool(body.disabled)
+    display_name = clean_display_name(body.display_name) if body.display_name is not None else None
+    # A session that never expires is for a display (kiosk) account. An admin
+    # session without an end date is a standing admin credential, so the
+    # combination cannot be created; an account that already has both keeps
+    # them until one is changed.
+    was_never = bool(target.get("session_never_expires"))
+    now_never = was_never if body.session_never_expires is None else bool(body.session_never_expires)
+    was_admin = (target.get("role") or "") == "admin"
+    now_admin = was_admin if role is None else role == "admin"
+    if now_never and now_admin and not (was_never and was_admin):
+        raise HTTPException(
+            status_code=400,
+            detail="A session that never expires cannot be combined with the admin role: use a non-admin account.",
+        )
 
     try:
-        await db.update_user_admin(
+        updated = await db.update_user_admin(
             user_id,
             username=username,
-            display_name=body.display_name,
+            display_name=display_name,
             role=role,
             session_never_expires=body.session_never_expires,
+            disabled=body.disabled,
+            keep_enabled_admin=True,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    if updated is False:
+        raise HTTPException(status_code=400, detail="Cannot demote or disable the last enabled admin user")
     # A role change alters privileges; revoke the target's outstanding
     # sessions so a demotion/promotion takes effect immediately. A rename
     # does too: tokens and CSRF tokens carry the old username, which owner
-    # checks compare and which a new account may later take.
+    # checks compare and which a new account may later take. Disabling
+    # does too, so re-enabling later does not bring the old cookies back.
     role_changed = role is not None and role != (target.get("role") or "")
     renamed = username is not None and username != (target.get("username") or "")
-    if role_changed or renamed:
+    disabled_changed = now_disabled != was_disabled
+    if role_changed or renamed or (disabled_changed and now_disabled):
         await db.bump_user_session_epoch(user_id)
     # Handing the account to another sign-in provider (or back to local):
     # the explicit, audited way to let an external sign-in use an existing
     # account, which it never does on its own (auth.upsert_external_user).
     # The SSO subject bound under the old provider is forgotten (the next
-    # OIDC / SAML sign-in binds its own) and open sessions end.
+    # OIDC / SAML sign-in binds its own) and open sessions end. So does the
+    # local password, in both directions: the one the account had before
+    # the hand-over must not come back with a later change to local, where
+    # an admin sets a new one (admin_reset_user_password).
     old_provider = target.get("auth_provider") or ""
     provider_changed = provider is not None and provider != old_provider
     if provider_changed:
         await db.set_user_auth_provider(user_id, provider or "", clear_external_id=True)
+        pw_hash, salt = await unknown_password_hash()
+        await db.update_user_password(user_id, pw_hash, salt)
         await db.bump_user_session_epoch(user_id)
         await _audit(
             "auth",
@@ -682,15 +788,28 @@ async def admin_update_user(user_id: int, body: AdminUserUpdateRequest, request:
             user=session["user"] if session else "",
             detail=(
                 f"user id={user_id} ('{target.get('username', '')}') "
-                f"provider {old_provider or 'local'} -> {provider or 'local'}"
+                f"provider {old_provider or 'local'} -> {provider or 'local'}, local password cleared"
             ),
             correlation_id=_corr_id(request),
         )
+    # What changed, so the entry can be read on its own.
+    changes = []
+    if renamed:
+        changes.append(f"username '{target.get('username', '')}' -> '{username}'")
+    if display_name is not None and display_name != (target.get("display_name") or ""):
+        changes.append(f"display name '{target.get('display_name') or ''}' -> '{display_name}'")
+    if role_changed:
+        changes.append(f"role {target.get('role') or ''} -> {role}")
+    if now_never != was_never:
+        changes.append(f"session never expires {was_never} -> {now_never}")
+    if disabled_changed:
+        changes.append(f"disabled {was_disabled} -> {now_disabled}")
+    changed = f" ({'; '.join(changes)})" if changes else ""
     await _audit(
         "auth",
         "user.update",
         user=session["user"] if session else "",
-        detail=f"updated user id={user_id}" + (f" role={role}" if role else ""),
+        detail=f"updated user id={user_id}" + (f" role={role}" if role else "") + changed,
         correlation_id=_corr_id(request),
     )
     user = await db.get_user_by_id(user_id)
@@ -702,12 +821,23 @@ async def admin_reset_user_password(user_id: int, body: AdminUserPasswordResetRe
     target = await db.get_user_by_id(user_id)
     if not target:
         raise HTTPException(status_code=404, detail="User not found")
-    if len(body.new_password) < 8:
-        raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
+    managed_by = target.get("auth_provider") or ""
+    if managed_by:
+        # A local password would never be accepted for it (app.verify_user).
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"This account signs in through {managed_by}; it has no local password. "
+                "Set its sign-in provider to local first to give it one."
+            ),
+        )
+    problem = account_rules.password_problem(body.new_password, target.get("username") or "")
+    if problem:
+        raise HTTPException(status_code=400, detail=problem)
 
     salt = secrets.token_hex(16)
     pw_hash = await asyncio.to_thread(_hash_password_fn, body.new_password, salt)
-    await db.update_user_password(user_id, pw_hash, salt)
+    await db.update_user_password(user_id, pw_hash, salt, must_change_password=body.must_change_password)
     # Force the target off all existing sessions after an admin reset.
     await db.bump_user_session_epoch(user_id)
     session = _get_session(request)
@@ -715,7 +845,8 @@ async def admin_reset_user_password(user_id: int, body: AdminUserPasswordResetRe
         "auth",
         "user.password_reset",
         user=session["user"] if session else "",
-        detail=f"reset password for user id={user_id} ('{target.get('username', '')}')",
+        detail=f"reset password for user id={user_id} ('{target.get('username', '')}')"
+        + (", must change it at next sign-in" if body.must_change_password else ""),
         correlation_id=_corr_id(request),
     )
     return {"ok": True}
@@ -888,10 +1019,64 @@ async def admin_get_login_rules():
     return state.LOGIN_RULES
 
 
+# Settings whose value never goes into an audit entry (only "changed").
+_AUDIT_SECRET_SETTINGS = frozenset({"secret", "bind_password", "client_secret", "client_secret_enc"})
+_AUDIT_VALUE_MAX = 80
+_AUDIT_CHANGES_MAX = 3000
+
+
+def _audit_setting_value(key: str, value) -> str:
+    if key == "idp_certs":  # a PEM says nothing in an audit entry; its fingerprint does
+        value = [saml.cert_fingerprint(pem) for pem in value or []]
+    text = json.dumps(value, sort_keys=True, default=str) if isinstance(value, (dict, list)) else str(value)
+    return text if len(text) <= _AUDIT_VALUE_MAX else text[:_AUDIT_VALUE_MAX] + "..."
+
+
+def _settings_changes(old: dict, new: dict, prefix: str = "") -> list[str]:
+    """One ``name: old -> new`` entry per setting that differs between two
+    settings dicts, a nested block's settings as ``block.name``. A secret is
+    only named as changed, and a long value is cut."""
+    changes: list[str] = []
+    for key in sorted(set(old) | set(new)):
+        before, after = old.get(key), new.get(key)
+        if before == after:
+            continue
+        name = f"{prefix}{key}"
+        if isinstance(before, dict) or isinstance(after, dict):
+            changes.extend(
+                _settings_changes(
+                    before if isinstance(before, dict) else {}, after if isinstance(after, dict) else {}, f"{name}."
+                )
+            )
+        elif key in _AUDIT_SECRET_SETTINGS:
+            changes.append(f"{name}: changed")
+        else:
+            changes.append(f"{name}: {_audit_setting_value(key, before)} -> {_audit_setting_value(key, after)}")
+    return changes
+
+
+async def _audit_settings_change(request: Request | None, action: str, old: dict, new: dict) -> None:
+    """Audit a change to the settings that decide who may sign in and how
+    (``auth`` / ``action``), listing what changed."""
+    changes = "; ".join(_settings_changes(old, new)) or "no changes"
+    if len(changes) > _AUDIT_CHANGES_MAX:
+        changes = changes[:_AUDIT_CHANGES_MAX] + "..."
+    # request_session, so a change made with the server API token names it.
+    await _audit(
+        "auth",
+        action,
+        user=(request_session(request) or {}).get("user", "") if request is not None else "",
+        detail=changes,
+        correlation_id=_corr_id(request) if request is not None else "",
+    )
+
+
 @router.put("/api/admin/login-rules")
-async def admin_update_login_rules(body: AdminLoginRulesRequest):
+async def admin_update_login_rules(body: AdminLoginRulesRequest, request: Request = None):  # type: ignore[assignment]
+    old_rules = dict(state.LOGIN_RULES)
     state.LOGIN_RULES = state._sanitize_login_rules(body.model_dump())
     await db.set_auth_setting("login_rules", state.LOGIN_RULES)
+    await _audit_settings_change(request, "login_rules.update", old_rules, state.LOGIN_RULES)
     return state.LOGIN_RULES
 
 
@@ -1106,8 +1291,10 @@ async def admin_update_auth_config(body: AuthConfigRequest, request: Request = N
     new_config = state._sanitize_auth_config(data)
     _refuse_moved_auth_secrets(state.AUTH_CONFIG, new_config, reused)
     await _refuse_guarded_auth_servers(state.AUTH_CONFIG, new_config)
+    old_config = state.AUTH_CONFIG
     state.AUTH_CONFIG = new_config
     await db.set_auth_setting("auth_config", state.AUTH_CONFIG)
+    await _audit_settings_change(request, "auth_config.update", old_config, new_config)
     return _redact_auth_config(state.AUTH_CONFIG)
 
 

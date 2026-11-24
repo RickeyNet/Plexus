@@ -185,7 +185,7 @@ routes/
 ├── database.py             # Data layer (PostgreSQL, with the SQL dialect translator)
 ├── db/                     # Per-domain database queries
 ├── migrations/             # Numbered schema migrations
-├── crypto.py               # Fernet encryption for stored credentials
+├── crypto.py               # AES-256-GCM encryption for stored credentials
 ├── runner.py               # Playbook base class, executor and registry
 └── seed.py                 # Demo inventory/playbooks/templates on first launch
 templates/
@@ -201,9 +201,10 @@ Dockerfile                  # App image
 
 ## Security Notes
 
-- **netcontrol.key** - Fernet encryption key for credentials. Back it up.
-  Losing it means stored passwords are unrecoverable.
+- **netcontrol.key** - AES-256-GCM encryption key for stored credentials and
+  secrets (`routes/crypto.py`). Back it up. Losing it means stored passwords
+  are unrecoverable.
 - Credentials are encrypted at rest but decrypted in memory during job execution.
 - The static server API token `APP_API_TOKEN` is off (empty) on a new install; it is admin-equivalent and skips CSRF, the API rate limit and the session limits. Enable it with `deploy/setup.sh --with-api-token` (or `PLEXUS_ENABLE_API_TOKEN=true`) only for automation or federation peers ([deploy/DEPLOYMENT.md](deploy/DEPLOYMENT.md#server-api-token)); `APP_REQUIRE_API_TOKEN=true` enforces it for API routes.
-- Default seed credential uses `netadmin / cisco123` - change in production.
+- The seed script (`routes/seed.py`) creates a `netadmin` credential with a random password, printed once when it runs - change or remove it after setup.
 - License: MIT (`LICENSE`).

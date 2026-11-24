@@ -210,7 +210,7 @@ def _login_cfg(**tacacs):
 
 @pytest.mark.asyncio
 async def test_login_identity_tacacs_accept(monkeypatch) -> None:
-    monkeypatch.setattr(app_module, "AUTH_CONFIG", _login_cfg())
+    monkeypatch.setattr(app_module.state, "AUTH_CONFIG", _login_cfg())
     seen: dict = {}
 
     async def fake_verify(username, password):
@@ -235,7 +235,7 @@ async def test_login_identity_tacacs_accept(monkeypatch) -> None:
 
 @pytest.mark.asyncio
 async def test_login_identity_tacacs_reject_no_fallback(monkeypatch) -> None:
-    monkeypatch.setattr(app_module, "AUTH_CONFIG", _login_cfg())
+    monkeypatch.setattr(app_module.state, "AUTH_CONFIG", _login_cfg())
 
     async def fake_verify(username, password):
         return False, "reject", {}
@@ -251,7 +251,7 @@ async def test_login_identity_tacacs_reject_no_fallback(monkeypatch) -> None:
 
 @pytest.mark.asyncio
 async def test_login_identity_tacacs_error_with_local_fallback(monkeypatch) -> None:
-    monkeypatch.setattr(app_module, "AUTH_CONFIG", _login_cfg())
+    monkeypatch.setattr(app_module.state, "AUTH_CONFIG", _login_cfg())
 
     async def fake_verify(username, password):
         return False, "error", {}
@@ -268,7 +268,7 @@ async def test_login_identity_tacacs_error_with_local_fallback(monkeypatch) -> N
 
 @pytest.mark.asyncio
 async def test_login_identity_tacacs_error_without_fallback(monkeypatch) -> None:
-    monkeypatch.setattr(app_module, "AUTH_CONFIG", _login_cfg(fallback_to_local=False))
+    monkeypatch.setattr(app_module.state, "AUTH_CONFIG", _login_cfg(fallback_to_local=False))
 
     async def fake_verify(username, password):
         return False, "error", {}
@@ -285,7 +285,7 @@ async def test_login_identity_tacacs_error_without_fallback(monkeypatch) -> None
 
 @pytest.mark.asyncio
 async def test_login_identity_tacacs_reject_with_override_fallback(monkeypatch) -> None:
-    monkeypatch.setattr(app_module, "AUTH_CONFIG", _login_cfg(fallback_on_reject=True))
+    monkeypatch.setattr(app_module.state, "AUTH_CONFIG", _login_cfg(fallback_on_reject=True))
 
     async def fake_verify(username, password):
         return False, "reject", {}
@@ -302,7 +302,7 @@ async def test_login_identity_tacacs_reject_with_override_fallback(monkeypatch) 
 
 @pytest.mark.asyncio
 async def test_login_identity_tacacs_disabled_falls_to_local(monkeypatch) -> None:
-    monkeypatch.setattr(app_module, "AUTH_CONFIG", _login_cfg(enabled=False))
+    monkeypatch.setattr(app_module.state, "AUTH_CONFIG", _login_cfg(enabled=False))
     called = {"tacacs": False}
 
     async def fake_verify(username, password):

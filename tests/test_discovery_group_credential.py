@@ -188,11 +188,11 @@ async def test_scheduled_sync_uses_the_group_credential_only_when_service(monkey
     async def fake_get_group(group_id):
         return {"id": group_id, "name": "ups", "discovery_credential_id": remembered}
 
-    async def fake_discover(_body, group_id=None, *, credential=None):
+    async def fake_discover(_body, group_id=None, *, credential=None, **_kw):
         seen["credential"] = credential
         return 0, []
 
-    async def fake_sync(group_id, discovered, remove_absent=False):
+    async def fake_sync(group_id, discovered, remove_absent=False, **_kwargs):
         return {"added": 0, "updated": 0, "removed": 0}
 
     monkeypatch.setattr(inventory.db, "get_group", fake_get_group)
@@ -249,7 +249,7 @@ def _run(coro):
 
 
 def test_api_remembers_forgets_and_survives_deletes(api, monkeypatch):
-    async def no_scan(_body, group_id=None, *, credential=None):
+    async def no_scan(_body, group_id=None, *, credential=None, **_kw):
         return 0, []
 
     monkeypatch.setattr(inventory, "_discover_hosts", no_scan)

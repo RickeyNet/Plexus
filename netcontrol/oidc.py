@@ -147,13 +147,26 @@ def groups_overage(claims: dict, name: str) -> bool:
     return claims.get("hasgroups") in (True, "true", "True")
 
 
-def read_username(claims: dict, name: str) -> str:
+def read_username(claims: dict, name: str, *, allow_unverified_email: bool = False) -> str:
     """The username claim, trimmed. Raises ``claims`` when it is missing,
-    empty, longer than 150 characters or holds a control character, and
-    when it is the email while ``email_verified`` is false."""
+    empty, longer than 150 characters or holds a control character.
+
+    When the claim is the email, the provider must say the address is
+    verified (``email_verified`` true): an address a person typed in
+    themselves is not an identity. ``allow_unverified_email`` accepts a
+    token that leaves the claim out (providers that never send it); an
+    explicit ``false`` is refused either way."""
     username = clean_username(claims.get(name), f"claim '{name}'", OidcError)
-    if name == "email" and claims.get("email_verified") in (False, "false", "False"):
-        raise OidcError("claims", "email is not verified at the provider")
+    if name == "email":
+        verified = claims.get("email_verified")
+        if verified in (False, "false", "False"):
+            raise OidcError("claims", "email is not verified at the provider")
+        if verified not in (True, "true", "True") and not allow_unverified_email:
+            raise OidcError(
+                "claims",
+                "the provider does not say the email is verified (no email_verified claim): "
+                "use another username claim, or allow unverified email in the OIDC settings",
+            )
     return username
 
 
@@ -436,6 +449,10 @@ class OidcClient:
         azp = claims.get("azp")
         if azp is not None and azp != client_id:
             raise OidcError("token", "ID token azp is not the client id")
+        audiences = claims.get("aud")
+        if azp is None and isinstance(audiences, list) and len(audiences) > 1:
+            # Issued for several parties: azp is what says it was issued to us.
+            raise OidcError("token", "ID token has several audiences and no azp")
         token_nonce = claims.get("nonce")
         if not isinstance(token_nonce, str) or not hmac.compare_digest(token_nonce.encode(), nonce.encode()):
             raise OidcError("token", "ID token nonce does not match")
@@ -494,7 +511,7 @@ class OidcClient:
                 merged.setdefault(name, value)
             claims = merged
 
-        username = read_username(claims, username_claim)
+        username = read_username(claims, username_claim, allow_unverified_email=bool(cfg.get("allow_unverified_email")))
         display = claims.get(display_claim) if display_claim else None
         display_name = clean_display_name(display)
         groups = claim_groups(claims, groups_claim)

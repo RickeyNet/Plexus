@@ -317,7 +317,7 @@ async def test_discover_topology_stp_route(monkeypatch):
     """STP discovery endpoint should collect and upsert per-host rows."""
     fake_group = {"id": 1, "name": "core"}
     fake_hosts = [
-        {"id": 100, "hostname": "sw-core-01", "ip_address": "10.0.1.1", "group_id": 1},
+        {"id": 100, "hostname": "sw-core-01", "ip_address": "10.0.1.1", "group_id": 1, "address_confirmed": 1},
     ]
     fake_snapshot = {
         "host_id": 100,
@@ -390,7 +390,9 @@ async def test_discover_topology_stp_route(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_discover_topology_stp_route_all_vlans(monkeypatch):
-    fake_hosts = [{"id": 100, "hostname": "sw-core-01", "ip_address": "10.0.1.1", "group_id": 1}]
+    fake_hosts = [
+        {"id": 100, "hostname": "sw-core-01", "ip_address": "10.0.1.1", "group_id": 1, "address_confirmed": 1}
+    ]
     monkeypatch.setattr(topology_module.db, "get_all_groups", AsyncMock(return_value=[{"id": 1, "name": "core"}]))
     monkeypatch.setattr(topology_module.db, "get_hosts_for_group", AsyncMock(return_value=fake_hosts))
     monkeypatch.setattr(topology_module.db, "get_stp_port_states", AsyncMock(return_value=[]))

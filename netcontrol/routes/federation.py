@@ -45,6 +45,11 @@ LOGGER = configure_logging("plexus.federation")
 # Background sync defaults
 _SYNC_INTERVAL_SECONDS = 300  # 5 minutes
 _HTTP_TIMEOUT_SECONDS = 30
+# A peer is another server: its answers are bounded in size and in total
+# time, so a broken or hostile one cannot fill memory or hold a sync open.
+_PEER_RESPONSE_MAX_BYTES = 10 * 1024 * 1024
+_PEER_TOTAL_TIMEOUT_SECONDS = 120
+_PEER_VERSION_MAX_CHARS = 64
 # Replaces the network layer of peer requests (tests); None in production.
 HTTP_TRANSPORT: httpx.AsyncBaseTransport | None = None
 
@@ -123,7 +128,15 @@ async def _peer_get(peer, path: str) -> httpx.Response:
         verify=_peer_tls_verify(peer),
         timeout_s=_HTTP_TIMEOUT_SECONDS,
         transport=HTTP_TRANSPORT,
+        max_bytes=_PEER_RESPONSE_MAX_BYTES,
+        total_timeout_s=_PEER_TOTAL_TIMEOUT_SECONDS,
     )
+
+
+def _peer_version(caps: Any, default: str = "") -> str:
+    """The version a peer reports, as a short string (it is stored and shown)."""
+    value = caps.get("version", default) if isinstance(caps, dict) else default
+    return str(value if value is not None else default)[:_PEER_VERSION_MAX_CHARS]
 
 
 def _peer_destination(url: str, tls_verify: Any) -> dict:
@@ -237,7 +250,7 @@ async def _fetch_peer_data(peer) -> dict:
 
     caps = await _get_json("version", "/api/admin/capabilities")
     if isinstance(caps, dict):
-        result["version"] = caps.get("version", "")
+        result["version"] = _peer_version(caps)
 
     return result
 
@@ -425,7 +438,7 @@ async def test_peer(peer_id: int, request: Request, _user=Depends(admin_session)
             caps = resp.json()
             return {
                 "status": "ok",
-                "remote_version": caps.get("version", "unknown"),
+                "remote_version": _peer_version(caps, "unknown"),
                 "response_code": resp.status_code,
             }
         return {

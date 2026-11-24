@@ -54,7 +54,8 @@ Settings > Authentication > **Single sign-on (OpenID Connect)**:
 | Client ID / Client Secret | | From the registration. The secret is stored encrypted (the same AES-256-GCM helper as stored credentials and the Meraki webhook secret) and is shown masked; empty means a public client. |
 | Token Endpoint Auth | `client_secret_basic` | Or `client_secret_post` |
 | Scopes | `openid profile email` | `openid` is always sent |
-| Username Claim | `preferred_username` | Becomes the Plexus username (trimmed; 1 to 150 characters, no control characters). When it is `email`, an `email_verified` of `false` is refused. |
+| Username Claim | `preferred_username` | Becomes the Plexus username (trimmed; 1 to 150 characters, no control characters). Use a claim people cannot edit at the provider. When it is `email`, the token must carry `email_verified: true`; a token without the claim or with `false` is refused. |
+| Allow unverified email | off | Only read when the Username Claim is `email`: accept a token that has no `email_verified` claim (Entra ID does not send it). An explicit `false` is still refused. Turn it on only when people cannot set their own address at the provider; the security check warns while it is on. |
 | Display Name Claim | `name` | |
 | Groups Claim | `groups` | A list of strings or one string |
 | Admin Groups | | Group claim values, one per line. A member gets the `admin` role. |
@@ -83,6 +84,18 @@ ID is refused (HTTP 400), as is a typed redirect URI that is not https.
   refused, so someone who takes over the username at the provider cannot
   take over the Plexus account. An `oidc` account from before Plexus
   stored the `sub` binds it at its next login.
+- The `sub` finds the account. When the provider later sends another
+  username for the same `sub` (a name change), the person signs in to
+  their existing account, which keeps its Plexus username; no second
+  account is created. Each such sign-in is audited as `auth` /
+  `login.sso_username_changed`; rename the account in **Settings > Users**
+  to end the entries. When several accounts are bound to one `sub` (from
+  earlier versions) and none has the name the provider sends, the sign-in
+  is refused: delete the duplicate.
+- An account an admin handed to `oidc` (`PUT /api/admin/users/{id}` with
+  `auth_provider`) has no `sub` yet and is bound to whoever signs in first
+  under its username. Hand an account over only when the username claim
+  is one people cannot edit.
 - An existing account is used only when it is managed by `oidc`. A local
   account (admin or not) or one managed by SAML, LDAP, RADIUS or TACACS+
   with the same username is never adopted, whatever the token maps: the
@@ -133,8 +146,8 @@ named `groups` with "Full group path" off and "Add to ID token" on.
    characters).
 2. The provider redirects to `/api/auth/oidc/callback`. Plexus checks the
    state, exchanges the code, validates the ID token (signature against the
-   JWKS, `iss`, `aud`, `azp`, `exp`/`iat`/`nbf` with 60 s leeway, `nonce`,
-   `sub`), fetches userinfo only when a configured claim is missing (its
+   JWKS, `iss`, `aud`, `azp` (required when the token names several
+   audiences), `exp`/`iat`/`nbf` with 60 s leeway, `nonce`, `sub`), fetches userinfo only when a configured claim is missing (its
    `sub` must match), provisions the account and sets the normal session
    cookie.
 3. On any failure the browser lands on `/login?sso_error=<code>` and the
@@ -147,8 +160,14 @@ named `groups` with "Full group path" off and "Add to ID token" on.
    that failed; tokens, codes, the client secret and the verifier are never
    logged or audited.
 
-Callback failures count toward the same per-IP login rate limit and lockout
-as wrong passwords, and a locked-out address is refused (`denied`).
+A callback failure after the state check (a provider error, a token or
+claims error, a refused account) counts toward the same per-IP login rate
+limit and lockout as a wrong password, and a locked-out address is refused
+(`denied`). A request that never reaches that point does not count, because
+any website can make a browser send it: a callback without the transaction
+cookie, or while OIDC is off, is logged only, and a state that does not
+match is audited (at most **Max attempts** rows per address per **Lockout
+time**) but not counted. A refusal by the lockout is logged, not audited.
 Discovery and the JWKS are cached for an hour; a token signed with an
 unknown key ID forces one JWKS refetch, at most once a minute. Outbound
 calls use a 10 s timeout, do not follow redirects and verify TLS.
@@ -160,6 +179,11 @@ misconfigured, sign in with the local admin account (the break-glass path
 stays on unless `PLEXUS_BREAKGLASS_LOCAL_ADMIN=false`) and fix or disable
 SSO under Settings > Authentication. With "Lead with SSO" on, use the
 "Use a local account" link.
+
+That password is checked by Plexus alone: the provider's multi-factor step
+and account lockout do not apply to it. What follows from that, and how to
+turn the path off, is under "Break-glass local admin" in
+[administration.md](administration.md).
 
 ## Not supported
 

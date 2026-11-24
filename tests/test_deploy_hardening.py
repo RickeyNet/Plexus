@@ -129,6 +129,44 @@ def test_nginx_server_body_limit_is_small():
     assert "client_body_timeout" not in _locations(conf)["/"]
 
 
+# ── Connections per address ──────────────────────────────────────────────────
+
+
+def test_nginx_caps_connections_per_client_address():
+    conf = _nginx(NGINX_CONF)
+    zone = re.search(r"limit_conn_zone\s+\$binary_remote_addr\s+zone=(\w+):(\S+);", conf)
+    assert zone, "limit_conn_zone keyed on the client address is missing"
+    server_level = re.sub(r"location\s+[^{]+\{[^}]*\}", "", conf)
+    limit = re.search(rf"limit_conn\s+{zone.group(1)}\s+(\d+);", server_level)
+    assert limit, "limit_conn must be set at server level so every location (/ws/ and SSE too) is covered"
+    # Several tabs with streams and sockets fit; hundreds from one address do not.
+    assert 32 <= int(limit.group(1)) <= 200
+    assert re.search(r"limit_conn_status\s+429;", server_level)
+    # No location switches the limit off.
+    for header, block in _locations(conf).items():
+        assert "limit_conn " not in block, header
+
+
+def test_nginx_limits_the_password_sign_in_request_rate():
+    conf = _nginx(NGINX_CONF)
+    zone = re.search(r"limit_req_zone\s+\$binary_remote_addr\s+zone=(\w+):\S+\s+rate=(\d+)r/m;", conf)
+    assert zone, "limit_req_zone keyed on the client address is missing"
+    assert 10 <= int(zone.group(2)) <= 120
+    limited = [
+        header
+        for header, block in _locations(conf).items()
+        if re.search(rf"limit_req\s+zone={zone.group(1)}\b", block) and re.search(r"limit_req_status\s+429;", block)
+    ]
+    assert len(limited) == 1, limited
+    modifier, _, pattern = limited[0].partition(" ")
+    assert modifier == "~"
+    # Exactly the two routes that hash a password for an anonymous caller.
+    for path in ("/api/auth/login", "/api/auth/register"):
+        assert re.search(pattern, path), path
+    for path in ("/api/auth/status", "/api/auth/login/x", "/api/auth/oidc/login", "/x/api/auth/login"):
+        assert not re.search(pattern, path), path
+
+
 def test_nginx_upload_locations_match_the_app_allowlist():
     locations = _locations(_nginx(NGINX_CONF))
     nginx_uploads: dict[str, int] = {}
@@ -268,3 +306,16 @@ def test_compose_mounts_the_update_status_read_only():
     assert plexus["environment"]["PLEXUS_UPDATE_STATUS_DIR"] == "/app/state/update-status"
     # The entrypoint must not chown (write) the read-only status mount.
     assert "update-status" not in _read(DEPLOY / "docker-entrypoint.sh")
+
+
+def test_updater_git_ref_cannot_start_with_a_dash():
+    """The ref reaches ``git checkout`` on the host as root; the app refuses
+    a leading ``-`` (admin_updates._REF_RE) and the host check must too."""
+    script = _read(UPDATER)
+    match = re.search(r'if \[\[ ! "\$\{REF\}" =~ (\S+) \]\]; then', script)
+    assert match, "git ref check not found in plexus-updater.sh"
+    pattern = re.compile(match.group(1))
+    for ref in ("main", "release/1.2", "v1.2.3", "feature/a-b", "0a1b2c3"):
+        assert pattern.fullmatch(ref), ref
+    for ref in ("-f", "--force", "-", "", "a b", "a;b", "x" * 129):
+        assert not pattern.fullmatch(ref), ref

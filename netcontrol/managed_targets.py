@@ -1,22 +1,56 @@
-"""Which request-supplied addresses are inventory hosts a caller may use.
+"""Where Plexus may send a shared secret: the one rule and its helpers.
 
 Some actions send a stored secret to whatever device answers at an address:
-a job whose template or inputs use secret variables, or discovery signing
-in with the Plexus service credential. An address typed into the request
-may be a device the caller controls, so for a non-admin caller these
-actions are confined to inventory hosts the caller may change (their
-primary IP address). Admins and the server API token are not limited.
+unattended collection (monitoring polls, MAC tracking, topology walks,
+scheduled backups and compliance scans, the FDM collector) signing in with
+the Plexus service credential, the default credential or a shared SNMP
+profile; a job whose template or inputs use secret variables; discovery
+signing in with the service credential. A non-admin who may add or change
+inventory hosts could otherwise point such an action at a device they run
+and receive the secret.
+
+The rule: **shared secrets go only to a host address that an admin set or
+confirmed.** A host stores whether its address is confirmed
+(``hosts.address_confirmed``): an address written by an admin or the
+server API token is, one written by anyone else (or by a run nobody
+configured) is not, until an admin confirms it
+(``POST /api/admin/hosts/confirm-address``). Changing other host fields leaves
+the flag as it is.
+
+- ``address_confirmed`` / ``split_by_confirmation``: the per-host check the
+  collection paths call before sending a shared secret; a skipped host is
+  reported with ``ADDRESS_AWAITING_CONFIRMATION``, never recorded as down.
+- ``credential_is_shared`` / ``may_send_credential``: the check for a path
+  that is handed a credential (a user's own credential is not shared).
+- ``recorded_address_refusal``: the same check for an address a run
+  recorded earlier (an upgrade campaign device), on the host's row read now.
+- ``unattended_credential``: the credential unattended collection signs in
+  with (the service credential; the legacy default credential only when it
+  is itself a service credential).
+- ``caller_confirms_addresses``: whether an address a caller writes counts
+  as confirmed.
+- ``unmanaged_addresses``: for a request-supplied address, whether it is a
+  confirmed inventory host the caller may change.
+- ``same_address``: whether two address strings name the same address.
+- ``name_hosts``: the hosts a path refused, as text for its message.
 """
 
 from __future__ import annotations
 
 import ipaddress
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from typing import Any
 
 import routes.database as db
+from routes.db.change_events import current_actor
 
+import netcontrol.routes.state as state
+from netcontrol.account_rules import API_TOKEN_USER
 from netcontrol.object_scope import readable_host_ids
+from netcontrol.routes.shared import request_session, service_credential
+
+# The reason a collection path gives for a host it skipped under this rule.
+ADDRESS_AWAITING_CONFIRMATION = "address awaiting admin confirmation"
 
 
 def _address_key(value: object) -> str:
@@ -29,11 +63,138 @@ def _address_key(value: object) -> str:
         return text.lower()
 
 
+def same_address(a: object, b: object) -> bool:
+    """Whether ``a`` and ``b`` name the same address, whatever their
+    spelling (``2001:DB8::1`` and ``2001:db8::1``)."""
+    return _address_key(a) == _address_key(b)
+
+
+def name_hosts(hosts: Iterable[Mapping[str, Any]], limit: int = 5) -> str:
+    """The first ``limit`` of ``hosts`` as text for a message that says
+    which hosts were skipped or refused: ``name (address)`` each, then
+    ``and N more``."""
+    rows = list(hosts)
+    names = []
+    for host in rows[:limit]:
+        name = str(host.get("hostname") or "").strip()
+        address = str(host.get("ip_address") or "").strip()
+        names.append(f"{name} ({address})" if name and address else name or address or "unnamed host")
+    shown = ", ".join(names)
+    return f"{shown} and {len(rows) - limit} more" if len(rows) > limit else shown
+
+
+def address_confirmed(host: Mapping[str, Any] | None) -> bool:
+    """Whether an admin set or confirmed ``host``'s address. A host dict
+    without the flag (not a row of the hosts table) is not confirmed."""
+    if not host:
+        return False
+    try:
+        return int(host.get("address_confirmed") or 0) == 1
+    except TypeError, ValueError:
+        return False
+
+
+def split_by_confirmation[H: Mapping[str, Any]](hosts: Iterable[H]) -> tuple[list[H], list[H]]:
+    """``(confirmed, awaiting)``: the hosts that may get shared secrets and
+    the ones whose address awaits an admin's confirmation, order kept."""
+    confirmed: list[H] = []
+    awaiting: list[H] = []
+    for host in hosts:
+        (confirmed if address_confirmed(host) else awaiting).append(host)
+    return confirmed, awaiting
+
+
+def credential_is_shared(credential: Mapping[str, Any] | None) -> bool:
+    """Whether ``credential`` is a shared secret: a Plexus service
+    credential or the app-wide default credential (a user's own stored
+    credential is not)."""
+    if not credential:
+        return False
+    if credential.get("is_service"):
+        return True
+    default_id = state.AUTH_CONFIG.get("default_credential_id")
+    cred_id = credential.get("id")
+    return isinstance(default_id, int) and cred_id is not None and str(cred_id) == str(default_id)
+
+
+def may_send_credential(host: Mapping[str, Any] | None, credential: Mapping[str, Any] | None) -> bool:
+    """Whether ``credential`` may be sent to ``host``'s address: always for
+    a confirmed address, otherwise only a credential that is not shared."""
+    return address_confirmed(host) or not credential_is_shared(credential)
+
+
+async def recorded_address_refusal(
+    host_id: int | None, address: str, credential: Mapping[str, Any] | None
+) -> str | None:
+    """Why ``credential`` may not be sent to ``address``, the address a run
+    recorded for inventory host ``host_id`` (an upgrade campaign device),
+    or None when it may. Decided on the host's stored row read now: a
+    shared credential goes only to the host's confirmed address, so the
+    host must still exist (``host_id`` None: it was deleted) and the
+    recorded address must still be its address. A credential that is not
+    shared is never refused."""
+    if not credential_is_shared(credential):
+        return None
+    host = await db.get_host(int(host_id)) if host_id is not None else None
+    if host is None:
+        return "the inventory host no longer exists"
+    if not address_confirmed(host):
+        return ADDRESS_AWAITING_CONFIRMATION
+    if not same_address(host.get("ip_address"), address):
+        return "address differs from the inventory host's confirmed address"
+    return None
+
+
+async def unattended_credential() -> dict | None:
+    """The credential unattended collection (monitoring, MAC tracking) signs
+    in with: the Plexus service credential (``shared.service_credential``),
+    else the legacy ``default_credential_id`` when that credential is itself
+    a service credential. Never a user's personal credential."""
+    credential = await service_credential()
+    if credential is not None:
+        return credential
+    default_id = state.AUTH_CONFIG.get("default_credential_id")
+    if not isinstance(default_id, int) or not default_id:
+        return None
+    fallback = await db.get_credential_raw(default_id)
+    return fallback if fallback and fallback.get("is_service") else None
+
+
+async def _actor_confirms_addresses() -> bool:
+    """For a write with no request at hand: whether the acting user of this
+    request (``current_actor``) is an admin or the server API token. A run
+    with no actor (a background loop) confirms nothing. A user account named
+    like the API token actor is judged by its role, never as the token."""
+    actor = str(current_actor.get() or "").strip()
+    if not actor:
+        return False
+    user = await db.get_user_by_username(actor)
+    if user is not None:
+        return user.get("role") == "admin"
+    return actor == API_TOKEN_USER
+
+
+async def caller_confirms_addresses(request: Any = None) -> bool:
+    """Whether a host address written for this caller counts as confirmed:
+    an admin session or the server API token. Without a request (or with
+    one carrying no session) the acting user of the request decides
+    (``current_actor``); a background run confirms nothing."""
+    session = request_session(request) if request is not None else None
+    if session is None:
+        return await _actor_confirms_addresses()
+    if session.get("auth_mode") == "token":
+        return True
+    user = await db.get_user_by_id(int(session.get("user_id") or 0))
+    return bool(user and user.get("role") == "admin")
+
+
 async def unmanaged_addresses(addresses: Iterable[str], scope_or_request: Any) -> list[str]:
     """The entries of ``addresses`` that are not the primary IP address of
     an inventory host the caller (a request, or an ``ObjectScope``) may
-    change. Any inventory host counts for an unrestricted scope. Order and
-    duplicates of ``addresses`` are kept; blanks are skipped."""
+    change and whose address an admin confirmed. Any confirmed inventory
+    host counts for an unrestricted scope. Order and duplicates of
+    ``addresses`` are kept; blanks are skipped. Callers skip this check for
+    an admin, who may send secrets anywhere."""
     wanted = [str(a).strip() for a in addresses if str(a or "").strip()]
     if not wanted:
         return []
@@ -41,6 +202,6 @@ async def unmanaged_addresses(addresses: Iterable[str], scope_or_request: Any) -
     known = {
         _address_key(host.get("ip_address"))
         for host in await db.get_all_hosts()
-        if host.get("ip_address") and (writable is None or int(host["id"]) in writable)
+        if host.get("ip_address") and address_confirmed(host) and (writable is None or int(host["id"]) in writable)
     }
     return [address for address in wanted if _address_key(address) not in known]

@@ -71,7 +71,9 @@ def is_expired(expires_at: str, now: datetime | None = None) -> bool:
 
 async def resolve_token(plaintext: str) -> McpContext | None:
     """The call context for a token, or ``None`` when it must be refused:
-    wrong prefix, unknown, revoked, expired, or its owner no longer exists."""
+    wrong prefix, unknown, revoked, expired, or its owner no longer exists
+    or is disabled (``users.disabled``: the token stops working with its
+    owner's sign-in)."""
     if not plaintext or not plaintext.startswith(TOKEN_PREFIX):
         return None
     token_hash = hash_token(plaintext)
@@ -81,7 +83,7 @@ async def resolve_token(plaintext: str) -> McpContext | None:
     if row.get("revoked_at") or is_expired(str(row.get("expires_at") or "")):
         return None
     owner = await db.get_user_by_id(int(row["owner_user_id"]))
-    if not owner:
+    if not owner or owner.get("disabled"):
         return None
     return McpContext(
         token_id=int(row["id"]),

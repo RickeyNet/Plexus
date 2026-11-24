@@ -89,6 +89,7 @@ async def test_force_admin_password_reset_is_one_shot(monkeypatch):
 
     settings: dict[str, dict] = {}
     resets: list[bool] = []
+    revoked: list[int] = []
     admin_row = {"id": 1, "username": "admin", "role": "admin"}
 
     async def fake_get_all_users():
@@ -102,6 +103,10 @@ async def test_force_admin_password_reset_is_one_shot(monkeypatch):
 
     async def fake_update_user_password(user_id, pw_hash, salt, must_change_password=False):
         resets.append(must_change_password)
+
+    async def fake_bump_user_session_epoch(user_id):
+        revoked.append(user_id)
+        return len(revoked)
 
     async def fake_get_auth_setting(key):
         return settings.get(key)
@@ -119,6 +124,7 @@ async def test_force_admin_password_reset_is_one_shot(monkeypatch):
             patch.object(app_module.db, "get_user_by_username", fake_get_user_by_username),
             patch.object(app_module.db, "update_user_admin", fake_update_user_admin),
             patch.object(app_module.db, "update_user_password", fake_update_user_password),
+            patch.object(app_module.db, "bump_user_session_epoch", fake_bump_user_session_epoch),
             patch.object(app_module.db, "get_auth_setting", fake_get_auth_setting),
             patch.object(app_module.db, "set_auth_setting", fake_set_auth_setting),
             patch.object(app_module, "_emit_bootstrap_admin_credentials", lambda *a, **k: None),
@@ -127,6 +133,7 @@ async def test_force_admin_password_reset_is_one_shot(monkeypatch):
 
     await boot("true")
     assert resets == [True], "first boot with the flag resets the admin (must-change)"
+    assert revoked == [1], "the reset ends the sessions signed in with the old password"
     assert settings[app_module._FORCE_RESET_MARKER_KEY]["applied"] is True
 
     await boot("true")
@@ -138,6 +145,7 @@ async def test_force_admin_password_reset_is_one_shot(monkeypatch):
 
     await boot("true")
     assert resets == [True, True], "re-set flag fires again after re-arming"
+    assert revoked == [1, 1]
 
 
 @pytest.mark.asyncio
@@ -593,6 +601,62 @@ def test_security_check_payload_warns_when_hardening_disabled(monkeypatch):
     assert "APP_HSTS is false" in warnings
     assert "APP_REQUIRE_API_TOKEN is false" in warnings
     assert "APP_API_TOKEN is not set" in warnings
+
+
+@pytest.mark.parametrize(
+    ("https_enabled", "cookie_secure", "expect_secure"),
+    [(True, False, True), (False, True, True), (False, False, False)],
+)
+def test_security_check_reports_the_flag_the_cookie_carries(monkeypatch, https_enabled, cookie_secure, expect_secure):
+    monkeypatch.setattr(app_module, "APP_HTTPS_ENABLED", https_enabled)
+    monkeypatch.setattr(app_module, "APP_COOKIE_SECURE", cookie_secure)
+
+    payload = app_module._security_check_payload()
+
+    assert payload["cookies"]["session_cookie_secure"] is expect_secure
+    assert any("without Secure" in w for w in payload["warnings"]) is not expect_secure
+
+
+def test_session_refresh_keeps_the_secure_flag_of_sign_in(monkeypatch, request):
+    """APP_HTTPS on with APP_COOKIE_SECURE off: sign-in issues a Secure
+    cookie, so the refresh on the next request must too."""
+    from mcp_helpers import admin_client
+
+    admin = admin_client(monkeypatch, request)
+    monkeypatch.setattr(app_module, "APP_HTTPS_ENABLED", True)
+    monkeypatch.setattr(app_module, "APP_COOKIE_SECURE", False)
+
+    resp = admin.get("/api/admin/login-rules")
+
+    assert resp.status_code == 200
+    refreshed = [h for h in resp.headers.get_list("set-cookie") if h.startswith("session=")]
+    assert refreshed and all("Secure" in h for h in refreshed)
+
+
+def test_security_check_warns_about_unprotected_sign_in_providers(monkeypatch):
+    def warnings_for(**blocks) -> str:
+        monkeypatch.setattr(app_module.state, "AUTH_CONFIG", {"provider": "local", **blocks})
+        return "\n".join(app_module._security_check_payload()["warnings"])
+
+    # A provider that is off raises nothing, whatever its settings.
+    assert "RADIUS" not in warnings_for(radius={"enabled": False, "enforce_message_authenticator": False})
+    assert "LDAP" not in warnings_for(ldap={"enabled": False, "default_role": "admin"})
+
+    assert "CVE-2024-3596" in warnings_for(radius={"enabled": True, "enforce_message_authenticator": False})
+    assert "RADIUS" not in warnings_for(radius={"enabled": True, "enforce_message_authenticator": True})
+
+    assert "LDAP is enabled without TLS" in warnings_for(ldap={"enabled": True, "tls_verify": "demand"})
+    weak = warnings_for(ldap={"enabled": True, "use_starttls": True, "tls_verify": "allow"})
+    assert "below 'demand'" in weak and "without TLS" not in weak
+    assert "LDAP" not in warnings_for(ldap={"enabled": True, "use_ssl": True, "tls_verify": "demand"})
+
+    everyone_admin = warnings_for(
+        ldap={"enabled": True, "use_ssl": True, "default_role": "admin"},
+        oidc={"enabled": True, "default_role": "admin"},
+        saml={"enabled": True, "default_role": "user"},
+    )
+    assert "LDAP default role is admin" in everyone_admin and "OIDC default role is admin" in everyone_admin
+    assert "SAML" not in everyone_admin
 
 
 # ── Session signing key file ─────────────────────────────────────────────────

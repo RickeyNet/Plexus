@@ -70,20 +70,58 @@ see.
 
 To change a user, choose **Edit**. **Edit User Account** has **Username**,
 **Display Name**, **Role**, **Access Groups** and **Session never
-expires**. That last box skips the idle timeout; use it only for read-only
-kiosk accounts such as a NOC wall screen. **Reset Password** sets a new
-password (at least 8 characters). **Delete** removes the account after you
-confirm.
+expires**. That last box skips the idle timeout and the 24 hour session
+limit; use it only for read-only kiosk accounts such as a NOC wall screen.
+It cannot be combined with the **Admin** role: the save is refused (`400`)
+when it would turn the box on for an admin or make such an account an
+admin (an account that already had both keeps them until one is changed).
+A display name is at most 200 characters on one line, whoever sets it; a
+user changing their own is audited as `auth` / `profile.update`, and the
+`auth` / `user.update` entry of an admin's edit lists what changed (old and
+new username, display name, role, never-expiring session, disabled). **Reset
+Password** sets a new password (at least 8 characters) on a local account.
+**Delete** removes the account after you confirm.
+
+**Account disabled** (in **Edit User Account**) switches an account off
+without deleting it; the user card shows **Disabled**. A disabled account
+cannot sign in by any method (password, break-glass, RADIUS, TACACS+,
+LDAP, OIDC, SAML): the sign-in gets the answer a wrong password gets and
+is audited as `auth` / `login.failure` with "account disabled". Its open
+sessions end at once, the AI-access (MCP) tokens it owns are refused, and
+a directory or IdP sign-in never re-enables or changes it. Clearing the
+box lets it sign in again; sessions from before it was disabled stay
+ended. You cannot disable your own account, and the last enabled admin
+cannot be disabled, demoted or deleted (`400`); a disabled admin does not
+count as one. Disable an account to cut off a person removed at the
+directory or identity provider: until then their Plexus session and AI
+access tokens keep working.
 
 ### Password rules
 
-- At least 8 characters. Plexus checks no other complexity rule.
+- 8 to 256 characters, and not the account's own username. Plexus checks
+  no other complexity rule and no list of common passwords.
 - A user changes their own password from the user menu, **Change
   Password**. The new password must differ from the current one. After 5
   wrong current passwords in 5 minutes, Plexus refuses further tries for a
-  while.
+  while (requests sent together count one by one; the right password
+  clears the count).
 - An account flagged for a password change (for example the first admin)
-  sees **Password Change Required** and cannot close it.
+  sees **Password Change Required** and cannot close it. An admin who sets
+  a password knows it: `"must_change_password": true` in the body of
+  `POST /api/admin/users` or `PUT /api/admin/users/{id}/password` (API
+  only) makes the user replace it at the next sign-in.
+
+### Username rules
+
+- 3 to 150 characters, no control characters or line breaks; leading and
+  trailing spaces are removed.
+- A name that differs from an existing account's only in case is refused
+  (`Admin` next to `admin`), when an admin creates or renames an account
+  and at self-registration. Accounts that already differ only in case
+  keep working.
+- `api-token` is reserved in any case: it is the name the server API token
+  acts under, so no account may take it. An external sign-in under that
+  name is refused and audited (`auth` / `login.adopt_refused`).
 
 ### Access groups
 
@@ -140,7 +178,29 @@ to present it.
   refuses new attempts from an IP after that many failures in the window,
   without a lockout. **Idle timeout (s, 0 = off)** (default 1800, at most
   86400) signs out a session with no requests for that long. Choose
-  **Save Login Rules**.
+  **Save Login Rules**. Every save is audited as `auth` /
+  `login_rules.update` with the old and new value of each rule that
+  changed.
+- **What a failed sign-in is told.** A wrong name or password answers
+  "Invalid username or password". When the RADIUS, TACACS+ or LDAP server
+  does not answer, the caller sees only "Sign-in is temporarily
+  unavailable"; which server and what failed is in the `auth` /
+  `login.failure` audit entry and the server log. The lockout is on the
+  client address, not on an account: everyone behind one address (an
+  office NAT, a proxy not listed in `FORWARDED_ALLOW_IPS`) shares it, and
+  the message says so. The sign-in name is at most 256 characters; a name
+  with a control character or a line break fails like a wrong name and is
+  recorded on one line. Audit entries of failed sign-ins hold what was
+  typed in the name field, a password typed there by mistake included:
+  limit who can read the audit log and the forwarded copies.
+- **Sign-ins at once** (fixed, not on the tab). One client address can
+  have at most **Max attempts** password sign-ins in progress, and the
+  server checks at most 16 passwords at the same time; a request past
+  either gets `429` "Too many sign-in attempts at once" and counts as
+  neither a failure nor an audit entry. Self-registration, when it is on,
+  counts against the anonymous API write limit
+  (`APP_API_RATE_LIMIT_MAX_WRITE`). The shipped nginx config adds a
+  request rate per address in front of both (see `deploy/DEPLOYMENT.md`).
 - **Per-username delay** (fixed, not on the tab). Failed password sign-ins
   also count against the username, from any address and whether or not
   the account exists. The first 3 failures cost nothing; each attempt
@@ -154,11 +214,28 @@ to present it.
   **TACACS+** or **LDAP**, each with **Default Access Groups** for new
   users. **Default Credential** is the per-user fallback for jobs launched
   without a credential; **Service Credential** is the one Plexus uses for
-  monitoring polls and scheduled discovery. Choose **Save Authentication**. Provider
+  monitoring polls and scheduled discovery. Choose **Save Authentication**.
+  Password sign-in uses the saved provider from the next attempt on. Every
+  save (the RADIUS, TACACS+, LDAP, OIDC and SAML settings included) is
+  audited as `auth` / `auth_config.update` with the old and new value of
+  each setting that changed; a secret is only named as changed and a SAML
+  certificate is shown as its fingerprint. Provider
   guides: [RADIUS](../RADIUS_CONFIGURATION_GUIDE.md),
   [TACACS+](../TACACS_CONFIGURATION_GUIDE.md), LDAP in
   [deploy/DEPLOYMENT.md](../deploy/DEPLOYMENT.md), and OIDC single sign-on,
   set up on this tab as well, in [sso-oidc.md](sso-oidc.md).
+- **Security check.** `GET /api/admin/security-check` (admin) lists
+  warnings for the running configuration. For sign-in it warns while
+  RADIUS is enabled without **Require Message-Authenticator**
+  (CVE-2024-3596), while LDAP is enabled without **Use SSL** or **Use
+  STARTTLS** or with certificate verification below `demand`, while the
+  LDAP user search filter matches the sign-in name against more than one
+  attribute with no **Username Attribute** set, while OIDC names accounts
+  by `email` with **Allow unverified email** on, while a provider's
+  default role is `admin`, and while the session cookie is issued without
+  `Secure`. `cookies.session_cookie_secure` is the flag the
+  cookie really carries (`APP_COOKIE_SECURE` or `APP_HTTPS`), at sign-in
+  and on every refresh.
 - **Server address check.** An enabled RADIUS, TACACS+ or LDAP server
   passes the outbound address guard
   ([webhooks.md](webhooks.md#outbound-address-check)) when a save turns it
@@ -187,7 +264,24 @@ to present it.
   manages, with the same username is never taken over: the sign-in is
   refused with "Invalid username or password" (SSO: the generic sign-in
   error) and audited as `auth` / `login.adopt_refused`. Local admins keep
-  signing in with their local password (break-glass). An account created
+  signing in with their local password (break-glass, below). For LDAP,
+  RADIUS and TACACS+ the username is matched to the provider's existing
+  account without regard to case, as those directories do: `ALICE` signs
+  in to the account `alice` and is shown under that stored name, instead
+  of becoming a second account. Where accounts that differ only in case
+  exist from before, each keeps signing in with its exact spelling and
+  any other spelling is refused (`login.adopt_refused`, "several accounts
+  differ only in case"): delete the duplicates. OIDC and SAML names stay
+  exact; those accounts are bound to the IdP subject, and the subject
+  finds the account when the IdP changes the person's username. An LDAP
+  account is named as the person typed their name unless **Username
+  Attribute** (for example `sAMAccountName` or `uid`) is set: then the
+  entry's value names the account, so a filter that accepts both a logon
+  name and a mail address gives one person one account, and an entry
+  without the attribute is refused. Setting it later gives people who
+  used to type another form of their name a new account (their old one
+  stays until an admin deletes it); a sign-in that reads no entry (a
+  direct bind without a Base DN) keeps the typed name. An account created
   by an external sign-in before Plexus recorded providers, and not signed
   in through it since, looks like a local account and is refused too:
   delete it (the next sign-in recreates it with the default access groups)
@@ -196,9 +290,44 @@ to present it.
   or `saml`; API only). Changing the provider is how an admin hands an
   existing account to an external sign-in on purpose: it forgets the SSO
   subject bound to the account (the next OIDC or SAML sign-in binds its
-  own), ends the account's open sessions and is audited as `auth` /
-  `user.provider_change`. `GET /api/admin/users` shows each account's
-  `auth_provider`.
+  own), clears the account's local password, ends the account's open
+  sessions and is audited as `auth` / `user.provider_change`. The password
+  is cleared in both directions: an account set back to `local` has none
+  until an admin sets one (**Reset password**). `GET /api/admin/users`
+  shows each account's `auth_provider`.
+- **People removed at the directory or IdP.** Plexus does not ask the
+  provider again after a sign-in, so a person removed or locked there
+  keeps their open Plexus session and the AI-access tokens they own until
+  an admin acts. Tick **Account disabled** on their account (Users, above,
+  or `PUT /api/admin/users/{id}` with `{"disabled": true}`): the session
+  ends at once, the tokens are refused, and any later sign-in is refused
+  even when the provider accepts it.
+- **Local passwords belong to local accounts.** Plexus accepts a password
+  it holds only for an account whose provider is Local. An account an
+  external provider manages is signed in by that provider alone: not by
+  the local provider, not through local fallback and not as break-glass,
+  whatever its role. An admin cannot set a password on it (`400`; set its
+  provider to `local` first), and its own **Change password** is refused
+  (`400`): the password is changed at the provider.
+  `scripts/reset_admin_password.py` run for such an account makes it a
+  local account and says so.
+- **Break-glass local admin.** A local account with the admin role signs
+  in with its local password whatever the provider is, and even with
+  local fallback off, so a broken RADIUS, TACACS+, LDAP or SSO setup
+  cannot lock everyone out. Only an account whose provider is Local
+  counts: an admin account that a directory or SSO sign-in created is not
+  a break-glass account, so keep at least one admin that was created in
+  Plexus. The consequence: that password is checked by
+  Plexus alone. It is not subject to the directory's lockout or password
+  policy, nor to the multi-factor step of an IdP, and disabling a person
+  in the directory does not disable their local admin account. Keep one
+  or two such accounts with long random passwords, stored where the
+  on-call can reach them, and review the `auth` / `login.success` audit
+  entries with `source=local-admin-breakglass`. `PLEXUS_BREAKGLASS_LOCAL_ADMIN=false`
+  in the server's `.env` turns the path off: local admins then sign in
+  only when the provider is **Local** or through the provider's local
+  fallback, and a provider outage with fallback off needs
+  `scripts/reset_admin_password.py` or a database change to recover.
 - **Service Credentials.** **+ Add Service Credential** stores a **Name**,
   **Username**, **Password** and optional **Enable Secret** that only
   admins can create or change.
@@ -488,7 +617,7 @@ for the general rules.
 GET    /api/admin/users
 POST   /api/admin/users
 PUT    /api/admin/users/{id}                 (username, display_name, role, session_never_expires, auth_provider)
-PUT    /api/admin/users/{id}/password        {"new_password": "..."}
+PUT    /api/admin/users/{id}/password        {"new_password": "..."}  (local accounts only; 400 for a managed account)
 PUT    /api/admin/users/{id}/groups          {"group_ids": [2, 5]}
 DELETE /api/admin/users/{id}
 GET|PUT /api/admin/login-rules

@@ -138,7 +138,8 @@ async def seed():
         seeded_hosts = 0
         for hostname, ip in hosts:
             try:
-                await add_host(gid, hostname, ip)
+                # The install's own seed data: addresses the operator chose.
+                await add_host(gid, hostname, ip, address_confirmed=True)
                 seeded_hosts += 1
             except ValueError:
                 # add_host raises ValueError on (group_id, ip) unique violation.

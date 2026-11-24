@@ -130,6 +130,11 @@ export function useAuthStatus() {
   });
 }
 
+/** Whether the signed-in user is an admin. */
+export function useIsAdmin(): boolean {
+  return useAuthStatus().data?.role === 'admin';
+}
+
 export function useLogin() {
   const qc = useQueryClient();
   return useMutation({

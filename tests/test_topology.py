@@ -899,8 +899,22 @@ async def test_discover_topology_for_group_serializes_writes(monkeypatch):
     """Discovery should do concurrent SNMP walks then sequential DB writes."""
     fake_group = {"id": 1, "name": "core"}
     fake_hosts = [
-        {"id": 100, "hostname": "sw1", "ip_address": "10.0.0.1", "device_type": "cisco_ios", "status": "online"},
-        {"id": 200, "hostname": "sw2", "ip_address": "10.0.0.2", "device_type": "cisco_ios", "status": "online"},
+        {
+            "id": 100,
+            "hostname": "sw1",
+            "ip_address": "10.0.0.1",
+            "device_type": "cisco_ios",
+            "status": "online",
+            "address_confirmed": 1,
+        },
+        {
+            "id": 200,
+            "hostname": "sw2",
+            "ip_address": "10.0.0.2",
+            "device_type": "cisco_ios",
+            "status": "online",
+            "address_confirmed": 1,
+        },
     ]
 
     monkeypatch.setattr(app_module.db, "get_group", AsyncMock(return_value=fake_group))
@@ -974,6 +988,7 @@ async def test_discover_topology_for_group_handles_snmp_errors(monkeypatch):
                     "ip_address": "10.0.0.1",
                     "device_type": "cisco_ios",
                     "status": "online",
+                    "address_confirmed": 1,
                 },
             ]
         ),

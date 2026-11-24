@@ -188,6 +188,16 @@ checkpoints and the audit events around it.
 - Execute and rollback use the credential as the deployment's creator, so
   an admin can run a deployment someone else created with that person's
   credential.
+- **A shared credential goes only to a confirmed address.** When the
+  deployment's credential is the Plexus service credential or the default
+  credential, Plexus signs in only to hosts whose address an admin set or
+  confirmed, judged on the hosts as they are stored when you click
+  **Execute** or **Rollback**, whoever runs it. **Execute** is refused
+  (`409`) before any device is touched when a target host's address awaits
+  admin confirmation; the message names up to 5 of them. **Rollback** skips
+  such a host, marks its rollback checkpoint failed with the reason and
+  rolls back the others. An admin confirms the address on the Inventory
+  page. A credential that is your own is not limited.
 
 ## Who can do what
 

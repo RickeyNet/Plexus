@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 
 from netcontrol.bounded_map import BoundedDict
 from netcontrol.telemetry import configure_logging
@@ -55,6 +56,18 @@ DISCOVERY_DEFAULT_TIMEOUT_SECONDS = float(os.getenv("APP_DISCOVERY_TIMEOUT_SECON
 DISCOVERY_DEFAULT_MAX_HOSTS = int(os.getenv("APP_DISCOVERY_MAX_HOSTS", "256"))
 DISCOVERY_MAX_CONCURRENT_PROBES = int(os.getenv("APP_DISCOVERY_MAX_CONCURRENT_PROBES", "64"))
 DISCOVERY_PROBE_PORTS = (22, 443)
+
+# Long-lived work one caller may hold open at once (netcontrol/routes/shared.py
+# ActiveLimit). Every caller (an admin, the server API token: one identity)
+# gets the same numbers; past them a new one is refused with 429.
+# Heavy: inventory discovery scan/sync (streamed, inline or as a background
+# job) and topology neighbor discovery. Each runs up to
+# DISCOVERY_MAX_CONCURRENT_PROBES probes of its own.
+DISCOVERY_RUNS_PER_USER = max(1, int(os.getenv("APP_DISCOVERY_RUNS_PER_USER", "3")))
+DISCOVERY_RUNS_TOTAL = max(1, int(os.getenv("APP_DISCOVERY_RUNS_TOTAL", "12")))
+# Cheap: the topology utilization stream and the /ws/* job output sockets.
+LIVE_STREAMS_PER_USER = max(1, int(os.getenv("APP_LIVE_STREAMS_PER_USER", "24")))
+LIVE_STREAMS_TOTAL = max(1, int(os.getenv("APP_LIVE_STREAMS_TOTAL", "512")))
 
 
 # ── SNMP defaults ────────────────────────────────────────────────────────────
@@ -389,6 +402,9 @@ AUTH_CONFIG_DEFAULTS = {
         "bind_password": "",
         "base_dn": "",
         "user_search_filter": "(sAMAccountName={username})",
+        # The entry attribute that names the Plexus account (sAMAccountName,
+        # uid); empty = the name as it was typed at sign-in.
+        "username_attribute": "",
         "user_dn_template": "",
         "group_search_base": "",
         "group_search_filter": "(&(objectClass=group)(member={user_dn}))",
@@ -413,6 +429,9 @@ AUTH_CONFIG_DEFAULTS = {
         "token_auth_method": "client_secret_basic",
         "scopes": "openid profile email",
         "username_claim": "preferred_username",
+        # Only read when the username claim is "email": accept a token
+        # without the email_verified claim (an explicit false never passes).
+        "allow_unverified_email": False,
         "display_name_claim": "name",
         "groups_claim": "groups",
         "admin_groups": [],
@@ -451,6 +470,12 @@ AUTH_CONFIG_DEFAULTS = {
         "email_attribute": "",
         "display_name_attribute": "",
         "groups_attribute": "groups",
+        # The attribute the account is bound to; empty = the NameID (the
+        # username when the NameID is transient).
+        "subject_attribute": "",
+        # AuthnContextClassRef values, one of which the IdP must assert (and
+        # is asked for); empty = any.
+        "required_authn_context": [],
         "admin_groups": [],
         "default_role": "user",
         "default_group_ids": [],
@@ -464,6 +489,9 @@ AUTH_CONFIG_DEFAULTS = {
 OIDC_MAX_GROUP_MAPPINGS = 200
 OIDC_BUTTON_LABEL_MAX = 60
 SAML_MAX_CERTS = 5
+# An LDAP attribute description without options (RFC 4512), or nothing.
+_LDAP_ATTRIBUTE_NAME = re.compile(r"(?:[A-Za-z][A-Za-z0-9-]{0,63})?")
+SAML_MAX_AUTHN_CONTEXTS = 10
 _OIDC_TOKEN_AUTH_METHODS = {"client_secret_basic", "client_secret_post"}
 
 _LDAP_TLS_VERIFY_LEVELS = {"never", "allow", "try", "demand", "hard"}
@@ -632,6 +660,19 @@ def rate_limit_entry_expired(_key: str, stamps: list[float], now: float) -> bool
 # timestamps, ``LOCKED_OUT`` the time each lockout ends.
 LOGIN_ATTEMPTS: dict = BoundedDict(TRACKER_MAX_ENTRIES, login_attempts_expired)
 LOCKED_OUT: dict = BoundedDict(TRACKER_MAX_ENTRIES, lockout_expired)
+
+
+def sso_failure_audits_expired(_ip: str, stamps: list[float], now: float) -> bool:
+    """An ``SSO_FAILURE_AUDITS`` entry whose newest row left the window."""
+    return not stamps or (now - stamps[-1]) > max(1, int(LOGIN_RULES.get("lockout_time", 900)))
+
+
+# Audit rows written for single sign-on callback failures that do not count
+# toward the lockout (a request any website can make a browser send must not
+# lock its address out). Keyed by client IP, value the times of those rows:
+# an address gets at most ``max_attempts`` of them per ``lockout_time``, what
+# the password form can write before it locks.
+SSO_FAILURE_AUDITS: dict = BoundedDict(TRACKER_MAX_ENTRIES, sso_failure_audits_expired)
 
 # Global API rate-limit state - keyed by client IP (and by MCP auth-failure
 # keys). Each value is a list of ``time.time()`` timestamps of recent requests.
@@ -1097,6 +1138,7 @@ def _sanitize_auth_config(data: dict | None) -> dict:
                 "bind_password": str(ldap.get("bind_password", cfg["ldap"]["bind_password"])),
                 "base_dn": str(ldap.get("base_dn", cfg["ldap"]["base_dn"])).strip(),
                 "user_search_filter": str(ldap.get("user_search_filter", cfg["ldap"]["user_search_filter"])).strip(),
+                "username_attribute": str(ldap.get("username_attribute", cfg["ldap"]["username_attribute"])).strip(),
                 "user_dn_template": str(ldap.get("user_dn_template", cfg["ldap"]["user_dn_template"])).strip(),
                 "group_search_base": str(ldap.get("group_search_base", cfg["ldap"]["group_search_base"])).strip(),
                 "group_search_filter": str(ldap.get("group_search_filter", cfg["ldap"]["group_search_filter"])).strip(),
@@ -1112,6 +1154,8 @@ def _sanitize_auth_config(data: dict | None) -> dict:
         )
     cfg["ldap"]["port"] = max(1, cfg["ldap"]["port"])
     cfg["ldap"]["timeout"] = max(1, cfg["ldap"]["timeout"])
+    if not _LDAP_ATTRIBUTE_NAME.fullmatch(cfg["ldap"]["username_attribute"]):
+        cfg["ldap"]["username_attribute"] = ""
     if cfg["ldap"]["tls_verify"] not in _LDAP_TLS_VERIFY_LEVELS:
         cfg["ldap"]["tls_verify"] = "demand"
     # A typo'd role would fail closed everywhere role == "admin" is checked,
@@ -1186,6 +1230,7 @@ def _sanitize_oidc_config(data) -> dict:
         "token_auth_method": text("token_auth_method"),
         "scopes": " ".join(text("scopes").split()) or defaults["scopes"],
         "username_claim": text("username_claim") or defaults["username_claim"],
+        "allow_unverified_email": bool(src.get("allow_unverified_email", defaults["allow_unverified_email"])),
         "display_name_claim": text("display_name_claim"),
         "groups_claim": text("groups_claim"),
         "redirect_uri": text("redirect_uri"),
@@ -1221,6 +1266,10 @@ def _sanitize_saml_config(data) -> dict:
         "email_attribute": text("email_attribute"),
         "display_name_attribute": text("display_name_attribute"),
         "groups_attribute": text("groups_attribute"),
+        "subject_attribute": text("subject_attribute"),
+        "required_authn_context": _sanitize_string_list(src.get("required_authn_context", []))[
+            :SAML_MAX_AUTHN_CONTEXTS
+        ],
     }
 
 

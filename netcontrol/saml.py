@@ -42,6 +42,7 @@ import hashlib
 import secrets
 import time
 import zlib
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -256,7 +257,13 @@ def _instant(ts: float) -> str:
     return datetime.fromtimestamp(int(ts), UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def authn_request_xml(*, request_id: str, sp_entity_id: str, acs_url: str, sso_url: str, now: float) -> str:
+def authn_request_xml(
+    *, request_id: str, sp_entity_id: str, acs_url: str, sso_url: str, now: float, authn_context: Iterable[str] = ()
+) -> str:
+    """``authn_context``: AuthnContextClassRef values the IdP is asked to
+    use one of (``RequestedAuthnContext``, exact comparison)."""
+    classes = "".join(f"<saml:AuthnContextClassRef>{escape(c)}</saml:AuthnContextClassRef>" for c in authn_context)
+    requested = f'<samlp:RequestedAuthnContext Comparison="exact">{classes}</samlp:RequestedAuthnContext>'
     return (
         f'<samlp:AuthnRequest xmlns:samlp="{NS["samlp"]}" xmlns:saml="{NS["saml"]}" '
         f'ID={quoteattr(request_id)} Version="2.0" IssueInstant="{_instant(now)}" '
@@ -264,12 +271,20 @@ def authn_request_xml(*, request_id: str, sp_entity_id: str, acs_url: str, sso_u
         f"ProtocolBinding={quoteattr(BINDING_POST)}>"
         f"<saml:Issuer>{escape(sp_entity_id)}</saml:Issuer>"
         f'<samlp:NameIDPolicy Format="{NAMEID_UNSPECIFIED}" AllowCreate="true"/>'
+        f"{requested if classes else ''}"
         "</samlp:AuthnRequest>"
     )
 
 
 def authn_request_url(
-    sso_url: str, *, request_id: str, sp_entity_id: str, acs_url: str, relay_state: str, now: float | None = None
+    sso_url: str,
+    *,
+    request_id: str,
+    sp_entity_id: str,
+    acs_url: str,
+    relay_state: str,
+    now: float | None = None,
+    authn_context: Iterable[str] = (),
 ) -> str:
     """The IdP SSO URL carrying a deflated, base64 ``SAMLRequest`` and the
     ``RelayState`` (HTTP-Redirect binding, unsigned)."""
@@ -279,6 +294,7 @@ def authn_request_url(
         acs_url=acs_url,
         sso_url=sso_url,
         now=time.time() if now is None else now,
+        authn_context=authn_context,
     )
     compressor = zlib.compressobj(9, zlib.DEFLATED, -15)
     deflated = compressor.compress(xml.encode("utf-8")) + compressor.flush()
@@ -304,6 +320,12 @@ class SamlSettings:
     email_attribute: str = ""
     display_name_attribute: str = ""
     groups_attribute: str = ""
+    # The attribute that identifies the person for good (the account is
+    # bound to it); empty = the NameID.
+    subject_attribute: str = ""
+    # AuthnContextClassRef values, one of which the IdP must assert; empty =
+    # whatever the IdP used.
+    required_authn_context: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -390,15 +412,19 @@ def _text(node: Any) -> str:
 
 
 def _attributes(assertion: Any) -> dict[str, list[str]]:
-    """Attribute values by ``Name`` (and by ``FriendlyName``)."""
-    out: dict[str, list[str]] = {}
+    """Attribute values by ``Name``, and by ``FriendlyName`` for keys no
+    ``Name`` has. ``Name`` is the identifier; ``FriendlyName`` is a label
+    with no meaning of its own, so an attribute merely labelled like the
+    configured one never adds to it or stands in for it."""
+    by_name: dict[str, list[str]] = {}
+    by_friendly_name: dict[str, list[str]] = {}
     for attr in assertion.iterfind("saml:AttributeStatement/saml:Attribute", NS):
         values = [_text(v) for v in attr.iterfind("saml:AttributeValue", NS)]
         values = [v for v in values if v]
-        for key in (attr.get("Name"), attr.get("FriendlyName")):
+        for key, out in ((attr.get("Name"), by_name), (attr.get("FriendlyName"), by_friendly_name)):
             if key:
                 out.setdefault(key, []).extend(values)
-    return out
+    return {**by_friendly_name, **by_name}
 
 
 def _check_window(not_before: float | None, not_on_or_after: float | None, now: float, what: str) -> None:
@@ -515,9 +541,22 @@ def parse_response(
     display_name = clean_display_name(first(settings.display_name_attribute)) if settings.display_name_attribute else ""
     groups = group_values(attrs.get(settings.groups_attribute, [])) if settings.groups_attribute else []
 
-    # A transient NameID changes every sign-in, so bind the account to the
-    # username instead.
-    subject_id = username if nameid_format == NAMEID_TRANSIENT else name_id
+    if settings.required_authn_context:
+        asserted = {
+            _text(ref)
+            for ref in assertion.iterfind("saml:AuthnStatement/saml:AuthnContext/saml:AuthnContextClassRef", NS)
+        }
+        if not asserted & set(settings.required_authn_context):
+            raise SamlError("claims", "the IdP did not sign the user in with a required authentication context")
+
+    if settings.subject_attribute:
+        subject_id = first(settings.subject_attribute)
+        if not subject_id:
+            raise SamlError("claims", f"attribute '{settings.subject_attribute}' (the subject) is missing")
+    else:
+        # A transient NameID changes every sign-in, so bind the account to
+        # the username instead.
+        subject_id = username if nameid_format == NAMEID_TRANSIENT else name_id
     expires = min(t for t in (cond_not_after, confirmed_until) if t is not None)
     expires_at = int(min(expires, now + MAX_ASSERTION_LIFETIME_SECONDS)) + CLOCK_SKEW_SECONDS
     return SamlResult(

@@ -134,8 +134,23 @@ def test_read_username_rules():
             oidc.read_username(bad, "u")
         assert info.value.code == "claims"
     assert oidc.read_username({"email": "alice@example.com", "email_verified": True}, "email")
+    assert oidc.read_username({"email": "alice@example.com", "email_verified": "true"}, "email")
     with pytest.raises(oidc.OidcError):
         oidc.read_username({"email": "alice@example.com", "email_verified": False}, "email")
+
+
+def test_email_as_username_needs_a_verified_address():
+    unmarked = {"email": "alice@example.com"}
+    with pytest.raises(oidc.OidcError) as info:
+        oidc.read_username(unmarked, "email")
+    assert info.value.code == "claims" and "email_verified" in info.value.step
+    # The setting is for providers that never send the claim...
+    assert oidc.read_username(unmarked, "email", allow_unverified_email=True) == "alice@example.com"
+    # ...never for an address the provider says is unverified.
+    with pytest.raises(oidc.OidcError):
+        oidc.read_username({**unmarked, "email_verified": False}, "email", allow_unverified_email=True)
+    # Other claims are not email addresses to verify.
+    assert oidc.read_username({"upn": "alice@example.com"}, "upn") == "alice@example.com"
 
 
 def test_log_safe_redacts_and_truncates():
@@ -346,8 +361,14 @@ async def test_malformed_token():
 async def test_wrong_audience():
     idp = FakeIdP()
     await _expect("token", _validate(idp, idp.id_token(aud="someone-else")))
-    # A list holding the client id is fine.
-    assert await _validate(idp, idp.id_token(aud=["someone-else", CLIENT_ID]))
+    # A list holding only the client id is fine.
+    assert await _validate(idp, idp.id_token(aud=[CLIENT_ID]))
+    # Several audiences: azp must say the token was issued to this client.
+    several = ["someone-else", CLIENT_ID]
+    err = await _expect("token", _validate(idp, idp.id_token(aud=several)))
+    assert "azp" in err.step
+    assert await _validate(idp, idp.id_token(aud=several, azp=CLIENT_ID))
+    await _expect("token", _validate(idp, idp.id_token(aud=several, azp="someone-else")))
 
 
 async def test_wrong_azp():
@@ -590,6 +611,11 @@ async def test_email_username_with_unverified_email_fails():
     await _expect("claims", _complete(idp, username_claim="email"))
     idp.claims = {"email": "alice@example.com", "email_verified": True}
     assert (await _complete(idp, username_claim="email")).username == "alice@example.com"
+    # A provider that never sends email_verified needs the setting.
+    idp.claims = {"email": "alice@example.com"}
+    await _expect("claims", _complete(idp, username_claim="email"))
+    allowed = await _complete(idp, username_claim="email", allow_unverified_email=True)
+    assert allowed.username == "alice@example.com"
 
 
 def test_authorization_url_carries_pkce_state_nonce():

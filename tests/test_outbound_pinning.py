@@ -6,13 +6,20 @@ network layer are fakes."""
 
 from __future__ import annotations
 
+import asyncio
+import gzip
 import socket
 
 import httpx
 import pytest
 from netcontrol import saml, sso
 from netcontrol.routes import net_guard, outbound_http
-from netcontrol.routes.outbound_http import OutboundRequestError, PinnedTransport, send_request
+from netcontrol.routes.outbound_http import (
+    OutboundRequestError,
+    PinnedTransport,
+    ResponseTooLargeError,
+    send_request,
+)
 
 
 class _Recorder(httpx.AsyncBaseTransport):
@@ -229,3 +236,77 @@ async def test_a_refused_identity_provider_address_is_not_sent(monkeypatch, netw
         await sso.provider_request("GET", "https://idp.example.com/userinfo", code="claims")
     assert refused.value.code == "claims"
     assert network == []
+
+
+# ── Bounded responses (max_bytes, total_timeout_s) ───────────────────────────
+
+
+def _answering(handler) -> httpx.MockTransport:
+    return httpx.MockTransport(handler)
+
+
+@pytest.mark.asyncio
+async def test_bounded_response_within_the_limit_reads_like_a_normal_one(monkeypatch):
+    monkeypatch.setattr(net_guard, "_getaddrinfo", _rebinding_resolver(["192.0.2.10"]))
+    transport = _answering(lambda request: httpx.Response(200, json={"version": "1.2.3"}))
+
+    resp = await send_request("GET", "https://peer.example.com/api", transport=transport, max_bytes=1024)
+
+    assert resp.status_code == 200
+    assert resp.json() == {"version": "1.2.3"}
+    assert resp.request.url.host == "peer.example.com"
+
+
+@pytest.mark.asyncio
+async def test_bounded_response_past_the_limit_is_refused_before_it_is_all_read(monkeypatch):
+    monkeypatch.setattr(net_guard, "_getaddrinfo", _rebinding_resolver(["192.0.2.10"]))
+    sent = {"chunks": 0}
+
+    async def endless():
+        while True:
+            sent["chunks"] += 1
+            yield b"x" * 1024
+
+    transport = _answering(lambda request: httpx.Response(200, content=endless()))
+
+    with pytest.raises(ResponseTooLargeError):
+        await send_request("GET", "https://peer.example.com/api", transport=transport, max_bytes=4096)
+    assert sent["chunks"] <= 6
+    # It is an httpx error, so a caller's transport-failure handling covers it.
+    assert issubclass(ResponseTooLargeError, httpx.HTTPError)
+
+
+@pytest.mark.asyncio
+async def test_bounded_response_counts_decoded_bytes(monkeypatch):
+    """A small compressed body that inflates past the limit is refused, and
+    one within it is returned decoded once."""
+    monkeypatch.setattr(net_guard, "_getaddrinfo", _rebinding_resolver(["192.0.2.10"]))
+
+    def gz(payload: bytes):
+        return lambda request: httpx.Response(200, content=gzip.compress(payload), headers={"content-encoding": "gzip"})
+
+    with pytest.raises(ResponseTooLargeError):
+        await send_request(
+            "GET", "https://peer.example.com/api", transport=_answering(gz(b"0" * 500_000)), max_bytes=10_000
+        )
+    resp = await send_request(
+        "GET", "https://peer.example.com/api", transport=_answering(gz(b'{"ok": true}')), max_bytes=10_000
+    )
+    assert resp.json() == {"ok": True}
+
+
+@pytest.mark.asyncio
+async def test_total_timeout_ends_a_response_that_trickles(monkeypatch):
+    monkeypatch.setattr(net_guard, "_getaddrinfo", _rebinding_resolver(["192.0.2.10"]))
+
+    async def trickle():
+        while True:
+            await asyncio.sleep(0.01)
+            yield b"x"
+
+    transport = _answering(lambda request: httpx.Response(200, content=trickle()))
+
+    with pytest.raises(TimeoutError):
+        await send_request(
+            "GET", "https://peer.example.com/api", transport=transport, max_bytes=1_000_000, total_timeout_s=0.2
+        )

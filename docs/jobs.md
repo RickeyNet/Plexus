@@ -188,11 +188,16 @@ address can be any device, including one the person launching the job
 controls, so:
 
 - An admin (or the server API token) may send secrets to any target.
-- Anyone else may send secrets only to inventory hosts they may change. An
-  ad-hoc address counts when it is the address of such a host. Any other
-  ad-hoc address is refused with `403` and the message names the address.
-  Add the device to the inventory, drop the secret from the instruction
-  set, or ask an admin to run the job.
+- Anyone else may send secrets only to inventory hosts they may change
+  whose address an admin set or confirmed. An ad-hoc address counts when
+  it is the address of such a host. Any other ad-hoc address is refused
+  with `403` and the message names the address. Add the device to the
+  inventory (and have an admin confirm its address), drop the secret from
+  the instruction set, or ask an admin to run the job.
+- An inventory host whose address a non-admin added or changed shows
+  **Awaiting admin confirmation** on the Inventory page. A job of a
+  non-admin that would send secrets to it fails when it leaves the queue,
+  naming the address.
 - The check runs at launch, retry and **Run Live**, and again when the job
   leaves the queue: a job whose launcher is no longer an admin, or whose
   address is no longer an inventory host, fails before it signs in.
@@ -339,7 +344,7 @@ days** or **Last 30 days**.
 | Create, edit and delete instruction sets | `templates` Modify (`templates.write`) |
 | Manage your own credentials | `credentials` Modify (`credentials.write`) |
 | Manage secret variables | Admin |
-| Send secret variables to an ad-hoc address that is not an inventory host you may change | Admin |
+| Send secret variables to an ad-hoc address that is not an inventory host you may change, or to a host whose address awaits admin confirmation | Admin |
 | Set job retention and the default credential | Admin |
 
 Job actions are written to the audit log under `jobs`. Task, instruction set

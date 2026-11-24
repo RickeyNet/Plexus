@@ -511,10 +511,10 @@ def test_discovery_sync_updates_the_tracked_version_and_resolves_its_alert(api, 
         "discovery": {"protocol": "ssh"},
     }
 
-    async def _discover(_body, group_id=None, *, credential=None):
+    async def _discover(_body, group_id=None, *, credential=None, **_kw):
         return 1, [upgraded]
 
-    async def _scan(_ip, _body, _snmp_cfg, _slots, _credential):
+    async def _scan(_ip, _body, _snmp_cfg, _slots, _credential, **_kw):
         return upgraded
 
     monkeypatch.setattr(inventory_routes, "_discover_hosts", _discover)

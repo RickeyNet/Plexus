@@ -100,7 +100,10 @@ def build_assertion(
     confirmation_offset: int = 300,
     confirmation_in_response_to: str | None = None,
     attributes: dict[str, list[str]] | None = None,
+    friendly_names: dict[str, str] | None = None,
+    authn_context: str = "urn:oasis:names:tc:SAML:2.0:ac:classes:Password",
 ) -> etree._Element:
+    """``friendly_names``: attribute ``Name`` -> its ``FriendlyName``."""
     now = time.time() if now is None else now
     attributes = (
         attributes
@@ -113,7 +116,8 @@ def build_assertion(
         }
     )
     attrs = "".join(
-        f'<saml:Attribute Name="{name}">'
+        f'<saml:Attribute Name="{name}"'
+        + (f' FriendlyName="{friendly_names[name]}">' if name in (friendly_names or {}) else ">")
         + "".join(f"<saml:AttributeValue>{v}</saml:AttributeValue>" for v in values)
         + "</saml:Attribute>"
         for name, values in attributes.items()
@@ -130,7 +134,7 @@ def build_assertion(
 <saml:Conditions NotBefore="{_iso(now + not_before_offset)}" NotOnOrAfter="{_iso(now + not_on_or_after_offset)}">
 <saml:AudienceRestriction><saml:Audience>{audience}</saml:Audience></saml:AudienceRestriction>
 </saml:Conditions>
-<saml:AuthnStatement AuthnInstant="{_iso(now)}"><saml:AuthnContext><saml:AuthnContextClassRef>urn:oasis:names:tc:SAML:2.0:ac:classes:Password</saml:AuthnContextClassRef></saml:AuthnContext></saml:AuthnStatement>
+<saml:AuthnStatement AuthnInstant="{_iso(now)}"><saml:AuthnContext><saml:AuthnContextClassRef>{authn_context}</saml:AuthnContextClassRef></saml:AuthnContext></saml:AuthnStatement>
 <saml:AttributeStatement>{attrs}</saml:AttributeStatement>
 </saml:Assertion>"""
     return etree.fromstring(xml.encode())

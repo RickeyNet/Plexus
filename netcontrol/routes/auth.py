@@ -7,6 +7,7 @@ Includes RADIUS, TACACS+ and LDAP authentication helpers and login rate-limiting
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import hmac
 import os
@@ -23,11 +24,19 @@ from itsdangerous import BadSignature, URLSafeTimedSerializer
 from pydantic import BaseModel, Field
 
 import netcontrol.routes.state as state
-from netcontrol import object_scope, oidc, saml
+from netcontrol import account_rules, object_scope, oidc, saml
 from netcontrol.routes.net_guard import OutboundRequestError, validate_outbound_host
 from netcontrol.routes.shared import _audit, _corr_id, _get_session, _request_scheme, session_rejection
 from netcontrol.routes.state import _env_flag
-from netcontrol.sso import SsoError, SsoIdentity, safe_next
+from netcontrol.sso import (
+    CONTROL_CHARS,
+    DISPLAY_NAME_MAX_LENGTH,
+    SsoError,
+    SsoIdentity,
+    clean_display_name,
+    clean_username,
+    safe_next,
+)
 from netcontrol.telemetry import configure_logging
 
 LOGGER = configure_logging("plexus.auth")
@@ -216,6 +225,56 @@ async def verify_radius_user(username: str, password: str) -> tuple[bool, str]:
     return await asyncio.to_thread(_radius_authenticate_sync, username, password, radius_cfg)
 
 
+# Password directories match a username without case (Active Directory,
+# ISE and most RADIUS / TACACS+ servers accept ``alice`` and ``ALICE`` for
+# one account), so both spellings are one Plexus account. OIDC and SAML
+# accounts are bound to the IdP subject instead.
+_CASELESS_PROVIDERS = frozenset({"ldap", "radius", "tacacs"})
+
+
+async def resolve_external_account(username: str, provider: str) -> tuple[dict | None, bool]:
+    """``(account, ambiguous)`` for an external sign-in as ``username``.
+
+    The account with exactly this name, whoever manages it (the caller
+    applies the provider guard). Failing that, for a password directory,
+    the one account of ``provider`` whose name differs only in case:
+    without this, a second spelling of the same directory identity became
+    a second account, with the provider's default access groups again and
+    able to approve what the first one requested. ``ambiguous`` is true
+    when several such accounts exist already and none matches exactly;
+    the sign-in is then refused rather than guessed."""
+    username = username.strip()
+    user = await db.get_user_by_username(username)
+    if user or provider not in _CASELESS_PROVIDERS:
+        return user, False
+    same = [
+        candidate
+        for candidate in await db.get_users_by_username_ci(username)
+        if (candidate.get("auth_provider") or "") == provider
+    ]
+    if len(same) == 1:
+        return same[0], False
+    return None, len(same) > 1
+
+
+async def username_taken(username: str, except_user_id: int | None = None) -> bool:
+    """Whether another account already has ``username``, compared without
+    regard to case: ``Admin`` next to ``admin`` reads as the same person in
+    the user list and the audit trail. ``except_user_id`` is the account
+    being renamed."""
+    others = await db.get_users_by_username_ci(username)
+    return any(int(u["id"]) != except_user_id for u in others)
+
+
+async def unknown_password_hash() -> tuple[str, str]:
+    """The hash and salt of a random password nobody knows: what an account
+    holds when it has no usable local password (a shadow account, or one
+    whose sign-in provider an admin just changed)."""
+    salt = secrets.token_hex(16)
+    pw_hash = await asyncio.to_thread(_hash_password_fn, secrets.token_urlsafe(32), salt)
+    return pw_hash, salt
+
+
 async def upsert_external_user(
     username: str,
     display_name: str = "",
@@ -246,12 +305,26 @@ async def upsert_external_user(
     re-synced on every login - promotion AND demotion both propagate,
     including demotion of accounts promoted only in the Plexus UI. RADIUS
     asserts no role, so it never passes sync_role.
+
+    The account is found by ``resolve_external_account``: a name that
+    differs only in case from this provider's existing account signs into
+    that account, under its stored name.
     """
-    user = await db.get_user_by_username(username)
+    username = username.strip()
+    user, ambiguous = await resolve_external_account(username, provider)
+    if ambiguous:
+        await _refuse_adoption(username, provider, provider, "several accounts differ only in case")
+        return None
     if user:
+        username = str(user["username"])
         current_role = (user.get("role") or "").lower()
         if not await _may_use_existing_account(user, provider):
             return None
+        if user.get("disabled"):
+            # Returned untouched: the sign-in must not re-sync (or otherwise
+            # change) an account an admin switched off. authenticate_login_identity
+            # refuses it.
+            return user
         if sync_role:
             updates: dict = {}
             if role != current_role:
@@ -269,9 +342,12 @@ async def upsert_external_user(
                 user = await db.get_user_by_username(username)
         return user
 
-    salt = secrets.token_hex(16)
-    random_pw = secrets.token_urlsafe(32)
-    pw_hash = await asyncio.to_thread(_hash_password_fn, random_pw, salt)
+    if account_rules.is_reserved_username(username):
+        # The name the server API token acts under: an account with it would
+        # own everything created through the token.
+        await _refuse_adoption(username, provider, "nobody", "the name is reserved")
+        return None
+    pw_hash, salt = await unknown_password_hash()
     try:
         user_id = await db.create_user(
             username,
@@ -336,7 +412,7 @@ async def upsert_radius_user(username: str) -> dict | None:
     its provider guard applies: a RADIUS identity named like a local account
     or another provider's account is refused instead of signing in as it.
     """
-    existing = await db.get_user_by_username(username)
+    existing, _ = await resolve_external_account(username, "radius")
     user = await upsert_external_user(username, provider="radius")
     if user and not existing:
         user = await _assign_default_groups(
@@ -543,7 +619,7 @@ async def upsert_tacacs_user(username: str, tacacs_attrs: dict) -> dict | None:
         if role not in ("user", "admin"):
             role = "user"
 
-    existing = await db.get_user_by_username(username)
+    existing, _ = await resolve_external_account(username, "tacacs")
     user = await upsert_external_user(username, role=role, provider="tacacs", sync_role=authorize)
     if user and not existing:
         user = await _assign_default_groups(user, tacacs_cfg.get("default_group_ids", []), "tacacs")
@@ -561,6 +637,94 @@ def _normalize_dn(dn: str) -> str:
     the library is unavailable and in tests."""
     parts = re.split(r"(?<!\\),", dn)
     return ",".join(p.strip() for p in parts).lower()
+
+
+_LDAP_USER_ATTRS = ["dn", "displayName", "mail", "sAMAccountName", "cn", "memberOf"]
+
+
+def _ldap_first_str(raw_attrs: dict, name: str) -> str:
+    """The first value of an entry attribute as text ("" when absent)."""
+    vals = raw_attrs.get(name, [])
+    if vals and isinstance(vals[0], bytes):
+        return vals[0].decode("utf-8", errors="replace")
+    return str(vals[0]) if vals else ""
+
+
+def _ldap_user_attr_names(ldap_cfg: dict) -> list[str]:
+    """The entry attributes a user search asks for."""
+    account_attribute = str(ldap_cfg.get("username_attribute") or "").strip()
+    known = {name.lower() for name in _LDAP_USER_ATTRS}
+    return _LDAP_USER_ATTRS + ([account_attribute] if account_attribute.lower() not in known | {""} else [])
+
+
+def _ldap_entry_attrs(raw_attrs: dict, username: str, account_attribute: str = "") -> dict:
+    """Display name, mail and direct groups of a user entry, and under
+    ``account_name`` its ``account_attribute`` when one is configured."""
+    by_lower = {str(name).lower(): name for name in raw_attrs}
+    account_key = by_lower.get(account_attribute.lower(), account_attribute) if account_attribute else ""
+    return {
+        "account_name": _ldap_first_str(raw_attrs, account_key) if account_key else "",
+        "display_name": _ldap_first_str(raw_attrs, "displayName") or _ldap_first_str(raw_attrs, "cn") or username,
+        "email": _ldap_first_str(raw_attrs, "mail"),
+        "groups": [
+            g.decode("utf-8", errors="replace") if isinstance(g, bytes) else str(g)
+            for g in raw_attrs.get("memberOf", [])
+        ],
+    }
+
+
+def _ldap_entries(result) -> list:
+    """Search results without referrals (entries whose DN is None)."""
+    return [(dn, attrs) for dn, attrs in result if dn is not None]
+
+
+def _ldap_whoami(conn) -> tuple[str, str]:
+    """Who the connection is bound as, from the "Who am I?" operation
+    (RFC 4532): ``("dn", <DN>)``, ``("user", <account name>)`` (Active
+    Directory answers ``u:DOMAIN\\name``) or ``("", "")`` when the server
+    or the library does not say."""
+    whoami = getattr(conn, "whoami_s", None)
+    if whoami is None:
+        return "", ""
+    try:
+        authz = whoami() or ""
+    except Exception:
+        return "", ""
+    if isinstance(authz, bytes):
+        authz = authz.decode("utf-8", errors="replace")
+    kind, _, value = str(authz).partition(":")
+    value = value.strip()
+    if kind.lower() == "dn" and value:
+        return "dn", value
+    if kind.lower() == "u" and value:
+        return "user", value.rsplit("\\", 1)[-1].split("@", 1)[0]
+    return "", ""
+
+
+def _ldap_bound_user_entries(
+    conn, base_dn: str, user_search_filter: str, username: str, attr_names: list[str] | None = None
+) -> tuple[list, bool]:
+    """``(entries, mismatch)``: the entry of the user a direct bind just
+    authenticated, read after the bind.
+
+    The typed name chose the bind name, but ``user_search_filter`` may
+    match another entry (one account's logon name can equal another's
+    ``sAMAccountName``), and that entry's groups decide the role. So the
+    entry is tied to the bound identity where the server reports it: a
+    bound DN is read directly; a bound account name must equal the found
+    entry's ``sAMAccountName`` or ``mismatch`` is true. More than one
+    entry is for the caller to refuse."""
+    attr_names = attr_names or _LDAP_USER_ATTRS
+    kind, who = _ldap_whoami(conn)
+    if kind == "dn":
+        return _ldap_entries(conn.search_s(who, python_ldap.SCOPE_BASE, "(objectClass=*)", attr_names)), False
+    search_filter = user_search_filter.replace("{username}", _escape_filter_chars(username))
+    entries = _ldap_entries(conn.search_s(base_dn, python_ldap.SCOPE_SUBTREE, search_filter, attr_names))
+    if kind == "user" and len(entries) == 1:
+        account = _ldap_first_str(entries[0][1], "sAMAccountName")
+        if account and account.casefold() != who.casefold():
+            return entries, True
+    return entries, False
 
 
 def _upn_domain_from_base_dn(base_dn: str) -> str:
@@ -655,6 +819,8 @@ def _ldap_authenticate_sync(username: str, password: str, ldap_cfg: dict) -> tup
     user_dn_template = ldap_cfg.get("user_dn_template", "").strip()
     group_search_base = ldap_cfg.get("group_search_base", "").strip()
     group_search_filter = ldap_cfg.get("group_search_filter", "").strip()
+    account_attribute = str(ldap_cfg.get("username_attribute") or "").strip()
+    attr_names = _ldap_user_attr_names(ldap_cfg)
 
     protocol = "ldaps" if use_ssl else "ldap"
     uri = f"{protocol}://{server}:{port}"
@@ -663,6 +829,7 @@ def _ldap_authenticate_sync(username: str, password: str, ldap_cfg: dict) -> tup
     try:
         user_dn = None
         user_attrs: dict = {}
+        entry_read = False
 
         if user_dn_template:
             # Direct bind: template like "CN={username},OU=Users,DC=corp,DC=local"
@@ -689,13 +856,12 @@ def _ldap_authenticate_sync(username: str, password: str, ldap_cfg: dict) -> tup
                     base_dn,
                     python_ldap.SCOPE_SUBTREE,
                     search_filter,
-                    ["dn", "displayName", "mail", "sAMAccountName", "cn", "memberOf"],
+                    attr_names,
                 )
             except python_ldap.NO_SUCH_OBJECT:
                 return False, "reject", {}
 
-            # Filter out referrals (entries with dn=None)
-            entries = [(dn, attrs) for dn, attrs in result if dn is not None]
+            entries = _ldap_entries(result)
             if not entries:
                 return False, "reject", {}
             if len(entries) > 1:
@@ -710,21 +876,8 @@ def _ldap_authenticate_sync(username: str, password: str, ldap_cfg: dict) -> tup
                 return False, "reject", {}
 
             user_dn = entries[0][0]
-            raw_attrs = entries[0][1]
-
-            # Decode LDAP byte values
-            def _first_str(attr_name):
-                vals = raw_attrs.get(attr_name, [])
-                if vals and isinstance(vals[0], bytes):
-                    return vals[0].decode("utf-8", errors="replace")
-                return str(vals[0]) if vals else ""
-
-            user_attrs["display_name"] = _first_str("displayName") or _first_str("cn") or username
-            user_attrs["email"] = _first_str("mail")
-            user_attrs["groups"] = [
-                g.decode("utf-8", errors="replace") if isinstance(g, bytes) else str(g)
-                for g in raw_attrs.get("memberOf", [])
-            ]
+            user_attrs.update(_ldap_entry_attrs(entries[0][1], username, account_attribute))
+            entry_read = True
 
             # Unbind the service account before re-binding as the user
             _safe_unbind(conn)
@@ -734,6 +887,12 @@ def _ldap_authenticate_sync(username: str, password: str, ldap_cfg: dict) -> tup
             # derived from the base DN's DC components (DC=corp,DC=local ->
             # user@corp.local); plain username as a last resort.
             domain = _upn_domain_from_base_dn(base_dn)
+            # The name is the left half of a UPN here. One that carries its
+            # own domain (``name@other``, ``OTHER\name``) or padding would
+            # bind as, or be stored as, something other than what was typed.
+            if domain and (username != username.strip() or "@" in username or "\\" in username):
+                LOGGER.warning("ldap: refusing a sign-in name that is not a plain account name")
+                return False, "reject", {}
             user_dn = f"{username}@{domain}" if domain else username
 
         if not user_dn:
@@ -747,34 +906,39 @@ def _ldap_authenticate_sync(username: str, password: str, ldap_cfg: dict) -> tup
         except python_ldap.INVALID_CREDENTIALS:
             return False, "reject", user_attrs
 
-        # If we didn't get attributes from the search, fetch them now
+        # Direct bind: no entry was read before the bind, so read the bound
+        # user's now. Its groups decide the role, so an entry that is not
+        # provably this user's is refused, like the ambiguous match above.
         if not user_attrs.get("display_name") and base_dn:
+            entries, mismatch = [], False
             try:
-                search_filter = user_search_filter.replace("{username}", _escape_filter_chars(username))
-                result = conn.search_s(
-                    base_dn,
-                    python_ldap.SCOPE_SUBTREE,
-                    search_filter,
-                    ["displayName", "mail", "cn", "memberOf"],
-                )
-                entries = [(dn, attrs) for dn, attrs in result if dn is not None]
-                if entries:
-                    raw_attrs = entries[0][1]
-
-                    def _first(attr):
-                        vals = raw_attrs.get(attr, [])
-                        if vals and isinstance(vals[0], bytes):
-                            return vals[0].decode("utf-8", errors="replace")
-                        return str(vals[0]) if vals else ""
-
-                    user_attrs["display_name"] = _first("displayName") or _first("cn") or username
-                    user_attrs["email"] = _first("mail")
-                    user_attrs["groups"] = [
-                        g.decode("utf-8", errors="replace") if isinstance(g, bytes) else str(g)
-                        for g in raw_attrs.get("memberOf", [])
-                    ]
+                entries, mismatch = _ldap_bound_user_entries(conn, base_dn, user_search_filter, username, attr_names)
             except Exception as exc:
                 LOGGER.warning("ldap: failed to retrieve user attributes for '%s': %s", username, exc)
+            if mismatch or len(entries) > 1:
+                LOGGER.warning(
+                    "ldap: the entry found for '%s' after the bind is %s - refusing the sign-in "
+                    "(tighten user_search_filter or base_dn)",
+                    username,
+                    "not the bound account" if mismatch else f"ambiguous ({len(entries)} entries)",
+                )
+                return False, "reject", {}
+            if entries:
+                user_attrs.update(_ldap_entry_attrs(entries[0][1], username, account_attribute))
+                entry_read = True
+
+        # The account is named from the entry when an attribute is set for
+        # that, so one directory person is one account however they typed
+        # their name (logon name, mail address). A sign-in that read no entry
+        # (a direct bind without a search base) keeps the typed name.
+        if account_attribute and entry_read:
+            try:
+                user_attrs["account_name"] = clean_username(
+                    user_attrs.get("account_name") or None, f"attribute '{account_attribute}'"
+                )
+            except SsoError as exc:
+                LOGGER.warning("ldap: refusing the sign-in of '%s': %s", username, exc.step)
+                return False, "reject", {}
 
         # Merge in a configured group search. This runs even when memberOf
         # returned direct groups: AD's memberOf omits nested memberships, and a
@@ -831,9 +995,11 @@ async def upsert_ldap_user(username: str, ldap_attrs: dict) -> dict | None:
     if admin_group_dn and admin_group_dn in user_groups:
         role = "admin"
 
+    # Named from the directory entry when a username attribute is configured.
+    username = str(ldap_attrs.get("account_name") or username)
     display_name = ldap_attrs.get("display_name", "") or username
 
-    existing = await db.get_user_by_username(username)
+    existing, _ = await resolve_external_account(username, "ldap")
     user = await upsert_external_user(username, display_name=display_name, role=role, provider="ldap", sync_role=True)
     if user and not existing:
         user = await _assign_default_groups(user, ldap_cfg.get("default_group_ids", []), "ldap")
@@ -857,7 +1023,8 @@ async def upsert_sso_user(identity: SsoIdentity, sso_cfg: dict, provider: str) -
     Returns ``(user, "")`` or ``(None, reason)``. The account is bound to
     the provider's subject (OIDC ``sub``, SAML ``NameID``) on its first
     sign-in through that provider (``users.external_id``); a later sign-in
-    whose subject differs from the bound one is refused.
+    whose subject differs from the bound one is refused, and so is a
+    sign-in into a disabled account (``users.disabled``), unchanged.
     Role: ``admin`` when a group value is in ``admin_groups``, else
     ``default_role``, re-synced every login through upsert_external_user
     (whose provider guard applies). Access groups: the defaults
@@ -866,12 +1033,41 @@ async def upsert_sso_user(identity: SsoIdentity, sso_cfg: dict, provider: str) -
     account keeps its role and groups.
     """
     username = identity.username
+    # The subject is the identity; the username is a label the provider may
+    # change. An account already bound to this subject is this person's,
+    # whatever name the provider sends today: sign in to it under its stored
+    # name instead of creating a second account for the same person.
+    bound_accounts = await db.get_users_by_external_id(provider, identity.sub)
+    if bound_accounts:
+        named = [u for u in bound_accounts if str(u["username"]).lower() == username.lower()]
+        if len(bound_accounts) > 1 and len(named) != 1:
+            await _refuse_adoption(username, provider, provider, "several accounts are bound to this subject")
+            return None, "several accounts are bound to this subject"
+        account = named[0] if len(named) == 1 else bound_accounts[0]
+        if not named:
+            LOGGER.warning(
+                "auth: %s sign-in as '%s' uses the account '%s' bound to the same subject",
+                provider,
+                username,
+                account["username"],
+            )
+            await _audit(
+                "auth",
+                "login.sso_username_changed",
+                user=str(account["username"]),
+                detail=f"source={provider} name at the provider='{username}' account='{account['username']}'",
+            )
+        username = str(account["username"])
     existing = await db.get_user_by_username(username)
     sso_managed = bool(existing) and (existing.get("auth_provider") or "") == provider
     bound_sub = str((existing or {}).get("external_id") or "") if sso_managed else ""
     if bound_sub and not hmac.compare_digest(bound_sub.encode(), identity.sub.encode()):
         await _refuse_adoption(username, provider, provider, "subject does not match the bound subject")
         return None, "subject does not match the subject bound to this account"
+    if existing and existing.get("disabled"):
+        # Refused before anything is re-synced: the IdP cannot re-enable or
+        # change an account an admin switched off.
+        return None, "account disabled"
 
     groups = set(identity.groups)
     current_role = ((existing or {}).get("role") or "user").lower()
@@ -949,13 +1145,33 @@ async def _authenticate_dev_bootstrap(username: str, password: str) -> dict | No
 
     expected_username = _dev_bootstrap_username()
     expected_password = _dev_bootstrap_password()
-    if username != expected_username or password != expected_password:
+    name_ok = secrets.compare_digest(username.encode(), expected_username.encode())
+    password_ok = secrets.compare_digest(password.encode(), expected_password.encode())
+    if not (name_ok and password_ok):
         return None
 
     if _hash_password_fn is None:
         return None
 
     user = await db.get_user_by_username(expected_username)
+    if user and (user.get("auth_provider") or ""):
+        # The name belongs to an account an external provider manages: the
+        # shortcut never promotes it or gives it a local password.
+        LOGGER.warning(
+            "auth bootstrap: '%s' is managed by %s; the dev bootstrap sign-in does not apply to it",
+            expected_username,
+            user["auth_provider"],
+        )
+        return None
+    if user and user.get("disabled"):
+        # Not promoted or given the bootstrap password again; the caller
+        # refuses the disabled account.
+        return user
+    LOGGER.warning(
+        "auth bootstrap: dev bootstrap sign-in used for '%s' (APP_ENV / PLEXUS_DEV_BOOTSTRAP); "
+        "never leave it enabled outside development",
+        expected_username,
+    )
     salt = secrets.token_hex(16)
     pw_hash = await asyncio.to_thread(_hash_password_fn, expected_password, salt)
 
@@ -978,18 +1194,21 @@ async def _authenticate_dev_bootstrap(username: str, password: str) -> dict | No
     return await db.get_user_by_username(expected_username)
 
 
-async def authenticate_login_identity(username: str, password: str) -> tuple[dict | None, str | None, str | None]:
-    """Authenticate using configured provider with defined fallback behavior.
+async def _identify_login(username: str, password: str) -> tuple[dict | None, str | None, str | None]:
+    """Authenticate using configured provider with defined fallback behavior
+    (``authenticate_login_identity`` without the disabled-account check).
 
     Returns (user, auth_source, error_detail)
 
     Looks up ``verify_radius_user``, ``upsert_radius_user``,
-    ``verify_tacacs_user``, ``upsert_tacacs_user``, ``verify_user``
-    and ``AUTH_CONFIG`` through the app module so that tests can monkeypatch
-    ``app_module.X`` and the patched version is used here.
+    ``verify_tacacs_user``, ``upsert_tacacs_user`` and ``verify_user``
+    through the app module so that tests can monkeypatch ``app_module.X``
+    and the patched version is used here. The configuration is always
+    ``state.AUTH_CONFIG``, the object a save and startup rebind: any other
+    name for it is a copy that stops following the saved settings.
     """
     _app = _app_module()
-    auth_config = getattr(_app, "AUTH_CONFIG", state.AUTH_CONFIG)
+    auth_config = state.AUTH_CONFIG
     provider = auth_config.get("provider", "local")
     radius_cfg = auth_config.get("radius", {})
     radius_enabled = bool(radius_cfg.get("enabled"))
@@ -1000,7 +1219,15 @@ async def authenticate_login_identity(username: str, password: str) -> tuple[dic
     _upsert_ldap = getattr(_app, "upsert_ldap_user", upsert_ldap_user)
     _verify_tacacs = getattr(_app, "verify_tacacs_user", verify_tacacs_user)
     _upsert_tacacs = getattr(_app, "upsert_tacacs_user", upsert_tacacs_user)
-    _verify_local = getattr(_app, "verify_user", _verify_user_fn)
+    _verify_local_fn = getattr(_app, "verify_user", _verify_user_fn)
+    local_checks: list[dict | None] = []
+
+    async def _verify_local(name: str, secret: str) -> dict | None:
+        # Break-glass, local fallback and the local provider all ask the
+        # same question; the slow password hash is computed once per attempt.
+        if not local_checks:
+            local_checks.append(await _verify_local_fn(name, secret))
+        return local_checks[0]
 
     # Dev bootstrap shortcut: deterministic local admin credentials.
     dev_bootstrap_user = await _authenticate_dev_bootstrap(username, password)
@@ -1106,6 +1333,24 @@ async def authenticate_login_identity(username: str, password: str) -> tuple[dic
     return None, None, "Invalid username or password"
 
 
+# The audit detail of a sign-in refused because the account is disabled; the
+# caller still answers with the generic wrong-password message.
+LOGIN_ACCOUNT_DISABLED = "Invalid username or password: account disabled"
+
+
+async def authenticate_login_identity(username: str, password: str) -> tuple[dict | None, str | None, str | None]:
+    """``_identify_login`` (every password sign-in path: dev bootstrap,
+    break-glass, RADIUS / TACACS+ / LDAP, local fallback, local), then one
+    check on the account it signs into: a disabled account is refused only
+    after its password or the directory accepted it, so the refusal takes
+    as long as, and reads like, a wrong password. Returns
+    ``(user, auth_source, error_detail)``."""
+    user, auth_source, error = await _identify_login(username, password)
+    if user and user.get("disabled"):
+        return None, None, LOGIN_ACCOUNT_DISABLED
+    return user, auth_source, error
+
+
 # ── Feature helper (shared with other modules) ───────────────────────────────
 
 FEATURE_FLAGS = state.FEATURE_FLAGS
@@ -1134,14 +1379,15 @@ async def _get_user_features(user: dict) -> list[str]:
 
 
 class LoginRequest(BaseModel):
-    username: str = Field(min_length=1)
+    # 256 is more than any account name (and what _username_key keeps).
+    username: str = Field(min_length=1, max_length=256)
     password: str = Field(min_length=1)
 
 
 class RegisterRequest(BaseModel):
     username: str
     password: str
-    display_name: str = ""
+    display_name: str = Field(default="", max_length=DISPLAY_NAME_MAX_LENGTH)
 
 
 class ChangePasswordRequest(BaseModel):
@@ -1150,7 +1396,7 @@ class ChangePasswordRequest(BaseModel):
 
 
 class UpdateProfileRequest(BaseModel):
-    display_name: str | None = None
+    display_name: str | None = Field(default=None, max_length=DISPLAY_NAME_MAX_LENGTH)
 
 
 # ── Router ────────────────────────────────────────────────────────────────────
@@ -1175,7 +1421,9 @@ async def _login_blocked(ip: str, now: float) -> str | None:
     async with _login_lock:
         if ip in locked_out:
             if now < locked_out[ip]:
-                return f"Account locked. Try again in {int((locked_out[ip] - now) // 60) + 1} min."
+                # The lock is on the client address, not on an account.
+                minutes = int((locked_out[ip] - now) // 60) + 1
+                return f"Sign-in from this address is locked. Try again in {minutes} min."
             del locked_out[ip]
             attempts_by_ip.pop(ip, None)
         attempts = [t for t in attempts_by_ip.get(ip, []) if now - t < rules["rate_limit_window"]]
@@ -1289,6 +1537,40 @@ def _set_session_cookie(response: Response, user: dict) -> None:
     )
 
 
+# Password sign-ins in progress per client address, and password checks
+# running right now on the whole server (key ""). The server-wide number is
+# half the smallest worker thread pool the application starts with, so
+# sign-in can never take every thread.
+_LOGIN_IN_FLIGHT: dict[str, int] = {}
+_LOGIN_CHECKS: dict[str, int] = {}
+_LOGIN_CHECKS_MAX = 16
+
+
+@contextlib.contextmanager
+def _sign_in_slot(running: dict[str, int], key: str, limit: int):
+    """Hold one of ``limit`` slots of ``key`` for the length of the block;
+    ``429`` when none is free. A plain counter, changed without an ``await``
+    in between, so requests that arrive together cannot all pass."""
+    held = running.get(key, 0)
+    if held >= limit:
+        raise HTTPException(status_code=429, detail="Too many sign-in attempts at once. Try again in a moment.")
+    running[key] = held + 1
+    try:
+        yield
+    finally:
+        left = running.get(key, 1) - 1
+        if left > 0:
+            running[key] = left
+        else:
+            running.pop(key, None)
+
+
+_INVALID_LOGIN = "Invalid username or password"
+# Shown for every failure that is not a plain wrong name or password (a
+# directory server that does not answer, with or without local fallback).
+_LOGIN_UNAVAILABLE = "Sign-in is temporarily unavailable. Try again later, or contact an administrator."
+
+
 @router.post("/api/auth/login")
 async def login(body: LoginRequest, request: Request):
     _app = _app_module()
@@ -1303,6 +1585,17 @@ async def login(body: LoginRequest, request: Request):
     if blocked:
         raise HTTPException(status_code=429, detail=blocked)
 
+    # The lockout counts failures, and a failure is only known after the slow
+    # password check. Attempts sent together are therefore limited while they
+    # run, to the number of failures that locks the address.
+    per_address = max(1, int(state.LOGIN_RULES.get("max_attempts", 5)))
+    with _sign_in_slot(_LOGIN_IN_FLIGHT, ip, per_address):
+        return await _checked_login(body, request, ip, now, _auth_identity, _audit_fn, _features_fn)
+
+
+async def _checked_login(
+    body: LoginRequest, request: Request, ip: str, now: float, _auth_identity, _audit_fn, _features_fn
+):
     # Per-username progressive delay: slows guessing one account from many
     # addresses without ever refusing the real user.
     username_key = _username_key(body.username)
@@ -1310,8 +1603,17 @@ async def login(body: LoginRequest, request: Request):
     if wait > 0:
         await _login_delay_sleep(wait)
 
-    # Auth identity check runs outside lock (may be slow: LDAP/RADIUS)
-    user, auth_source, auth_error = await _auth_identity(body.username, body.password)
+    if CONTROL_CHARS.search(body.username):
+        # No account name holds a control character or a line break. Such a
+        # name fails like any wrong one, without reaching the database, a
+        # directory server or their log lines.
+        user, auth_source, auth_error = None, None, None
+    else:
+        # Auth identity check runs outside lock (may be slow: LDAP/RADIUS).
+        # The server-wide slot is taken only here, after the per-username
+        # delay, so waiting attempts hold none.
+        with _sign_in_slot(_LOGIN_CHECKS, "", _LOGIN_CHECKS_MAX):
+            user, auth_source, auth_error = await _auth_identity(body.username, body.password)
 
     if not user:
         _note_username_failure(username_key, time.time())
@@ -1324,8 +1626,13 @@ async def login(body: LoginRequest, request: Request):
             correlation_id=_corr_id(request),
         )
         if locked:
-            raise HTTPException(status_code=429, detail="Account locked due to too many failed attempts. Try again later.")
-        raise HTTPException(status_code=401, detail=auth_error or "Invalid username or password")
+            raise HTTPException(
+                status_code=429, detail="Too many failed sign-in attempts from this address. Try again later."
+            )
+        # The audit entry above names the backend and what failed; the
+        # anonymous caller learns only whether to check the password or wait.
+        public = _INVALID_LOGIN if auth_error in (None, _INVALID_LOGIN, LOGIN_ACCOUNT_DISABLED) else _LOGIN_UNAVAILABLE
+        raise HTTPException(status_code=401, detail=public)
     await _note_login_success(ip)
     _note_username_success(body.username, user["username"])
     # Use the canonical username from the DB (may differ in case from input)
@@ -1360,24 +1667,26 @@ async def register(body: RegisterRequest, request: Request = None):
 
     if not _env_flag("APP_ALLOW_SELF_REGISTER", False):
         raise HTTPException(status_code=403, detail="Self-registration is disabled")
-    existing = await db.get_user_by_username(body.username)
-    if existing:
+    username = body.username.strip()
+    problem = account_rules.username_problem(username) or account_rules.password_problem(body.password, username)
+    if problem:
+        raise HTTPException(status_code=400, detail=problem)
+    if await username_taken(username):
         raise HTTPException(status_code=400, detail="Username already taken")
-    if len(body.username) < 3:
-        raise HTTPException(status_code=400, detail="Username must be at least 3 characters")
-    if len(body.password) < 8:
-        raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
     salt = secrets.token_hex(16)
     pw_hash = await asyncio.to_thread(_hash_password_fn, body.password, salt)
-    display = body.display_name or body.username.title()
-    user_id = await db.create_user(body.username, pw_hash, salt, display_name=display, role="user")
+    display = clean_display_name(body.display_name) or username.title()
+    try:
+        user_id = await db.create_user(username, pw_hash, salt, display_name=display, role="user")
+    except ValueError:  # taken by a request that arrived together
+        raise HTTPException(status_code=400, detail="Username already taken")
     user = await db.get_user_by_id(user_id)
-    await _audit("auth", "register", user=body.username, correlation_id=_corr_id(request) if request else "")
-    csrf_token = _generate_csrf_token(body.username)
+    await _audit("auth", "register", user=username, correlation_id=_corr_id(request) if request else "")
+    csrf_token = _generate_csrf_token(username)
     response = JSONResponse(
         {
             "ok": True,
-            "username": body.username,
+            "username": username,
             "user_id": user_id,
             "display_name": display,
             "role": "user",
@@ -1531,22 +1840,33 @@ async def change_password(body: ChangePasswordRequest, request: Request):
     if not session:
         raise HTTPException(status_code=401, detail="Not authenticated")
 
-    # Rate-limit password verification attempts per user
     uid = session["user_id"]
+    account = await db.get_user_by_id(uid)
+    if account and (account.get("auth_provider") or ""):
+        raise HTTPException(
+            status_code=400,
+            detail="This account signs in through your organization's sign-in service; change the password there.",
+        )
+
+    # Rate-limit password verification attempts per user. The attempt is
+    # recorded before the slow hash check (no await in between), so parallel
+    # requests cannot all pass the limit; a correct password gives it back.
     now = time.time()
     attempts = [t for t in _PASSWORD_CHANGE_ATTEMPTS.get(uid, []) if now - t < _PASSWORD_CHANGE_WINDOW]
     if len(attempts) >= _PASSWORD_CHANGE_MAX:
         raise HTTPException(status_code=429, detail="Too many password change attempts. Try again later.")
+    attempts.append(now)
+    _PASSWORD_CHANGE_ATTEMPTS[uid] = attempts
 
     user = await _verify_user_fn(session["user"], body.current_password)
     if not user:
-        attempts.append(now)
-        _PASSWORD_CHANGE_ATTEMPTS[uid] = attempts
         raise HTTPException(status_code=400, detail="Current password is incorrect")
+    _PASSWORD_CHANGE_ATTEMPTS.pop(uid, None)
     if body.new_password == body.current_password:
         raise HTTPException(status_code=400, detail="New password must be different from your current password")
-    if len(body.new_password) < 8:
-        raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
+    problem = account_rules.password_problem(body.new_password, session["user"])
+    if problem:
+        raise HTTPException(status_code=400, detail=problem)
     salt = secrets.token_hex(16)
     pw_hash = await asyncio.to_thread(_hash_password_fn, body.new_password, salt)
     await db.update_user_password(user["id"], pw_hash, salt)
@@ -1585,7 +1905,22 @@ async def update_profile(body: UpdateProfileRequest, request: Request):
     session = _get_session(request)
     if not session:
         raise HTTPException(status_code=401, detail="Not authenticated")
-    await db.update_user_profile(session["user_id"], display_name=body.display_name)
+    if body.display_name is None:
+        return {"ok": True}
+    # The name is shown to admins and to other users wherever an owner or an
+    # actor is displayed: kept on one line, and the change is on record.
+    display = clean_display_name(body.display_name)
+    account = await db.get_user_by_id(session["user_id"]) or {}
+    previous = account.get("display_name") or ""
+    await db.update_user_profile(session["user_id"], display_name=display)
+    if display != previous:
+        await _audit(
+            "auth",
+            "profile.update",
+            user=session["user"],
+            detail=f"display name '{previous}' -> '{display}'",
+            correlation_id=_corr_id(request),
+        )
     return {"ok": True}
 
 
@@ -1597,8 +1932,9 @@ async def update_profile(body: UpdateProfileRequest, request: Request):
 # short-lived ``oidc_tx`` cookie carries state, nonce, PKCE verifier, the
 # redirect URI and where to return, and the callback signs the browser in
 # with the same session cookie as password login. Both routes are GET and
-# need no session; they stay under the anonymous API rate limit, and
-# callback failures count toward the login lockout like a bad password.
+# need no session; they stay under the anonymous API rate limit, and a
+# callback failure after the state check counts toward the login lockout
+# like a bad password (see ``_SsoAttempt``).
 
 _OIDC_TX_COOKIE = "oidc_tx"
 _OIDC_TX_SALT = "plexus-oidc-tx"
@@ -1679,10 +2015,31 @@ def _sso_unavailable_code(protocol: str, provider_ready: bool, missing: str) -> 
     return "disabled"
 
 
+def _sso_audit_allowed(ip: str, now: float) -> bool:
+    """Whether a callback failure that does not count toward the lockout may
+    still write an audit row (see ``state.SSO_FAILURE_AUDITS``). Runs without
+    an await, so the read-modify-write is atomic on the event loop."""
+    rules = state.LOGIN_RULES
+    tracker = state.SSO_FAILURE_AUDITS
+    stamps = [t for t in tracker.get(ip, []) if now - t < rules["lockout_time"]]
+    if len(stamps) >= rules["max_attempts"]:
+        return False
+    stamps.append(now)
+    tracker[ip] = stamps
+    return True
+
+
 class _SsoAttempt:
     """One sign-in callback of any single sign-on protocol: the lockout
-    check, failures (counted toward the lockout like a bad password and
-    audited) and success (provision, audit, session cookie, redirect)."""
+    check, failures and success (provision, audit, session cookie, redirect).
+
+    A failure counts toward the lockout like a bad password only when the
+    request is known to continue a sign-in this browser started (``fail``).
+    What a page on another site can make a browser send (a request without
+    the transaction cookie or with the protocol off, a forged state, a forged
+    response) never counts, or that page could lock the visitor's address out
+    of sign-in: ``refuse`` writes a log line only, and ``fail(count=False)``
+    also an audit row while the address has budget for one."""
 
     def __init__(self, request: Request, provider: str, drop_tx: Callable[[Response], None]):
         self.request = request
@@ -1694,12 +2051,20 @@ class _SsoAttempt:
 
     async def blocked(self) -> RedirectResponse | None:
         reason = await _login_blocked(self.ip, self.now)
-        return await self.fail("denied", f"refused, {reason}", count=False) if reason else None
+        return self.refuse("denied", f"refused, {reason}") if reason else None
+
+    def refuse(self, code: str, step: str) -> RedirectResponse:
+        """A request that is no sign-in attempt (or comes from a locked-out
+        address): not counted and not audited, like the password form's 429."""
+        LOGGER.info("%s: callback from %s refused: %s", self.provider, self.ip, step)
+        return _sso_error_redirect(code, self.drop_tx)
 
     async def fail(self, code: str, step: str, *, user: str = "", count: bool = True) -> RedirectResponse:
         # ``step`` never carries a token, assertion, code, secret or verifier.
         if count:
             await _note_login_failure(self.ip, self.now)
+        elif not _sso_audit_allowed(self.ip, self.now):
+            return self.refuse(code, step)
         await self.audit(
             "auth",
             "login.failure",
@@ -1796,14 +2161,17 @@ async def oidc_callback(request: Request):
     if not _oidc_ready(cfg):
         code = _oidc_unavailable_code(cfg)
         if code == "setup":
-            return await attempt.fail(code, "the OIDC redirect URI is not configured")
-        return await attempt.fail(code, "single sign-on is disabled")
+            return attempt.refuse(code, "the OIDC redirect URI is not configured")
+        return attempt.refuse(code, "single sign-on is disabled")
+    # Up to the state check the request proves nothing: any site can send a
+    # browser here, with the transaction cookie too once it has navigated
+    # that browser through the login route. Only what follows it counts.
     tx = _load_oidc_tx(request)
     if tx is None:
-        return await attempt.fail("state", "transaction cookie is missing, expired or invalid")
+        return attempt.refuse("state", "transaction cookie is missing, expired or invalid")
     state_param = params.get("state") or ""
     if not state_param or not hmac.compare_digest(state_param.encode(), tx["state"].encode()):
-        return await attempt.fail("state", "state does not match the transaction")
+        return await attempt.fail("state", "state does not match the transaction", count=False)
     if params.get("error"):
         error = oidc.log_safe(params.get("error"), 60)
         LOGGER.warning(
@@ -1909,6 +2277,8 @@ def _saml_settings(cfg: dict) -> saml.SamlSettings:
         email_attribute=str(cfg.get("email_attribute") or ""),
         display_name_attribute=str(cfg.get("display_name_attribute") or ""),
         groups_attribute=str(cfg.get("groups_attribute") or ""),
+        subject_attribute=str(cfg.get("subject_attribute") or ""),
+        required_authn_context=tuple(cfg.get("required_authn_context") or ()),
     )
 
 
@@ -1963,6 +2333,7 @@ async def saml_login(request: Request, next_path: str = Query("/", alias="next")
         sp_entity_id=saml_sp_entity_id(cfg),
         acs_url=saml_acs_url(cfg),
         relay_state=relay_state,
+        authn_context=tuple(cfg.get("required_authn_context") or ()),
     )
     response = RedirectResponse(url, status_code=302)
     response.headers["Cache-Control"] = "no-store"
@@ -2002,15 +2373,20 @@ async def saml_acs(request: Request):
     if not _saml_ready(cfg):
         code = _saml_unavailable_code(cfg)
         if code == "setup":
-            return await attempt.fail(code, "the SAML SP entity ID and ACS URL are not configured")
-        return await attempt.fail(code, "SAML single sign-on is disabled")
+            return attempt.refuse(code, "the SAML SP entity ID and ACS URL are not configured")
+        return attempt.refuse(code, "SAML single sign-on is disabled")
     tx = _load_saml_tx(request)
     if tx is None:
-        return await attempt.fail("state", "transaction cookie is missing, expired or invalid")
+        return attempt.refuse("state", "transaction cookie is missing, expired or invalid")
+    # The ``saml_tx`` cookie is SameSite=None, so another site can post a
+    # response of its choice here with it: a response that does not validate
+    # is audited but never counts toward the lockout. What only the browser
+    # that holds a validated response can cause (replay, a refused account)
+    # counts.
     try:
         form = await request.form()
     except Exception:  # malformed or oversized body
-        return await attempt.fail("provider", "the POST body could not be read")
+        return await attempt.fail("provider", "the POST body could not be read", count=False)
     saml_response = form.get("SAMLResponse")
     relay_state = form.get("RelayState")
     try:
@@ -2021,7 +2397,7 @@ async def saml_acs(request: Request):
         )
     except SsoError as exc:
         LOGGER.warning("saml: sign-in failed: %s", exc.step)
-        return await attempt.fail(exc.code, exc.step)
+        return await attempt.fail(exc.code, exc.step, count=False)
     if not await db.remember_saml_assertion(result.assertion_id, result.expires_at):
         return await attempt.fail("token", "the assertion was already used (replay)", user=result.identity.username)
     # RelayState goes back through the same-site path rule; without one,

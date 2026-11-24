@@ -31,6 +31,8 @@ export interface AdminUser {
   group_ids: number[];
   feature_access: string[];
   session_never_expires?: boolean;
+  /** Switched off by an admin: no sign-in, sessions and AI-access tokens refused. */
+  disabled?: boolean;
   /** Limited to selected inventory groups by its access groups. */
   object_scope_restricted?: boolean;
 }
@@ -115,6 +117,8 @@ export interface LdapConfig {
   bind_password: string;
   base_dn: string;
   user_search_filter: string;
+  /** The entry attribute that names the account; empty = the name as typed. */
+  username_attribute?: string;
   user_dn_template?: string;
   group_search_base?: string;
   group_search_filter?: string;
@@ -143,6 +147,9 @@ export interface OidcConfig {
   token_auth_method: 'client_secret_basic' | 'client_secret_post' | string;
   scopes: string;
   username_claim: string;
+  /** Only read when the username claim is `email`: accept a token without
+   * the `email_verified` claim. */
+  allow_unverified_email?: boolean;
   display_name_claim: string;
   groups_claim: string;
   admin_groups: string[];
@@ -178,6 +185,10 @@ export interface SamlConfig {
   email_attribute: string;
   display_name_attribute: string;
   groups_attribute: string;
+  /** The attribute the account is bound to; empty = the NameID. */
+  subject_attribute?: string;
+  /** AuthnContextClassRef values, one of which the IdP must assert. */
+  required_authn_context?: string[];
   admin_groups: string[];
   default_role: string;
   default_group_ids: number[];
@@ -481,6 +492,7 @@ export interface AdminUserUpdatePayload {
   display_name?: string;
   role?: 'admin' | 'user';
   session_never_expires?: boolean;
+  disabled?: boolean;
 }
 
 export function useUpdateAdminUser() {

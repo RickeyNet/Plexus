@@ -27,6 +27,7 @@ from pydantic import BaseModel
 
 import netcontrol.routes.state as state
 from netcontrol.integrations.meraki.clients import search_entry as _meraki_search_entry
+from netcontrol.managed_targets import ADDRESS_AWAITING_CONFIRMATION, address_confirmed, unattended_credential
 from netcontrol.object_scope import (
     can_access,
     group_filter,
@@ -256,6 +257,18 @@ async def collect_mac_arp_tables(
         "diag": diag,
     }
 
+    # ── Shared secrets only to a confirmed address (managed_targets) ──
+    # Both paths below send shared secrets (the service credential over SSH,
+    # the shared SNMP config): none of them goes to an inventory host whose
+    # address awaits an admin's confirmation. The stored row decides, not
+    # the caller's copy of the host.
+    stored_host = await db.get_host(host_id)
+    if stored_host is not None and not address_confirmed(stored_host):
+        errors.append(f"MAC/ARP collection skipped: {ADDRESS_AWAITING_CONFIRMATION}")
+        result["skipped"] = True
+        result["skipped_reason"] = ADDRESS_AWAITING_CONFIRMATION
+        return result
+
     # ── Preferred path: collect MACs via CLI (SSH + ntc-templates) ──
     # SNMP MAC collection is a quagmire on Cisco (per-VLAN SNMPv3 context
     # required, view permissions, VTP enumeration) — we keep the SNMP
@@ -278,18 +291,12 @@ async def collect_mac_arp_tables(
             if driver_supports_cli:
                 # Use the designated Plexus service credential for this
                 # unattended SSH login (the same account monitoring polls
-                # with), falling back to the legacy default credential for
-                # deployments that haven't set one. The old code grabbed
-                # whichever user credential happened to sort first, which
-                # logged into devices as an arbitrary operator and pulled an
-                # owned user credential into a background path — exactly what
-                # the credential-ownership model is meant to prevent.
-                cred_id = state.AUTH_CONFIG.get("service_credential_id") or state.AUTH_CONFIG.get(
-                    "default_credential_id"
-                )
-                # AUTH_CONFIG is a heterogeneous settings dict; the credential
-                # id slots only ever hold ``int | None`` (state.py coerces them).
-                service_cred = await db.get_credential_raw(cred_id) if isinstance(cred_id, int) and cred_id else None
+                # with), falling back to the legacy default credential only
+                # when it is itself a service credential
+                # (``managed_targets.unattended_credential``). Never a user's
+                # owned credential in a background path — exactly what the
+                # credential-ownership model is meant to prevent.
+                service_cred = await unattended_credential()
                 if service_cred is None:
                     errors.append(
                         "CLI MAC collection skipped: no service or default "
@@ -1235,7 +1242,7 @@ async def trigger_mac_collection(
             device_type=host.get("device_type", ""),
             host=host,
         )
-        result.setdefault("hosts_collected", 1)
+        result.setdefault("hosts_collected", 0 if result.get("skipped") else 1)
         return result
 
     # Full-fleet collection. The check-then-set is atomic under asyncio (no
@@ -1313,7 +1320,8 @@ async def _run_fleet_collection_job(job_id: str, targets: list[tuple[dict, dict]
             else:
                 total["macs_found"] += res["macs_found"]
                 total["arps_found"] += res["arps_found"]
-                total["hosts_collected"] += 1
+                # A host skipped for its unconfirmed address was not read.
+                total["hosts_collected"] += 0 if res.get("skipped") else 1
                 # Surface the per-host collection diagnostics that all-hosts
                 # mode used to drop on the floor. These (per-VLAN budget hits,
                 # view permission failures, "device isn't a bridge") are

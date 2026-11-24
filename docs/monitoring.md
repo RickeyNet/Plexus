@@ -36,7 +36,9 @@ Related guides: [SLA monitoring](sla-monitoring.md),
 ## How a host is polled
 
 Each cycle polls every host of every inventory group, up to 16 at a time,
-with a limit of 90 seconds per host. A poll has three independent parts:
+with a limit of 90 seconds per host, except a host whose address awaits an
+admin's confirmation (see [Rules worth knowing](#rules-worth-knowing)). A
+poll has three independent parts:
 
 | Part | When it runs | What it reads |
 |---|---|---|
@@ -492,6 +494,18 @@ Poll**, and the matching IPAM subnet when there is one.
   cycle. Metric samples are kept 48 hours, hourly rollups 30 days and daily
   rollups 365 days; interface traffic and syslog / trap events 30 days;
   interface error events 90 days.
+- **Hosts awaiting admin confirmation are not polled.** A host that a user
+  who is not an admin added, or whose address such a user changed, shows
+  **Awaiting admin confirmation** on the Inventory page. Monitoring, the
+  FDM collector and MAC/ARP collection skip it, so the service credential
+  and the shared SNMP profile never go to an address an admin has not
+  approved. A skipped host is not recorded as down: it gets no poll row,
+  availability change or alert, and its SLA shows no data. The cycle
+  reports the count as `awaiting_confirmation` with the reason "address
+  awaiting admin confirmation". An admin confirms the address on the
+  Inventory page; hosts stored before this check existed count as
+  confirmed. The legacy default credential is used for the SSH part only
+  when it is itself a service credential.
 - **Poll Now** runs even when polling is not enabled.
 - **One manual poll at a time.** While a **Poll Now** from any user (or
   the admin run-now) runs, another one is refused with "A manual monitoring

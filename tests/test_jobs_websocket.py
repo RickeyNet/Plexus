@@ -22,7 +22,9 @@ def ws_client(monkeypatch: pytest.MonkeyPatch):
     """
     state: dict = {"statuses": ["success"], "events": [[]]}
 
-    async def verify(token):
+    async def verify(token, websocket=None):
+        # The handler passes its socket so the Origin header is checked.
+        assert websocket is not None
         return {"user_id": 1, "user": "admin"}
 
     async def get_user(user_id):

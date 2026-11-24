@@ -39,6 +39,7 @@ from dataclasses import dataclass
 
 import routes.database as db
 
+from netcontrol.managed_targets import ADDRESS_AWAITING_CONFIRMATION, credential_is_shared, may_send_credential
 from netcontrol.routes.intended_config import recompare_host
 from netcontrol.routes.network_objects import sync_host_bindings
 from netcontrol.routes.opnsense_backup_encryption import is_opnsense_backup, same_digest, seal
@@ -54,6 +55,11 @@ _host_locks: dict[int, asyncio.Lock] = {}
 _sequence = itertools.count()
 # host_id -> (sequence number of the last capture's start, its backup id).
 _last_capture: dict[int, tuple[int, int]] = {}
+
+
+class AddressNotConfirmedError(RuntimeError):
+    """A shared credential was refused for a host whose address awaits an
+    admin's confirmation (``netcontrol.managed_targets``)."""
 
 
 @dataclass(frozen=True)
@@ -155,8 +161,15 @@ async def get_device_config(
 ) -> DeviceConfig:
     """An inventory host's configuration, from Config Backups when the
     device confirmed one within ``max_age_seconds``, otherwise read from the
-    device and stored. Raises what the SSH capture raises."""
+    device and stored. Raises what the SSH capture raises, and
+    ``AddressNotConfirmedError`` before any session when ``credentials`` is
+    a shared credential (the service or default credential) and the host's
+    address awaits an admin's confirmation (``managed_targets``)."""
     host_id = int(host["id"])
+    if credential_is_shared(credentials):
+        stored_host = await db.get_host(host_id)
+        if not may_send_credential(stored_host or host, credentials):
+            raise AddressNotConfirmedError(f"Not read with the shared credential: {ADDRESS_AWAITING_CONFIRMATION}")
     asked = next(_sequence)
     async with host_lock(host_id):
         last = _last_capture.get(host_id)

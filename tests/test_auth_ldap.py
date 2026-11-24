@@ -29,7 +29,7 @@ def _ldap_auth_config(**overrides):
 
 @pytest.mark.asyncio
 async def test_ldap_accept(monkeypatch):
-    monkeypatch.setattr(app_module, "AUTH_CONFIG", _ldap_auth_config())
+    monkeypatch.setattr(app_module.state, "AUTH_CONFIG", _ldap_auth_config())
 
     async def fake_verify_ldap_user(username, password):
         return True, "accept", {"display_name": "LDAP User", "groups": []}
@@ -53,7 +53,7 @@ async def test_ldap_accept(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_ldap_reject_no_fallback(monkeypatch):
-    monkeypatch.setattr(app_module, "AUTH_CONFIG", _ldap_auth_config())
+    monkeypatch.setattr(app_module.state, "AUTH_CONFIG", _ldap_auth_config())
 
     async def fake_verify_ldap_user(username, password):
         return False, "reject", {}
@@ -73,7 +73,7 @@ async def test_ldap_reject_no_fallback(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_ldap_error_with_local_fallback(monkeypatch):
-    monkeypatch.setattr(app_module, "AUTH_CONFIG", _ldap_auth_config())
+    monkeypatch.setattr(app_module.state, "AUTH_CONFIG", _ldap_auth_config())
 
     async def fake_verify_ldap_user(username, password):
         return False, "error", {}
@@ -93,7 +93,7 @@ async def test_ldap_error_with_local_fallback(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_ldap_reject_with_override_fallback(monkeypatch):
-    monkeypatch.setattr(app_module, "AUTH_CONFIG", _ldap_auth_config(fallback_on_reject=True))
+    monkeypatch.setattr(app_module.state, "AUTH_CONFIG", _ldap_auth_config(fallback_on_reject=True))
 
     async def fake_verify_ldap_user(username, password):
         return False, "reject", {}
@@ -393,6 +393,17 @@ class FakeConn:
         self.unbound = True
 
 
+class WhoamiConn(FakeConn):
+    """A server that answers the "Who am I?" operation."""
+
+    def whoami_s(self):
+        return self.module.whoami
+
+    def search_s(self, base, scope, flt, attrs=None):
+        self.module.searches.append((base, scope, flt))
+        return self.module.search_hook(base, flt)
+
+
 class FakeLdapModule:
     OPT_NETWORK_TIMEOUT = "network_timeout"
     OPT_TIMEOUT = "timeout"
@@ -407,6 +418,7 @@ class FakeLdapModule:
     OPT_X_TLS_CACERTFILE = "tls_cacertfile"
     OPT_X_TLS_NEWCTX = "tls_newctx"
     SCOPE_SUBTREE = 2
+    SCOPE_BASE = 0
 
     class INVALID_CREDENTIALS(Exception):
         pass
@@ -556,3 +568,168 @@ def test_invalid_user_credentials_reject(monkeypatch):
 
     ok, status, _ = auth._ldap_authenticate_sync("jdoe", "wrong", dict(_SEARCH_CFG))
     assert (ok, status) == (False, "reject")
+
+
+# ── Direct bind: the entry read after the bind is the bound user's ───────────
+
+_UPN_CFG = {"server": "ldap.example.com", "port": 389, "base_dn": "OU=Users,DC=example,DC=com"}
+
+
+class WhoamiLdapModule(FakeLdapModule):
+    def __init__(self, whoami, search_hook=None):
+        super().__init__(search_hook=search_hook)
+        self.whoami = whoami
+        self.searches: list[tuple] = []
+
+    def initialize(self, uri):
+        conn = WhoamiConn(uri, self)
+        self.connections.append(conn)
+        return conn
+
+
+def _account_entry(account: str, group: str = "CN=Team,DC=example,DC=com"):
+    return (
+        f"CN={account},OU=Users,DC=example,DC=com",
+        {"displayName": [account.encode()], "sAMAccountName": [account.encode()], "memberOf": [group.encode()]},
+    )
+
+
+def test_direct_bind_refuses_an_ambiguous_attribute_lookup(monkeypatch):
+    """Two entries match the filter after a direct bind: the first one's
+    groups used to decide the role."""
+    fake = FakeLdapModule(
+        search_hook=lambda base, flt: [_account_entry("jdoe", "CN=Admins,DC=example,DC=com"), _account_entry("jdoe2")]
+    )
+    _install_fake_ldap(monkeypatch, fake)
+
+    assert auth._ldap_authenticate_sync("jdoe", "pw", dict(_UPN_CFG)) == (False, "reject", {})
+
+
+def test_direct_bind_refuses_an_entry_of_another_account(monkeypatch):
+    """The server says the bind was as ``jdoe``; the filter matched the
+    entry of ``admin`` (its attribute equals the typed name)."""
+    fake = WhoamiLdapModule(
+        "u:EXAMPLE\\jdoe", search_hook=lambda base, flt: [_account_entry("admin", "CN=Admins,DC=example,DC=com")]
+    )
+    _install_fake_ldap(monkeypatch, fake)
+
+    assert auth._ldap_authenticate_sync("jdoe", "pw", dict(_UPN_CFG)) == (False, "reject", {})
+
+
+def test_direct_bind_accepts_the_bound_accounts_entry(monkeypatch):
+    fake = WhoamiLdapModule("u:EXAMPLE\\JDoe", search_hook=lambda base, flt: [_account_entry("jdoe")])
+    _install_fake_ldap(monkeypatch, fake)
+
+    ok, status, attrs = auth._ldap_authenticate_sync("jdoe", "pw", dict(_UPN_CFG))
+
+    assert (ok, status) == (True, "accept")
+    assert attrs["groups"] == ["CN=Team,DC=example,DC=com"]
+
+
+def test_direct_bind_reads_the_bound_dn_when_the_server_reports_one(monkeypatch):
+    """A ``dn:`` answer is read directly (base scope): the search filter and
+    the typed name choose nothing."""
+    bound = "uid=jdoe,ou=people,dc=example,dc=com"
+    fake = WhoamiLdapModule(f"dn:{bound}", search_hook=lambda base, flt: [_account_entry("jdoe")])
+    _install_fake_ldap(monkeypatch, fake)
+
+    cfg = {**_UPN_CFG, "user_dn_template": "uid={username},ou=people,dc=example,dc=com"}
+    ok, status, attrs = auth._ldap_authenticate_sync("jdoe", "pw", cfg)
+
+    assert (ok, status) == (True, "accept")
+    assert fake.searches == [(bound, FakeLdapModule.SCOPE_BASE, "(objectClass=*)")]
+    assert attrs["display_name"] == "jdoe"
+
+
+def test_whoami_failure_falls_back_to_the_filter(monkeypatch):
+    fake = WhoamiLdapModule("", search_hook=lambda base, flt: [_account_entry("jdoe")])
+    _install_fake_ldap(monkeypatch, fake)
+
+    def refuse(self):
+        raise RuntimeError("extended operation not supported")
+
+    monkeypatch.setattr(WhoamiConn, "whoami_s", refuse)
+    ok, status, attrs = auth._ldap_authenticate_sync("jdoe", "pw", dict(_UPN_CFG))
+
+    assert (ok, status) == (True, "accept")
+    assert attrs["groups"] == ["CN=Team,DC=example,DC=com"]
+
+
+@pytest.mark.parametrize("name", ["jdoe@other.example.com", "OTHER\\jdoe", " jdoe", "jdoe "])
+def test_upn_bind_refuses_a_name_that_is_not_a_plain_account_name(monkeypatch, name):
+    fake = FakeLdapModule()
+    _install_fake_ldap(monkeypatch, fake)
+
+    assert auth._ldap_authenticate_sync(name, "pw", dict(_UPN_CFG)) == (False, "reject", {})
+    # The password was not sent anywhere.
+    assert all(not conn.binds for conn in fake.connections)
+
+
+# ── the account name comes from the directory entry ──────────────────────────
+
+_TWO_ATTRIBUTE_FILTER = "(|(sAMAccountName={username})(mail={username}))"
+
+
+def _named_entry(**more):
+    attrs = {"displayName": [b"J Doe"], "sAMAccountName": [b"jdoe"], "mail": [b"jdoe@example.com"], "memberOf": []}
+    return ("CN=J Doe,OU=Users,DC=corp,DC=local", {**attrs, **more})
+
+
+def test_account_name_is_read_from_the_username_attribute(monkeypatch):
+    fake = FakeLdapModule(search_hook=lambda base, flt: [_named_entry()])
+    _install_fake_ldap(monkeypatch, fake)
+    # Attribute names are not case sensitive in a directory.
+    cfg = {**_SEARCH_CFG, "user_search_filter": _TWO_ATTRIBUTE_FILTER, "username_attribute": "samaccountname"}
+
+    for typed in ("jdoe", "jdoe@example.com"):
+        ok, status, attrs = auth._ldap_authenticate_sync(typed, "user-pass", cfg)
+        assert (ok, status) == (True, "accept")
+        assert attrs["account_name"] == "jdoe"
+
+    # No attribute configured: the account keeps the name as typed.
+    cfg["username_attribute"] = ""
+    ok, _status, attrs = auth._ldap_authenticate_sync("jdoe@example.com", "user-pass", cfg)
+    assert ok and attrs["account_name"] == ""
+
+
+@pytest.mark.parametrize("value", [None, [b""], [b"jdoe\nadmin"], [b"j" * 151]])
+def test_entry_without_a_usable_username_attribute_is_refused(monkeypatch, value):
+    more = {} if value is None else {"uid": value}
+    fake = FakeLdapModule(search_hook=lambda base, flt: [_named_entry(**more)])
+    _install_fake_ldap(monkeypatch, fake)
+    cfg = {**_SEARCH_CFG, "username_attribute": "uid"}
+
+    assert auth._ldap_authenticate_sync("jdoe", "user-pass", cfg) == (False, "reject", {})
+
+
+def test_user_search_asks_for_the_username_attribute():
+    assert auth._ldap_user_attr_names({}) == auth._LDAP_USER_ATTRS
+    assert auth._ldap_user_attr_names({"username_attribute": "SAMAccountName"}) == auth._LDAP_USER_ATTRS
+    assert auth._ldap_user_attr_names({"username_attribute": "uid"}) == [*auth._LDAP_USER_ATTRS, "uid"]
+
+
+@pytest.mark.asyncio
+async def test_one_directory_person_is_one_account(monkeypatch):
+    await _fresh_db()
+    _ldap_state_config(monkeypatch)
+
+    first = await app_module.upsert_ldap_user("jdoe", {"account_name": "jdoe", **_NO_GROUPS})
+    second = await app_module.upsert_ldap_user("jdoe@example.com", {"account_name": "jdoe", **_NO_GROUPS})
+    assert second["id"] == first["id"] and second["username"] == "jdoe"
+    assert await db_module.get_user_by_username("jdoe@example.com") is None
+
+    # A sign-in that read no entry keeps the typed name.
+    typed = await app_module.upsert_ldap_user("asmith", _NO_GROUPS)
+    assert typed["username"] == "asmith"
+
+
+def test_username_attribute_setting_is_an_attribute_name():
+    def saved(value):
+        return app_module.state._sanitize_auth_config({"ldap": {"username_attribute": value}})["ldap"][
+            "username_attribute"
+        ]
+
+    assert saved(" sAMAccountName ") == "sAMAccountName"
+    assert saved("uid") == "uid"
+    assert saved("uid)(objectClass=*") == ""
+    assert saved("") == ""

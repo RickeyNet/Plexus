@@ -22,10 +22,10 @@ from typing import Any
 
 import routes.database as db
 from fastapi import APIRouter, HTTPException, Query, Request
-from fastapi.responses import StreamingResponse
 
 import netcontrol.routes.state as state
 from netcontrol.integrations.meraki.unified import external_key, external_keys
+from netcontrol.managed_targets import ADDRESS_AWAITING_CONFIRMATION, split_by_confirmation
 from netcontrol.object_scope import (
     ObjectScope,
     group_filter,
@@ -35,6 +35,7 @@ from netcontrol.object_scope import (
     require_host,
     scoped,
 )
+from netcontrol.routes.shared import DISCOVERY_RUNS, LIVE_STREAMS, fan_out
 from netcontrol.routes.snmp import _discover_neighbors, _infer_device_category, _snmp_walk  # noqa: F401
 from netcontrol.telemetry import configure_logging, increment_metric, redact_value
 
@@ -1007,8 +1008,18 @@ _SNMP_NOT_ENABLED_DETAIL = (
 
 def _snmp_hosts(hosts: list[dict], group_id: int | None) -> tuple[list[dict], dict[int, dict]]:
     """The hosts of a group that have SNMP enabled (their own profile, else
-    the group's config) and each one's effective config by host id."""
-    pairs = state._hosts_with_snmp_config(hosts, group_id)
+    the group's config) and each one's effective config by host id. A host
+    whose address awaits an admin's confirmation is left out: the walks send
+    it the shared SNMP config (``managed_targets``)."""
+    confirmed, awaiting = split_by_confirmation(hosts)
+    if awaiting:
+        LOGGER.info(
+            "topology: not walking %d host(s) of group %s, %s",
+            len(awaiting),
+            group_id,
+            ADDRESS_AWAITING_CONFIRMATION,
+        )
+    pairs = state._hosts_with_snmp_config(confirmed, group_id)
     return [h for h, _ in pairs], {h["id"]: cfg for h, cfg in pairs}
 
 
@@ -2009,6 +2020,9 @@ async def stream_topology_utilization(
     """SSE endpoint that pushes utilization updates at regular intervals."""
     # The caller's scope is read once, when the stream opens.
     links_scope = await _visible_links(request, group_id)
+    # Held until the stream ends; nothing between the claim and the return
+    # can fail and leave it held.
+    slot = LIVE_STREAMS.claim(request)
 
     async def _event_gen():
         try:
@@ -2041,7 +2055,7 @@ async def stream_topology_utilization(
         except asyncio.CancelledError:
             return
 
-    return StreamingResponse(_event_gen(), media_type="text/event-stream")
+    return slot.stream(_event_gen())
 
 
 async def _discoverable_groups(request: Any) -> list[dict]:
@@ -2058,6 +2072,9 @@ async def _discoverable_groups(request: Any) -> list[dict]:
 @scoped("groups")
 async def discover_topology_stream(request: Request = None):  # type: ignore[assignment]
     """Run neighbor discovery on all groups, streaming progress via SSE."""
+    # Held until the stream ends; nothing between the claim and the return
+    # can fail and leave it held.
+    slot = DISCOVERY_RUNS.claim(request)
 
     async def _event_generator():
         try:
@@ -2102,13 +2119,14 @@ async def discover_topology_stream(request: Request = None):  # type: ignore[ass
                             LOGGER.warning("topology: neighbor discovery failed for %s: %s", host["ip_address"], exc)
                             return host, None, []
 
-                tasks = [asyncio.create_task(_walk_host(h)) for h in hosts]
-                for coro in asyncio.as_completed(tasks):
-                    host, neighbors, if_stats = await coro
-                    walk_results.append((host, neighbors, if_stats))
-                    scanned += 1
-                    neighbor_count = len(neighbors) if neighbors is not None else 0
-                    yield f"data: {json.dumps({'type': 'host_walked', 'scanned': scanned, 'total_hosts': total_hosts, 'hostname': host['hostname'], 'ip': host['ip_address'], 'neighbors': neighbor_count, 'ok': neighbors is not None})}\n\n"
+                # A client that goes away cancels the walks still pending.
+                async with fan_out(_walk_host(h) for h in hosts) as finished:
+                    for coro in finished:
+                        host, neighbors, if_stats = await coro
+                        walk_results.append((host, neighbors, if_stats))
+                        scanned += 1
+                        neighbor_count = len(neighbors) if neighbors is not None else 0
+                        yield f"data: {json.dumps({'type': 'host_walked', 'scanned': scanned, 'total_hosts': total_hosts, 'hostname': host['hostname'], 'ip': host['ip_address'], 'neighbors': neighbor_count, 'ok': neighbors is not None})}\n\n"
 
                 # Phase 1b: optional inferred topology via FDB+ARP correlation.
                 if _any_inferred_topology(snmp_cfgs):
@@ -2165,7 +2183,7 @@ async def discover_topology_stream(request: Request = None):  # type: ignore[ass
             LOGGER.error("topology: streaming discovery error: %s", exc, exc_info=True)
             yield f"data: {json.dumps({'type': 'error', 'message': 'An internal error occurred during discovery.'})}\n\n"
 
-    return StreamingResponse(_event_generator(), media_type="text/event-stream")
+    return slot.stream(_event_generator())
 
 
 @router.post("/api/topology/discover/{group_id}")
@@ -2174,6 +2192,7 @@ async def discover_topology_for_group(group_id: int, request: Request = None):  
     """Run CDP/LLDP neighbor discovery on all hosts in a group."""
     if (await request_scope(request)).restricted:
         await require_group(request, group_id, write=True)
+    slot = DISCOVERY_RUNS.claim(request)
     try:
         group = await db.get_group(group_id)
         if not group:
@@ -2284,12 +2303,15 @@ async def discover_topology_for_group(group_id: int, request: Request = None):  
     except Exception as exc:
         LOGGER.error("topology: discovery error for group %d: %s", group_id, exc, exc_info=True)
         raise HTTPException(status_code=500, detail="An internal error occurred during topology discovery.")
+    finally:
+        slot.release()
 
 
 @router.post("/api/topology/discover")
 @scoped("groups")
 async def discover_topology_all(request: Request = None):  # type: ignore[assignment]
     """Run CDP/LLDP neighbor discovery on all groups."""
+    slot = DISCOVERY_RUNS.claim(request)
     try:
         groups = await _discoverable_groups(request)
         total_hosts = 0
@@ -2372,6 +2394,8 @@ async def discover_topology_all(request: Request = None):  # type: ignore[assign
     except Exception as exc:
         LOGGER.error("topology: full discovery error: %s", exc, exc_info=True)
         raise HTTPException(status_code=500, detail="An internal error occurred during topology discovery.")
+    finally:
+        slot.release()
 
 
 @router.post("/api/topology/discover/{group_id}/stream")
@@ -2390,6 +2414,9 @@ async def discover_topology_for_group_stream(group_id: int, request: Request = N
     # An empty group is only an error when the group itself has SNMP off.
     if not hosts and (group_hosts or not state._resolve_snmp_discovery_config(group_id).get("enabled", False)):
         raise HTTPException(status_code=400, detail=_SNMP_NOT_ENABLED_DETAIL)
+    # Held until the stream ends; nothing between the claim and the return
+    # can fail and leave it held.
+    slot = DISCOVERY_RUNS.claim(request)
 
     async def _event_generator():
         try:
@@ -2430,13 +2457,14 @@ async def discover_topology_for_group_stream(group_id: int, request: Request = N
                         )
                         return host, None, []
 
-            tasks = [asyncio.create_task(_walk_host(h)) for h in hosts]
-            for coro in asyncio.as_completed(tasks):
-                host, neighbors, if_stats = await coro
-                walk_results.append((host, neighbors, if_stats))
-                scanned += 1
-                neighbor_count = len(neighbors) if neighbors is not None else 0
-                yield f"data: {json.dumps({'type': 'host_walked', 'scanned': scanned, 'total_hosts': total_hosts, 'hostname': host['hostname'], 'ip': host['ip_address'], 'neighbors': neighbor_count, 'ok': neighbors is not None})}\n\n"
+            # A client that goes away cancels the walks still pending.
+            async with fan_out(_walk_host(h) for h in hosts) as finished:
+                for coro in finished:
+                    host, neighbors, if_stats = await coro
+                    walk_results.append((host, neighbors, if_stats))
+                    scanned += 1
+                    neighbor_count = len(neighbors) if neighbors is not None else 0
+                    yield f"data: {json.dumps({'type': 'host_walked', 'scanned': scanned, 'total_hosts': total_hosts, 'hostname': host['hostname'], 'ip': host['ip_address'], 'neighbors': neighbor_count, 'ok': neighbors is not None})}\n\n"
 
             # Phase 1b: optional inferred topology via FDB+ARP correlation.
             if _any_inferred_topology(snmp_cfgs):
@@ -2490,7 +2518,7 @@ async def discover_topology_for_group_stream(group_id: int, request: Request = N
             LOGGER.error("topology: streaming discovery error for group %d: %s", group_id, exc, exc_info=True)
             yield f"data: {json.dumps({'type': 'error', 'message': 'An internal error occurred during discovery.'})}\n\n"
 
-    return StreamingResponse(_event_generator(), media_type="text/event-stream")
+    return slot.stream(_event_generator())
 
 
 @router.get("/api/topology/host/{host_id}")

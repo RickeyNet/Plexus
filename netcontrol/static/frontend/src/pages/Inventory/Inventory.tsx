@@ -24,6 +24,8 @@ import { useLinkedParam } from '@/lib/useLinkedParam';
 import { bringIntoView, splitGridStyle, useWideDetail } from '@/lib/wideDetail';
 
 import {
+  addressAwaitingConfirmation,
+  awaitingHostIds,
   groupLabel,
   type InventoryGroupFull,
   type InventoryHost,
@@ -39,6 +41,7 @@ import {
   useSnmpProfiles,
 } from '@/api/inventory';
 
+import { AwaitingConfirmationBadge, ConfirmAddressButton } from './AddressConfirmation';
 import { BulkEditModal } from './BulkEditModal';
 import { BulkMoveModal } from './BulkMoveModal';
 import { BulkSnmpProfileModal } from './BulkSnmpProfileModal';
@@ -737,6 +740,10 @@ export function GroupCard({
     ? hosts.find((h) => h.id === selectedHostId)
     : null;
 
+  // Hosts whose address awaits an admin's confirmation: all, and the selected ones.
+  const awaitingIds = awaitingHostIds(hosts);
+  const selectedAwaitingIds = awaitingIds.filter((id) => selectedSet.has(id));
+
   const onToggleSelectAll = (checked: boolean) => {
     onSelectionChange(checked ? new Set(hosts.map((h) => h.id)) : new Set());
   };
@@ -954,7 +961,13 @@ export function GroupCard({
                     Set SNMP…
                   </button>
                   <DeleteButton onClick={onBulkDelete} disabled={readOnly} title={readOnlyTitle} />
+                  {selectedAwaitingIds.length > 0 && (
+                    <ConfirmAddressButton hostIds={selectedAwaitingIds} label="Confirm addresses" />
+                  )}
                 </>
+              )}
+              {selectedSet.size === 0 && awaitingIds.length > 0 && (
+                <ConfirmAddressButton groupId={group.id} label={`Confirm ${awaitingIds.length} address(es)`} />
               )}
               <button
                 type="button"
@@ -1079,7 +1092,14 @@ export function GroupCard({
                                   </div>
                                 )}
                               </td>
-                              <td>{host.ip_address}</td>
+                              <td>
+                                {host.ip_address}
+                                {addressAwaitingConfirmation(host) && (
+                                  <div style={{ marginTop: 'var(--space-1)' }}>
+                                    <AwaitingConfirmationBadge host={host} />
+                                  </div>
+                                )}
+                              </td>
                               <td>{host.device_type || 'cisco_ios'}</td>
                               <td title={host.hardware && host.model ? `Discovered model: ${host.model}` : undefined}>
                                 {hostModelText(host)}

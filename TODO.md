@@ -234,30 +234,10 @@ migration completed and the legacy files were deleted).
   network; neither is measured automatically yet.
 - Frontend unit-test coverage threshold is already tracked in Batch 4.
 
-### Deferred hardening (from the 2026-07-06 multi-dimension sweep)
+### Maintenance follow-up
 
-- Maintenance follow-up is tracked in the private security workspace.
-
-- [ ] **Dockerfile: move the build toolchain out of the runtime image** -
-  `Dockerfile:28-30` installs `gcc libldap2-dev libsasl2-dev libssl-dev` into
-  the final `python:3.14-slim` image and never removes them (~200MB + attack
-  surface). Plan: a builder stage installs the `-dev` packages + gcc and
-  `pip install`s into a venv; the runtime stage copies the venv and installs
-  only the runtime shared libs (`libldap2 libsasl2-2 libssl3` - verify exact
-  names on the trixie base) plus `gosu`. Deferred because a wrong runtime-lib
-  package name ships an image that fails at import, and I can't `docker build`
-  to verify here.
-- [ ] **Pin GitHub Actions to commit SHAs** - `ci.yml` / `release.yml` /
-  `release-sbom.yml` use floating tags (`actions/checkout@v6`,
-  `gitleaks/gitleaks-action@v2`, `docker/build-push-action@v7`,
-  `aquasecurity/trivy-action@0.28.0`, `actions/setup-python@v6`). Repin each
-  to the SHA the tag currently points at (leave the tag in a trailing comment)
-  to close the mutable-tag supply-chain window. Deferred: needs each action's
-  current SHA looked up and verified.
-
-### Deferred hardening (from the 2026-07-07 five-agent audit)
-
-- Maintenance follow-up is tracked in the private security workspace.
+Detailed security findings and remediation tracking are maintained privately.
+Their absence from this roadmap does not mean that every finding is resolved.
 
 - [ ] **Chart-axis timestamp shift** - `InterfaceTab`/`DeviceDetail` feed raw
   naive-UTC strings into the time-series chart's `time:` field; the chart parses
@@ -270,12 +250,6 @@ migration completed and the legacy files were deleted).
   bulk accept/resolve-all, CustomDashboards delete, ErrorTrending ack/resolve,
   BackupStatusPanel showing "never" on a query error, Cloud Flow/Traffic sync).
   Each needs an `onError`/rendered error state.
-- [ ] **Cloud auth at-rest backfill** - existing plaintext cloud-account rows
-  are read transparently and re-encrypted on next save, but are not proactively
-  migrated. A one-time startup backfill (encrypt any `_looks_encrypted`-false
-  `auth_config_json`) would close the residual at-rest exposure for accounts
-  never re-saved.
-
 ## UI Spacing & UX Audit (2026-11-09)
 
 Static code audit of every page, the app shell, the shared components and

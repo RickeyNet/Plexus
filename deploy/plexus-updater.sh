@@ -360,7 +360,9 @@ case "${ACTION}" in
                 ARGS=(--image "${IMAGE}")
                 ;;
             git)
-                if [[ ! "${REF}" =~ ^[A-Za-z0-9._/-]{1,128}$ ]]; then
+                # No leading "-": the ref is passed to git as an argument and
+                # must never be read as an option (same rule as the app).
+                if [[ ! "${REF}" =~ ^[A-Za-z0-9._/][A-Za-z0-9._/-]{0,127}$ ]]; then
                     finish failed 2 "Rejected git ref '${REF}': invalid characters."
                     exit 0
                 fi

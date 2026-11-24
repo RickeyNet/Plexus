@@ -37,7 +37,7 @@ def env(monkeypatch, request):
 
     probed: list[tuple[str, dict | None]] = []
 
-    async def _no_probe(ip_address, body, snmp_cfg, semaphore, credential):
+    async def _no_probe(ip_address, body, snmp_cfg, semaphore, credential, **_kw):
         # No traffic: record what would have been probed, and with what.
         probed.append((ip_address, credential))
         return None
@@ -64,7 +64,8 @@ def env(monkeypatch, request):
         service = await db_module.create_credential("ds-service", "svc", encrypt("pw"), is_service=True)
         own = await db_module.create_credential("ds-own", "me", encrypt("pw"), owner_id=scanner["id"])
         group = await db_module.create_group("ds-group")
-        await db_module.add_host(group, "ds-sw1", INVENTORY_IP)
+        # An admin's host: its address is confirmed (netcontrol.managed_targets).
+        await db_module.add_host(group, "ds-sw1", INVENTORY_IP, address_confirmed=True)
         return {"service": service, "own": own, "group": group}
 
     ctx = asyncio.run(_seed())

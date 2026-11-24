@@ -148,7 +148,6 @@ async def test_an_admin_mapped_identity_cannot_adopt_a_local_admin(monkeypatch, 
 @pytest.mark.parametrize("provider", ["ldap", "radius", "tacacs"])
 async def test_password_login_refusal_uses_the_generic_message(monkeypatch, audits, provider):
     _auth_config(monkeypatch, provider)
-    monkeypatch.setattr(app_module, "AUTH_CONFIG", app_module.state.AUTH_CONFIG)
     monkeypatch.setenv("PLEXUS_BREAKGLASS_LOCAL_ADMIN", "false")
     await _account("henry")
 
@@ -165,3 +164,79 @@ async def test_password_login_refusal_uses_the_generic_message(monkeypatch, audi
     user, source, error = await auth.authenticate_login_identity("henry", "directory-password")
     assert user is None and source is None
     assert error == "Invalid username or password"
+
+
+# ── One directory identity is one account, whatever the case typed ───────────
+
+_PASSWORD_PROVIDERS = ["ldap", "radius", "tacacs"]
+
+
+async def _usernames() -> list[str]:
+    return sorted(u["username"] for u in await db_module.get_users_by_username_ci("heidi"))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider", _PASSWORD_PROVIDERS)
+async def test_another_spelling_signs_into_the_same_account(monkeypatch, audits, provider):
+    """Directories match a name without case; ``HEIDI`` used to become a
+    second account next to ``heidi`` (default groups again, and a second
+    name for four-eyes approval)."""
+    _auth_config(monkeypatch)
+    first = await _account("heidi", provider=provider)
+    for spelling in ("HEIDI", "Heidi", " heidi "):
+        user = await _sign_in(provider, spelling)
+        assert user is not None and user["id"] == first["id"] and user["username"] == "heidi"
+    assert await _usernames() == ["heidi"]
+    assert audits == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider", _PASSWORD_PROVIDERS)
+async def test_another_spelling_gets_no_default_groups_again(monkeypatch, audits, provider):
+    _auth_config(monkeypatch)
+    await _account("heidi", provider=provider)
+    assigned: list[int] = []
+
+    async def record(user, group_ids, source):
+        assigned.append(int(user["id"]))
+        return user
+
+    monkeypatch.setattr(auth, "_assign_default_groups", record)
+    monkeypatch.setitem(app_module.state.AUTH_CONFIG[provider], "default_group_ids", [1])
+    assert await _sign_in(provider, "HEIDI") is not None
+    assert assigned == []
+
+
+@pytest.mark.asyncio
+async def test_exact_name_wins_when_spellings_already_exist(monkeypatch, audits):
+    _auth_config(monkeypatch)
+    lower = await _account("heidi", provider="ldap")
+    upper = await _account("HEIDI", provider="ldap")
+    assert (await _sign_in("ldap", "heidi"))["id"] == lower["id"]
+    assert (await _sign_in("ldap", "HEIDI"))["id"] == upper["id"]
+    # A third spelling cannot be tied to one of them: refused, not guessed.
+    assert await _sign_in("ldap", "Heidi") is None
+    assert any("several accounts differ only in case" in d for _c, _a, _u, d in audits)
+    assert await _usernames() == ["HEIDI", "heidi"]
+
+
+@pytest.mark.asyncio
+async def test_another_providers_account_is_not_matched_by_case(monkeypatch, audits):
+    """Only this provider's account is matched without case: a local
+    ``heidi`` is not adopted by an LDAP ``HEIDI`` (it gets its own account,
+    as an exact new name does)."""
+    _auth_config(monkeypatch)
+    local = await _account("heidi")
+    user = await _sign_in("ldap", "HEIDI")
+    assert user is not None and user["id"] != local["id"] and user["auth_provider"] == "ldap"
+    assert ((await db_module.get_user_by_username("heidi"))["auth_provider"] or "") == ""
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider", ["oidc", "saml"])
+async def test_sso_names_stay_exact(monkeypatch, audits, provider):
+    # SSO accounts are bound to the IdP subject, not to a spelling.
+    _auth_config(monkeypatch)
+    first = await _account("heidi", provider=provider, external_id="subject-0001")
+    user = await _sign_in(provider, "HEIDI", sub="subject-0002")
+    assert user is not None and user["id"] != first["id"]

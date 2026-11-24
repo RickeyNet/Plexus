@@ -235,11 +235,11 @@ async def test_sync_group_hosts_adds_updates_and_removes(monkeypatch):
         assert group_id == 77
         return existing_hosts
 
-    async def fake_add_host(group_id, hostname, ip_address, device_type):
+    async def fake_add_host(group_id, hostname, ip_address, device_type, **_kwargs):
         calls["add"].append((group_id, hostname, ip_address, device_type))
         return 42
 
-    async def fake_update_host(host_id, hostname, ip_address, device_type):
+    async def fake_update_host(host_id, hostname, ip_address, device_type, **_kwargs):
         calls["update"].append((host_id, hostname, ip_address, device_type))
 
     async def fake_remove_host(host_id):
@@ -359,7 +359,7 @@ async def test_ssh_fallback_does_not_clobber_snmp_confirmed_device_type(monkeypa
     async def fake_get_hosts_for_group(group_id):
         return existing_hosts
 
-    async def fake_update_host(host_id, hostname, ip_address, device_type):
+    async def fake_update_host(host_id, hostname, ip_address, device_type, **_kwargs):
         updates.append((host_id, device_type))
 
     async def fake_noop(*_a, **_k):
@@ -428,7 +428,7 @@ async def test_run_discovery_sync_once_runs_profiles(monkeypatch):
     async def fake_service_credential():
         return service
 
-    async def fake_discover(_body, group_id=None, *, credential=None):
+    async def fake_discover(_body, group_id=None, *, credential=None, **_kw):
         assert group_id == 9
         # Unattended sync reads show version with the service credential.
         assert credential is service
@@ -436,7 +436,7 @@ async def test_run_discovery_sync_once_runs_profiles(monkeypatch):
 
     monkeypatch.setattr(inventory_module, "service_credential", fake_service_credential)
 
-    async def fake_sync_group_hosts(group_id, discovered_hosts, remove_absent=False):
+    async def fake_sync_group_hosts(group_id, discovered_hosts, remove_absent=False, **_kwargs):
         assert group_id == 9
         assert len(discovered_hosts) == 1
         assert remove_absent is False
@@ -550,7 +550,7 @@ async def test_discovery_onboard_returns_sync_summary(monkeypatch):
         assert group_id == 22
         return {"id": 22, "name": "distribution"}
 
-    async def fake_sync_group_hosts(group_id, discovered_hosts, remove_absent=False):
+    async def fake_sync_group_hosts(group_id, discovered_hosts, remove_absent=False, **_kwargs):
         assert group_id == 22
         assert remove_absent is False
         assert len(discovered_hosts) == 1

@@ -55,6 +55,21 @@ widens the panel to the page's full width, above the groups, so its tables
 need no sideways scrolling; the choice is shared with the other list pages'
 detail panels.
 
+#### Host addresses awaiting admin confirmation
+Shared secrets (the Plexus service credential, the default credential and
+the shared SNMP profiles) go only to a host address that an admin set or
+confirmed. A host that a user who is not an admin adds (one at a time, in
+bulk, by bulk import, or by a discovery sync or onboard), or whose IP
+address such a user changes, shows **Awaiting admin confirmation** in the
+host list and the host details panel. Until an admin confirms it, Plexus
+does not poll it, collect its MAC/ARP table, walk it for topology, back it
+up or scan it for compliance with a shared credential, or send it a job's
+secret variables for a non-admin; it is never shown as down for that.
+Changing a host's other fields keeps its state. An admin confirms a host
+from its details panel, the selected hosts, or every waiting host of a
+group (**Confirm addresses**); each confirmation is audited. Hosts that
+existed before this check count as confirmed.
+
 ### Playbooks
 Python scripts that subclass `BasePlaybook` and register themselves with
 the `@register_playbook` decorator. Each playbook is an async generator
@@ -77,7 +92,7 @@ or delete them and the change sticks across restarts. The SNMPv3 keys are
 them under Delegator > Credentials > Secret Variables before running.
 
 ### Credentials
-SSH username/password/enable-secret, encrypted at rest with Fernet.
+SSH username/password/enable-secret, encrypted at rest with AES-256-GCM.
 Referenced by ID when launching jobs.
 
 ### Jobs

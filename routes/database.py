@@ -279,6 +279,8 @@ CREATE TABLE IF NOT EXISTS users (
     must_change_password INTEGER NOT NULL DEFAULT 0,
     session_never_expires INTEGER NOT NULL DEFAULT 0,
     session_epoch INTEGER NOT NULL DEFAULT 0,
+    -- 1 = switched off by an admin: no sign-in, sessions and MCP tokens refused; migration 0137.
+    disabled    INTEGER NOT NULL DEFAULT 0,
     -- Which external provider manages this account ('ldap'/'radius', '' = local).
     -- Provider-managed accounts get role/display_name re-synced on every login.
     auth_provider TEXT NOT NULL DEFAULT '',

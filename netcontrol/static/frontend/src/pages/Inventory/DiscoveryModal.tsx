@@ -23,6 +23,7 @@ import { useObjectScope } from '@/lib/objectScope';
 import { useCredentialChoice } from '@/lib/useCredentialChoice';
 
 import {
+  describeSnmpWithheld,
   describeSshEnrichment,
   discoveryCredentialOptions,
   discoveredHostFacts,
@@ -102,6 +103,7 @@ export function DiscoveryModal({ mode, group, groups, onClose }: Props) {
   const [useIcmp, setUseIcmp] = useState(true);
   const [useSsh, setUseSsh] = useState(true);
   const [sshSummary, setSshSummary] = useState<SshEnrichmentSummary | null>(null);
+  const [snmpWithheldNote, setSnmpWithheldNote] = useState('');
   const [removeAbsent, setRemoveAbsent] = useState(false);
   const [testOnly, setTestOnly] = useState(false);
   const [testTargetIp, setTestTargetIp] = useState('');
@@ -168,6 +170,7 @@ export function DiscoveryModal({ mode, group, groups, onClose }: Props) {
     e.preventDefault();
     setError(null);
     setSshSummary(null);
+    setSnmpWithheldNote('');
 
     if (isGlobal && testOnly) {
       const targetIp = testTargetIp.trim();
@@ -253,6 +256,7 @@ export function DiscoveryModal({ mode, group, groups, onClose }: Props) {
               setScanState((prev) => (prev ? { ...prev, syncing: true } : prev));
             } else if (event.type === 'done') {
               setSshSummary(event.ssh_enrichment ?? null);
+              setSnmpWithheldNote(describeSnmpWithheld(event.snmp_withheld));
               const s = event.sync || {};
               finalSync = {
                 added: s.added || 0,
@@ -304,6 +308,7 @@ export function DiscoveryModal({ mode, group, groups, onClose }: Props) {
           } else if (event.type === 'done') {
             finalDiscovered = event.discovered_hosts || [];
             setSshSummary(event.ssh_enrichment ?? null);
+            setSnmpWithheldNote(describeSnmpWithheld(event.snmp_withheld));
           }
         },
         abort.signal,
@@ -384,6 +389,7 @@ export function DiscoveryModal({ mode, group, groups, onClose }: Props) {
             </tbody>
           </table>
           <SshSummaryNote summary={sshSummary} />
+          <SnmpWithheldNote text={snmpWithheldNote} />
         </div>
       </Modal>
     );
@@ -608,6 +614,7 @@ export function DiscoveryModal({ mode, group, groups, onClose }: Props) {
           Found {discovered.length} reachable device(s). Will onboard into{' '}
           <strong>{targetGroup?.name ?? 'selected group'}</strong>.
           <SshSummaryNote summary={sshSummary} />
+          <SnmpWithheldNote text={snmpWithheldNote} />
         </div>
         <div
           style={{
@@ -954,6 +961,12 @@ export function DiscoveryModal({ mode, group, groups, onClose }: Props) {
       </form>
     </Modal>
   );
+}
+
+/** Why some scan targets were probed without the group's SNMP settings ('' renders nothing). */
+function SnmpWithheldNote({ text }: { text: string }) {
+  if (!text) return null;
+  return <div style={{ marginTop: '0.5rem', fontSize: '0.85rem', opacity: 0.8 }}>{text}</div>;
 }
 
 /** The SSH show version summary under a scan or sync result, with each host that failed. */

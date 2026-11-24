@@ -6,6 +6,7 @@ import { SETTINGS_SERVICE_CREDENTIAL } from '@/lib/credentialChoice';
 import {
   applyGroupOrder,
   componentsNote,
+  describeSnmpWithheld,
   describeSshEnrichment,
   descendantIds,
   discoveryCredentialOptions,
@@ -216,6 +217,17 @@ describe('discovery SSH show version', () => {
       describeSshEnrichment({ ...base, attempted: 1, enriched: 1, failed: 0, note: 'The credential this group remembers cannot be used' }),
     ).toBe(
       'SSH show version (plexus-svc, service credential): read 1 of 1 host. The credential this group remembers cannot be used.',
+    );
+  });
+
+  it('describes the targets probed without SNMP', () => {
+    expect(describeSnmpWithheld(undefined)).toBe('');
+    expect(describeSnmpWithheld({ count: 0, reason: '' })).toBe('');
+    expect(describeSnmpWithheld({ count: 1, reason: 'Only confirmed hosts.' })).toBe(
+      'SNMP: 1 address probed without SNMP. Only confirmed hosts.',
+    );
+    expect(describeSnmpWithheld({ count: 3, reason: 'Only confirmed hosts.' })).toBe(
+      'SNMP: 3 addresses probed without SNMP. Only confirmed hosts.',
     );
   });
 

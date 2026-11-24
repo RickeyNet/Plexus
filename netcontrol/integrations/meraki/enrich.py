@@ -27,6 +27,7 @@ import routes.database as db
 import netcontrol.routes.state as state
 from netcontrol.integrations.meraki.normalize import InventoryIndex, _add, table_section, text_section
 from netcontrol.integrations.pathtrace.opnsense_routes import HEADER as OPNSENSE_CAPTURE_HEADER
+from netcontrol.managed_targets import ADDRESS_AWAITING_CONFIRMATION, may_send_credential
 from netcontrol.mcp.redact import redact_config_text
 from netcontrol.routes.shared import _run_show_commands, service_credential
 from netcontrol.telemetry import configure_logging, redact_value
@@ -205,7 +206,17 @@ async def enrich_snapshot(snapshot: dict[str, Any], *, ssh: bool = False, progre
             sections = await collected_sections(host_id)
             if credential is not None:
                 host = await db.get_host(host_id)
-                if host:
+                if host and not may_send_credential(host, credential):
+                    # The service credential goes only to a confirmed address.
+                    collection.setdefault("errors", []).append(
+                        {
+                            "scope": f"ssh:{host.get('hostname')}",
+                            "path": "",
+                            "status": None,
+                            "message": f"Live SSH enrichment skipped: {ADDRESS_AWAITING_CONFIRMATION}",
+                        }
+                    )
+                elif host:
                     live, error = await _live_ssh_sections(host, credential)
                     sections.extend(live)
                     used_ssh = used_ssh or bool(live)

@@ -32,6 +32,12 @@ server in the scheduled SLA pass for the tracked entities they cover
 them) into `monitoring_alerts` / notification channels
 (`netcontrol/routes/topology_sla.py`, `docs/sla-monitoring.md`).
 
+An inventory host whose address a non-admin added or changed is not polled
+(SNMP/SSH/ICMP and the FDM collector alike, every vendor) until an admin
+confirms it, so no shared credential or SNMP secret reaches it
+(`netcontrol/managed_targets.py`). It is skipped, never recorded as down:
+no poll row, availability transition or alert, and its SLA shows no data.
+
 | Vendor / source | Entities tracked | State source | Latency / loss / jitter | SLA targets | Notes |
 |---|---|---|---|---|---|
 | Cisco IOS / IOS XE / IOS XR / NX-OS / ASA (inventory) | host, interfaces | SNMP + ICMP poll | Yes (ICMP) | Yes | Full pipeline. |

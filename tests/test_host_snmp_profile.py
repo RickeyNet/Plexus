@@ -236,8 +236,8 @@ def test_host_snmp_test_uses_the_hosts_own_profile(api, monkeypatch):  # noqa: F
 async def test_monitoring_targets_carry_each_hosts_effective_config(monkeypatch):
     own = _host_profile(monkeypatch)
     hosts = [
-        {"id": 1, "group_id": 3, "hostname": "own", "snmp_profile_id": "p-host"},
-        {"id": 2, "group_id": 3, "hostname": "sibling", "snmp_profile_id": ""},
+        {"id": 1, "group_id": 3, "hostname": "own", "snmp_profile_id": "p-host", "address_confirmed": 1},
+        {"id": 2, "group_id": 3, "hostname": "sibling", "snmp_profile_id": "", "address_confirmed": 1},
     ]
     monkeypatch.setattr(state, "_resolve_snmp_discovery_config", lambda _gid: dict(GROUP_CFG))
     monkeypatch.setattr(state, "AUTH_CONFIG", {})
@@ -252,8 +252,8 @@ async def test_monitoring_targets_carry_each_hosts_effective_config(monkeypatch)
 async def test_topology_discovery_walks_an_overriding_host_in_a_disabled_group(monkeypatch):
     own = _host_profile(monkeypatch)
     hosts = [
-        {"id": 100, "hostname": "sw1", "ip_address": "192.0.2.61", "snmp_profile_id": "p-host"},
-        {"id": 200, "hostname": "sw2", "ip_address": "192.0.2.62", "snmp_profile_id": ""},
+        {"id": 100, "hostname": "sw1", "ip_address": "192.0.2.61", "snmp_profile_id": "p-host", "address_confirmed": 1},
+        {"id": 200, "hostname": "sw2", "ip_address": "192.0.2.62", "snmp_profile_id": "", "address_confirmed": 1},
     ]
     monkeypatch.setattr(state, "_resolve_snmp_discovery_config", lambda _gid: dict(DISABLED_CFG))
     monkeypatch.setattr(db, "get_group", AsyncMock(return_value={"id": 1, "name": "core"}))

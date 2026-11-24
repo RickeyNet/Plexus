@@ -41,6 +41,7 @@ from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from pydantic import BaseModel, ConfigDict, Field
 
 from netcontrol import listener_sources, syslog_tls
+from netcontrol.account_rules import API_TOKEN_USER
 from netcontrol.body_limit import BodyLimitMiddleware
 from netcontrol.bounded_map import prune_expired
 from netcontrol.integrations.cisco_fdm.collector import fdm_poll_loop
@@ -85,6 +86,7 @@ from netcontrol.routes.auth import (
     _ensure_radius_dictionary_file,
     _get_user_features,
     _radius_authenticate_sync,
+    _session_cookie_secure,
     auth_status,
     authenticate_login_identity,
     init_auth,
@@ -390,6 +392,7 @@ from netcontrol.routes.virtualization import (
     router as virtualization_router,
 )
 from netcontrol.scoped_dashboard import dashboard_for_caller, scoped_dashboard_data
+from netcontrol.sso import safe_next
 from netcontrol.sync.runner import sync_jobs_loop
 
 # Ensure project root is on path for imports
@@ -714,6 +717,9 @@ async def _ensure_default_admin():
             salt,
             must_change_password=must_change_password,
         )
+        # A recovery reset must also end the sessions signed in with the old
+        # password, or a stolen admin cookie outlives it.
+        await db.bump_user_session_epoch(int(target["id"]))
         await db.set_auth_setting(
             _FORCE_RESET_MARKER_KEY,
             {"applied": True, "applied_at": datetime.now(UTC).isoformat(timespec="seconds")},
@@ -739,6 +745,7 @@ async def _ensure_default_admin():
             salt,
             must_change_password=must_change_password,
         )
+        await db.bump_user_session_epoch(int(existing_user["id"]))
         _emit_bootstrap_admin_credentials(
             existing_user["username"],
             password,
@@ -782,13 +789,20 @@ _DUMMY_PASSWORD_SALT = secrets.token_hex(16)
 
 
 async def verify_user(username: str, password: str) -> dict | None:
-    """Verify credentials and return the user dict, or None."""
+    """Verify a local password and return the user dict, or None.
+
+    Only a local account has one: an account an external provider manages
+    (``auth_provider`` set) never matches, whatever hash it holds, so the
+    password form cannot sign in around the directory or the IdP (its
+    lockout, MFA and disablement) on any path: local provider, local
+    fallback or break-glass. The hash is computed all the same, so the
+    response time does not tell which accounts are managed."""
     user = await db.get_user_by_username(username)
     salt = user["salt"] if user else _DUMMY_PASSWORD_SALT
     # PBKDF2 with 600k iterations is deliberately expensive (~200-500ms CPU);
     # run it off the event loop so a login burst can't stall every other request.
     computed = await asyncio.to_thread(_hash_password, password, salt)
-    if user and secrets.compare_digest(computed, user["password_hash"]):
+    if user and secrets.compare_digest(computed, user["password_hash"]) and not (user.get("auth_provider") or ""):
         return user
     return None
 
@@ -866,6 +880,11 @@ PUBLIC_PATHS = {
     "/favicon.ico",
 }
 
+# Public paths that still count against the anonymous API rate limit:
+# self-registration creates an account and costs a password hash per request.
+# Login is not here; it has its own lockout, delay and in-flight limits.
+RATE_LIMITED_PUBLIC_PATHS = frozenset({"/api/auth/register"})
+
 # The SAML assertion consumer service: the IdP's cross-site POST carries no
 # CSRF token; the signed response and the saml_tx cookie authenticate it.
 SAML_ACS_PATH = "/api/auth/saml/acs"
@@ -931,6 +950,7 @@ def _session_user_gone(response: Response | None) -> HTTPException:
 # user aside (_session_user_gone).
 _SESSION_REJECTION_DETAIL = {
     "revoked": "Session has been revoked",
+    "disabled": "Session has been revoked",
     "expired": "Session expired",
     "idle": "Session idle timeout exceeded",
 }
@@ -959,9 +979,9 @@ async def require_auth(request: Request, response: Response = None):
 
     api_token = _extract_api_token(request)
     if APP_API_TOKEN and api_token and secrets.compare_digest(api_token, APP_API_TOKEN):
-        session = {"user": "api-token", "user_id": 0, "auth_mode": "token"}
+        session = {"user": API_TOKEN_USER, "user_id": 0, "auth_mode": "token"}
         request.state.auth_session = session
-        current_actor.set("api-token")
+        current_actor.set(API_TOKEN_USER)
         current_correlation_id.set(getattr(request.state, "correlation_id", ""))
         return session
 
@@ -979,8 +999,8 @@ async def require_auth(request: Request, response: Response = None):
 
     user = await _load_request_user(request, session)
     # The same decision the WebSocket check and /api/auth/status take: a
-    # deleted user, a revoked epoch (password change, admin reset, privilege
-    # change, rename, sign-out), the 24h cap and the idle timeout. Kiosk
+    # deleted user, a disabled account, a revoked epoch (password change,
+    # admin reset, privilege change, rename, sign-out), the 24h cap and the idle timeout. Kiosk
     # accounts skip the two time checks.
     rejection = shared.session_rejection(session, user)
     if rejection == "user_missing" or not user:
@@ -1016,7 +1036,7 @@ async def require_auth(request: Request, response: Response = None):
             httponly=True,
             samesite="strict",
             max_age=SESSION_MAX_AGE,
-            secure=APP_COOKIE_SECURE,
+            secure=_session_cookie_secure(),
         )
 
     request.state.auth_session = session
@@ -1043,7 +1063,8 @@ FEATURE_FLAGS = state.FEATURE_FLAGS
 AUTH_CONFIG_DEFAULTS = state.AUTH_CONFIG_DEFAULTS
 RADIUS_DICTIONARY_FILE = state.RADIUS_DICTIONARY_FILE
 LOGIN_RULES = state.LOGIN_RULES
-AUTH_CONFIG = state.AUTH_CONFIG
+# No AUTH_CONFIG here: startup and every save rebind state.AUTH_CONFIG, so a
+# name bound at import would keep the built-in defaults. Read state.AUTH_CONFIG.
 DISCOVERY_SYNC_CONFIG = state.DISCOVERY_SYNC_CONFIG
 SNMP_DISCOVERY_CONFIG = state.SNMP_DISCOVERY_CONFIG
 SNMP_DISCOVERY_PROFILES = state.SNMP_DISCOVERY_PROFILES
@@ -1958,6 +1979,7 @@ async def _rate_limit_cleanup_loop() -> None:
             prune_expired(state.LOCKED_OUT, state.lockout_expired, now)
             prune_expired(state.LOGIN_ATTEMPTS, state.login_attempts_expired, now)
             prune_expired(state.LOGIN_USERNAME_FAILURES, state.username_failures_expired, now)
+            prune_expired(state.SSO_FAILURE_AUDITS, state.sso_failure_audits_expired, now)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -2114,13 +2136,19 @@ async def api_rate_limit_middleware(request: Request, call_next):
     """Enforce per-IP sliding-window rate limits on API endpoints.
 
     Read requests (GET) and write requests (POST/PUT/DELETE) have separate
-    thresholds.  Public paths (login, register, health) are exempt - the
-    login endpoint already has its own brute-force protection.
+    thresholds.  Public paths (login, health) are exempt - the login
+    endpoint already has its own brute-force protection - except those in
+    ``RATE_LIMITED_PUBLIC_PATHS`` (self-registration).
 
     Authenticated requests (valid session cookie or valid API token) are
     exempt: the limiter's job is to throttle anonymous flooders, and a
     legitimate logged-in user with several tabs open or a stale-session
     refresh storm shouldn't be able to self-DoS into a 429 loop.
+
+    A signed cookie alone is not a login. The cookie of a deleted user and
+    a revoked one (password change, admin reset, rename, sign-out) are
+    counted as anonymous; an idle or over-age session of a live account
+    stays exempt, which is the stale-session case above.
     """
     cfg = state.API_RATE_LIMIT
     if cfg.get("enabled") and request.url.path in WEBHOOK_PATHS:
@@ -2130,16 +2158,26 @@ async def api_rate_limit_middleware(request: Request, call_next):
         if retry_after is not None:
             return _api_error_response(429, "rate_limit_exceeded", f"Too many requests. Try again in {retry_after}s.")
         return await call_next(request)
-    if cfg.get("enabled") and request.url.path.startswith("/api/") and request.url.path not in PUBLIC_PATHS:
+    path = request.url.path
+    unlimited = path in PUBLIC_PATHS and path not in RATE_LIMITED_PUBLIC_PATHS
+    if cfg.get("enabled") and path.startswith("/api/") and not unlimited:
         # Skip counting for authenticated requests - see docstring.
         api_token = _extract_api_token(request)
         session_cookie = request.cookies.get("session")
         verified_session = verify_session_token(session_cookie) if session_cookie else None
+        session_counts = False
         if verified_session:
-            # Stash for require_auth so the same cookie isn't decoded again.
+            # Stash for require_auth so the same cookie isn't decoded again;
+            # the user row is cached on the request for the same reason.
             request.state.session_precheck = verified_session
+            session_user = await _load_request_user(request, verified_session)
+            session_counts = shared.session_rejection(verified_session, session_user) not in (
+                "user_missing",
+                "disabled",
+                "revoked",
+            )
         is_authenticated = bool(
-            (APP_API_TOKEN and api_token and secrets.compare_digest(api_token, APP_API_TOKEN)) or verified_session
+            (APP_API_TOKEN and api_token and secrets.compare_digest(api_token, APP_API_TOKEN)) or session_counts
         )
         if is_authenticated:
             return await call_next(request)
@@ -3078,7 +3116,9 @@ class _SpaFallbackRoute(APIRoute):
 async def redirect_legacy_frontend_prefix(request: Request, path: str = ""):
     """The SPA used to live under /frontend/. Bounce old bookmarks and links
     to the same route at the site root."""
-    target = "/" + path
+    # safe_next: "/frontend//host" must not become the scheme-relative
+    # "//host", which a browser follows off the site.
+    target = safe_next("/" + path)
     if request.url.query:
         target += "?" + request.url.query
     return RedirectResponse(url=target, status_code=301)

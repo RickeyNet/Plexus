@@ -127,7 +127,7 @@ section (Monitoring, Config Backup, etc.).
 ## Encryption-at-rest considerations
 
 Retention controls how long data lives in the database. Some of that data
-is sensitive - credentials are Fernet-encrypted in the `credentials`
+is sensitive - credentials are AES-256-GCM encrypted in the `credentials`
 table, but other tables (config backups, syslog events) may contain
 hostnames, interface names, neighbor IPs, and free-text command output.
 Disk-level encryption (LUKS, BitLocker, cloud-volume KMS) is recommended

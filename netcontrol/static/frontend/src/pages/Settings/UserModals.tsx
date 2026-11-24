@@ -287,6 +287,7 @@ export function EditUserModal({
   );
   const [groupIds, setGroupIds] = useState<number[]>(user.group_ids);
   const [neverExpires, setNeverExpires] = useState<boolean>(!!user.session_never_expires);
+  const [disabled, setDisabled] = useState<boolean>(!!user.disabled);
   const [error, setError] = useState<string | null>(null);
 
   const usernameOk = username.trim().length >= MIN_USERNAME;
@@ -315,6 +316,7 @@ export function EditUserModal({
                   display_name: displayName.trim(),
                   role,
                   session_never_expires: neverExpires,
+                  disabled,
                 },
               },
               {
@@ -387,6 +389,12 @@ export function EditUserModal({
         checked={neverExpires}
         onChange={setNeverExpires}
         help="Bypasses the global idle timeout. Use only for read-only kiosk accounts (smart boards, NOC walls)."
+      />
+      <CheckboxField
+        label="Account disabled"
+        checked={disabled}
+        onChange={setDisabled}
+        help="Blocks every sign-in, ends the account's open sessions and stops its AI-access tokens. Nothing is deleted; clear it to let the account sign in again."
       />
       {error && <Callout tone="danger">{error}</Callout>}
     </Modal>

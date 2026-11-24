@@ -53,7 +53,9 @@ as a change made in the UI, so webhooks and the change log see imports.
   keys such as `ip_address` work too), or an object with one key holding
   that list (`hosts: [...]`). `tags` may be a list; `custom_fields` may be an
   object of values by field key or label. YAML is read with a safe loader:
-  tags such as `!!python/object` are refused.
+  tags such as `!!python/object` are refused, and so are anchors with
+  aliases (`&name` / `*name`, merge keys `<<: *name` included): write the
+  repeated values out. A file that uses one fails to parse.
 
 Limits: 1 MiB per file and 5,000 rows per import.
 

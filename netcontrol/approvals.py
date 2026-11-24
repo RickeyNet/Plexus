@@ -27,8 +27,11 @@ class ApprovalDecision(BaseModel):
 def require_different_approver(approver: str, requester: str | None, *, requester_label: str = "creator") -> None:
     """403 when ``approver`` is the person who asked for the change
     (four-eyes). Self-approval is never allowed, admins included; an empty
-    ``approver`` (the server API token) has no identity to compare."""
-    if approver and approver == (requester or ""):
+    ``approver`` (the server API token) has no identity to compare.
+
+    Names are compared without case: a directory matches ``alice`` and
+    ``ALICE`` to one person, so the two spellings are one requester."""
+    if approver and approver.strip().casefold() == (requester or "").strip().casefold():
         raise HTTPException(status_code=403, detail=f"Approver must be different from {requester_label} (four-eyes)")
 
 

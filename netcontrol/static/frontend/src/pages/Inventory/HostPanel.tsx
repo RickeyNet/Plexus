@@ -3,7 +3,7 @@ import { Link } from 'react-router';
 
 import { useAuthStatus } from '@/api/auth';
 import { useMonitoringPollHistory } from '@/api/deviceDetail';
-import type { InventoryHost } from '@/api/inventory';
+import { addressAwaitingConfirmation, type InventoryHost } from '@/api/inventory';
 import { ChangelogPanel } from '@/components/ChangelogPanel';
 import { QueryError } from '@/components/QueryError';
 import { TabBar } from '@/components/TabBar';
@@ -28,6 +28,8 @@ import {
 import { isOpnsenseDevice } from '@/pages/Topology/opnsenseRules';
 import { OpnsenseRulesTab } from '@/pages/Topology/OpnsenseRulesTab';
 import { HostClusters } from '@/pages/Virtualization/HostClusters';
+
+import { AwaitingConfirmationBadge, ConfirmAddressButton } from './AddressConfirmation';
 
 type TabKey = 'config' | 'rules' | 'interfaces' | 'vlans' | 'mac' | 'errors' | 'audit' | 'changelog';
 
@@ -77,6 +79,11 @@ export function HostPanel({ host, groupName, canWrite, wide, onToggleWide, onEdi
           <div className="text-muted" style={{ fontSize: '0.9em' }}>
             {host.ip_address} · {groupName}
           </div>
+          {addressAwaitingConfirmation(host) && (
+            <div style={{ marginTop: 'var(--space-1)' }}>
+              <AwaitingConfirmationBadge host={host} />
+            </div>
+          )}
         </div>
         <WidenToggle wide={wide} onToggle={onToggleWide} />
         <button type="button" className="modal-close" aria-label="Close host details" title="Close" onClick={onClose}>
@@ -98,6 +105,7 @@ export function HostPanel({ host, groupName, canWrite, wide, onToggleWide, onEdi
         <button type="button" className="btn btn-sm btn-secondary" onClick={onEdit} disabled={!canWrite}>
           Edit
         </button>
+        {addressAwaitingConfirmation(host) && <ConfirmAddressButton hostIds={[host.id]} />}
       </div>
 
       {canMonitor && <HostPoll hostId={host.id} />}

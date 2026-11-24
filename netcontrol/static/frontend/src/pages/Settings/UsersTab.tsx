@@ -1,5 +1,6 @@
 import { useId, useState } from 'react';
 
+import { Badge } from '@/components/Badge';
 import { DeleteButton } from '@/components/DeleteButton';
 import { useDialogs } from '@/components/DialogProvider-context';
 import {
@@ -121,6 +122,15 @@ export function UsersTab() {
               <div className="card-description">
                 @{u.username} · {u.role} · Created {formatBackendDate(u.created_at)}
               </div>
+              {u.disabled && (
+                <Badge
+                  tone="danger"
+                  title="Cannot sign in; its sessions and AI-access tokens are refused"
+                  style={{ marginTop: '0.25rem', marginRight: '0.4rem', display: 'inline-block' }}
+                >
+                  Disabled
+                </Badge>
+              )}
               {u.object_scope_restricted && (
                 <span
                   className="badge badge-warning"

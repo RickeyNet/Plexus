@@ -243,6 +243,38 @@ The upload paths are listed in `location` blocks in `deploy/nginx.conf` and in
 in the `/api/upgrades/images` block with it. If you raise
 `APP_MAX_REQUEST_BODY_MB`, raise the server-level `client_max_body_size` too.
 
+### Connection and stream limits
+
+The app is one process, so long-lived streams and discovery runs are
+capped, per user and in all:
+
+| What | Per user | Server total | Settings |
+|------|----------|--------------|----------|
+| Discovery runs: inventory scan/sync (streamed, inline or background job), topology neighbor discovery | 3 | 12 | `APP_DISCOVERY_RUNS_PER_USER`, `APP_DISCOVERY_RUNS_TOTAL` |
+| Live streams: the topology utilization stream and the `/ws/*` job output sockets | 24 | 512 | `APP_LIVE_STREAMS_PER_USER`, `APP_LIVE_STREAMS_TOTAL` |
+
+Admins have the same limits, and the server API token counts as one user.
+A request past a limit gets `429` with a message naming it; a WebSocket past
+it is closed with code `1013` (try again later). A slot is freed when the
+run or stream ends, fails, or the browser closes it.
+
+nginx also limits each client address to 100 connections with a request in
+progress at once (`limit_conn` in `deploy/nginx.conf`; idle keep-alive
+connections do not count) and answers `429` past it. That leaves plenty of
+room for one browser with several tabs, streams and sockets. If many users
+reach Plexus through one shared NAT address, raise the number there.
+
+Password sign-in and self-registration (`/api/auth/login`,
+`/api/auth/register`) have a request rate per client address as well
+(`limit_req` in `deploy/nginx.conf`: 30 a minute with a burst of 20, `429`
+past it), because each request costs a slow password hash. The application
+has its own limits behind it: at most as many password sign-ins in progress
+per address as failures that lock it (Login Rules, default 5), 16 password
+checks at once on the whole server, and self-registration counted against
+the anonymous API write limit. A deployment without the shipped nginx
+config has only the application limits. Behind a shared NAT address, raise
+`rate` and `burst`.
+
 The AI access endpoint (`/mcp`, off until enabled in Settings > AI Access) is served through the same nginx `location /` block as the rest of the application: it answers each request with one JSON response, so it needs no extra proxy configuration and no extra port. See [docs/ai-access.md](../docs/ai-access.md).
 
 Additional ports exposed on the app container:
@@ -322,6 +354,14 @@ sudo ufw allow 6514/tcp  # Syslog over TLS (optional)
 3. Check "Enable LDAP / Active Directory authentication"
 4. Save
 5. Test: log out, log back in with your AD credentials
+
+Without a service account (and without a user DN template) Plexus binds
+directly as `<username>@<domain>`, the domain taken from the Base DN's `DC=`
+parts, and reads the user's entry afterwards. Users then type the plain
+account name: a name containing `@` or `\` is refused. The entry must be the
+bound account's and the only match of the filter, or the sign-in is refused
+and the server log says why; narrow the filter or the Base DN in that case.
+A username is matched to its existing Plexus account without regard to case.
 
 ### Create User Access Groups
 
@@ -623,7 +663,7 @@ docker compose up -d
 ### Backups
 
 A backup script is provided at `deploy/backup.sh`. It dumps PostgreSQL **and**
-archives the `plexus-db` state volume, which holds `netcontrol.key` (the Fernet
+archives the `plexus-db` state volume, which holds `netcontrol.key` (the AES-256-GCM
 key for stored device credentials) and `session.key`. **Losing
 `netcontrol.key` permanently breaks decryption of every stored credential**
 and of the raw `config.xml` of OPNsense config backups (their masked text
@@ -832,7 +872,7 @@ ss -ulnp | grep 2055
 
 The compose file mounts:
 
-- `plexus-db` volume at `/app/state` - the Fernet key (`netcontrol.key`),
+- `plexus-db` volume at `/app/state` - the AES-256-GCM key (`netcontrol.key`),
   the session signing key (`session.key`) and uploaded floor plans
   (`floor_plans/`). **Back this up.** Losing the key file means every stored
   credential is unrecoverable.

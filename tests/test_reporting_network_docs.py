@@ -298,3 +298,13 @@ async def test_run_scheduled_reports_once_runs_due_definitions(monkeypatch):
     assert result["errors"] == 0
     execute_mock.assert_awaited_once()
     update_mock.assert_awaited_once_with(11)
+
+
+def test_drawio_label_lines_are_html_escaped():
+    """Cells are ``html=1``: a neighbour-advertised name must reach draw.io
+    as text, with the line break as the only markup."""
+    value = reporting_module._drawio_value(["<img src=x onerror=alert(1)>", "", "Gi0/1 & Gi0/2"])
+    assert value == "&lt;img src=x onerror=alert(1)&gt;<br/>Gi0/1 &amp; Gi0/2"
+    # In the file it is escaped once more as an XML attribute.
+    assert "<img" not in reporting_module._xml_attr_escape(value)
+    assert "&amp;lt;img" in reporting_module._xml_attr_escape(value)

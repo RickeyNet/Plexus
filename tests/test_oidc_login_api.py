@@ -56,6 +56,7 @@ def env(monkeypatch, request):
     monkeypatch.setitem(state.AUTH_CONFIG, "oidc", _oidc_cfg())
     monkeypatch.setattr(app_module, "LOGIN_ATTEMPTS", {})
     monkeypatch.setattr(app_module, "LOCKED_OUT", {})
+    monkeypatch.setattr(state, "SSO_FAILURE_AUDITS", {})
     return admin, idp
 
 
@@ -217,15 +218,22 @@ def test_failures_count_toward_lockout(env, monkeypatch):
     monkeypatch.setitem(state.LOGIN_RULES, "max_attempts", 3)
     monkeypatch.setitem(state.LOGIN_RULES, "rate_limit_max", 10)
     browser = _browser()
+    # A failure after the state check (here a token the provider issued for
+    # another client) counts like a wrong password.
+    idp.claims = {"aud": "someone-else"}
     for _ in range(3):
-        _start(browser, idp)
-        assert _error_code(browser.get(CALLBACK, params={"code": "code-1", "state": "forged"})) == "state"
+        assert _error_code(_sign_in(browser, idp)) == "token"
     assert "testclient" in app_module.LOCKED_OUT
     # Even a valid sign-in is refused while locked out, and not counted again.
+    idp.claims = {}
+    token_calls = idp.calls["token"]
+    failures = len(_audit_details("login.failure"))
     resp = _sign_in(browser, idp)
     assert _error_code(resp) == "denied"
-    assert idp.calls["token"] == 0
+    assert idp.calls["token"] == token_calls
     assert len(app_module.LOGIN_ATTEMPTS["testclient"]) == 3
+    # ... and writes no audit row, like the password form's 429.
+    assert len(_audit_details("login.failure")) == failures
     # Password login shares the same lockout.
     pw = _browser().post("/api/auth/login", json={"username": "admin", "password": "netcontrol"})
     assert pw.status_code == 429
@@ -234,11 +242,43 @@ def test_failures_count_toward_lockout(env, monkeypatch):
 def test_success_resets_failures(env):
     _, idp = env
     browser = _browser()
-    _start(browser, idp)
-    browser.get(CALLBACK, params={"code": "code-1", "state": "forged"})
+    idp.claims = {"aud": "someone-else"}
+    assert _error_code(_sign_in(browser, idp)) == "token"
     assert app_module.LOGIN_ATTEMPTS.get("testclient")
+    idp.claims = {}
     assert _sign_in(browser, idp).status_code == 303
     assert "testclient" not in app_module.LOGIN_ATTEMPTS
+
+
+def test_requests_any_site_can_cause_never_lock_the_address(env, monkeypatch):
+    """A page on another site can send a browser to the callback (with the
+    transaction cookie too, after sending it through the login route). None
+    of that counts toward the lockout, and none of it adds unbounded audit rows."""
+    _, idp = env
+    monkeypatch.setitem(state.LOGIN_RULES, "max_attempts", 2)
+    monkeypatch.setitem(state.LOGIN_RULES, "rate_limit_max", 10)
+    before = len(_audit_details("login.failure"))
+    # No transaction cookie: not counted, not audited.
+    for _ in range(4):
+        assert _error_code(_browser().get(CALLBACK)) == "state"
+        assert _error_code(_browser().get(CALLBACK, params={"code": "x", "state": "y"})) == "state"
+    assert len(_audit_details("login.failure")) == before
+    # A forged state with a real transaction cookie: not counted, audited
+    # for the first ``max_attempts`` only.
+    browser = _browser()
+    for _ in range(4):
+        _start(browser, idp)
+        assert _error_code(browser.get(CALLBACK, params={"code": "code-1", "state": "forged"})) == "state"
+    assert len(_audit_details("login.failure")) == before + 2
+    # Single sign-on switched off: not counted, not audited.
+    monkeypatch.setitem(state.AUTH_CONFIG, "oidc", _oidc_cfg(enabled=False))
+    for _ in range(4):
+        assert _error_code(_browser().get(CALLBACK)) == "disabled"
+    assert len(_audit_details("login.failure")) == before + 2
+    assert not app_module.LOCKED_OUT and not app_module.LOGIN_ATTEMPTS
+    # The address can still sign in.
+    monkeypatch.setitem(state.AUTH_CONFIG, "oidc", _oidc_cfg())
+    assert _sign_in(_browser(), idp).status_code == 303
 
 
 # ── accounts ─────────────────────────────────────────────────────────────────

@@ -40,7 +40,9 @@ USERNAME_MAX_LENGTH = 150
 DISPLAY_NAME_MAX_LENGTH = 200
 
 _LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
-CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f]")
+# C0 and C1 control characters and the Unicode line and paragraph separators:
+# everything a log reader or a terminal may take for a line break or a command.
+CONTROL_CHARS = re.compile("[\x00-\x1f\x7f-\x9f  ]")
 # Long runs of token-alphabet characters (JWTs, codes, secrets, base64 XML)
 # in provider text are replaced before it is logged.
 _TOKENISH = re.compile(r"[A-Za-z0-9_\-\.~+/=]{24,}")
@@ -101,12 +103,17 @@ def safe_next(value: str | None) -> str:
     return candidate
 
 
+def single_line(text: Any, limit: int | None = None) -> str:
+    """Text someone else chose (a typed sign-in name, a provider's message)
+    made safe for one log line or audit field: every control character and
+    line separator becomes a space, and the result is cut to ``limit``."""
+    return CONTROL_CHARS.sub(" ", str(text or ""))[:limit]
+
+
 def log_safe(text: Any, limit: int = 200) -> str:
     """Provider-supplied text made safe to log: control characters removed,
     token-like runs redacted, truncated."""
-    cleaned = CONTROL_CHARS.sub(" ", str(text or ""))
-    cleaned = _TOKENISH.sub("[redacted]", cleaned)
-    return cleaned[:limit]
+    return _TOKENISH.sub("[redacted]", single_line(text))[:limit]
 
 
 def clean_username(value: Any, what: str, error: type[SsoError] = SsoError) -> str:
@@ -122,7 +129,9 @@ def clean_username(value: Any, what: str, error: type[SsoError] = SsoError) -> s
 
 
 def clean_display_name(value: Any) -> str:
-    return value.strip()[:DISPLAY_NAME_MAX_LENGTH] if isinstance(value, str) else ""
+    """A display name from a provider or a form: on one line, trimmed and
+    cut to ``DISPLAY_NAME_MAX_LENGTH``; ``""`` for anything but a string."""
+    return single_line(value).strip()[:DISPLAY_NAME_MAX_LENGTH] if isinstance(value, str) else ""
 
 
 def group_values(value: Any) -> list[str]:

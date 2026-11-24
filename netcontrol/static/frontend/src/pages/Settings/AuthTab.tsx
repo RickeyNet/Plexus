@@ -635,6 +635,12 @@ function LdapPanel({ draft, setDraft, groups }: PanelProps) {
         help="{username} is replaced by the login name, e.g. (sAMAccountName={username}). Must match exactly one entry."
       />
       <TextField
+        label="Username Attribute"
+        value={l.username_attribute ?? ''}
+        onChange={(v) => setL({ username_attribute: v })}
+        help="Entry attribute that names the Plexus account, e.g. sAMAccountName or uid. Blank uses the name as typed; set it when the filter matches more than one attribute. Changing it gives people who typed another form of their name a new account."
+      />
+      <TextField
         label="Admin Group DN"
         value={l.admin_group_dn}
         onChange={(v) => setL({ admin_group_dn: v })}
@@ -680,6 +686,12 @@ export function OidcPanel({ draft, setDraft, groups }: PanelProps) {
           checked={o.sync_groups}
           onChange={(v) => setO({ sync_groups: v })}
           help="Sets the account's groups to the defaults plus every mapped group in the token."
+        />
+        <CheckboxField
+          label="Allow unverified email"
+          checked={o.allow_unverified_email ?? false}
+          onChange={(v) => setO({ allow_unverified_email: v })}
+          help="Only when the username claim is email: accept a token without email_verified. Leave off unless the provider never sends it and people cannot edit their address."
         />
       </CheckboxRow>
       <div className="form-group">
@@ -1084,6 +1096,30 @@ export function SamlPanel({ draft, setDraft, groups }: PanelProps) {
           onChange={(v) => setO({ groups_attribute: v })}
           flex="1 1 160px"
         />
+      </FormRow>
+      <FormRow>
+        <TextField
+          label="Subject Attribute"
+          value={o.subject_attribute ?? ''}
+          onChange={(v) => setO({ subject_attribute: v })}
+          flex="1 1 200px"
+          help="Attribute that identifies the person for good; the account is bound to it. Blank uses the NameID. Set it when the IdP sends a transient NameID."
+        />
+        <div className="form-group" style={{ flex: '2 1 320px' }}>
+          <label className="form-label" htmlFor={`${fid}-authn-context`}>Required Authentication Context</label>
+          <textarea
+            id={`${fid}-authn-context`}
+            className="form-input"
+            rows={2}
+            value={(o.required_authn_context ?? []).join('\n')}
+            aria-describedby={`${fid}-authn-context-help`}
+            onChange={(e) => setO({ required_authn_context: parseGroupLines(e.target.value) })}
+          />
+          <div className="form-help" id={`${fid}-authn-context-help`}>
+            One AuthnContextClassRef per line. The IdP is asked for one of them and a sign-in that used none
+            is refused. Blank accepts whatever the IdP used.
+          </div>
+        </div>
       </FormRow>
       <SsoRoleFields value={o} onChange={setO} groupNoun="groups attribute value" />
       <FormRow>

@@ -190,7 +190,7 @@ Try not to be too technical. However, as this is a technical MOP, sometimes acro
 | Prestage | The upgrade phase that backs up and saves the config and frees up flash space. No outage. |
 | RFC | Request for Change. The formal change-control ticket. |
 | SCP | Secure Copy Protocol. Used to copy the software image to the switch over SSH. |
-| Service Credential | The site-wide device credential configured in Settings, used automatically when a campaign an admin created has no credential set. Another user's campaign must select one of that user's own credentials. Required for scheduled, unattended reloads. |
+| Service Credential | The site-wide device credential configured in Settings, used automatically when a campaign an admin created has no credential set. Another user's campaign must select one of that user's own credentials. Required for scheduled, unattended reloads. It signs in only to an inventory host whose address an admin set or confirmed (see [Shared credentials and confirmed addresses](#shared-credentials-and-confirmed-addresses)). |
 | SSH | Secure Shell. Encrypted remote command-line access to the switch. |
 | SSO | Stateful Switchover. The redundancy mode that lets the standby supervisor take over without dropping traffic. |
 | Stack | Two or more physical switches joined to act as one logical switch. They upgrade and reboot together. |
@@ -583,6 +583,12 @@ The switch warns that a larger SSH window can raise CPU load and should be used 
 | SSH Retries | 2 | Connection retry attempts per device |
 
 A campaign can be edited later (devices, images, options) as long as no phase is currently running.
+
+#### Shared credentials and confirmed addresses
+
+When a campaign runs with the site-wide service credential or the app-wide default credential, the tool signs in to an inventory device only when the host's address is one an admin set or confirmed. It decides this from the host as stored in inventory when each device's turn comes in a phase: Prestage, Transfer, Activate (also a scheduled one, and one resumed after a server restart), Verify, Check status, and the APC UPS phases. Running the campaign as an admin does not confirm anything.
+
+A device whose host address awaits admin confirmation is not connected to. It is marked failed for that phase with `Not signed in with the shared credential: address awaiting admin confirmation`, and the other devices carry on. An admin confirms the address on the Inventory page (or with `POST /api/admin/hosts/confirm-address`), then you run the phase again for that device. A device whose stored campaign address is no longer its host's address, or whose host was deleted from inventory after it was added to the campaign, is failed the same way; edit the campaign so its devices match the inventory. Ad-hoc IP addresses, which only the campaign's creator or an admin can enter, are not affected, and neither is a campaign that runs with a credential of your own.
 
 ### Appendix D. Backups
 

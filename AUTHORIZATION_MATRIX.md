@@ -24,10 +24,10 @@ All API endpoints and their required authentication/authorization levels.
 | POST | `/api/auth/register` | Gated by `APP_ALLOW_SELF_REGISTER` env flag |
 | GET | `/api/auth/status` | Returns current session info; signed out it also carries `sso.oidc` and `sso.saml` (`enabled`, `label`, `primary`) for the login page |
 | GET | `/api/auth/oidc/login` | Starts an OIDC sign-in (`?next=<same-site path>`): sets the signed `oidc_tx` cookie and redirects to the identity provider. Under the anonymous API rate limit. See `docs/sso-oidc.md` |
-| GET | `/api/auth/oidc/callback` | OIDC redirect target: checks state, exchanges the code, validates the ID token, provisions the account and sets the session cookie; on failure redirects to `/login?sso_error=<code>`. Failures count toward the login lockout |
+| GET | `/api/auth/oidc/callback` | OIDC redirect target: checks state, exchanges the code, validates the ID token, provisions the account and sets the session cookie; on failure redirects to `/login?sso_error=<code>`. Failures after the state check count toward the login lockout; requests any site can cause (no transaction cookie, OIDC off, a wrong state) do not |
 | GET | `/api/auth/saml/metadata` | SAML SP metadata (entity ID, ACS URL) to register at the IdP. See `docs/sso-saml.md` |
 | GET | `/api/auth/saml/login` | Starts a SAML sign-in (`?next=<same-site path>`): sets the signed `saml_tx` cookie with the request ID and redirects to the IdP with an `AuthnRequest`. Under the anonymous API rate limit |
-| POST | `/api/auth/saml/acs` | SAML assertion consumer service. No session and no CSRF token (the IdP's cross-site POST); authenticated by the signed assertion, bound to the `saml_tx` cookie's request ID, replayed assertion IDs refused. `RelayState` kept only as a same-site path. Sets the session cookie or redirects to `/login?sso_error=<code>`; failures count toward the login lockout |
+| POST | `/api/auth/saml/acs` | SAML assertion consumer service. No session and no CSRF token (the IdP's cross-site POST); authenticated by the signed assertion, bound to the `saml_tx` cookie's request ID, replayed assertion IDs refused. `RelayState` kept only as a same-site path. Sets the session cookie or redirects to `/login?sso_error=<code>`; a replayed assertion or a refused account counts toward the login lockout, a response that does not validate (which any site can post) does not |
 | GET | `/api/health` | Health check. Without a session or the API token it answers only `{ok, status}` (200 healthy, 503 degraded, the same status codes as before); with a valid session (when `APP_REQUIRE_API_TOKEN` is off) or the `APP_API_TOKEN` it adds uptime, metrics and the database probe result |
 | GET | `/api/version` | Release number (`version`). The exact build (`git_sha`) only with a valid session (when `APP_REQUIRE_API_TOKEN` is off) or the `APP_API_TOKEN` |
 | GET | `/favicon.ico` | Static |
@@ -78,7 +78,7 @@ below. Admins and the API token pass every feature check.
 | `topology` | `/api/topology/*` | topology |
 | `topology` | `GET/POST/DELETE /api/topology/history/{kind}`, `DELETE /api/topology/history/{kind}/{entry_id}` (the caller's own last 30 Path Mode traces, reachability sweeps or summaries; the writes need only `topology`, not `topology.write`, since each user changes only their own history) | tool_history |
 | `topology` | `/api/sources/*`, `/api/topology/search/deep`, `/api/topology/export.html` (collections/deletes need `topology.write`; source and credential management `POST/PUT/DELETE /api/sources*` is admin-only in the handlers; a `PUT` that changes the source's address or turns TLS verification off must send the API key again, else `400`) | meraki_topology |
-| `jobs` | `/api/jobs/*` (writes need `jobs.write`, except approve and deny. Launch, retry and rerun of an Ansible task need admin, and the queue fails a queued Ansible job whose launcher is not an admin. Launch, retry and rerun also check the task's run permission and, for a live run, its commit permission: `403` when refused; admins and API token callers always pass. See `docs/jobs.md#run-and-commit-permissions`. `GET /api/jobs/approvals`, `POST /api/jobs/{id}/approve` and `POST /api/jobs/{id}/deny` also need `jobs.approve` (admins and the API token always have it) and every job target writable; the job's own requester is refused with `403`, admins included (four-eyes, like deployment approval). Changing a task's `approval_required` needs admin in the handler. See `docs/jobs.md#approvals`. A task whose template (any variant) or inputs use secret variables may target an ad-hoc address only for an admin or the API token, unless the address is the IP of an inventory host the caller may change: launch, retry and rerun answer `403` before any secret is looked up, and the queue fails such a job whose launcher is not an admin. A secret that does not exist answers one generic message that names no secret. See `docs/jobs.md#secret-variables-and-ad-hoc-targets`) | jobs |
+| `jobs` | `/api/jobs/*` (writes need `jobs.write`, except approve and deny. Launch, retry and rerun of an Ansible task need admin, and the queue fails a queued Ansible job whose launcher is not an admin. Launch, retry and rerun also check the task's run permission and, for a live run, its commit permission: `403` when refused; admins and API token callers always pass. See `docs/jobs.md#run-and-commit-permissions`. `GET /api/jobs/approvals`, `POST /api/jobs/{id}/approve` and `POST /api/jobs/{id}/deny` also need `jobs.approve` (admins and the API token always have it) and every job target writable; the job's own requester is refused with `403`, admins included (four-eyes, like deployment approval). Changing a task's `approval_required` needs admin in the handler. See `docs/jobs.md#approvals`. A task whose template (any variant) or inputs use secret variables may target an ad-hoc address only for an admin or the API token, unless the address is the IP of an inventory host the caller may change whose address an admin confirmed (an inventory host awaiting confirmation fails the job at the queue for a non-admin launcher): launch, retry and rerun answer `403` before any secret is looked up, and the queue fails such a job whose launcher is not an admin. A secret that does not exist answers one generic message that names no secret. See `docs/jobs.md#secret-variables-and-ad-hoc-targets`) | jobs |
 | `templates` | `/api/templates/*` | templates |
 | `credentials` | `/api/credentials/*` | credentials |
 | `playbooks` | `GET /api/playbooks`, `GET /api/playbooks/{id}`, `GET /api/playbooks/{id}/input-schema`; `PUT /api/playbooks/{id}` and `PUT /api/playbooks/{id}/input-schema` need `playbooks.write`. Changing a playbook's code (`content`, `type` or `filename` different from the stored value) needs admin in the handler (`403`), as do `PUT /api/playbooks/{id}/permissions` and `permissions` / `approval_required` in an update. A module write never replaces a built-in playbook's module or another playbook's (`409`) | playbooks (router) |
@@ -199,11 +199,51 @@ pick; when the caller may not use it the service credential is used and
 the result says so (no `403`). The scheduled discovery sync uses it only
 when it is a service credential. The Plexus service credential signs in to
 a scan's or sync's addresses only for an admin or the API token, or when
-every address is the IP of an inventory host the caller may change;
-otherwise the scan, sync and their stream variants answer `403` and the
-caller picks their own credential or turns SSH off. Inventory collection
-(`POST /api/topology/inventory/collect`) reads only inventory hosts the
-caller may change, so its service-credential fallback needs no such check.
+every address is the IP of an inventory host the caller may change whose
+address an admin confirmed; otherwise the scan, sync and their stream
+variants answer `403` and the caller picks their own credential or turns
+SSH off. Inventory collection (`POST /api/topology/inventory/collect`)
+reads only inventory hosts the caller may change, and skips (saying so) a
+host whose address awaits confirmation when it signs in with the service
+credential.
+
+**Confirmed host addresses** (`netcontrol/managed_targets.py`). Shared
+secrets (the Plexus service credential, the default credential, the
+shared SNMP profiles) go only to a host address an admin set or
+confirmed. `hosts.address_confirmed` is set when an admin or the API token
+creates a host or changes its `ip_address` (single, bulk, bulk import,
+discovery sync and onboard), and cleared when anyone else does; other
+host fields leave it alone. Hosts stored before migration 0134 count as
+confirmed. A host awaiting confirmation is not polled by monitoring or the
+FDM collector (never recorded as down, no availability or SLA alert),
+gets no MAC/ARP collection, topology SNMP walk, post-job SNMP re-probe,
+backup or compliance capture with a shared credential, no live SSH
+enrichment, is skipped by a job that runs with the default or a service
+credential, and is not a valid secret-variable job target for a
+non-admin launcher. An upgrade campaign or deployment that runs with the
+default or a service credential decides on the host's stored row read at
+the time of the run, whoever runs it (running it as an admin confirms
+nothing): deployment execute is refused with `409` before any device is
+touched, naming up to 5 such hosts; a rollback skips the host (a failed
+rollback checkpoint with the reason) and rolls back the others; a campaign
+phase (prestage, transfer, activate, verify, check status, a scheduled or
+rehydrated activate, UPS phases) fails the device with the reason and
+carries on with the others, as it does for a campaign device whose
+address is no longer its inventory host's or whose host was deleted
+since it was added (`upgrade_devices.from_inventory`, migration 0135). A user's own credential is
+unaffected. Discovery scans and syncs by a non-admin send the group's SNMP
+settings only to the IP of a confirmed inventory host the caller may
+change and probe the other addresses without SNMP, reported as
+`snmp_withheld` (`count`, `reason`) in the scan job result, the stream
+`start` / `done` events and the sync response; an admin, the API token and
+the scheduled sync are not limited. A sync or onboard decides whether the
+hosts it writes are confirmed from the request's caller. `unmanaged_addresses`
+treats the address of a host awaiting confirmation as unmanaged. The monitoring and MAC tracking fallback to
+`default_credential_id` applies only when that credential is a service
+credential. Admin only (admin router): `POST
+/api/admin/hosts/{host_id}/confirm-address` and `POST
+/api/admin/hosts/confirm-address` (`host_ids` and/or `group_id`), audited
+`inventory` / `host.address_confirmed`.
 Routes (inventory feature, `@scoped("group")`):
 
 | Route | Group access | Effect |

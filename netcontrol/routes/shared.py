@@ -9,16 +9,24 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import difflib
+import functools
 import os
 import re
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Iterable, Iterator
+from typing import Any
+from urllib.parse import urlsplit
 
 import routes.database as db
 from fastapi import HTTPException, Request
 from starlette.datastructures import UploadFile
+from starlette.responses import StreamingResponse
+from starlette.types import Receive, Scope, Send
+from starlette.websockets import WebSocket
 
 import netcontrol.routes.state as state
+from netcontrol.account_rules import API_TOKEN_USER
+from netcontrol.sso import single_line
 from netcontrol.telemetry import configure_logging
 
 LOGGER = configure_logging("plexus.shared")
@@ -31,6 +39,9 @@ _WS_SESSION_MAX_AGE = 86400
 
 # ── Audit helper ─────────────────────────────────────────────────────────────
 
+_AUDIT_USER_MAX = 256
+_AUDIT_DETAIL_MAX = 4000
+
 
 async def _audit(
     category: str,
@@ -39,7 +50,15 @@ async def _audit(
     detail: str = "",
     correlation_id: str = "",
 ) -> None:
-    """Fire-and-forget audit record.  Never raises to the caller."""
+    """Fire-and-forget audit record.  Never raises to the caller.
+
+    ``user`` and ``detail`` may hold text an anonymous caller chose (the
+    name typed into the sign-in form), so both are stored and logged on one
+    line and cut to a fixed length: such text can then neither start a log
+    line of its own nor fill the audit table.
+    """
+    user = single_line(user, _AUDIT_USER_MAX)
+    detail = single_line(detail, _AUDIT_DETAIL_MAX)
     try:
         await db.add_audit_event(category, action, user=user, detail=detail, correlation_id=correlation_id)
         LOGGER.info(
@@ -76,6 +95,233 @@ def supervise_task(task: asyncio.Task, label: str) -> None:
             LOGGER.error("%s crashed: %s", label, exc, exc_info=exc)
 
     task.add_done_callback(_cb)
+
+
+# ── Fan-out and long-lived work limits ───────────────────────────────────────
+
+
+@contextlib.asynccontextmanager
+async def fan_out[T](aws: Iterable[Awaitable[T]]) -> AsyncIterator[Iterator[Awaitable[T]]]:
+    """Start every awaitable as a task and give ``asyncio.as_completed`` over
+    them: ``await`` each item for the next result to finish (it raises what
+    that task raised).
+
+    Leaving the block, at the end, by an exception, by cancellation or
+    because the consumer went away (the client of a streaming response
+    disconnects: GeneratorExit or CancelledError in the generator), cancels
+    every task still pending, so no probe or device sign-in keeps running
+    for a result nobody will read."""
+    tasks = [asyncio.ensure_future(aw) for aw in aws]
+    try:
+        yield asyncio.as_completed(tasks)
+    finally:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+            elif not task.cancelled():
+                # Mark a finished, unread failure as retrieved: no "Task
+                # exception was never retrieved" warning for it.
+                task.exception()
+
+
+def session_identity(session: dict | None) -> str | None:
+    """Who a session is, for per-caller limits: ``user:<id>``, ``api-token``
+    for the server API token (one identity, however many clients use it),
+    ``None`` without a session."""
+    if not session:
+        return None
+    if session.get("auth_mode") == "token":
+        return API_TOKEN_USER
+    return f"user:{session.get('user_id')}"
+
+
+class ActiveSlot:
+    """One unit of an ``ActiveLimit`` held by one caller. ``release`` is
+    idempotent. Used as a context manager it is released when the block
+    ends, unless ownership passed to a response (``stream``) or a task
+    (``release_when_done``), which then release it when they end."""
+
+    def __init__(self, limit: ActiveLimit, identity: str) -> None:
+        self._limit = limit
+        self._identity = identity
+        self._held = True
+        self._handed_off = False
+
+    @property
+    def held(self) -> bool:
+        return self._held
+
+    def release(self) -> None:
+        if self._held:
+            self._held = False
+            self._limit._release(self._identity)
+
+    def __enter__(self) -> ActiveSlot:
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        if not self._handed_off:
+            self.release()
+
+    def stream(self, content: AsyncGenerator[str], media_type: str = "text/event-stream") -> StreamingResponse:
+        """A streaming response of ``content`` that holds this slot until
+        the response ends, however it ends (finished, failed, client gone),
+        and closes ``content`` then so its own cleanup runs at once."""
+        self._handed_off = True
+        return _SlotStreamingResponse(_SlotBody(content, self), media_type=media_type)
+
+    def release_when_done(self, task: asyncio.Future[Any]) -> None:
+        """Hold this slot until ``task`` is done (also when it is cancelled
+        before it starts)."""
+        self._handed_off = True
+        task.add_done_callback(lambda _task: self.release())
+
+
+class _SlotBody:
+    """The body of a slot's streaming response: ``content``, releasing the
+    slot and closing ``content`` when it ends, fails, is cancelled or is
+    closed (also when it is closed before it ever started)."""
+
+    def __init__(self, content: AsyncGenerator[str], slot: ActiveSlot) -> None:
+        self._content = content
+        self._slot = slot
+
+    def __aiter__(self) -> _SlotBody:
+        return self
+
+    async def __anext__(self) -> str:
+        try:
+            return await self._content.__anext__()
+        except BaseException:
+            # StopAsyncIteration, a failure, or CancelledError (the client
+            # went away while the stream waited for its next event).
+            await self.aclose()
+            raise
+
+    async def aclose(self) -> None:
+        self._slot.release()
+        # Closing a finished generator does nothing; one still open (the
+        # client went away between two events) runs its cleanup now, which
+        # cancels its fan_out tasks.
+        with contextlib.suppress(RuntimeError):
+            await self._content.aclose()
+
+
+class _SlotStreamingResponse(StreamingResponse):
+    """A ``StreamingResponse`` that closes its ``_SlotBody`` when it is done
+    with, whatever ended it."""
+
+    def __init__(self, content: _SlotBody, *, media_type: str) -> None:
+        super().__init__(content, media_type=media_type)
+        self._body = content
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            await self._body.aclose()
+
+
+class ActiveLimit:
+    """At most ``per_identity`` long-lived things (streams, jobs, sockets)
+    open per caller and ``total`` overall.
+
+    The app is one process and one event loop, so plain counters suffice: a
+    claim and a release never interleave. Every caller gets the same
+    numbers, an admin included; the server API token is one identity."""
+
+    def __init__(self, what: str, per_identity: int, total: int) -> None:
+        self.what = what
+        self.per_identity = max(1, per_identity)
+        self.total = max(1, total)
+        self._open: dict[str, int] = {}
+
+    def active(self, identity: str | None = None) -> int:
+        """How many are open: for ``identity``, or overall."""
+        if identity is None:
+            return sum(self._open.values())
+        return self._open.get(identity, 0)
+
+    def refusal(self, identity: str) -> str | None:
+        """Why one more for ``identity`` is refused, ``None`` when it is not."""
+        if self._open.get(identity, 0) >= self.per_identity:
+            return (
+                f"You already have {self.per_identity} {self.what} open, the most one user may run at once. "
+                "Wait for one to finish or close it, then try again."
+            )
+        if self.active() >= self.total:
+            return f"The server is already running its limit of {self.total} {self.what}. Try again shortly."
+        return None
+
+    def try_claim(self, identity: str | None) -> ActiveSlot | None:
+        """A slot for ``identity`` (``None``: ``anonymous``), or ``None``
+        when the caller or the server is at the limit."""
+        key = identity or "anonymous"
+        if self.refusal(key) is not None:
+            return None
+        return self._take(key)
+
+    def claim(self, request: Any) -> ActiveSlot:
+        """A slot for the caller of an HTTP request; 429 with the reason
+        when the caller or the server is at the limit."""
+        identity = session_identity(request_session(request)) or "anonymous"
+        reason = self.refusal(identity)
+        if reason is not None:
+            raise HTTPException(status_code=429, detail=reason, headers={"Retry-After": "10"})
+        return self._take(identity)
+
+    def _take(self, identity: str) -> ActiveSlot:
+        self._open[identity] = self._open.get(identity, 0) + 1
+        return ActiveSlot(self, identity)
+
+    def _release(self, identity: str) -> None:
+        left = self._open.get(identity, 0) - 1
+        if left > 0:
+            self._open[identity] = left
+        else:
+            self._open.pop(identity, None)
+
+    def reset(self) -> None:
+        """Forget every open slot (tests)."""
+        self._open.clear()
+
+
+# Heavy: inventory discovery scans and syncs (streamed, inline or as a
+# background job) and topology neighbor discovery.
+DISCOVERY_RUNS = ActiveLimit("discovery runs", state.DISCOVERY_RUNS_PER_USER, state.DISCOVERY_RUNS_TOTAL)
+# Cheap: the topology utilization stream and the /ws/* job output sockets.
+LIVE_STREAMS = ActiveLimit("live streams", state.LIVE_STREAMS_PER_USER, state.LIVE_STREAMS_TOTAL)
+
+# Close code of a WebSocket refused for the limit: 1013 "Try Again Later".
+WS_CLOSE_TRY_AGAIN_LATER = 1013
+
+
+def limit_websocket(limit: ActiveLimit) -> Callable[[Callable[..., Awaitable[Any]]], Callable[..., Awaitable[Any]]]:
+    """Wrap a ``/ws/*`` handler so each signed-in caller holds one slot of
+    ``limit`` while its socket is open; past the limit the handshake is
+    closed with 1013. A handshake without a validly signed session cookie
+    takes no slot: the handler itself refuses it."""
+
+    def wrap(fn: Callable[..., Awaitable[Any]]) -> Callable[..., Awaitable[Any]]:
+        @functools.wraps(fn)
+        async def handler(*args: Any, **kwargs: Any) -> Any:
+            websocket = next((v for v in (*args, *kwargs.values()) if isinstance(v, WebSocket)), None)
+            token = websocket.cookies.get("session") if websocket is not None else None
+            session = _verify_session_token_fn(token) if token and _verify_session_token_fn else None
+            identity = session_identity(session)
+            if identity is None or websocket is None:
+                return await fn(*args, **kwargs)
+            slot = limit.try_claim(identity)
+            if slot is None:
+                LOGGER.warning("websocket refused: %s at the %s limit", identity, limit.what)
+                await websocket.close(code=WS_CLOSE_TRY_AGAIN_LATER, reason=f"Too many {limit.what} open")
+                return None
+            with slot:
+                return await fn(*args, **kwargs)
+
+        return handler
+
+    return wrap
 
 
 def resolve_state_root() -> str | None:
@@ -268,7 +514,32 @@ async def require_any_feature(request, *feature_keys: str) -> None:
     raise HTTPException(status_code=403, detail=f"Access denied: this needs the {names} feature")
 
 
-async def verify_ws_session(token: str) -> dict | None:
+def ws_origin_allowed(websocket) -> bool:
+    """Whether a WebSocket handshake comes from a page of this site.
+
+    CORS does not cover WebSockets, and the SameSite=Strict session cookie
+    is still sent by a page on a sibling subdomain (same site), so without
+    this check such a page could read the signed-in user's streams.
+
+    Allowed: no ``Origin`` (a non-browser client; a browser always sends
+    one), an ``Origin`` whose host is the request's ``Host``, and the
+    origins of ``APP_CORS_ORIGINS``. Ports are not compared, because the
+    shipped nginx forwards ``$host``, which carries none.
+    """
+    origin = (websocket.headers.get("origin") or "").strip().rstrip("/").lower()
+    if not origin:
+        return True
+    if origin in {str(allowed).strip().rstrip("/").lower() for allowed in state.APP_CORS_ALLOW_ORIGINS}:
+        return True
+    try:
+        origin_host = urlsplit(origin).hostname
+        request_host = urlsplit("//" + (websocket.headers.get("host") or "")).hostname
+    except ValueError:
+        return False
+    return bool(origin_host) and origin_host == request_host
+
+
+async def verify_ws_session(token: str | None, websocket=None) -> dict | None:
     """Validate a WebSocket session token the same way require_auth does.
 
     The raw ``verify_session_token`` only checks the signature; the idle
@@ -278,10 +549,15 @@ async def verify_ws_session(token: str) -> dict | None:
     This mirrors require_auth's time checks, honoring the
     ``session_never_expires`` kiosk opt-out.
 
+    A handler passes its ``websocket`` so a handshake from a page of
+    another site is refused too (``ws_origin_allowed``).
+
     Returns the session dict on success, or None (caller should close the
     socket with code 1008).
     """
     if not token or _verify_session_token_fn is None:
+        return None
+    if websocket is not None and not ws_origin_allowed(websocket):
         return None
     session = _verify_session_token_fn(token)
     if not session or "user_id" not in session:
@@ -303,15 +579,18 @@ def session_rejection(session: dict, user: dict | None) -> str | None:
     """Why ``require_auth`` would refuse a validly signed ``session`` whose
     user record is ``user``, or ``None`` when it would accept it.
 
-    Reasons: ``"user_missing"`` (deleted account), ``"revoked"`` (the
-    user's session epoch moved on: password change, admin reset, privilege
-    change, rename, sign-out), ``"expired"`` (24h absolute cap) and
+    Reasons: ``"user_missing"`` (deleted account), ``"disabled"`` (an admin
+    switched the account off; callers treat it like ``"revoked"``),
+    ``"revoked"`` (the user's session epoch moved on: password change,
+    admin reset, privilege change, rename, sign-out), ``"expired"`` (24h absolute cap) and
     ``"idle"`` (idle timeout). Kiosk accounts (``session_never_expires``)
     skip the two time checks. The forced password change is not a reason
     here: each caller decides what that user may still reach.
     """
     if not user:
         return "user_missing"
+    if user.get("disabled"):
+        return "disabled"
     if int(session.get("session_epoch") or 0) != int(user.get("session_epoch") or 0):
         return "revoked"
     if bool(user.get("session_never_expires")):
@@ -418,7 +697,7 @@ async def require_credential_access(
     distinguishable from a future authorization regression.
     """
     caller = (
-        "api-token"
+        API_TOKEN_USER
         if session is not None and session.get("auth_mode") == "token"
         else (session or {}).get("user") or submitter_username or "(unauthenticated)"
     )
@@ -469,7 +748,7 @@ async def require_credential_access(
 
     if session is not None:
         if session.get("auth_mode") == "token":
-            return await _allow(cred, override="api-token")
+            return await _allow(cred, override=API_TOKEN_USER)
         user_id = session.get("user_id")
         if user_id is None:
             raise await _deny(401, "Not authenticated", cred)

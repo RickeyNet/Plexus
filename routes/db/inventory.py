@@ -61,6 +61,7 @@ __all__ = [
     "remove_host",
     "update_host",
     "move_hosts",
+    "confirm_host_addresses",
     "set_hosts_snmp_profile",
     "clear_host_snmp_profile",
     "bulk_delete_hosts",
@@ -158,6 +159,7 @@ _GROUP_LISTING_HOST_COLUMNS = (
     "site_id",
     "tenant_id",
     "location_detail",
+    "address_confirmed",
 )
 # Host columns read back as '' when NULL.
 _GROUP_LISTING_TEXT_COLUMNS = (
@@ -745,17 +747,23 @@ async def add_host(
     vlan_id: str = "",
     aws_instance_id: str = "",
     snmp_profile_id: str = "",
+    *,
+    address_confirmed: bool = False,
 ) -> int:
     """Insert a host. It gets the default lifecycle status (none when no
     status is the default) and the category its device type implies (an
-    ``apc_ups`` host is a ``ups``), and the role of that name."""
+    ``apc_ups`` host is a ``ups``), and the role of that name.
+
+    ``address_confirmed``: an admin (or the server API token) chose the
+    address. Without it the host gets no shared secret until an admin
+    confirms the address (``netcontrol.managed_targets``)."""
     category = device_type_category(device_type)
     db = await _dbcore.get_db()
     try:
         cursor = await db.execute(
             "INSERT INTO hosts (group_id, hostname, ip_address, device_type, vrf_name, vlan_id, aws_instance_id,"
-            " snmp_profile_id, device_category, lifecycle_status_id)"
-            " VALUES (?,?,?,?,?,?,?,?,?,(SELECT id FROM host_statuses WHERE is_default = 1 ORDER BY id LIMIT 1))",
+            " snmp_profile_id, device_category, address_confirmed, lifecycle_status_id)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,(SELECT id FROM host_statuses WHERE is_default = 1 ORDER BY id LIMIT 1))",
             (
                 group_id,
                 hostname,
@@ -766,6 +774,7 @@ async def add_host(
                 (aws_instance_id or "").strip(),
                 (snmp_profile_id or "").strip(),
                 category,
+                1 if address_confirmed else 0,
             ),
         )
         await db.commit()
@@ -837,10 +846,15 @@ async def update_host(
     vlan_id: str | None = None,
     aws_instance_id: str | None = None,
     snmp_profile_id: str | None = None,
+    *,
+    address_confirmed: bool | None = None,
 ):
     """``None`` leaves ``vrf_name``, ``vlan_id``, ``aws_instance_id`` and
     ``snmp_profile_id`` unchanged, each on its own; a string sets it (``""``
-    clears it)."""
+    clears it).
+
+    A changed ``ip_address`` stores ``address_confirmed`` with it (``None``:
+    not confirmed); an unchanged one leaves the stored flag as it is."""
     db = await _dbcore.get_db()
     try:
         cur = await db.execute("SELECT ip_address, vrf_name FROM hosts WHERE id = ?", (host_id,))
@@ -853,6 +867,11 @@ async def update_host(
             "UPDATE hosts SET hostname=?, ip_address=?, device_type=? WHERE id=?",
             (hostname, ip_address, device_type, host_id),
         )
+        if prior_row is not None and prior_ip != (ip_address or "").strip():
+            await db.execute(
+                "UPDATE hosts SET address_confirmed=? WHERE id=?",
+                (1 if address_confirmed else 0, host_id),
+            )
         if vrf_name is not None:
             await db.execute("UPDATE hosts SET vrf_name=? WHERE id=?", (vrf_name, host_id))
         if vlan_id is not None:
@@ -926,6 +945,33 @@ async def set_hosts_snmp_profile(host_ids: list[int], profile_id: str) -> int:
         )
         await db.commit()
         return cursor.rowcount
+    finally:
+        await db.close()
+
+
+@tracks_changes("host", "update", ids_arg="host_ids")
+async def confirm_host_addresses(host_ids: list[int]) -> list[int]:
+    """Mark the addresses of ``host_ids`` as confirmed by an admin; returns
+    the ids of the hosts that were awaiting confirmation (now confirmed)."""
+    ids = sorted({int(h) for h in host_ids})
+    if not ids:
+        return []
+    db = await _dbcore.get_db()
+    try:
+        placeholders = ",".join("?" for _ in ids)
+        cursor = await db.execute(
+            f"SELECT id FROM hosts WHERE id IN ({placeholders}) AND address_confirmed = 0",  # nosec B608 - placeholders only
+            tuple(ids),
+        )
+        pending = [int(dict(r)["id"]) for r in await cursor.fetchall()]
+        if pending:
+            marks = ",".join("?" for _ in pending)
+            await db.execute(
+                f"UPDATE hosts SET address_confirmed = 1 WHERE id IN ({marks})",  # nosec B608 - placeholders only
+                tuple(pending),
+            )
+        await db.commit()
+        return pending
     finally:
         await db.close()
 

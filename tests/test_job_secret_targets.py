@@ -125,7 +125,8 @@ def env(monkeypatch, request):
         runner_cred = await db_module.create_credential("st-cred", "dev", encrypt("pw"), owner_id=runner["id"])
         admin_cred = await db_module.create_credential("st-admin-cred", "dev", encrypt("pw"), owner_id=admin["id"])
         inv = await db_module.create_group("st-group")
-        host = await db_module.add_host(inv, "st-sw1", INVENTORY_IP)
+        # An admin's host: its address is confirmed (netcontrol.managed_targets).
+        host = await db_module.add_host(inv, "st-sw1", INVENTORY_IP, address_confirmed=True)
         await db_module.create_secret_variable("core_key", encrypt(SECRET_VALUE))
         uses_secret = await db_module.create_template("st-secret", "username x secret {{secret.core_key}}")
         missing_secret = await db_module.create_template("st-missing", "username x secret {{secret.nope_missing}}")

@@ -37,6 +37,7 @@ from routes.db.inventory import GROUP_SUBTREE_SQL
 
 __all__ = [
     "get_user_by_username",
+    "get_users_by_username_ci",
     "get_user_by_id",
     "create_user",
     "update_user_password",
@@ -45,6 +46,7 @@ __all__ = [
     "update_user_admin",
     "set_user_auth_provider",
     "set_user_external_id",
+    "get_users_by_external_id",
     "get_all_users",
     "delete_user",
     "delete_user_guarded",
@@ -78,12 +80,24 @@ async def get_user_by_username(username: str) -> dict | None:
         await db.close()
 
 
+async def get_users_by_username_ci(username: str) -> list[dict]:
+    """Every account whose username equals ``username`` when case is
+    ignored. Usernames are unique by exact text only, so there can be
+    more than one."""
+    db = await _dbcore.get_db(read_only=True)
+    try:
+        cursor = await db.execute("SELECT * FROM users WHERE LOWER(username) = LOWER(?) ORDER BY id", (username,))
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
 async def get_user_by_id(user_id: int) -> dict | None:
     # Runs on every authenticated request (auth dependencies); read-only.
     db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
-            "SELECT id, username, display_name, role, must_change_password, session_never_expires, session_epoch, created_at, auth_provider FROM users WHERE id = ?",
+            "SELECT id, username, display_name, role, must_change_password, session_never_expires, session_epoch, created_at, auth_provider, disabled FROM users WHERE id = ?",
             (user_id,),
         )
         return row_to_dict(await cursor.fetchone())
@@ -180,6 +194,22 @@ async def set_user_external_id(user_id: int, external_id: str):
         await db.close()
 
 
+async def get_users_by_external_id(provider: str, external_id: str) -> list[dict]:
+    """The accounts of ``provider`` bound to the subject ``external_id``
+    (normally one; none for an empty subject)."""
+    if not provider or not external_id:
+        return []
+    db = await _dbcore.get_db(read_only=True)
+    try:
+        cursor = await db.execute(
+            "SELECT * FROM users WHERE auth_provider = ? AND external_id = ? ORDER BY id",
+            (provider, external_id),
+        )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
 async def update_user_profile(user_id: int, display_name: str = None):
     db = await _dbcore.get_db()
     try:
@@ -196,7 +226,15 @@ async def update_user_admin(
     display_name: str = None,
     role: str = None,
     session_never_expires: bool | None = None,
-):
+    disabled: bool | None = None,
+    keep_enabled_admin: bool = False,
+) -> bool:
+    """Apply the given account changes; False when nothing was changed
+    because ``keep_enabled_admin`` refused the update.
+
+    ``keep_enabled_admin``: refuse a demotion or a disable that would leave
+    no enabled admin. As in ``delete_user_guarded``, the count is part of
+    the UPDATE statement itself rather than a separate check before it."""
     db = await _dbcore.get_db()
     try:
         fields = []
@@ -213,11 +251,29 @@ async def update_user_admin(
         if session_never_expires is not None:
             fields.append("session_never_expires = ?")
             values.append(int(bool(session_never_expires)))
+        if disabled is not None:
+            fields.append("disabled = ?")
+            values.append(int(bool(disabled)))
         if not fields:
-            return
-        sql, params = _safe_dynamic_update("users", fields, values, "id = ?", user_id)
-        await db.execute(sql, params)
+            return True
+        guarded = keep_enabled_admin and (role == "user" or bool(disabled))
+        where = "id = ?"
+        if guarded:
+            # The row may change only when it is not an enabled admin now,
+            # or another enabled admin remains.
+            where = (
+                "id = ? AND (role != 'admin' OR disabled != 0 OR "
+                "(SELECT COUNT(*) FROM users WHERE role = 'admin' AND disabled = 0 AND id != ?) > 0)"
+            )
+        sql, params = _safe_dynamic_update("users", fields, values, where, user_id)
+        if guarded:
+            params = (*params, user_id)
+        cursor = await db.execute(sql, params)
+        if guarded and (cursor.rowcount or 0) < 1:
+            await db.rollback()
+            return False
         await db.commit()
+        return True
     except Exception as e:
         await db.rollback()
         if _is_unique_violation(e):
@@ -231,7 +287,8 @@ async def get_all_users() -> list[dict]:
     db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
-            "SELECT id, username, display_name, role, must_change_password, created_at, auth_provider FROM users ORDER BY username"
+            "SELECT id, username, display_name, role, must_change_password, session_never_expires, created_at, auth_provider, disabled "
+            "FROM users ORDER BY username"
         )
         return rows_to_list(await cursor.fetchall())
     finally:
@@ -252,7 +309,8 @@ async def delete_user(user_id: int):
 
 
 async def delete_user_guarded(user_id: int) -> str:
-    """Delete a user, refusing to remove the last remaining admin.
+    """Delete a user, refusing to remove the last remaining enabled admin
+    (a disabled admin cannot sign in, so it does not count).
 
     The last-admin check lives *inside* the DELETE statement — its COUNT
     subquery is evaluated atomically at execution — so two concurrent deletes
@@ -271,9 +329,9 @@ async def delete_user_guarded(user_id: int) -> str:
         cur2 = await db.execute(
             """DELETE FROM users
                WHERE id = ?
-                 AND (role != 'admin'
-                      OR (SELECT COUNT(*) FROM users WHERE role = 'admin') > 1)""",
-            (user_id,),
+                 AND (role != 'admin' OR disabled != 0
+                      OR (SELECT COUNT(*) FROM users WHERE role = 'admin' AND disabled = 0 AND id != ?) > 0)""",
+            (user_id, user_id),
         )
         if (cur2.rowcount or 0) < 1:
             # Blocked as the last admin — undo the credentials delete too.

@@ -58,6 +58,7 @@ from netcontrol.drivers import (
 )
 from netcontrol.integrations.pathtrace.platforms import interface_addresses
 from netcontrol.integrations.pathtrace.route_tables import interface_key
+from netcontrol.managed_targets import ADDRESS_AWAITING_CONFIRMATION, may_send_credential
 from netcontrol.object_scope import ObjectScope, request_scope, require_group, require_host_ids, scoped
 from netcontrol.routes import background_jobs
 from netcontrol.routes.device_config import store_device_config
@@ -434,7 +435,11 @@ def _host_result(error: str | None, *, skipped: bool = False, stored: dict[str, 
 
 
 async def _collect_host(host: dict, credential: dict, rename_lock: asyncio.Lock) -> dict[str, Any]:
-    """One host: capture over SSH, then store. Never raises."""
+    """One host: capture over SSH, then store. Never raises. A shared
+    credential (the service credential) is not sent to a host whose address
+    awaits an admin's confirmation (``managed_targets``): skipped, saying so."""
+    if not may_send_credential(host, credential):
+        return _host_result(f"Skipped: {ADDRESS_AWAITING_CONFIRMATION}", skipped=True)
     try:
         async with state.device_op_semaphore():
             outcome = await asyncio.wait_for(

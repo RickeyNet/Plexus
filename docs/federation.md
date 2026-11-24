@@ -136,7 +136,13 @@ texts are not stored.
 
 - **Automatic sync** runs every 5 minutes for every enabled peer. Peers
   are contacted in parallel. **Sync** runs one peer at once.
-- **Timeout:** 30 seconds per request.
+- **Timeout:** 30 seconds per connect, read or write, and 120 seconds for
+  a whole request, so a peer that answers a few bytes at a time is cut off
+  too.
+- **Response size:** at most 10 MiB per request, counted after
+  decompression. A larger answer is dropped and that part of the sync
+  fails (**Partial**). The version a peer reports is kept to 64
+  characters.
 - **Disabled peers** are not synced and are left out of the cards and
   totals. Their last snapshot is kept until the peer is deleted.
 - **Deleting a peer** also deletes its cached snapshots. Nothing changes on

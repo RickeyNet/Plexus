@@ -253,7 +253,7 @@ API calls in `src/api/settings.ts`.
 - New `docs/ai-access.md`: overview, enabling, tokens, connecting clients,
   tool reference, redaction coverage and limits, data egress, troubleshooting.
 - Updates: `docs/api-reference.md`, `AUTHORIZATION_MATRIX.md`,
-  `internal security review`, `CHANGELOG.md`, in-app `PageHelp`.
+  `CHANGELOG.md`, in-app `PageHelp`. Detailed security review notes are maintained privately.
 - All examples use invented names and the documentation address ranges.
 
 ## Testing

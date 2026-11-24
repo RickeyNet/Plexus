@@ -100,8 +100,8 @@ async def test_run_fdm_poll_once_disabled_is_noop(monkeypatch):
 @pytest.mark.asyncio
 async def test_run_fdm_poll_once_polls_each_host_and_processes(monkeypatch):
     hosts = [
-        {"id": 1, "hostname": "ftd-a", "ip_address": "10.0.0.1", "fdm_credential_id": 1},
-        {"id": 2, "hostname": "ftd-b", "ip_address": "10.0.0.2", "fdm_credential_id": 1},
+        {"id": 1, "hostname": "ftd-a", "ip_address": "10.0.0.1", "fdm_credential_id": 1, "address_confirmed": 1},
+        {"id": 2, "hostname": "ftd-b", "ip_address": "10.0.0.2", "fdm_credential_id": 1, "address_confirmed": 1},
     ]
 
     async def _fake_get_fdm_hosts():

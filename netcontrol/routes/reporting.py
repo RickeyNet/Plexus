@@ -791,7 +791,11 @@ def _drawio_cell_id(raw_id: str | int, used: set[str]) -> str:
 
 
 def _drawio_value(lines: list[str]) -> str:
-    clean = [str(line or "").strip() for line in lines if str(line or "").strip()]
+    """A cell label. The cells are styled ``html=1``, so draw.io reads the
+    value as HTML once the XML attribute is decoded: each line (device and
+    interface names a neighbour can advertise) is escaped as text here and
+    only the line break is markup."""
+    clean = [_xml_escape(str(line or "").strip()) for line in lines if str(line or "").strip()]
     return "<br/>".join(clean)
 
 

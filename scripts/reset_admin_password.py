@@ -60,6 +60,15 @@ async def _run(username: str, password: str | None) -> int:
     if user:
         await db.update_user_admin(int(user["id"]), role="admin")
         await db.update_user_password(int(user["id"]), pw_hash, salt, must_change_password=False)
+        # A local password signs in a local account only: an account an
+        # external provider managed becomes local here (and loses its bound
+        # SSO subject), or the new password would never be accepted.
+        was_managed = str(user.get("auth_provider") or "")
+        if was_managed:
+            await db.set_user_auth_provider(int(user["id"]), "", clear_external_id=True)
+            print(f"[info] the account was managed by {was_managed}; it is now a local account")
+        # End the sessions signed in with the old password.
+        await db.bump_user_session_epoch(int(user["id"]))
         action = "updated existing user"
     else:
         await db.create_user(

@@ -53,6 +53,10 @@ DEFAULT_RULES = {
     # The shared four-eyes approval rules (jobs and deployments). Measured
     # by tests/test_job_approvals.py (100%); do not lower it to land a change.
     "netcontrol/approvals.py": 95.0,
+    # The YAML loader for text someone else wrote (bulk import, config
+    # contexts from Git): it refuses anchors with aliases. Measured by
+    # tests/test_yaml_safe.py (100%); do not lower it to land a change.
+    "netcontrol/yaml_safe.py": 95.0,
     # AI access (MCP): the token check, the dispatcher every call goes
     # through and the secret masking. Floors sit a few points under what
     # tests/test_mcp_*.py measure; do not lower them to land a change.
@@ -277,6 +281,12 @@ DEFAULT_RULES = {
     # tests/test_opnsense_backup_encryption.py (96%); do not lower it to
     # land a change.
     "netcontrol/routes/opnsense_backup_encryption.py": 92.0,
+    # Where shared secrets may go: confirmed host addresses, shared
+    # credentials, the unattended credential. Measured by
+    # tests/test_host_address_confirmation.py and
+    # tests/test_host_address_collection_paths.py (87%); do not lower it to
+    # land a change.
+    "netcontrol/managed_targets.py": 85.0,
 }
 
 

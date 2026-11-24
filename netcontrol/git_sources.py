@@ -52,6 +52,7 @@ from netcontrol.intended_config import (
     clean_name_value,
     clean_weight,
 )
+from netcontrol.yaml_safe import safe_load_no_alias
 
 # The content types a source can provide, each read from the directory of
 # the same name at the top of the repository.
@@ -509,7 +510,8 @@ def _context_item(rel: str, path: Path, text: str, out: Collected) -> Item | Non
     optional ``_metadata`` key sets the name, weight, description, enabled
     and scope; everything else is the data."""
     try:
-        data = json.loads(text) if rel.lower().endswith(".json") else yaml.safe_load(text)
+        # No aliases: the data is serialised below, which would expand them.
+        data = json.loads(text) if rel.lower().endswith(".json") else safe_load_no_alias(text)
     except (ValueError, yaml.YAMLError) as exc:
         out.warn(
             rel, f"Skipped: not valid {'JSON' if rel.lower().endswith('.json') else 'YAML'} ({type(exc).__name__})."

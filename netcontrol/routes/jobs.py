@@ -14,6 +14,7 @@ import asyncio
 import ipaddress
 import json
 import os
+from collections.abc import Iterable
 
 import routes.database as db
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
@@ -34,7 +35,14 @@ import netcontrol.routes.state as state
 from netcontrol import job_inputs
 from netcontrol.approvals import ApprovalDecision, decision_audit_detail, require_different_approver
 from netcontrol.dynamic_groups import resolve_group, scope_for_launcher
-from netcontrol.managed_targets import unmanaged_addresses
+from netcontrol.managed_targets import (
+    ADDRESS_AWAITING_CONFIRMATION,
+    address_confirmed,
+    credential_is_shared,
+    name_hosts,
+    split_by_confirmation,
+    unmanaged_addresses,
+)
 from netcontrol.object_scope import (
     READ_ONLY_DETAIL,
     ObjectScope,
@@ -48,11 +56,13 @@ from netcontrol.object_scope import (
 from netcontrol.routes.host_identity import host_ip_problem
 from netcontrol.routes.playbooks import effective_input_schema, playbook_permissions, playbook_supports_dry_run
 from netcontrol.routes.shared import (
+    LIVE_STREAMS,
     _audit,
     _corr_id,
     _get_session,
     caller_features,
     caller_is_admin,
+    limit_websocket,
     require_credential_access,
     require_owner_or_admin,
     verify_ws_session,
@@ -362,8 +372,9 @@ SECRET_UNAVAILABLE = "The job references a secret variable that does not exist o
 def _secrets_need_inventory(addresses: list[str]) -> str:
     shown = ", ".join(addresses[:5]) + (", ..." if len(addresses) > 5 else "")
     return (
-        "This job uses secret variables, so it may target only inventory hosts you can change; "
-        f"the ad-hoc address(es) {shown} are not, and only an admin may send secrets to them"
+        "This job uses secret variables, so it may target only inventory hosts you can change "
+        "whose address an admin confirmed; "
+        f"the address(es) {shown} are not, and only an admin may send secrets to them"
     )
 
 
@@ -413,15 +424,23 @@ async def _require_secret_targets(request: Request, ad_hoc_ips: list[str] | None
         raise HTTPException(403, _secrets_need_inventory(outside))
 
 
-async def _launcher_secret_targets_refused(job: dict) -> list[str]:
+async def _launcher_secret_targets_refused(job: dict, hosts: Iterable[dict] = ()) -> list[str]:
     """Queue-time recheck of ``_require_secret_targets`` against the job's
-    launcher: the ad-hoc addresses that launcher may not send secrets to
-    (empty: none). The caller has established the job uses secrets."""
+    launcher: the addresses that launcher may not send secrets to (empty:
+    none), the ad-hoc ones and those of the job's inventory ``hosts`` whose
+    address awaits an admin's confirmation (``managed_targets``). The
+    caller has established the job uses secrets."""
     ad_hoc = [str(ip) for ip in (_stored_list(job, "ad_hoc_ips") or [])]
+    awaiting = [
+        str(h.get("ip_address") or h.get("hostname") or h.get("id"))
+        for h in hosts
+        if h.get("id") is not None and not address_confirmed(h)
+    ]
     launched_by = job.get("launched_by")
-    if not ad_hoc or await _launcher_is_admin(launched_by):
+    if not (ad_hoc or awaiting) or await _launcher_is_admin(launched_by):
         return []
-    return await unmanaged_addresses(ad_hoc, await scope_for_launcher(launched_by))
+    refused = await unmanaged_addresses(ad_hoc, await scope_for_launcher(launched_by)) if ad_hoc else []
+    return refused + awaiting
 
 
 async def _require_job_permission(request: Request, playbook: dict, *, commit: bool) -> None:
@@ -643,7 +662,9 @@ async def _reprobe_hosts_after_job(hosts: list[dict], credentials: dict, dry_run
 
         for group_id, group_hosts in groups.items():
             discovered = []
-            for h, snmp_cfg in state._hosts_with_snmp_config(group_hosts, group_id):
+            # The shared SNMP config goes only to a confirmed address.
+            confirmed, _awaiting = split_by_confirmation(group_hosts)
+            for h, snmp_cfg in state._hosts_with_snmp_config(confirmed, group_id):
                 ip = h.get("ip_address")
                 if not ip:
                     continue
@@ -860,6 +881,21 @@ async def _process_job_queue_inner():
             "No credential configured - set a default credential in Settings or select one when launching the job",
         )
         return
+    # A shared credential (the default or a service credential) never goes to
+    # an inventory host whose address awaits an admin's confirmation.
+    if credential_is_shared(cred):
+        awaiting = [h for h in hosts if h.get("id") is not None and not address_confirmed(h)]
+        if awaiting:
+            hosts = [h for h in hosts if h.get("id") is None or address_confirmed(h)]
+            await db.add_job_event(
+                job_id,
+                "warning",
+                f"Skipped {len(awaiting)} host(s), {ADDRESS_AWAITING_CONFIRMATION}: {name_hosts(awaiting)}",
+            )
+        if not hosts:
+            await db.finish_job(job_id, status="failed")
+            await db.add_job_event(job_id, "error", "No host left to run on")
+            return
 
     # Get template commands.  ``template_commands`` is the flat generic
     # body used by every legacy playbook.  ``template_by_device_type``
@@ -899,7 +935,7 @@ async def _process_job_queue_inner():
     if _needs_secrets or _params_use_secrets(stored_inputs):
         # Re-checked here: the launcher may have lost the admin role, the
         # host may have left the inventory, or the job came from a preset.
-        refused = await _launcher_secret_targets_refused(next_job)
+        refused = await _launcher_secret_targets_refused(next_job, hosts)
         if refused:
             await db.finish_job(job_id, status="failed")
             await db.add_job_event(job_id, "error", _secrets_need_inventory(refused))
@@ -1672,6 +1708,7 @@ async def update_job_priority_endpoint(job_id: int, body: dict, request: Request
 
 @ws_router.websocket("/ws/jobs/{job_id}")
 @scoped("job")
+@limit_websocket(LIVE_STREAMS)
 async def websocket_job(websocket: WebSocket, job_id: int):
     """
     Stream job events in real-time.
@@ -1682,7 +1719,7 @@ async def websocket_job(websocket: WebSocket, job_id: int):
     4. Server sends {"type": "job_complete"} when done
     """
     token = websocket.cookies.get("session")
-    session = await verify_ws_session(token)
+    session = await verify_ws_session(token, websocket)
     if not session:
         await websocket.close(code=1008)
         return

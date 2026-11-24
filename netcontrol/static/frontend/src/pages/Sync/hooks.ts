@@ -9,6 +9,4 @@ export function useCanWriteSync(): boolean {
 }
 
 /** Connections bind a service credential: only admins change them. */
-export function useIsAdmin(): boolean {
-  return useAuthStatus().data?.role === 'admin';
-}
+export { useIsAdmin } from '@/api/auth';

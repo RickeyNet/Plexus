@@ -32,6 +32,7 @@ from netcontrol.drivers import supports_cli
 from netcontrol.integrations.apc import snmp as apc_snmp
 from netcontrol.integrations.availability import ENTITY_TYPES as TOPOLOGY_ENTITY_TYPES
 from netcontrol.integrations.opnsense import health as opnsense_health
+from netcontrol.managed_targets import ADDRESS_AWAITING_CONFIRMATION, split_by_confirmation, unattended_credential
 from netcontrol.object_scope import (
     HOST_NOT_FOUND,
     READ_ONLY_DETAIL,
@@ -64,7 +65,7 @@ from netcontrol.routes.route_capture import (  # re-exported: tests and callers 
     read_full_route_tables,
     store_route_snapshot,
 )
-from netcontrol.routes.shared import _audit, _corr_id, _get_session, _session_user
+from netcontrol.routes.shared import _audit, _corr_id, _get_session, _session_user, fan_out
 from netcontrol.routes.snmp import (
     PYSMNP_AVAILABLE,
     SNMP_TIMEOUT_ERROR,
@@ -1085,20 +1086,32 @@ async def _run_alert_escalation() -> int:
 # ── Background loops ─────────────────────────────────────────────────────────
 
 
+async def _awaiting_confirmation_hosts() -> list[dict]:
+    """The hosts a poll sweep skips because their address awaits an
+    admin's confirmation (``managed_targets``)."""
+    return split_by_confirmation(await db.get_all_hosts())[1]
+
+
 async def _build_poll_targets() -> list[tuple[dict, dict | None, dict]]:
-    """(host, credential, snmp_cfg) for every host in every group.
+    """(host, credential, snmp_cfg) for every host in every group whose
+    address an admin set or confirmed.
 
     Shared by the scheduled cycle and the manual SSE stream so credential
-    resolution and target building can't drift apart. Prefers the dedicated
-    service credential; falls back to the legacy default_credential_id for
-    deployments that haven't migrated yet."""
-    cred_id = state.AUTH_CONFIG.get("service_credential_id") or state.AUTH_CONFIG.get("default_credential_id")
-    default_cred = await db.get_credential_raw(cred_id) if cred_id else None
+    resolution and target building can't drift apart. Signs in with the
+    service credential (``managed_targets.unattended_credential``: the
+    legacy default credential only when it is a service credential).
+
+    A host whose address awaits an admin's confirmation is no target: it
+    would get the service credential and the shared SNMP config. It is not
+    polled, so no poll row, availability transition or alert is recorded
+    for it (it never reads as down); the sweep counts it under
+    ``awaiting_confirmation``."""
+    default_cred = await unattended_credential()
     targets: list[tuple[dict, dict | None, dict]] = []
     for group in await db.get_all_groups():
-        hosts = await db.get_hosts_for_group(group["id"])
-        # Every host is a target whatever its SNMP state, carrying its own
-        # effective SNMP config.
+        hosts, _awaiting = split_by_confirmation(await db.get_hosts_for_group(group["id"]))
+        # Every confirmed host is a target whatever its SNMP state, carrying
+        # its own effective SNMP config.
         for h, snmp_cfg in state._hosts_with_snmp_config(hosts, group["id"], enabled_only=False):
             targets.append((h, default_cred, snmp_cfg))
     return targets
@@ -1343,6 +1356,15 @@ async def _run_monitoring_poll_once(*, force: bool = False, host_ids: frozenset[
     # a manual (force) poll.
     targets: list[tuple[dict, dict | None, dict]] = []
     backed_off = 0
+    # Not polled at all (see _build_poll_targets): reported, never "down".
+    awaiting = [h for h in await _awaiting_confirmation_hosts() if host_ids is None or int(h["id"]) in host_ids]
+    if awaiting:
+        LOGGER.info(
+            "monitoring: not polling %d host(s), %s: %s",
+            len(awaiting),
+            ADDRESS_AWAITING_CONFIRMATION,
+            ", ".join(str(h.get("hostname") or h.get("ip_address") or h["id"]) for h in awaiting[:10]),
+        )
     for h, cred, snmp_cfg in await _build_poll_targets():
         if host_ids is not None and int(h["id"]) not in host_ids:
             continue
@@ -1401,6 +1423,9 @@ async def _run_monitoring_poll_once(*, force: bool = False, host_ids: frozenset[
         "alerts_created": alerts_created,
         "errors": errors,
         "backed_off": backed_off,
+        # Hosts left out because their address awaits an admin's confirmation.
+        "awaiting_confirmation": len(awaiting),
+        "skipped_reason": ADDRESS_AWAITING_CONFIRMATION if awaiting else "",
     }
 
 
@@ -1955,12 +1980,13 @@ async def monitoring_poll_now_stream(request: Request):
 
         poll_timeout = float(state.MONITORING_CONFIG.get("per_host_timeout_seconds", 90))
 
-        tasks = [
-            asyncio.create_task(_poll_target(h, cred, snmp_cfg, sem, poll_timeout)) for h, cred, snmp_cfg in all_hosts
-        ]
-
-        try:
-            for coro in asyncio.as_completed(tasks):
+        # A client disconnect lands GeneratorExit at a yield below: fan_out
+        # then cancels the outstanding polls instead of letting the whole
+        # fleet sweep run to completion with nobody consuming (or persisting) it.
+        async with fan_out(
+            _poll_target(h, cred, snmp_cfg, sem, poll_timeout) for h, cred, snmp_cfg in all_hosts
+        ) as finished:
+            for coro in finished:
                 try:
                     h, res, err, joined = await coro
                 except Exception as exc:  # task itself crashed (no host context)
@@ -2003,13 +2029,6 @@ async def monitoring_poll_now_stream(request: Request):
 
                 status_icon = "ok" if res["poll_status"] == "ok" else "error"
                 yield f"data: {json.dumps({'type': 'host_done', 'completed': completed, 'total_hosts': total, 'hostname': hostname, 'status': status_icon, 'cpu': res.get('cpu_percent'), 'memory': res.get('memory_percent'), 'alerts': host_alerts})}\n\n"
-        finally:
-            # Client disconnect lands GeneratorExit at a yield above: cancel
-            # the outstanding polls instead of letting the whole fleet sweep
-            # run to completion with nobody consuming (or persisting) it.
-            for t in tasks:
-                if not t.done():
-                    t.cancel()
 
         await _run_retention_cleanup_throttled()
 
