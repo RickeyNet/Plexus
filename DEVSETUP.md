@@ -66,7 +66,7 @@ docker compose version
 Docker Desktop needs a paid subscription at larger companies; Podman Desktop is
 the free alternative.
 
-Install Python 3.14 and Node 24 if they are missing. Node is only needed for
+Install Python 3.14 and Node 26 if they are missing. Node is only needed for
 the frontend (Vite, `npm run build`). After `winget install`, open a new
 terminal so `python` and `node` are on PATH.
 
@@ -201,12 +201,12 @@ the `sed` line, edit `.env` by hand and set
    curl -LsSf https://astral.sh/uv/install.sh | sh
    uv python install 3.14
    ```
-4. **Node 24 via nvm inside WSL.** Never run `npm ci` with the Windows `node`
+4. **Node 26 via nvm inside WSL.** Never run `npm ci` with the Windows `node`
    from `/mnt/c` (it is first on PATH in a default WSL shell):
    ```bash
    curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash
    exec bash
-   nvm install 24
+   nvm install 26
    ```
 
 ## Loop A: full stack (what the VM runs)

@@ -1,3 +1,7 @@
+# Each entry is <commit>:<path>:<rule>:<line> for a specific finding.
+# To refresh an entry, run `gitleaks git --report-format json` and verify
+# that the reported fingerprint identifies the same reviewed false positive.
+
 # False positive: high-entropy `key:"..."` string inside the vendored,
 # minified vis-network library (legacy SPA asset, since removed from HEAD).
 # Finding exists only in git history at commit 0881bda.
@@ -38,3 +42,9 @@ e204ea8e3b85c20ebe691922c272a77e3717c561:tests/test_mcp_redact.py:private-key:53
 918521f58c6dd688d3641bd848edeef34dac1239:tests/test_opnsense_drift.py:generic-api-key:59
 918521f58c6dd688d3641bd848edeef34dac1239:tests/test_opnsense_drift.py:generic-api-key:60
 918521f58c6dd688d3641bd848edeef34dac1239:tests/test_opnsense_drift.py:private-key:36
+# - netcontrol/routes/inventory.py: three call sites that pass the
+#   snmp_withheld flag by keyword right after the device login argument;
+#   the "secret" the rule matched is that keyword argument, not a value.
+0fae994cd490210620f66f318373e02a0ccca9ef:netcontrol/routes/inventory.py:generic-api-key:2554
+0fae994cd490210620f66f318373e02a0ccca9ef:netcontrol/routes/inventory.py:generic-api-key:2701
+0fae994cd490210620f66f318373e02a0ccca9ef:netcontrol/routes/inventory.py:generic-api-key:2769

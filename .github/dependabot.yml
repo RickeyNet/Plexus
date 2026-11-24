@@ -9,6 +9,19 @@ updates:
       python-dependencies:
         patterns:
           - "*"
+    ignore:
+      # requirements-cloud-lock.txt pins python-dateutil 2.x because botocore
+      # requires <3, while requirements-lock.txt pins 4.x (see
+      # CLOUD_LOCK_DIVERGENT in tools/check_requirements_lock.py). A bump to
+      # 4.x in the cloud lock cannot be installed and fails the group pull
+      # request at the pip-audit step. Remove this once botocore accepts 4.x.
+      - dependency-name: "python-dateutil"
+        update-types: ["version-update:semver-major"]
+      # azure-monitor-query 2.0 removed MetricsQueryClient, which the Azure
+      # metric puller imports; the tests use stand-ins and would not catch
+      # it. Remove this once the puller is ported (requirements-cloud.txt).
+      - dependency-name: "azure-monitor-query"
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
