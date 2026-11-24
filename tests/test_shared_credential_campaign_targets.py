@@ -5,7 +5,8 @@ A campaign or deployment that runs with the Plexus service credential or
 the app-wide default credential signs in to an inventory host only when its
 stored row, read at the time of the run, holds the address as confirmed
 (``netcontrol.managed_targets``), whoever runs it. A user's own credential
-is unaffected. Deployment execute refuses the whole run (409) before any
+run by its owner is unaffected (run by someone else, see
+``test_personal_credential_deferred_targets.py``). Deployment execute refuses the whole run (409) before any
 device is touched; rollback and campaign phases skip the host with the
 reason and carry on with the others.
 """

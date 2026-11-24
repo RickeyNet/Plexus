@@ -216,8 +216,12 @@ status, time and message, and its number of subnets and allocations.
 
 When you edit a source, enter the token or password again. The field says
 "Leave blank to keep existing", but saving the dialog with it blank clears
-the stored secret today. The kebab menu on a source has **Reconcile**,
-**Edit** and **Delete**.
+the stored secret today. A stored token or password stays with the address
+it was entered for: an update (also through the API) that changes the
+**Base URL** to another host, port or scheme, or turns **Verify TLS** off,
+without sending the credentials again is refused (`400`, "... cannot be
+reused: enter API credentials again"). The same holds for DHCP servers.
+The kebab menu on a source has **Reconcile**, **Edit** and **Delete**.
 
 **Scheduled auto-sync** syncs every enabled source on a schedule. Set the
 interval in minutes (5 to 1,440) and select **Save**. The default is on,

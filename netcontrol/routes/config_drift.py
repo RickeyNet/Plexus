@@ -1,5 +1,13 @@
 """
 config_drift.py -- Config drift detection routes: baselines, snapshots, drift events, revert, analysis.
+
+Device secrets: snapshots, baselines and drift diffs are device
+configuration, read under the rule of ``netcontrol.routes.config_visibility``
+(as captured for ``config-backups.write`` with write access to the device,
+masked for every other reader). Drift detection compares the stored text on
+the server. A baseline saved from masked text gets its masked lines back from
+the configuration it was read from, so the mask is never stored as the
+intended configuration.
 """
 
 from __future__ import annotations
@@ -25,6 +33,13 @@ from netcontrol.object_scope import (
     ws_scope,
 )
 from netcontrol.routes import opnsense_masking
+from netcontrol.routes.config_visibility import (
+    mask_commands,
+    mask_config_record,
+    mask_config_rows,
+    restore_masked_lines,
+    sees_raw_config,
+)
 from netcontrol.routes.device_config import get_device_config
 from netcontrol.routes.shared import (
     LIVE_STREAMS,
@@ -588,8 +603,20 @@ def _build_revert_commands(diff_text: str, baseline_text: str = "") -> list[str]
     return commands
 
 
-async def _run_revert_job(job_id: str, event: dict, host: dict, baseline: dict, credentials: dict, user: str):
-    """Background task: push only the changed lines back to the device, then re-capture and re-analyze."""
+async def _run_revert_job(
+    job_id: str,
+    event: dict,
+    host: dict,
+    baseline: dict,
+    credentials: dict,
+    user: str,
+    *,
+    mask_output: bool = False,
+):
+    """Background task: push only the changed lines back to the device, then re-capture and re-analyze.
+
+    ``mask_output``: the launcher may not read the device's secrets, so the
+    commands are pushed as built but shown with their secrets masked."""
     hostname = host.get("hostname", host["ip_address"])
     try:
         await _broadcast_revert_line(
@@ -611,7 +638,7 @@ async def _run_revert_job(job_id: str, event: dict, host: dict, baseline: dict, 
             job_id,
             f"[{datetime.now(UTC).strftime('%H:%M:%S')}] {len(config_lines)} lines to revert (only changed lines, not full config):\n",
         )
-        for cmd in config_lines:
+        for cmd in mask_commands(config_lines) if mask_output else config_lines:
             await _broadcast_revert_line(job_id, f"  {cmd}\n")
 
         await _broadcast_revert_line(
@@ -819,7 +846,7 @@ async def list_config_baselines(request: Request, host_id: int | None = Query(de
     scope_filter = await group_filter(request)
     try:
         rows = await db.get_config_baselines(host_id=host_id, **scope_filter)
-        return [opnsense_masking.mask_record(r, "config_text") for r in rows]
+        return await mask_config_rows(request, rows, "config_text")
     except Exception as exc:
         LOGGER.error("config-drift: list baselines error: %s", exc, exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to list config baselines")
@@ -829,7 +856,7 @@ async def list_config_baselines(request: Request, host_id: int | None = Query(de
 @scoped("baseline")
 async def get_config_baseline(baseline_id: int, request: Request = None):
     """Get a single config baseline."""
-    return opnsense_masking.mask_record(await _require_baseline(request, baseline_id), "config_text")
+    return await mask_config_record(request, await _require_baseline(request, baseline_id), "config_text")
 
 
 @router.post("/api/config-drift/baselines", status_code=201)
@@ -840,6 +867,10 @@ async def create_config_baseline(body: ConfigBaselineCreate, request: Request):
     session = _get_session(request)
     user = session["user"] if session else ""
     config_text = body.config_text
+    if not await sees_raw_config(request, body.host_id):
+        # Taken from the masked view of the newest snapshot: store its lines.
+        latest = await db.get_latest_config_snapshot(body.host_id)
+        config_text = restore_masked_lines(config_text, str((latest or {}).get("config_text") or ""))
     if opnsense_masking.is_opnsense_host(host) or opnsense_masking.is_opnsense_text(config_text):
         config_text = opnsense_masking.drift_form(config_text)
     baseline_id = await db.create_config_baseline(
@@ -863,11 +894,15 @@ async def create_config_baseline(body: ConfigBaselineCreate, request: Request):
 @scoped("baseline")
 async def update_config_baseline_endpoint(baseline_id: int, body: ConfigBaselineUpdate, request: Request):
     """Update a config baseline."""
-    await _require_baseline(request, baseline_id, write=True)
+    existing = await _require_baseline(request, baseline_id, write=True)
+    config_text = body.config_text
+    if config_text is not None and not await sees_raw_config(request, existing.get("host_id")):
+        # Edited from the masked view of this baseline: keep its secret lines.
+        config_text = restore_masked_lines(config_text, str(existing.get("config_text") or ""))
     await db.update_config_baseline(
         baseline_id,
         name=body.name,
-        config_text=_drift_form(body.config_text) if body.config_text is not None else None,
+        config_text=_drift_form(config_text) if config_text is not None else None,
         source=body.source,
     )
     session = _get_session(request)
@@ -920,7 +955,7 @@ async def list_config_snapshots(
 @scoped("snapshot")
 async def get_config_snapshot(snapshot_id: int, request: Request):
     """Get a single snapshot with full config text."""
-    return opnsense_masking.mask_record(await _require_snapshot(request, snapshot_id), "config_text")
+    return await mask_config_record(request, await _require_snapshot(request, snapshot_id), "config_text")
 
 
 @router.post("/api/config-drift/snapshots/capture")
@@ -1197,7 +1232,7 @@ async def list_config_drift_events(
 ):
     """List drift events with optional filters."""
     rows = await db.get_config_drift_events(status=status, host_id=host_id, limit=limit, **await group_filter(request))
-    return [opnsense_masking.mask_record(r, "diff_text") for r in rows]
+    return await mask_config_rows(request, rows, "diff_text", keep_lines=True)
 
 
 async def _bulk_close_drift_events(event_ids: list[int], to_status: str, request: Request) -> int:
@@ -1278,7 +1313,7 @@ async def bulk_resolve_drift_events(body: ConfigDriftBulkEventsRequest, request:
 @scoped("event")
 async def get_config_drift_event(event_id: int, request: Request):
     """Get a single drift event with diff text."""
-    return opnsense_masking.mask_record(await _require_event(request, event_id), "diff_text")
+    return await mask_config_record(request, await _require_event(request, event_id), "diff_text", keep_lines=True)
 
 
 @router.get("/api/config-drift/events/{event_id}/history")
@@ -1378,8 +1413,9 @@ async def revert_drift_event(body: ConfigDriftRevertRequest, request: Request):
     }
     _revert_job_sockets[job_id] = []
 
+    mask_output = not await sees_raw_config(request, event["host_id"])
     supervise_task(
-        asyncio.create_task(_run_revert_job(job_id, event, host, baseline, credentials, user)),
+        asyncio.create_task(_run_revert_job(job_id, event, host, baseline, credentials, user, mask_output=mask_output)),
         f"config-revert job {job_id}",
     )
     await db.create_config_drift_event_history(

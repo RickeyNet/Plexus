@@ -323,14 +323,16 @@ async def resolve_secret_inputs(params: dict, *, user: tuple[str, list[int]] | N
     secret. Returns the resolved inputs and the values to scrub from the job
     log. Raises ``SecretResolutionError`` for a secret that no longer exists
     or whose ``usable_by`` rule does not allow ``user`` (``None``: no rule)."""
-    from routes.secret_resolver import build_redaction_set, resolve_secrets
+    from routes.secret_resolver import resolve_secret_bodies
 
     resolved = dict(params)
-    redact: set[str] = set()
-    for key, value in params.items():
-        if isinstance(value, str) and has_secret_references(value):
-            redact |= await build_redaction_set([value], user=user)
-            resolved[key] = (await resolve_secrets([value], user=user))[0]
+    keys = [key for key, value in params.items() if isinstance(value, str) and has_secret_references(value)]
+    if not keys:
+        return resolved, set()
+    # One fetch per secret: the values scrubbed are the values substituted.
+    bodies, redact = await resolve_secret_bodies([[params[key]] for key in keys], user=user)
+    for key, body in zip(keys, bodies, strict=True):
+        resolved[key] = body[0]
     return resolved, redact
 
 

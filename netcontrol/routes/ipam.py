@@ -43,6 +43,7 @@ from netcontrol.routes.ipam_reconciliation import (
 )
 from netcontrol.routes.meraki_topology import ipam_subnets as topology_subnets
 from netcontrol.routes.shared import _audit, _corr_id, _get_session, admin_session
+from netcontrol.secret_fields import refuse_endpoint_secret_reuse
 
 router = APIRouter()
 
@@ -467,6 +468,15 @@ async def update_ipam_source_api(source_id: int, body: IpamSourceUpdate, request
             updates["provider"] = normalize_ipam_provider(updates["provider"])
         except ValueError:
             raise HTTPException(status_code=400, detail="Unsupported IPAM provider") from None
+    try:
+        # The stored API credentials stay with the address they were entered for.
+        refuse_endpoint_secret_reuse(
+            existing,
+            updates,
+            has_stored_secret=any((await db.get_ipam_source_auth_config(source_id)).values()),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
     updated = await db.update_ipam_source(source_id, **updates)
     if not updated:
         raise HTTPException(status_code=404, detail="IPAM source not found")

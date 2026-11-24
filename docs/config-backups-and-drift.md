@@ -121,6 +121,19 @@ keys. Who sees them:
 Masking is pattern based: it covers the common vendor forms but cannot
 promise to catch a secret in every syntax.
 
+The same rule covers every other page that shows a device's configuration
+or lines taken from it: config drift snapshots, baselines and drift diffs,
+the revert job's command list, intended-config extra lines and remediation
+commands, lab twins cloned from a host (and their runs and drift diffs),
+risk analyses, and the drift events listed beside an alert or a deployment.
+Without `config-backups.write` and write access to the device you read them
+masked. A lab twin cloned by such a user is built from the masked text. A
+baseline saved from a masked snapshot stores the captured lines, not the
+mask. Intended-config remediation whose commands remove secret lines is
+shown masked and is not turned into a deployment for such a user. The
+compliance scan snippet and the audit drift evidence are stored masked for
+everyone; checks and drift detection still run on the text as captured.
+
 ### Search all configurations
 
 Open **Configuration > Config Search**, type the text and choose a

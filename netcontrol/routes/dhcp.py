@@ -36,6 +36,7 @@ from netcontrol.routes.dhcp_adapters import (
     normalize_dhcp_provider,
 )
 from netcontrol.routes.shared import _audit, _corr_id, _get_session, admin_session
+from netcontrol.secret_fields import refuse_endpoint_secret_reuse
 
 router = APIRouter()
 
@@ -214,6 +215,15 @@ async def update_dhcp_server_api(
             update_kwargs["provider"] = normalize_dhcp_provider(update_kwargs["provider"])
         except ValueError:
             raise HTTPException(status_code=400, detail="invalid_provider")
+    try:
+        # The stored API credentials stay with the address they were entered for.
+        refuse_endpoint_secret_reuse(
+            existing,
+            update_kwargs,
+            has_stored_secret=any((await db.get_dhcp_server_auth_config(server_id)).values()),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
     row = await db.update_dhcp_server(server_id, **update_kwargs)
     await _audit(
         "dhcp",

@@ -2546,8 +2546,10 @@ async def run_config_change(host_id: int) -> dict:
         return outcome
     policy, cred = target
     async with state.device_op_semaphore():
+        # Not the policy creator's own request: their personal credential
+        # goes only to an address they set or an admin confirmed.
         result = await config_backups.backup_host(
-            host, cred, policy_id=int(policy["id"]), capture_method=CAPTURE_METHOD
+            host, cred, policy_id=int(policy["id"]), capture_method=CAPTURE_METHOD, deferred=True
         )
     outcome["backup"] = "stored" if result is True else ("unchanged" if result == "skipped" else "failed")
     if result is False:

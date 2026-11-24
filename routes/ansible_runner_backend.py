@@ -12,12 +12,74 @@ import logging
 import os
 import shutil
 import tempfile
+import time
 
 import ansible_runner
 
 from routes.runner import LogEvent, PlaybookResult
 
 _LOGGER = logging.getLogger("plexus.ansible")
+
+# ── Run directories ──────────────────────────────────────────────────────────
+#
+# Each run gets a private directory (``mkdtemp``: mode 0700, owned by the
+# service user) holding the playbook and an inventory with the device
+# password; it is removed when the run ends. A run killed hard (the process
+# killed, the host losing power) leaves it behind, so starting a run first
+# removes this code's run directories that are older than any run can be.
+
+RUN_DIR_PREFIX = "plexus_ansible_"
+# A run directory older than this belongs to no running job.
+STALE_RUN_DIR_SECONDS = 24 * 3600
+# The run directories of this process's runs in progress (never swept).
+_ACTIVE_RUN_DIRS: set[str] = set()
+
+
+def sweep_stale_run_dirs(parent: str | None = None, *, now: float | None = None) -> list[str]:
+    """Remove leftover run directories under ``parent`` (the system temp
+    directory): only directories named with ``RUN_DIR_PREFIX``, owned by
+    this user, not in use by this process and last changed more than
+    ``STALE_RUN_DIR_SECONDS`` ago. Returns the paths removed."""
+    parent = parent or tempfile.gettempdir()
+    now = time.time() if now is None else now
+    removed: list[str] = []
+    try:
+        entries = list(os.scandir(parent))
+    except OSError as exc:
+        _LOGGER.debug("Cannot list %s for stale Ansible run directories: %s", parent, exc)
+        return removed
+    for entry in entries:
+        try:
+            if not entry.name.startswith(RUN_DIR_PREFIX) or not entry.is_dir(follow_symlinks=False):
+                continue
+            if os.path.abspath(entry.path) in _ACTIVE_RUN_DIRS:
+                continue
+            info = entry.stat(follow_symlinks=False)
+            if hasattr(os, "getuid") and info.st_uid != os.getuid():
+                continue
+            if now - info.st_mtime < STALE_RUN_DIR_SECONDS:
+                continue
+            shutil.rmtree(entry.path, ignore_errors=True)
+            removed.append(entry.path)
+        except OSError as exc:
+            _LOGGER.debug("Cannot remove stale Ansible run directory %s: %s", entry.path, exc)
+    if removed:
+        _LOGGER.warning("Removed %d Ansible run director(ies) left by an interrupted run", len(removed))
+    return removed
+
+
+def new_run_dir() -> str:
+    """A new private run directory (mode 0700), after sweeping stale ones."""
+    sweep_stale_run_dirs()
+    path = os.path.abspath(tempfile.mkdtemp(prefix=RUN_DIR_PREFIX))
+    _ACTIVE_RUN_DIRS.add(path)
+    return path
+
+
+def remove_run_dir(path: str) -> None:
+    _ACTIVE_RUN_DIRS.discard(path)
+    shutil.rmtree(path, ignore_errors=True)
+
 
 # ── Device type mapping ──────────────────────────────────────────────────────
 
@@ -244,7 +306,7 @@ async def execute_ansible_playbook(
     Returns:
         PlaybookResult with host counts
     """
-    tmpdir = tempfile.mkdtemp(prefix="plexus_ansible_")
+    tmpdir = new_run_dir()
     try:
         # Set up ansible-runner project structure
         project_dir = os.path.join(tmpdir, "project")
@@ -349,6 +411,6 @@ async def execute_ansible_playbook(
     finally:
         # Clean up temp directory
         try:
-            shutil.rmtree(tmpdir, ignore_errors=True)
+            remove_run_dir(tmpdir)
         except Exception as exc:
             _LOGGER.debug("Failed to clean up temp directory %s: %s", tmpdir, exc)

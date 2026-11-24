@@ -34,6 +34,7 @@ from netcontrol.object_scope import (
     scoped,
 )
 from netcontrol.routes import background_jobs
+from netcontrol.routes.config_visibility import mask_config_text
 from netcontrol.routes.device_config import ON_DEMAND_MAX_AGE_SECONDS, get_device_config
 from netcontrol.routes.meraki_compliance import (
     run_due_assignments as _run_due_meraki_assignments,
@@ -271,12 +272,16 @@ async def _evaluate_host_compliance(
     credentials: dict,
     *,
     max_age_seconds: int = ON_DEMAND_MAX_AGE_SECONDS,
+    deferred: bool = False,
 ) -> dict:
     """Evaluate a host against a compliance profile's rules.
 
     The config is a Config Backups record the device confirmed within
     ``max_age_seconds`` when there is one, else read from the device
     (``0``: always read - the scheduled scan, the re-scan after a fix).
+    ``deferred``: a run for the assignment's stored assigner, not their own
+    request (``device_config.get_device_config``); a host refused under it
+    gets an error result with the reason.
 
     Returns {status, total_rules, passed_rules, failed_rules, findings, config_snippet}.
     """
@@ -284,7 +289,9 @@ async def _evaluate_host_compliance(
 
     try:
         stored = await _aio.wait_for(
-            get_device_config(host, credentials, capture_method="compliance", max_age_seconds=max_age_seconds),
+            get_device_config(
+                host, credentials, capture_method="compliance", max_age_seconds=max_age_seconds, deferred=deferred
+            ),
             timeout=_SCAN_TIMEOUT_SECONDS,
         )
         config_text = stored.config_text
@@ -342,8 +349,9 @@ async def _evaluate_host_compliance(
 
     total = len(rules)
     status = "compliant" if failed == 0 else "non-compliant"
-    # Truncate config snippet for storage
-    snippet = config_text[:2000] if len(config_text) > 2000 else config_text
+    # The head of the config, stored with its secrets masked: the result is
+    # read by every compliance user, who may hold no configuration right.
+    snippet = mask_config_text(config_text[:2000])
 
     return {
         "status": status,
@@ -418,7 +426,9 @@ async def _run_compliance_check_once(*, force: bool = False) -> dict:
             async def _scan_host(h, prof, cred_data, asgn_id, prof_id):
                 async with sem:
                     try:
-                        result = await _evaluate_host_compliance(h, prof, cred_data, max_age_seconds=0)
+                        result = await _evaluate_host_compliance(
+                            h, prof, cred_data, max_age_seconds=0, deferred=True
+                        )
                         await db.create_compliance_scan_result(
                             assignment_id=asgn_id,
                             profile_id=prof_id,
@@ -733,7 +743,7 @@ async def list_compliance_scan_results(
     status: str | None = Query(default=None),
     limit: int = Query(default=200, ge=1, le=1000),
 ):
-    return await db.get_compliance_scan_results(
+    rows = await db.get_compliance_scan_results(
         host_id=host_id,
         profile_id=profile_id,
         assignment_id=assignment_id,
@@ -741,6 +751,15 @@ async def list_compliance_scan_results(
         limit=limit,
         **await group_filter(request),
     )
+    return [_masked_snippet(row) for row in rows]
+
+
+def _masked_snippet(result: dict) -> dict:
+    """A scan result with its ``config_snippet`` masked for every reader
+    (rows stored before the snippet was masked at scan time included)."""
+    if isinstance(result.get("config_snippet"), str):
+        result["config_snippet"] = mask_config_text(result["config_snippet"])
+    return result
 
 
 _RESULT_NOT_FOUND = "Scan result not found"
@@ -759,7 +778,7 @@ async def _require_scan_result(request: Request, result_id: int, *, write: bool 
 @router.get("/api/compliance/results/{result_id}")
 @scoped("host_record")
 async def get_compliance_scan_result(result_id: int, request: Request):
-    return await _require_scan_result(request, result_id)
+    return _masked_snippet(await _require_scan_result(request, result_id))
 
 
 @router.delete("/api/compliance/results/{result_id}")

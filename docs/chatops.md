@@ -175,7 +175,9 @@ user's id and pick the Plexus user. The id is:
 Ids are compared ignoring case. One chat identity maps to one Plexus user;
 several chat identities may map to the same user. An unmapped person who
 types `/plexus` is shown their id, so they can send it to an admin.
-Deleting a Plexus user deletes its mappings.
+Deleting a Plexus user deletes its mappings. A mapping to a disabled
+account, or to one that must change its password first, gives no access
+(the person is answered as unmapped) until the account may sign in again.
 
 ## Job presets
 

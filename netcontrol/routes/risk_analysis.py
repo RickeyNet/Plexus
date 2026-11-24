@@ -16,7 +16,6 @@ import json
 import routes.database as db
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
-from routes.crypto import decrypt
 
 import netcontrol.routes.state as state
 from netcontrol.object_scope import (
@@ -31,6 +30,7 @@ from netcontrol.object_scope import (
     scoped,
     sql_condition,
 )
+from netcontrol.routes.config_visibility import mask_config_rows
 from netcontrol.routes.device_config import ON_DEMAND_MAX_AGE_SECONDS, get_device_config
 from netcontrol.routes.shared import (
     _audit,
@@ -53,6 +53,18 @@ register_model(
         description="Risk analyses (by their host and inventory group)",
     )
 )
+
+
+# The fields that hold (a diff of) a host's running configuration.
+_CONFIG_FIELDS = ("current_config", "simulated_config", "proposed_diff")
+
+
+async def _masked_analyses(request: Request, rows: list[dict]) -> list[dict]:
+    """Analyses with the configuration their host returned masked under the
+    rule of ``netcontrol.routes.config_visibility``. An offline analysis
+    (no host) holds text its author supplied and is returned as it is."""
+    await mask_config_rows(request, [r for r in rows if r.get("host_id") is not None], *_CONFIG_FIELDS, keep_lines=True)
+    return rows
 
 
 async def require_risk_analysis(request: Request, analysis_id: int, *, write: bool = False) -> dict:
@@ -459,13 +471,8 @@ async def run_risk_analysis(body: RiskAnalysisRequest, request: Request):
         elif body.host_id:
             await require_host(request, body.host_id, write=True)
 
-    # Resolve credentials
-    cred = await require_credential_access(body.credential_id, session=session)
-    credentials = {
-        "username": cred["username"],
-        "password": decrypt(cred["password"]),
-        "secret": decrypt(cred["secret"]) if cred["secret"] else "",
-    }
+    # Resolve credentials: the stored row, which the SSH helpers decrypt.
+    credentials = await require_credential_access(body.credential_id, session=session)
 
     # Resolve proposed commands - from body or from template
     commands = list(body.proposed_commands)
@@ -563,7 +570,7 @@ async def run_risk_analysis(body: RiskAnalysisRequest, request: Request):
         "hosts_analyzed": len(results),
         "total_compliance_violations": total_compliance_violations,
         "affected_areas": list(all_affected_areas),
-        "host_results": results,
+        "host_results": await _masked_analyses(request, results),
     }
 
 
@@ -577,9 +584,10 @@ async def list_risk_analyses(
     limit: int = Query(default=100, ge=1, le=500),
 ):
     scope_kwargs = await _scope_kwargs(request)
-    return await db.get_risk_analyses(
+    rows = await db.get_risk_analyses(
         host_id=host_id, group_id=group_id, risk_level=risk_level, limit=limit, **scope_kwargs
     )
+    return await _masked_analyses(request, rows)
 
 
 async def _scope_kwargs(request: Request) -> dict:
@@ -597,7 +605,7 @@ async def get_risk_analysis_summary_endpoint(request: Request):
 @router.get("/api/risk-analysis/{analysis_id}")
 @scoped("risk_analysis")
 async def get_risk_analysis(analysis_id: int, request: Request):
-    return await require_risk_analysis(request, analysis_id)
+    return (await _masked_analyses(request, [await require_risk_analysis(request, analysis_id)]))[0]
 
 
 @router.post("/api/risk-analysis/{analysis_id}/approve")

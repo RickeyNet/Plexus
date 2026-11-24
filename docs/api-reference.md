@@ -60,7 +60,7 @@ For a scoped user the inventory, config backup, config drift and intended config
 | POST   | `/api/admin/hosts/{id}/confirm-address` | Admin only. Confirm the host's address (`address_confirmed`), so shared secrets may go to it. Audited. `{ok, confirmed, already_confirmed}`; unknown host: 404 |
 | POST   | `/api/admin/hosts/confirm-address` | Admin only. `{host_ids?, group_id?}`: confirm the addresses of those hosts and of every host of the group. Audited. `{ok, confirmed, already_confirmed}`; neither given: 400 |
 
-Host rows carry `address_confirmed` (1: an admin or the API token set or confirmed the address; 0: a non-admin did, and no shared credential or SNMP secret is sent to it until an admin confirms it).
+Host rows carry `address_confirmed` (1: an admin or the API token set or confirmed the address; 0: a non-admin did, and no shared credential or SNMP secret is sent to it until an admin confirms it). They also carry `address_set_by`, the id of the user who last wrote the address, or null when no signed-in user did. Deferred work with a user's own credential (a scheduled backup or compliance scan, a syslog-triggered backup, a queued or approved job, a deployment executed or rolled back by someone other than the credential's owner) signs in only to a confirmed address or one the credential's owner set.
 
 ### VRFs, VLANs and interface addresses
 Reads need the `ipam` feature, writes are admin only and audited (`network_objects`). See [vrfs-and-vlans.md](vrfs-and-vlans.md).

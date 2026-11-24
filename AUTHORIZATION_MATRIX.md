@@ -87,7 +87,7 @@ below. Admins and the API token pass every feature check.
 | `config-drift` | `GET /api/intended-config/templates`, `GET /api/intended-config/templates/{id}`, `GET /api/intended-config/contexts`, `GET /api/intended-config/contexts/{id}`, `GET /api/intended-config/hosts`, `GET /api/intended-config/hosts/{host_id}`, `GET /api/intended-config/hosts/{host_id}/variables`, `POST /api/intended-config/generate` (renders and compares stored data only, no device session; needs `config-drift.write`; audited as `config` / `intended_generate`) | intended_config (router) |
 | `config-drift` | `GET /api/intended-config/hosts/{host_id}/remediation` (router), `POST /api/intended-config/remediation` (read_router: no `config-drift.write` needed) (remediation commands from stored data, read scope on every host; stores and pushes nothing) | intended_config |
 | `deployments` + `config-drift` | `POST /api/deployments/intended-remediation` (plans one deployment per host from its remediation; `config-drift` checked in the handler, write scope on every host, credential ownership as for `POST /api/deployments`; audited as `deployments` / `deployment.intended_remediation`) | deployments |
-| `config-backups` | `/api/config-backups/*` (writes need `config-backups.write`). Backup text holds device secrets: `GET /api/config-backups/{id}`, `/{id}/diff` and `/search` return it masked (`netcontrol/mcp/redact.py`, `secrets_masked: true`) unless the caller is an admin, the API token, or holds `config-backups.write` with write scope on the device's group; `GET /api/config-backups/{id}/download` and `GET /api/config-backups/download` (raw text) need the same, else `403` (the ZIP holds only devices of groups the caller may change). Restore uses the stored text server-side | config_backups |
+| `config-backups` | `/api/config-backups/*` (writes need `config-backups.write`). Backup text holds device secrets: `GET /api/config-backups/{id}`, `/{id}/diff` and `/search` return it masked (`netcontrol/mcp/redact.py`, `secrets_masked: true`) unless the caller is an admin, the API token, or holds `config-backups.write` with write scope on the device's group; `GET /api/config-backups/{id}/download` and `GET /api/config-backups/download` (raw text) need the same, else `403` (the ZIP holds only devices of groups the caller may change). Restore uses the stored text server-side. The same rule (`netcontrol/routes/config_visibility.py`) covers every other copy of device configuration: config drift snapshots, baselines, diffs and the revert command echo, intended-config extra lines and remediation, lab twins cloned from a host and their runs and drift runs, risk analyses of a host, and drift events in alert and deployment correlations. A lab clone by a caller without the right holds the masked text; an intended-remediation deployment that would remove secret lines is skipped for them. Compliance scan snippets and audit drift evidence are stored and returned masked for everyone | config_backups |
 | `compliance` | `/api/compliance/*` | compliance |
 | `compliance` | `/api/compliance/meraki/*` (scans use the organization's stored Dashboard API key, read-only; organizations themselves are managed under `/api/sources*`, admin-only) | meraki_compliance |
 | `risk-analysis` | `/api/risk-analysis/*` | risk_analysis |
@@ -142,7 +142,7 @@ below. Admins and the API token pass every feature check.
 | `GET/POST /api/intended-config/remediation-ignores`, `PUT/DELETE /api/intended-config/remediation-ignores/{id}` (remediation ignore rules; writes audited as `config` / `intended_ignore_*`) | intended_config (admin_router) |
 | `GET/POST /api/git-sources`, `GET/PUT/DELETE /api/git-sources/{id}`, `GET /api/git-sources/{id}/objects`, `POST /api/git-sources/{id}/sync` (writes and syncs audited as `config` / `git_source_*`; credentials are service credentials, never returned). Templates, playbooks and intended configuration contexts a Git source owns answer `409` to `PUT` and `DELETE` on their own routes | git_sources (router, `require_admin` in `app.py`) |
 | `POST /api/sync/connections`, `PUT/DELETE /api/sync/connections/{id}`, `POST /api/sync/connections/{id}/test` (a connection binds a service credential; audited as `sync` / `connection_*`) | sync (admin_router) |
-| `/api/secret-variables/*` | (admin enforced in handlers; reads and writes both, including each secret's `usable_by` rule) |
+| `/api/secret-variables/*` | (admin enforced in handlers; reads and writes both, including each secret's `usable_by` rule. Saving a template, a playbook input schema or a group SNMP profile that references `{{secret.NAME}}` needs the saver to be allowed by that secret's rule, else `403`; a name that does not exist reads the same) |
 | `/api/inventory/admin/*` | inventory_admin |
 | `/api/topology/admin/*` | topology_admin |
 | `/api/compliance/admin/*` | compliance_admin |
@@ -232,7 +232,17 @@ rehydrated activate, UPS phases) fails the device with the reason and
 carries on with the others, as it does for a campaign device whose
 address is no longer its inventory host's or whose host was deleted
 since it was added (`upgrade_devices.from_inventory`, migration 0135). A user's own credential is
-unaffected. Discovery scans and syncs by a non-admin send the group's SNMP
+unaffected when its owner uses it in their own request. Work that runs
+later for a stored owner (a scheduled backup or compliance scan, a
+syslog-triggered backup, a queued or approved job, a deployment executed or
+rolled back by someone other than the credential's owner) sends that
+owner's personal credential only to a confirmed address or one the owner
+set (`hosts.address_set_by`, migration 0141; written with the address by
+host create, update, bulk add, bulk import and discovery sync, left alone
+by an edit that keeps the address). Other hosts are skipped and reported
+with the reason; a deployment execute is refused with `409`. Hosts stored
+before migration 0141 have no recorded writer: an unconfirmed one needs an
+admin's confirmation first. Discovery scans and syncs by a non-admin send the group's SNMP
 settings only to the IP of a confirmed inventory host the caller may
 change and probe the other addresses without SNMP, reported as
 `snmp_withheld` (`count`, `reason`) in the scan job result, the stream

@@ -19,6 +19,7 @@ Two routers:
 from __future__ import annotations
 
 import importlib
+import json
 import os
 import re
 import sys
@@ -26,6 +27,7 @@ import sys
 import routes.database as db
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
+from routes.secret_resolver import require_usable_secret_references
 
 from netcontrol import job_inputs
 from netcontrol.object_scope import require_model_write, scope_exempt, scoped
@@ -304,6 +306,20 @@ def _clean_schema(raw: list | None) -> list[dict] | None:
         raise _unprocessable(exc)
 
 
+async def _require_schema_secrets(
+    schema: list[dict] | None, request: Request | None, stored: list | None = None
+) -> None:
+    """A secret input's default (a bare secret name) and any
+    ``{{secret.NAME}}`` in the schema may name only secret variables the
+    saving user may use: a launch that leaves the field blank resolves the
+    default for whoever runs the job. Saving the ``stored`` schema again
+    unchanged (the editor sends every field) is not checked."""
+    if not schema or schema == stored:
+        return
+    defaults = [str(f.get("default")) for f in schema if f.get("type") == "secret" and f.get("default")]
+    await require_usable_secret_references(request, [json.dumps(schema)], names=defaults)
+
+
 async def _clean_permissions(raw: dict | None, request: Request | None) -> dict | None:
     """Validate permissions and require an admin to set them (a user who
     could edit them could grant themselves commit)."""
@@ -427,6 +443,7 @@ async def put_playbook_input_schema(playbook_id: int, body: InputSchemaBody, req
         raise HTTPException(404, "Playbook not found")
     await require_model_write(request)
     schema = _clean_schema(body.schema_) or []
+    await _require_schema_secrets(schema, request, playbook.get("input_schema"))
     await db.update_playbook(playbook_id, input_schema=schema)
     session = _get_session(request) if request else None
     await _audit(
@@ -473,6 +490,7 @@ async def create_playbook(body: PlaybookCreate, request: Request = None):
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     input_schema = _clean_schema(body.input_schema)
+    await _require_schema_secrets(input_schema, request)
     permissions = await _clean_permissions(body.permissions, request)
     approval_required = await _clean_approval_required(body.approval_required, False, request)
     await _require_playbook_file_free(filename, None)
@@ -530,6 +548,7 @@ async def update_playbook(playbook_id: int, body: PlaybookUpdate, request: Reque
     if code_changed:
         await _require_admin_for_code(request)
     input_schema = _clean_schema(body.input_schema)
+    await _require_schema_secrets(input_schema, request, playbook.get("input_schema"))
     permissions = await _clean_permissions(body.permissions, request)
     approval_required = await _clean_approval_required(
         body.approval_required, bool(playbook.get("approval_required")), request

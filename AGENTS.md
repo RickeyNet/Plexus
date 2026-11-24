@@ -19,7 +19,7 @@ and IOS-XE upgrades via SNMP, Netmiko, and Ansible.
 - Route modules use late-binding init functions (`init_jobs()`, `init_auth()`, etc.) to avoid circular imports
 - Frontend renders user data through React (JSX auto-escapes); avoid `dangerouslySetInnerHTML`
 - `{{secret.NAME}}` syntax in config templates resolves encrypted variables at job execution time
-- Secret values are redacted from job logs via `redact_values()` in `routes/secret_resolver.py`
+- Secret values are redacted from job logs via one `SecretScrubber` per job (`routes/secret_resolver.py`, used by `_JobOutputScrubber` in `netcontrol/routes/jobs.py`)
 
 ## Code Reuse
 - Search for an existing helper before writing a new one; reuse or extend it instead of adding a duplicate

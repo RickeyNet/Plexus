@@ -52,7 +52,9 @@ def parse(text: str) -> tuple[str, list[str]]:
 async def resolve_user(platform: str, identities: list[str], display_name: str = "") -> ChatUser:
     """The chat identity (``identities[0]`` is the platform's user id; the
     rest are e-mail addresses) as a ``ChatUser``, mapped when a mapping
-    matches any of them and the Plexus user still exists."""
+    matches any of them and the Plexus user still exists and may sign in:
+    a disabled account, or one that must change its password first, is
+    treated as unmapped, as its sessions and tokens are refused."""
     from netcontrol.routes.auth import _get_user_features
 
     chat_id = next((i for i in identities if i), "")
@@ -60,7 +62,7 @@ async def resolve_user(platform: str, identities: list[str], display_name: str =
     if mapping is None:
         return ChatUser(platform=platform, chat_user_id=chat_id, chat_user_name=display_name)
     user = await db.get_user_by_id(int(mapping["user_id"]))
-    if not user:
+    if not user or user.get("disabled") or user.get("must_change_password"):
         return ChatUser(platform=platform, chat_user_id=chat_id, chat_user_name=display_name)
     return ChatUser(
         platform=platform,

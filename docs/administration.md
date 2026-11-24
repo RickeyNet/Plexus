@@ -88,7 +88,11 @@ cannot sign in by any method (password, break-glass, RADIUS, TACACS+,
 LDAP, OIDC, SAML): the sign-in gets the answer a wrong password gets and
 is audited as `auth` / `login.failure` with "account disabled". Its open
 sessions end at once, the AI-access (MCP) tokens it owns are refused, and
-a directory or IdP sign-in never re-enables or changes it. Clearing the
+a directory or IdP sign-in never re-enables or changes it. A chat identity
+mapped to it gets no ChatOps access, and work it queued or scheduled
+earlier (jobs, backup policies, compliance assignments, upgrade campaigns)
+is refused its credential when it starts and fails with "Submitter account
+is disabled"; hand such work to another account before disabling. Clearing the
 box lets it sign in again; sessions from before it was disabled stay
 ended. You cannot disable your own account, and the last enabled admin
 cannot be disabled, demoted or deleted (`400`); a disabled admin does not

@@ -45,6 +45,7 @@ from netcontrol.object_scope import (
     scope_exempt,
     scoped,
 )
+from netcontrol.routes.config_visibility import mask_config_text
 from netcontrol.routes.reporting import (
     _parse_db_datetime_utc,
     _parse_schedule_interval_seconds,
@@ -202,9 +203,10 @@ class ConfigDriftRule(Rule):
                         "hostname": host.get("hostname", ""),
                         "lines_added": lines_added,
                         "lines_removed": lines_removed,
-                        # Cap evidence size; the full diff is also accessible
-                        # via the existing config-drift endpoints.
-                        "diff_excerpt": diff_text[:8000],
+                        # Stored with its secrets masked: audit findings are
+                        # read with the reports feature alone. The full diff
+                        # is on the config-drift pages, under their rule.
+                        "diff_excerpt": mask_config_text(diff_text, keep_lines=True)[:8000],
                     },
                 )
             )
@@ -1275,17 +1277,24 @@ async def list_audit_findings(
         cursor = await conn.execute(sql, tuple(params))
         rows = await cursor.fetchall()
         cols = [d[0] for d in cursor.description]
-        findings = []
-        for r in rows:
-            f = dict(zip(cols, r))
-            try:
-                f["evidence"] = json.loads(f.pop("evidence_json") or "{}")
-            except Exception:
-                f["evidence"] = {}
-            findings.append(f)
-        return {"findings": findings}
+        return {"findings": [_finding_row(dict(zip(cols, r))) for r in rows]}
     finally:
         await conn.close()
+
+
+def _finding_row(row: dict) -> dict:
+    """A stored finding as returned: ``evidence_json`` decoded into
+    ``evidence``, a diff excerpt with its secrets masked (findings are read
+    with the reports feature alone; rows stored before the excerpt was
+    masked at run time included)."""
+    try:
+        evidence = json.loads(row.pop("evidence_json", None) or "{}")
+    except Exception:
+        evidence = {}
+    if isinstance(evidence, dict) and isinstance(evidence.get("diff_excerpt"), str):
+        evidence["diff_excerpt"] = mask_config_text(evidence["diff_excerpt"], keep_lines=True)
+    row["evidence"] = evidence
+    return row
 
 
 # ── Schedule endpoints (Phase 5) ────────────────────────────────────────────
@@ -1623,15 +1632,7 @@ async def list_host_audit_findings(host_id: int, request: Request, limit: int = 
         )
         rows = await cursor.fetchall()
         cols = [d[0] for d in cursor.description]
-        findings = []
-        for r in rows:
-            f = dict(zip(cols, r))
-            try:
-                f["evidence"] = json.loads(f.pop("evidence_json") or "{}")
-            except Exception:
-                f["evidence"] = {}
-            findings.append(f)
-        return {"host_id": host_id, "findings": findings}
+        return {"host_id": host_id, "findings": [_finding_row(dict(zip(cols, r))) for r in rows]}
     finally:
         await conn.close()
 

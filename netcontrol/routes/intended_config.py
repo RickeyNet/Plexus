@@ -18,6 +18,11 @@ gap to its intended configuration, previewed here and turned into
 deployments by ``netcontrol.routes.deployments`` (rules in
 ``netcontrol.intended_remediation``).
 
+Device secrets: the compared backup's lines (a host's ``extra`` lines, the
+commands that remove them) are read under the rule of
+``netcontrol.routes.config_visibility``: masked for a caller who may not
+read the backup as captured.
+
 ``generate_for_hosts`` renders and compares; ``recompare_host`` compares a
 host's stored intended configuration again (``store_device_config`` calls it
 when a capture stores a new backup); ``intended_config_loop`` regenerates
@@ -74,6 +79,7 @@ from netcontrol.object_scope import (
     require_object_host,
     scoped,
 )
+from netcontrol.routes.config_visibility import mask_commands, mask_lines, sees_raw_config
 from netcontrol.routes.custom_fields import attach_custom_data
 from netcontrol.routes.device_model import check_device_values
 from netcontrol.routes.git_sources import reject_git_owned
@@ -699,11 +705,31 @@ async def get_host_detail(host_id: int, request: Request) -> dict:
     if backup is not None and int(backup.get("host_id") or 0) != host_id:
         backup = None
     comparison = compare_configs(row["config_text"], str(backup.get("config_text") or "")) if backup else None
+    extra = comparison.extra if comparison else []
+    masked = bool(extra) and not await sees_raw_config(request, host_id)
+    if masked:
+        # The extra lines are the backup's: masked like the backup itself.
+        extra = [_masked_extra(item) for item in extra]
     return {
         **row,
         "lines": comparison.lines if comparison else [{"text": t, "missing": False} for t in _lines(row)],
-        "extra": comparison.extra if comparison else [],
+        "extra": extra,
         "backup": {"id": int(backup["id"]), "captured_at": backup.get("captured_at") or ""} if backup else None,
+        **({"secrets_masked": True} if masked else {}),
+    }
+
+
+def _masked_extra(item: dict) -> dict:
+    """An extra backup line with its secrets masked. The line is masked in
+    its place under its section headers (indented as in the backup), since
+    many secret forms are known only inside a section."""
+    path = [str(p) for p in item.get("path") or []]
+    nested = [" " * depth + line for depth, line in enumerate([*path, str(item.get("text") or "")])]
+    masked = mask_lines(nested)
+    return {
+        **item,
+        "path": [line[depth:] for depth, line in enumerate(masked[:-1])],
+        "text": masked[-1][len(path) :],
     }
 
 
@@ -766,7 +792,7 @@ def _unavailable(reason: str) -> dict:
     }
 
 
-async def _host_remediation(host: dict, ignores: list[dict]) -> dict:
+async def _host_remediation(host: dict, ignores: list[dict], request: Request | None = None) -> dict:
     host_id = int(host["id"])
     out: dict[str, Any] = {
         "host_id": host_id,
@@ -794,17 +820,35 @@ async def _host_remediation(host: dict, ignores: list[dict]) -> dict:
         out["device_type"],
         ignores,
     )
-    return {**out, "state": "ok" if result.supported else "unsupported", **result.as_dict()}
+    found = {**out, "state": "ok" if result.supported else "unsupported", **result.as_dict()}
+    if found["commands"] and not await sees_raw_config(request, host_id):
+        # A command that is not a line of the intended configuration (the
+        # caller reads that in full) carries a backup line: masked like the
+        # backup, and the host flagged so it is never deployed as shown.
+        intended = {line.strip() for line in str(row["config_text"] or "").splitlines()}
+        masked = [
+            command if command.strip() in intended else masked_command
+            for command, masked_command in zip(found["commands"], mask_commands(found["commands"]), strict=True)
+        ]
+        if masked != found["commands"]:
+            found["commands"] = masked
+            found["secrets_masked"] = True
+    return found
 
 
-async def remediation_for_hosts(hosts: list[dict]) -> list[dict]:
+async def remediation_for_hosts(hosts: list[dict], request: Request | None = None) -> list[dict]:
     """The remediation of each host, in order: ``state`` ``ok`` (with
     ``commands``, empty when the host already matches), ``unsupported`` (its
     driver) or ``unavailable`` (no intended configuration, a render error or
     no backup), ``reason`` saying why. Compares the backup the stored
-    comparison used, so the commands match the diff the detail shows."""
+    comparison used, so the commands match the diff the detail shows.
+
+    For a ``request`` whose caller may not read the host's configuration as
+    captured, commands holding a device secret are masked and the host is
+    flagged ``secrets_masked``. Without a request (server side) they are
+    returned as built."""
     ignores = await db.list_remediation_ignores()
-    return [await _host_remediation(host, ignores) for host in hosts]
+    return [await _host_remediation(host, ignores, request) for host in hosts]
 
 
 async def resolve_remediation_targets(request: Request, body: RemediationTargets, *, write: bool) -> list[dict]:
@@ -843,7 +887,7 @@ async def host_remediation(host_id: int, request: Request) -> dict:
     """The commands that close the host's gap to its intended configuration
     (nothing is stored or pushed)."""
     host = await require_host(request, host_id, not_found=_INTENDED_NOT_FOUND)
-    return (await remediation_for_hosts([host]))[0]
+    return (await remediation_for_hosts([host], request))[0]
 
 
 @read_router.post(f"{PREFIX}/remediation")
@@ -851,7 +895,7 @@ async def host_remediation(host_id: int, request: Request) -> dict:
 async def bulk_remediation(body: RemediationTargets, request: Request) -> dict:
     """The remediation of several hosts (``host_ids``, an inventory group or a
     dynamic group); nothing is stored or pushed."""
-    rows = await remediation_for_hosts(await resolve_remediation_targets(request, body, write=False))
+    rows = await remediation_for_hosts(await resolve_remediation_targets(request, body, write=False), request)
     return {
         "hosts": rows,
         "counts": {

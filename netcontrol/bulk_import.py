@@ -51,7 +51,7 @@ from netcontrol.csv_cells import CSV_FORMULA_PREFIXES, csv_text_cell
 from netcontrol.custom_fields import TEXT_MAX, CustomFieldError, check_object_values, clean_tag_name, typed_value
 from netcontrol.data_validation import CUSTOM_FIELD_PREFIX, pick, validate_object
 from netcontrol.device_model import LOCATION_DETAIL_MAX
-from netcontrol.managed_targets import caller_confirms_addresses
+from netcontrol.managed_targets import address_writer_id, caller_confirms_addresses
 from netcontrol.network_objects import clean_description, clean_rd, clean_vid, clean_vlan_name, clean_vrf_name
 from netcontrol.object_scope import READ_ONLY_DETAIL, ObjectScope
 from netcontrol.routes.host_identity import host_ip_problem
@@ -872,6 +872,8 @@ class HostAdapter(Adapter):
         # An address from the file counts as confirmed only for an admin or
         # the API token (``managed_targets``); a sync job confirms nothing.
         confirmed = await caller_confirms_addresses()
+        # Who set the address: the acting user (a scheduled sync job: nobody).
+        writer = await address_writer_id()
         if cur is None:
             host_id = await db.add_host(
                 plan["group_id"],
@@ -881,6 +883,7 @@ class HostAdapter(Adapter):
                 vrf_name=plan["vrf"] or "",
                 vlan_id=plan["vlan"] or "",
                 address_confirmed=confirmed,
+                address_set_by=writer,
             )
             prior_ip = ""
         else:
@@ -896,6 +899,7 @@ class HostAdapter(Adapter):
                     vrf_name=plan["vrf"],
                     vlan_id=plan["vlan"],
                     address_confirmed=confirmed,
+                    address_set_by=writer,
                 )
             if plan["group_id"] != cur.get("group_id"):
                 await db.move_hosts([host_id], int(plan["group_id"]))

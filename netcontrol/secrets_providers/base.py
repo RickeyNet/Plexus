@@ -44,6 +44,7 @@ UNREACHABLE = "unreachable"
 PROVIDER_ERROR = "provider_error"
 DISABLED = "disabled"
 PROVIDER_MISSING = "provider_missing"
+PERSONAL_NOT_ALLOWED = "personal_not_allowed"
 
 PATH_MAX = 512
 KEY_MAX = 256

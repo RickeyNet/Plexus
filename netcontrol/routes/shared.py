@@ -766,6 +766,10 @@ async def require_credential_access(
         if not user:
             # Submitter no longer exists (deleted account). Fail closed.
             raise await _deny(403, "Submitter account is no longer valid", cred)
+        if user.get("disabled"):
+            # A disabled account runs nothing: its sessions and tokens are
+            # refused, and so is work it queued or scheduled earlier.
+            raise await _deny(403, "Submitter account is disabled", cred)
         if is_service_cred:
             if user.get("role") == "admin":
                 return await _allow(cred, override="admin-service-cred")

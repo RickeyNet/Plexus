@@ -133,13 +133,16 @@ async def _resolve_campaign_credential(
         if not cred:
             raise HTTPException(400, f"Configured default credential {fallback_id} no longer exists")
 
-    # The fallback is the system's credential, so it follows the creator's
-    # rights: an admin's (or the API token's) campaign uses it directly;
-    # anyone else's goes through the per-user check, which refuses a service
-    # credential and any credential the creator does not own.
+    # The fallback follows the creator's rights. An admin's (or the API
+    # token's) campaign uses the Plexus service credential directly: it is
+    # the system's own. Everything else goes through the per-user check an
+    # explicit credential gets, so a default credential that is somebody's
+    # personal one serves only its owner, admins included, and a non-admin
+    # never gets the service credential.
     creator = (created_by or "").strip()
     creator_user = await db.get_user_by_username(creator) if creator else None
-    if creator_user and creator_user.get("role") == "admin":
+    creator_is_admin = bool(creator_user and creator_user.get("role") == "admin" and not creator_user.get("disabled"))
+    if creator_is_admin and cred.get("is_service"):
         return cred
     try:
         if creator_user or (creator and creator.lower() != "unknown"):
@@ -149,6 +152,13 @@ async def _resolve_campaign_credential(
     except HTTPException as exc:
         if exc.status_code != 403:
             raise
+        if creator_is_admin:
+            raise HTTPException(
+                403,
+                "This campaign has no credential set, and the default credential "
+                "in Settings belongs to another user. Select a credential on the "
+                "campaign, or choose the Service Credential in Settings > Authentication.",
+            ) from exc
         raise HTTPException(
             403,
             "This campaign has no credential set, and only a campaign an admin "

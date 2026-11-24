@@ -28,7 +28,6 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import Response
 from pydantic import BaseModel
 from routes.db.topology import _compile_config_backup_regex
-from starlette.requests import HTTPConnection
 
 import netcontrol.routes.state as state
 from netcontrol.drivers import get_driver
@@ -41,6 +40,7 @@ from netcontrol.object_scope import (
     scoped,
 )
 from netcontrol.routes import opnsense_masking
+from netcontrol.routes.config_visibility import has_raw_config_feature, sees_raw_config
 from netcontrol.routes.device_config import get_device_config
 from netcontrol.routes.opnsense_backup import backup_firewall
 from netcontrol.routes.opnsense_backup_encryption import (
@@ -53,7 +53,6 @@ from netcontrol.routes.shared import (
     _compute_config_diff,
     _corr_id,
     _get_session,
-    caller_features,
     require_credential_access,
 )
 from netcontrol.telemetry import configure_logging, increment_metric, redact_value
@@ -100,33 +99,15 @@ class ConfigBackupRestoreRequest(BaseModel):
 
 _POLICY_NOT_FOUND = "Policy not found"
 _BACKUP_NOT_FOUND = "Backup not found"
-_RAW_FEATURE = "config-backups.write"
 _RAW_DOWNLOAD_DENIED = (
     "Downloading a config backup needs config-backups.write: it holds the device's secrets. "
     "The view shows it with the secrets masked."
 )
 
-
-async def _has_raw_feature(request: Request | None) -> bool:
-    """Whether the caller may see device secrets in backups at all: an
-    admin, the API token, or a user holding ``config-backups.write``. A
-    route called directly (no HTTP request) is a server-side caller."""
-    if not isinstance(request, HTTPConnection):
-        return True
-    features = await caller_features(request)
-    return features is None or _RAW_FEATURE in features
-
-
-async def _sees_raw(request: Request | None, host_id: int | None) -> bool:
-    """``_has_raw_feature`` and, for a caller limited to inventory groups,
-    write access to the device's group (the right a restore needs)."""
-    if not await _has_raw_feature(request):
-        return False
-    try:
-        await require_object_host(request, host_id, write=True, not_found=_BACKUP_NOT_FOUND)
-    except HTTPException:
-        return False
-    return True
+# Who reads a backup as captured: one rule for every page that returns
+# device configuration (``netcontrol.routes.config_visibility``).
+_has_raw_feature = has_raw_config_feature
+_sees_raw = sees_raw_config
 
 
 async def _require_policy(request: Request | None, policy_id: int, *, write: bool = False) -> dict:
@@ -804,7 +785,7 @@ NO_CREDENTIAL_MESSAGE = (
 
 
 async def backup_host_outcome(
-    host: dict, cred: dict | None, *, policy_id: int, capture_method: str
+    host: dict, cred: dict | None, *, policy_id: int, capture_method: str, deferred: bool = False
 ) -> tuple[bool | str, str]:
     """Back up one host of a backup policy. The result, and for a failed
     capture the reason stored on its error row (``""`` otherwise). The
@@ -817,14 +798,20 @@ async def backup_host_outcome(
     An OPNsense firewall is backed up over the API key of its OPNsense
     source (``opnsense_backup.backup_firewall``: no SSH, ``cred`` unused);
     any other host over SSH with ``cred``, and with none (a policy without
-    a credential) it gets an error row that says so."""
+    a credential) it gets an error row that says so. ``deferred``: the run
+    is not the credential owner's own request (the schedule, a syslog
+    trigger), so a personal credential goes only to an address its owner
+    set or an admin confirmed (``managed_targets``); a refused host gets an
+    error row with the reason."""
     try:
         if opnsense_masking.is_opnsense_host(host):
             stored = await backup_firewall(host, policy_id=policy_id, capture_method=capture_method)
         elif cred is None:
             raise RuntimeError(NO_CREDENTIAL_MESSAGE)
         else:
-            stored = await get_device_config(host, cred, capture_method=capture_method, policy_id=policy_id)
+            stored = await get_device_config(
+                host, cred, capture_method=capture_method, policy_id=policy_id, deferred=deferred
+            )
         return (True if stored.created else "skipped"), ""
     except Exception as exc:
         reason = str(exc)[:1000]
@@ -839,9 +826,13 @@ async def backup_host_outcome(
         return False, reason
 
 
-async def backup_host(host: dict, cred: dict | None, *, policy_id: int, capture_method: str) -> bool | str:
+async def backup_host(
+    host: dict, cred: dict | None, *, policy_id: int, capture_method: str, deferred: bool = False
+) -> bool | str:
     """The result of ``backup_host_outcome``, without the reason."""
-    result, _reason = await backup_host_outcome(host, cred, policy_id=policy_id, capture_method=capture_method)
+    result, _reason = await backup_host_outcome(
+        host, cred, policy_id=policy_id, capture_method=capture_method, deferred=deferred
+    )
     return result
 
 
@@ -914,7 +905,9 @@ async def _run_config_backups_once() -> dict:
 
             async def _backup_host(host, cred_data, pol_id):
                 async with sem:
-                    return await backup_host(host, cred_data, policy_id=pol_id, capture_method="scheduled")
+                    return await backup_host(
+                        host, cred_data, policy_id=pol_id, capture_method="scheduled", deferred=True
+                    )
 
             tasks = [_backup_host(h, cred, policy["id"]) for h in hosts]
             results = await asyncio.gather(*tasks, return_exceptions=True)

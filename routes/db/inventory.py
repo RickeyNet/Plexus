@@ -750,6 +750,7 @@ async def add_host(
     snmp_profile_id: str = "",
     *,
     address_confirmed: bool = False,
+    address_set_by: int | None = None,
 ) -> int:
     """Insert a host. It gets the default lifecycle status (none when no
     status is the default) and the category its device type implies (an
@@ -757,14 +758,16 @@ async def add_host(
 
     ``address_confirmed``: an admin (or the server API token) chose the
     address. Without it the host gets no shared secret until an admin
-    confirms the address (``netcontrol.managed_targets``)."""
+    confirms the address (``netcontrol.managed_targets``).
+    ``address_set_by``: the id of the signed-in user who wrote the address
+    (``None``: no user did)."""
     category = device_type_category(device_type)
     db = await _dbcore.get_db()
     try:
         cursor = await db.execute(
             "INSERT INTO hosts (group_id, hostname, ip_address, device_type, vrf_name, vlan_id, aws_instance_id,"
-            " snmp_profile_id, device_category, address_confirmed, lifecycle_status_id)"
-            " VALUES (?,?,?,?,?,?,?,?,?,?,(SELECT id FROM host_statuses WHERE is_default = 1 ORDER BY id LIMIT 1))",
+            " snmp_profile_id, device_category, address_confirmed, address_set_by, lifecycle_status_id)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?,(SELECT id FROM host_statuses WHERE is_default = 1 ORDER BY id LIMIT 1))",
             (
                 group_id,
                 hostname,
@@ -776,6 +779,7 @@ async def add_host(
                 (snmp_profile_id or "").strip(),
                 category,
                 1 if address_confirmed else 0,
+                int(address_set_by) if address_set_by is not None else None,
             ),
         )
         await db.commit()
@@ -849,13 +853,16 @@ async def update_host(
     snmp_profile_id: str | None = None,
     *,
     address_confirmed: bool | None = None,
+    address_set_by: int | None = None,
 ):
     """``None`` leaves ``vrf_name``, ``vlan_id``, ``aws_instance_id`` and
     ``snmp_profile_id`` unchanged, each on its own; a string sets it (``""``
     clears it).
 
-    A changed ``ip_address`` stores ``address_confirmed`` with it (``None``:
-    not confirmed); an unchanged one leaves the stored flag as it is."""
+    A changed ``ip_address`` stores ``address_confirmed`` and
+    ``address_set_by`` (the id of the signed-in user who wrote it, ``None``:
+    no user did) with it (``None``: not confirmed); an unchanged one leaves
+    both as they are."""
     db = await _dbcore.get_db()
     try:
         cur = await db.execute("SELECT ip_address, vrf_name FROM hosts WHERE id = ?", (host_id,))
@@ -870,8 +877,12 @@ async def update_host(
         )
         if prior_row is not None and prior_ip != (ip_address or "").strip():
             await db.execute(
-                "UPDATE hosts SET address_confirmed=? WHERE id=?",
-                (1 if address_confirmed else 0, host_id),
+                "UPDATE hosts SET address_confirmed=?, address_set_by=? WHERE id=?",
+                (
+                    1 if address_confirmed else 0,
+                    int(address_set_by) if address_set_by is not None else None,
+                    host_id,
+                ),
             )
         if vrf_name is not None:
             await db.execute("UPDATE hosts SET vrf_name=? WHERE id=?", (vrf_name, host_id))

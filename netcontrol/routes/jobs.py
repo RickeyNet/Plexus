@@ -23,11 +23,11 @@ from routes.crypto import decrypt
 from routes.runner import LogEvent, execute_playbook, get_playbook_class
 from routes.secret_resolver import (
     SecretResolutionError,
-    build_redaction_set,
+    SecretScrubber,
     extract_secret_names,
     has_secret_references,
     redact_secrets_in_text,
-    redact_values,
+    resolve_secret_bodies,
     resolve_secrets,
 )
 
@@ -37,8 +37,10 @@ from netcontrol.approvals import ApprovalDecision, decision_audit_detail, requir
 from netcontrol.dynamic_groups import resolve_group, scope_for_launcher
 from netcontrol.managed_targets import (
     ADDRESS_AWAITING_CONFIRMATION,
+    ADDRESS_NOT_SET_BY_OWNER,
     address_confirmed,
     credential_is_shared,
+    may_send_credential,
     name_hosts,
     split_by_confirmation,
     unmanaged_addresses,
@@ -269,6 +271,43 @@ class _JobEventWriter:
                 batch = []
 
 
+class _JobOutputScrubber:
+    """The one place a job's output is scrubbed of secret values before it
+    is stored or streamed: one ``SecretScrubber`` per job, fed every event
+    in order, so a value split across two events is masked too. ``flush``
+    emits what it still holds when the job ends."""
+
+    def __init__(self, job_id: int, secret_values: set[str] | None):
+        self.job_id = job_id
+        self._scrubber = SecretScrubber(secret_values) if secret_values else None
+        self._last: LogEvent | None = None
+
+    def scrub(self, event: LogEvent) -> LogEvent:
+        if self._scrubber is None:
+            return event
+        self._last = event
+        return LogEvent(
+            level=event.level,
+            message=self._scrubber.feed(event.message),
+            host=event.host,
+            timestamp=event.timestamp,
+        )
+
+    async def flush(self, event_writer: _JobEventWriter) -> None:
+        if self._scrubber is None:
+            return
+        held = self._scrubber.flush()
+        if not held:
+            return
+        last = self._last
+        event = LogEvent(level=last.level if last else "info", message=held, host=last.host if last else "")
+        if event_writer.closed:
+            await db.add_job_event(self.job_id, event.level, event.message, event.host)
+        else:
+            event_writer.enqueue(event)
+        await _broadcast_to_job_sockets(self.job_id, event.to_dict())
+
+
 # ── Pydantic Models ──────────────────────────────────────────────────────────
 
 
@@ -342,9 +381,9 @@ async def _require_playbook_launch(request: Request, playbook: dict) -> None:
 
 async def _launcher_is_admin(launched_by: str | None) -> bool:
     """Whether the user a job was launched by is (still) an admin. Fails
-    closed on an unknown user."""
+    closed on an unknown or disabled user."""
     user = await db.get_user_by_username(launched_by) if launched_by else None
-    return bool(user and user.get("role") == "admin")
+    return bool(user and not user.get("disabled") and user.get("role") == "admin")
 
 
 async def _launcher_may_run(playbook: dict, launched_by: str | None) -> bool:
@@ -903,11 +942,11 @@ async def _process_job_queue_inner():
                 "secret": decrypt(cred["secret"]) if cred["secret"] else "",
             }
         except HTTPException as exc:
-            await db.update_job_status(job_id, "failed")
+            await db.finish_job(job_id, status="failed")
             await db.add_job_event(job_id, "error", f"Credential check failed: {exc.detail}")
             return
     if not credentials:
-        await db.update_job_status(job_id, "failed")
+        await db.finish_job(job_id, status="failed")
         await db.add_job_event(
             job_id,
             "error",
@@ -915,16 +954,20 @@ async def _process_job_queue_inner():
         )
         return
     # A shared credential (the default or a service credential) never goes to
-    # an inventory host whose address awaits an admin's confirmation.
-    if credential_is_shared(cred):
-        awaiting = [h for h in hosts if h.get("id") is not None and not address_confirmed(h)]
-        if awaiting:
-            hosts = [h for h in hosts if h.get("id") is None or address_confirmed(h)]
-            await db.add_job_event(
-                job_id,
-                "warning",
-                f"Skipped {len(awaiting)} host(s), {ADDRESS_AWAITING_CONFIRMATION}: {name_hosts(awaiting)}",
-            )
+    # an inventory host whose address awaits an admin's confirmation. The job
+    # runs after its launch request, for the stored launcher (deferred use):
+    # the launcher's own credential goes only to an inventory host whose
+    # address the launcher set or an admin confirmed. Addresses typed into
+    # the launch (ad hoc, no host row) were the launcher's choice.
+    awaiting = [h for h in hosts if h.get("id") is not None and not may_send_credential(h, cred, deferred=True)]
+    if awaiting:
+        hosts = [h for h in hosts if h.get("id") is None or may_send_credential(h, cred, deferred=True)]
+        reason = ADDRESS_AWAITING_CONFIRMATION if credential_is_shared(cred) else ADDRESS_NOT_SET_BY_OWNER
+        await db.add_job_event(
+            job_id,
+            "warning",
+            f"Skipped {len(awaiting)} host(s), {reason}: {name_hosts(awaiting)}",
+        )
         if not hosts:
             await db.finish_job(job_id, status="failed")
             await db.add_job_event(job_id, "error", "No host left to run on")
@@ -980,14 +1023,13 @@ async def _process_job_queue_inner():
         launcher = await job_inputs.launcher_permissions(next_job.get("launched_by"))
     if _needs_secrets:
         try:
-            for body in _all_bodies:
-                if body and has_secret_references("\n".join(body)):
-                    _secret_redact_values |= await build_redaction_set(body, user=launcher)
-            if template_commands:
-                template_commands = await resolve_secrets(template_commands, user=launcher)
-            for dt, body in list(template_by_device_type.items()):
-                if body:
-                    template_by_device_type[dt] = await resolve_secrets(body, user=launcher)
+            # One fetch per secret for every body: the values scrubbed from
+            # the log are exactly the values pushed.
+            _resolved_bodies, _body_values = await resolve_secret_bodies(_all_bodies, user=launcher)
+            template_commands = _resolved_bodies[0]
+            for dt, body in zip(list(template_by_device_type), _resolved_bodies[1:], strict=True):
+                template_by_device_type[dt] = body
+            _secret_redact_values |= _body_values
             await db.add_job_event(job_id, "info", "Secret variables resolved successfully")
         except SecretResolutionError as exc:
             # The job log is readable by the launcher: no names (see SECRET_UNAVAILABLE).
@@ -1030,6 +1072,9 @@ async def _process_job_queue_inner():
         await db.add_job_event(job_id, "error", f"{SECRET_UNAVAILABLE} (a job input).")
         return
     _secret_redact_values |= input_redact
+    # The device credential's password and enable secret are scrubbed from
+    # the output too (a task or command may print them).
+    _secret_redact_values |= {v for v in (credentials.get("password"), credentials.get("secret")) if v}
 
     if pb_type == "ansible":
         # ── Ansible playbook path ──
@@ -1112,16 +1157,10 @@ async def _run_ansible_job(
 ):
     """Background task: execute Ansible playbook, store events, broadcast via WebSocket."""
     event_writer = _JobEventWriter(job_id)
-    _redact = secret_redact_values or set()
+    output = _JobOutputScrubber(job_id, secret_redact_values)
 
     async def on_event(event: LogEvent):
-        if _redact:
-            event = LogEvent(
-                level=event.level,
-                message=redact_values(event.message, _redact),
-                host=event.host,
-                timestamp=event.timestamp,
-            )
+        event = output.scrub(event)
         event_writer.enqueue(event)
         await _broadcast_to_job_sockets(job_id, event.to_dict())
 
@@ -1136,6 +1175,7 @@ async def _run_ansible_job(
             extra_vars=extra_vars or None,
             event_callback=on_event,
         )
+        await output.flush(event_writer)
         await event_writer.close()
         await db.finish_job(
             job_id,
@@ -1152,6 +1192,7 @@ async def _run_ansible_job(
                 await db.add_job_event(job_id, event.level, event.message, event.host)
             else:
                 await on_event(event)
+            await output.flush(event_writer)
             await event_writer.close()
         except Exception:
             LOGGER.exception("job %s: failed to persist Ansible cancellation event", job_id)
@@ -1159,6 +1200,7 @@ async def _run_ansible_job(
     except Exception as e:
         try:
             await on_event(LogEvent(level="error", message=f"Fatal error: {e}"))
+            await output.flush(event_writer)
             await event_writer.close()
         except Exception:
             LOGGER.exception("job %s: failed to persist final Ansible event batch", job_id)
@@ -1193,20 +1235,14 @@ async def _run_job(
     """Background task: execute playbook, store events, broadcast via WebSocket."""
     hosts_ok = 0
     hosts_failed = 0
-    _redact = secret_redact_values or set()
     event_writer = _JobEventWriter(job_id)
+    output = _JobOutputScrubber(job_id, secret_redact_values)
 
     async def on_event(event: LogEvent):
         nonlocal hosts_ok, hosts_failed
 
         # Scrub any secret values from the log message before persisting
-        if _redact:
-            event = LogEvent(
-                level=event.level,
-                message=redact_values(event.message, _redact),
-                host=event.host,
-                timestamp=event.timestamp,
-            )
+        event = output.scrub(event)
 
         # Queue persistence without blocking playbook execution on a commit.
         event_writer.enqueue(event)
@@ -1232,6 +1268,7 @@ async def _run_job(
             parameters=parameters,
             template_by_device_type=template_by_device_type,
         )
+        await output.flush(event_writer)
         await event_writer.close()
         await db.finish_job(
             job_id,
@@ -1248,6 +1285,7 @@ async def _run_job(
                 await db.add_job_event(job_id, event.level, event.message, event.host)
             else:
                 await on_event(event)
+            await output.flush(event_writer)
             await event_writer.close()
         except Exception:
             LOGGER.exception("job %s: failed to persist cancellation event", job_id)
@@ -1255,6 +1293,7 @@ async def _run_job(
     except Exception as e:
         try:
             await on_event(LogEvent(level="error", message=f"Fatal error: {e}"))
+            await output.flush(event_writer)
             await event_writer.close()
         except Exception:
             LOGGER.exception("job %s: failed to persist final event batch", job_id)

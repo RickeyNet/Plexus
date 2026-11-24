@@ -566,7 +566,7 @@ The switch warns that a larger SSH window can raise CPU load and should be used 
 2. Fill in:
    - **Campaign Name / Description** - for example `Q2 2026 IOS-XE 17.15 Upgrade`.
    - **Image map** - one row per hardware family: a model pattern (for example `9200`) and the image to install on devices matching it. Longer or more specific patterns win when several match. A device whose model matches no pattern is skipped with a warning.
-   - **Credential** - pick your credential, or (admins only) leave "Use default service credential".
+   - **Credential** - pick your credential, or (admins only) leave "Use default service credential". With no service credential configured, the fallback is the default credential in Settings, and only when it is your own: a default credential that belongs to another user is refused (`403`).
    - **Devices** - tick inventory groups and hosts, and/or paste ad-hoc IPs (one per line).
 3. Options (defaults are sensible; change only with a reason):
 

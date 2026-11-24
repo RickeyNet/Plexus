@@ -35,6 +35,7 @@ from netcontrol.integrations.software.versions import classify_host
 from netcontrol.managed_targets import (
     ADDRESS_AWAITING_CONFIRMATION,
     address_confirmed as host_address_confirmed,
+    address_writer_id,
     caller_confirms_addresses,
     same_address,
     unmanaged_addresses,
@@ -1120,6 +1121,7 @@ async def _sync_group_hosts(
     *,
     interface_ip_resolver=None,
     address_confirmed: bool | None = None,
+    address_set_by: int | None = None,
 ) -> dict:
     """Reconcile discovered devices into inventory, deduplicating a
     multi-interface device into a single host (see _build_discovery_plan).
@@ -1131,9 +1133,15 @@ async def _sync_group_hosts(
     count as confirmed by an admin (``managed_targets``); ``None``: as the
     acting user of the request decides (an admin or the API token: yes).
     Unconfirmed, the group's SNMP config is walked only on the addresses of
-    hosts an admin already confirmed.
+    hosts an admin already confirmed. ``address_set_by``: the signed-in user
+    recorded as having set those addresses; with ``address_confirmed``
+    ``None`` the acting user of the request.
     """
-    confirmed = address_confirmed if address_confirmed is not None else await caller_confirms_addresses()
+    if address_confirmed is None:
+        confirmed = await caller_confirms_addresses()
+        address_set_by = await address_writer_id()
+    else:
+        confirmed = address_confirmed
     existing_hosts = await db.get_hosts_for_group(group_id)
     existing_by_id = {h["id"]: h for h in existing_hosts}
     existing_ip_index = await db.get_host_ip_index(group_id)
@@ -1201,7 +1209,12 @@ async def _sync_group_hosts(
         existing = existing_by_id.get(item["host_id"], {})
         if existing.get("hostname") != item["hostname"] or existing.get("device_type") != item["device_type"]:
             await db.update_host(
-                item["host_id"], item["hostname"], item["ip"], item["device_type"], address_confirmed=confirmed
+                item["host_id"],
+                item["hostname"],
+                item["ip"],
+                item["device_type"],
+                address_confirmed=confirmed,
+                address_set_by=address_set_by,
             )
             await push_inventory_host_allocation(
                 hostname=item["hostname"],
@@ -1217,7 +1230,12 @@ async def _sync_group_hosts(
         _validate_host_ip(item["ip"])
         try:
             new_id = await db.add_host(
-                group_id, item["hostname"], item["ip"], item["device_type"], address_confirmed=confirmed
+                group_id,
+                item["hostname"],
+                item["ip"],
+                item["device_type"],
+                address_confirmed=confirmed,
+                address_set_by=address_set_by,
             )
         except ValueError:
             # Race/duplicate within the payload - reconciled on the next pass.
@@ -1837,7 +1855,9 @@ async def _group_hosts(group_id: int, request: Request) -> list[dict]:
     return hosts
 
 
-async def _insert_host(group_id: int, body: HostCreate, *, address_confirmed: bool) -> int:
+async def _insert_host(
+    group_id: int, body: HostCreate, *, address_confirmed: bool, address_set_by: int | None = None
+) -> int:
     """Validate and insert one host, then run the per-host follow-ups.
 
     Shared by the single and bulk add routes. Raises ``HTTPException`` for an
@@ -1845,7 +1865,8 @@ async def _insert_host(group_id: int, body: HostCreate, *, address_confirmed: bo
     ``ValueError`` when the group already has a host with that IP. The caller
     invalidates the topology cache and audits the device values.
     ``address_confirmed``: the caller is an admin or the API token
-    (``managed_targets.caller_confirms_addresses``).
+    (``managed_targets.caller_confirms_addresses``); ``address_set_by``: the
+    signed-in user who wrote the address (``managed_targets.address_writer_id``).
     """
     _validate_host_ip(body.ip_address)
     aws_instance_id = _validate_aws_instance_id(body.aws_instance_id) or ""
@@ -1873,6 +1894,7 @@ async def _insert_host(group_id: int, body: HostCreate, *, address_confirmed: bo
         aws_instance_id=aws_instance_id,
         snmp_profile_id=snmp_profile_id,
         address_confirmed=address_confirmed,
+        address_set_by=address_set_by,
     )
     if device_values:
         await db.set_host_device_fields(hid, device_values, lock=True)
@@ -1908,7 +1930,12 @@ async def add_host(group_id: int, body: HostCreate, request: Request):
     if (await request_scope(request)).restricted:
         await require_group(request, group_id, write=True)
     try:
-        hid = await _insert_host(group_id, body, address_confirmed=await caller_confirms_addresses(request))
+        hid = await _insert_host(
+            group_id,
+            body,
+            address_confirmed=await caller_confirms_addresses(request),
+            address_set_by=await address_writer_id(request),
+        )
     except ValueError:
         raise HTTPException(409, "A host with that IP address already exists in this group")
     device_values = sent_device_values(body)
@@ -1952,6 +1979,7 @@ async def _bulk_add(entries: list[HostBulkEntry], default_group_id: int | None, 
     id_by_path: dict[tuple[str, ...], int] = {}
     index = await load_inventory_index()
     confirms = await caller_confirms_addresses(request)
+    writer = await address_writer_id(request)
 
     async def group_for(path: tuple[str, ...]) -> int:
         if path in id_by_path:
@@ -2027,7 +2055,7 @@ async def _bulk_add(entries: list[HostBulkEntry], default_group_id: int | None, 
                     LOGGER.warning("inventory: bulk add could not create group %r: %s", label, exc)
                     errors.append({**names, "error": f"Could not create group {label!r}"})
                     continue
-            hid = await _insert_host(group_id, entry, address_confirmed=confirms)
+            hid = await _insert_host(group_id, entry, address_confirmed=confirms, address_set_by=writer)
             if entry.serial_number:
                 await db.update_host_serial(hid, entry.serial_number)
         except HTTPException as exc:
@@ -2135,6 +2163,7 @@ async def update_host(host_id: int, body: HostUpdate, request: Request):
         snmp_profile_id=snmp_profile_id,
         # Used only when the address changes (managed_targets).
         address_confirmed=await caller_confirms_addresses(request),
+        address_set_by=await address_writer_id(request),
     )
     if device_values and await db.set_host_device_fields(host_id, device_values, lock=True):
         await audit_device_write(request, "host_update", f"host={host_id} {describe_values(device_values)}")
@@ -2593,6 +2622,26 @@ async def get_group_snmp_discovery_profile(group_id: int, request: Request):
     return mask_secret_fields(profile, SNMP_SECRET_FIELDS)
 
 
+async def _require_usable_snmp_secrets(request: Request, stored: dict | None, profile: dict) -> None:
+    """A group's SNMP secrets are resolved with no user when the group is
+    polled or scanned, so a ``{{secret.NAME}}`` the saving user writes into
+    one must name a secret variable they may use (403 otherwise). A secret
+    kept as stored (sent as the mask, or unchanged) is not checked again."""
+    from routes.secret_resolver import require_usable_secret_references
+
+    from netcontrol.secret_fields import destination_changes, map_secret_paths
+
+    changed = list(SNMP_SECRET_FIELDS) if stored is None else destination_changes(stored, profile, SNMP_SECRET_FIELDS)
+    texts: list[str] = []
+
+    def _collect(value: object) -> object:
+        texts.append(str(value or ""))
+        return value
+
+    map_secret_paths(profile, changed, _collect)
+    await require_usable_secret_references(request, texts)
+
+
 @router.put("/api/inventory/{group_id}/snmp-discovery-profile")
 @scoped("group")
 async def update_group_snmp_discovery_profile(group_id: int, body: dict, request: Request):
@@ -2600,6 +2649,7 @@ async def update_group_snmp_discovery_profile(group_id: int, body: dict, request
     # A secret sent as the mask, or left out, keeps the stored one.
     body = merge_secret_fields(body, state.SNMP_DISCOVERY_PROFILES.get(group_id), SNMP_SECRET_FIELDS)
     profile = state._sanitize_snmp_discovery_profile(group_id, body)
+    await _require_usable_snmp_secrets(request, state.SNMP_DISCOVERY_PROFILES.get(group_id), profile)
     state.SNMP_DISCOVERY_PROFILES[group_id] = profile
     await db.set_auth_setting("snmp_discovery_profiles", state.SNMP_DISCOVERY_PROFILES)
     return mask_secret_fields(profile, SNMP_SECRET_FIELDS)
@@ -2705,6 +2755,7 @@ async def discovery_sync(group_id: int, body: DiscoverySyncRequest, request: Req
         discovered,
         remove_absent=body.remove_absent,
         address_confirmed=await caller_confirms_addresses(request),
+        address_set_by=await address_writer_id(request),
     )
     await _software_changed()
     audit_user = session["user"] if session else API_TOKEN_USER
@@ -2763,6 +2814,7 @@ async def discovery_sync_stream(group_id: int, body: DiscoverySyncRequest, reque
         snmp_withheld, snmp_summary = await _snmp_withheld_targets(request, body, targets)
         # Decided here, where the request is at hand, not in the generator.
         confirms = await caller_confirms_addresses(request)
+        writer = await address_writer_id(request)
 
         async def _scan_one(ip_address: str) -> tuple[str, dict | None]:
             return ip_address, await _scan_target(
@@ -2792,7 +2844,11 @@ async def discovery_sync_stream(group_id: int, body: DiscoverySyncRequest, reque
             # Persisting phase: probing is done, now reconcile with the DB.
             yield f"data: {json.dumps({'type': 'syncing', 'discovered_count': len(discovered)})}\n\n"
             sync_result = await _sync_group_hosts(
-                group_id, discovered, remove_absent=body.remove_absent, address_confirmed=confirms
+                group_id,
+                discovered,
+                remove_absent=body.remove_absent,
+                address_confirmed=confirms,
+                address_set_by=writer,
             )
             await _software_changed()
 
@@ -2832,6 +2888,7 @@ async def discovery_onboard(group_id: int, body: DiscoveryOnboardRequest, reques
         body.discovered_hosts,
         remove_absent=False,
         address_confirmed=await caller_confirms_addresses(request),
+        address_set_by=await address_writer_id(request),
     )
     await _software_changed()
     session = _get_session(request)

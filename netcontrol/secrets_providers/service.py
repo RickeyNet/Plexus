@@ -37,6 +37,7 @@ from netcontrol.secrets_providers.base import (
     DISABLED,
     INVALID_CONFIG,
     INVALID_REFERENCE,
+    PERSONAL_NOT_ALLOWED,
     PROVIDER_MISSING,
     SDK_NOT_INSTALLED,
     SecretsProvider,
@@ -227,9 +228,14 @@ async def resolve_reference(
     context: str = "",
     actor: str = "",
     use_cache: bool = True,
+    personal: bool = False,
 ) -> str:
     """The value a reference points at. Raises ``SecretsProviderError``
-    (audited) when it cannot be resolved."""
+    (audited) when it cannot be resolved.
+
+    ``personal`` marks the reference of a non-admin's own credential: it
+    resolves only while the provider is open to personal credentials, the
+    rule a save applies too (``reference_provider``)."""
     try:
         try:
             reference = check_reference(path, key)
@@ -240,10 +246,26 @@ async def resolve_reference(
             raise SecretsProviderError(PROVIDER_MISSING, f"Secrets provider {provider_id} does not exist")
         if not row.get("enabled"):
             raise SecretsProviderError(DISABLED, f"{row['name']}: the provider is disabled")
+        if personal and not row.get("allow_user_credentials"):
+            raise SecretsProviderError(
+                PERSONAL_NOT_ALLOWED, f"{row['name']}: the provider is not open to personal credentials"
+            )
         return await build_provider(row).resolve(reference, use_cache=use_cache)
     except SecretsProviderError as exc:
         await _audit_failure(int(provider_id or 0), context, exc, actor)
         raise
+
+
+async def _is_personal_credential(row: dict) -> bool:
+    """Whether ``row`` is a non-admin's own credential. A service credential
+    and a credential with no owner (only an admin or the API token can
+    create or use those) are not; an owner who is not an admin now, or no
+    longer exists, makes it personal."""
+    owner_id = row.get("owner_id")
+    if row.get("is_service") or owner_id is None:
+        return False
+    owner = await db.get_user_by_id(int(owner_id))
+    return not (owner and owner.get("role") == "admin")
 
 
 async def materialize_credential(row: dict | None, *, strict: bool = False, actor: str = "") -> dict | None:
@@ -251,19 +273,25 @@ async def materialize_credential(row: dict | None, *, strict: bool = False, acto
     reference (unchanged when it has none).
 
     ``strict`` raises ``SecretsProviderError`` on failure; otherwise both
-    fields hold an ``unavailable`` stand-in that ``decrypt`` refuses."""
+    fields hold an ``unavailable`` stand-in that ``decrypt`` refuses.
+
+    The provider's "allow personal credentials" rule is applied on every
+    use, not only when the reference is saved: closing the provider, or
+    demoting the credential's owner, stops the reference from resolving."""
     if not row or not row.get("ext_provider_id"):
         return row
     out = dict(row)
     provider_id = int(row["ext_provider_id"])
     context = f"credential_id={row.get('id')}"
+    path = row.get("ext_path") or ""
     try:
+        personal = await _is_personal_credential(row)
         password = await resolve_reference(
-            provider_id, row.get("ext_path") or "", row.get("ext_key") or "", context=context, actor=actor
+            provider_id, path, row.get("ext_key") or "", context=context, actor=actor, personal=personal
         )
         secret_key = row.get("ext_secret_key") or ""
         secret = (
-            await resolve_reference(provider_id, row.get("ext_path") or "", secret_key, context=context, actor=actor)
+            await resolve_reference(provider_id, path, secret_key, context=context, actor=actor, personal=personal)
             if secret_key
             else password
         )

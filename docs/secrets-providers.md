@@ -67,7 +67,7 @@ fields `password` and `enable` is the reference provider `corp-vault`, path
 | Type | Vault, AWS Secrets Manager or Azure Key Vault. Cannot change later |
 | Cache values for | Seconds a resolved value is kept in server memory (0 to 3600) |
 | Enabled | A disabled provider resolves nothing; credentials pointing at it fail |
-| Allow personal credentials | Non-admin users may point their own credentials at this provider |
+| Allow personal credentials | Non-admin users may point their own credentials at this provider. Checked on every use: turning it off, or demoting a credential's owner from admin, stops existing personal credentials from resolving ("the provider is not open to personal credentials") |
 
 The provider's own secrets (Vault token, AppRole secret ID, AWS secret
 access key and session token, Azure client secret) are write-only. They are

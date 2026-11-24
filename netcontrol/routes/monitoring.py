@@ -49,6 +49,7 @@ from netcontrol.object_scope import (
     scoped,
 )
 from netcontrol.routes import opnsense_health as opnsense_health_poll, topology_availability as topology_tracking
+from netcontrol.routes.config_visibility import mask_config_rows
 from netcontrol.routes.icmp import ICMP_AVAILABLE, ping_host
 from netcontrol.routes.maintenance_windows import _parse_iso
 from netcontrol.routes.metrics_engine import (
@@ -1928,10 +1929,15 @@ async def get_alert_correlation(alert_id: int, request: Request):
         if host_id and window_start
         else []
     )
-    related_drift = (
-        await db.get_config_drift_events_in_range([host_id], window_start, alert_time)
-        if host_id and window_start
-        else []
+    related_drift = await mask_config_rows(
+        request,
+        (
+            await db.get_config_drift_events_in_range([host_id], window_start, alert_time)
+            if host_id and window_start
+            else []
+        ),
+        "diff_text",
+        keep_lines=True,
     )
 
     return {

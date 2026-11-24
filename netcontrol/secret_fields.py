@@ -149,6 +149,32 @@ def compared_tls_verify(old: Any, new: Any) -> bool:
     return bool(old) if new else False
 
 
+def refuse_endpoint_secret_reuse(
+    stored_row: Mapping,
+    updates: Mapping,
+    *,
+    has_stored_secret: bool,
+    secret_field: str = "auth_config",
+    secret_label: str = "API credentials",
+) -> None:
+    """``refuse_secret_reuse`` for a row that sends one stored secret to
+    ``base_url`` with a ``verify_tls`` switch: raises ``ValueError`` when
+    ``updates`` moves the address or turns certificate checks off without
+    carrying ``secret_field`` (sent again, or sent empty to clear it)."""
+    old_url, old_verify = stored_row.get("base_url"), bool(stored_row.get("verify_tls", True))
+    new_url, new_verify = updates.get("base_url"), updates.get("verify_tls")
+    refuse_secret_reuse(
+        {"address": url_origin(old_url), "TLS verification": old_verify},
+        {
+            "address": url_origin(old_url if new_url is None else new_url),
+            "TLS verification": compared_tls_verify(old_verify, old_verify if new_verify is None else new_verify),
+        },
+        ("address", "TLS verification"),
+        stored=[secret_label] if has_stored_secret else [],
+        resent=[secret_label] if updates.get(secret_field) is not None else [],
+    )
+
+
 # ── Secrets at rest inside a JSON settings object ────────────────────────────
 
 # A sealed secret is stored as {SEALED_KEY: "<ciphertext>"}: a plain legacy

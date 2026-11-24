@@ -1,8 +1,9 @@
 """The "address changed, enter the secret again" rule
 (``secret_fields.refuse_secret_reuse``) on every update path that keeps a
 stored secret when the form sends it blank or masked: topology sources,
-notification channels, SIEM sinks, event webhooks and the RADIUS / TACACS+ /
-LDAP / OIDC settings (federation peers: test_federation_outbound.py).
+notification channels, SIEM sinks, event webhooks, IPAM sources, DHCP
+servers and the RADIUS / TACACS+ / LDAP / OIDC settings (federation peers:
+test_federation_outbound.py).
 
 Without it, an admin who may edit an integration but not read its secret
 could point it at a host they control and have Plexus present the secret.
@@ -181,3 +182,78 @@ def test_directory_and_sso_secrets_need_reentry_for_a_new_server(admin):
 
     resent = {**masked, "radius": {**masked["radius"], "server": "203.0.113.50", "secret": "radius-secret-2"}}
     assert admin.put("/api/admin/auth-config", json=resent).status_code == 200
+
+
+def test_ipam_source_credentials_need_reentry_for_a_new_address(admin, monkeypatch):
+    import netcontrol.routes.ipam as ipam_routes
+
+    sent: list[tuple[str, dict]] = []
+
+    async def fake_collect(source, auth_config):
+        sent.append((str(source.get("base_url")), dict(auth_config or {})))
+        return {"summary": {}}
+
+    monkeypatch.setattr(ipam_routes, "collect_ipam_snapshot", fake_collect)
+    created = admin.post(
+        "/api/ipam/sources",
+        json={
+            "provider": "netbox",
+            "name": "Lab NetBox",
+            "base_url": "https://192.0.2.10",
+            "auth_config": {"token": "invented-ipam-token-0010"},
+        },
+    )
+    assert created.status_code == 201, created.text
+    url = f"/api/ipam/sources/{created.json()['source']['id']}"
+
+    # Same address, other settings: the token is kept.
+    assert admin.put(url, json={"name": "Lab NetBox 2", "base_url": "https://192.0.2.10/"}).status_code == 200
+    _refused(admin.put(url, json={"base_url": "https://203.0.113.66"}), "address", "API credentials")
+    _refused(admin.put(url, json={"verify_tls": False}), "TLS verification", "API credentials")
+    admin.post(f"{url}/validate")
+    assert [address for address, _ in sent] == ["https://192.0.2.10/"]
+
+    # Sent again, the credentials go with the new address.
+    moved = admin.put(
+        url, json={"base_url": "https://203.0.113.66", "auth_config": {"token": "invented-ipam-token-0011"}}
+    )
+    assert moved.status_code == 200, moved.text
+    admin.post(f"{url}/validate")
+    assert sent[-1] == ("https://203.0.113.66", {"token": "invented-ipam-token-0011"})
+
+
+def test_dhcp_server_credentials_need_reentry_for_a_new_address(admin):
+    created = admin.post(
+        "/api/dhcp/servers",
+        json={
+            "provider": "kea",
+            "name": "Lab Kea",
+            "base_url": "https://192.0.2.10",
+            "auth_type": "basic",
+            "auth_config": {"username": "kea-reader", "password": "invented-dhcp-password-0010"},
+        },
+    )
+    assert created.status_code == 200, created.text
+    url = f"/api/dhcp/servers/{created.json()['id']}"
+
+    assert admin.patch(url, json={"notes": "rack 4", "base_url": "https://192.0.2.10/"}).status_code == 200
+    _refused(admin.patch(url, json={"base_url": "https://203.0.113.66"}), "address", "API credentials")
+    _refused(admin.patch(url, json={"verify_tls": False}), "TLS verification", "API credentials")
+    moved = admin.patch(
+        url,
+        json={
+            "base_url": "https://203.0.113.66",
+            "auth_config": {"username": "kea-reader", "password": "invented-dhcp-password-0011"},
+        },
+    )
+    assert moved.status_code == 200, moved.text
+
+    # A server with no stored credentials moves freely.
+    bare = admin.post(
+        "/api/dhcp/servers", json={"provider": "kea", "name": "Open Kea", "base_url": "https://192.0.2.11"}
+    )
+    assert bare.status_code == 200, bare.text
+    assert (
+        admin.patch(f"/api/dhcp/servers/{bare.json()['id']}", json={"base_url": "https://203.0.113.67"}).status_code
+        == 200
+    )

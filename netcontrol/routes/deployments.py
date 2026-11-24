@@ -22,11 +22,18 @@ from typing import Annotated
 import routes.database as db
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, Field
-from routes.crypto import decrypt
 
 import netcontrol.routes.state as state
 from netcontrol.approvals import ApprovalDecision, decision_audit_detail, require_different_approver
-from netcontrol.managed_targets import ADDRESS_AWAITING_CONFIRMATION, may_send_credential, name_hosts
+from netcontrol.managed_targets import (
+    ADDRESS_AWAITING_CONFIRMATION,
+    ADDRESS_NOT_SET_BY_OWNER,
+    credential_is_shared,
+    may_send_credential,
+    name_hosts,
+    send_refusal,
+    session_owns_credential,
+)
 from netcontrol.object_scope import (
     READ_ONLY_DETAIL,
     ObjectScope,
@@ -38,6 +45,7 @@ from netcontrol.object_scope import (
     ws_scope,
 )
 from netcontrol.routes.config_drift import _analyze_drift_for_host
+from netcontrol.routes.config_visibility import mask_config_rows
 from netcontrol.routes.device_config import get_device_config
 from netcontrol.routes.intended_config import RemediationTargets, remediation_for_hosts, resolve_remediation_targets
 from netcontrol.routes.maintenance_windows import evaluate_change_gate
@@ -440,8 +448,14 @@ async def _run_deployment_job(
     commands: list[str],
     credentials: dict,
     user: str,
+    *,
+    deferred: bool = False,
 ):
-    """Background task: pre-check -> execute -> post-check deployment with checkpoint tracking."""
+    """Background task: pre-check -> execute -> post-check deployment with checkpoint tracking.
+
+    ``credentials``: the stored credential row. ``deferred``: run by someone
+    other than the credential's owner; each config read applies the address
+    rule of ``managed_targets`` again on the host's stored row."""
     try:
         await db.update_deployment_status(deployment_id, "pre-check")
         await _broadcast_deploy_line(
@@ -464,7 +478,9 @@ async def _run_deployment_job(
                     job_id,
                     f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Capturing pre-deployment config for {hostname}...\n",
                 )
-                config_text = (await get_device_config(host, credentials, capture_method="deployment")).config_text
+                config_text = (
+                    await get_device_config(host, credentials, capture_method="deployment", deferred=deferred)
+                ).config_text
                 await db.create_deployment_snapshot(deployment_id, host["id"], "pre", config_text)
                 await db.update_deployment_checkpoint(cp_id, "passed", json.dumps({"config_length": len(config_text)}))
 
@@ -579,7 +595,9 @@ async def _run_deployment_job(
                     job_id,
                     f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Capturing post-deployment config for {hostname}...\n",
                 )
-                post_config = (await get_device_config(host, credentials, capture_method="deployment")).config_text
+                post_config = (
+                    await get_device_config(host, credentials, capture_method="deployment", deferred=deferred)
+                ).config_text
                 await db.create_deployment_snapshot(deployment_id, host["id"], "post", post_config)
 
                 # Get pre-snapshot for diff
@@ -670,15 +688,17 @@ async def _run_rollback_job(
     credentials: dict,
     user: str,
     *,
-    credential_row: dict | None = None,
+    deferred: bool = False,
 ):
     """Background task: restore pre-deployment configs to roll back a deployment.
 
-    ``credential_row``: the stored credential ``credentials`` came from.
-    When it is shared (the service or default credential), a host of
-    ``hosts`` (stored rows) whose address awaits an admin's confirmation is
-    not connected to: it is recorded as a failed rollback with the reason,
-    and the others are rolled back."""
+    ``credentials``: the stored credential row. A host of ``hosts`` (stored
+    rows) it may not be sent to (``managed_targets.may_send_credential``: a
+    shared credential to an address awaiting an admin's confirmation, or in
+    ``deferred`` use, run by someone other than its owner, a personal
+    credential to an address its owner did not set either) is not connected
+    to: it is recorded as a failed rollback with the reason, and the others
+    are rolled back."""
     try:
         await db.update_deployment_status(deployment_id, "rolling-back", rollback_status="in_progress")
         await _broadcast_deploy_line(
@@ -720,9 +740,9 @@ async def _run_rollback_job(
                     host_id=host["id"],
                 )
 
-                if not may_send_credential(host, credential_row):
+                reason = send_refusal(host, credentials, deferred=deferred)
+                if reason:
                     rollback_failures += 1
-                    reason = f"Not signed in with the shared credential: {ADDRESS_AWAITING_CONFIRMATION}"
                     await _broadcast_deploy_line(
                         job_id,
                         f"[{datetime.now(UTC).strftime('%H:%M:%S')}] ROLLBACK SKIPPED for {hostname}: {reason}. "
@@ -740,7 +760,7 @@ async def _run_rollback_job(
                         f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Capturing current config for {hostname}...\n",
                     )
                     current_config = (
-                        await get_device_config(host, credentials, capture_method="deployment")
+                        await get_device_config(host, credentials, capture_method="deployment", deferred=deferred)
                     ).config_text
 
                     diff_text, _, _ = _compute_config_diff(
@@ -769,7 +789,7 @@ async def _run_rollback_job(
 
                     # Verify rollback
                     verify_config = (
-                        await get_device_config(host, credentials, capture_method="deployment")
+                        await get_device_config(host, credentials, capture_method="deployment", deferred=deferred)
                     ).config_text
                     verify_diff, va, vr = _compute_config_diff(
                         snap["config_text"],
@@ -1080,6 +1100,8 @@ def _remediation_skip(row: dict, host: dict) -> str | None:
         return row["reason"]
     if not row["commands"]:
         return "The device already matches its intended configuration."
+    if row.get("secrets_masked"):
+        return "The remediation removes lines that hold device secrets; it needs config-backups.write."
     if host.get("group_id") is None:
         return "The host is in no inventory group; a deployment targets one."
     if len(row["commands"]) > 10000 or any(len(c) > 4000 for c in row["commands"]):
@@ -1101,7 +1123,7 @@ async def create_intended_remediation_deployments(body: IntendedRemediationDeplo
     user = session["user"] if session else ""
     hosts = await resolve_remediation_targets(request, body, write=True)
     await require_credential_access(body.credential_id, session=session, allow_service=True)
-    rows = await remediation_for_hosts(hosts)
+    rows = await remediation_for_hosts(hosts, request)
     created: list[dict] = []
     skipped: list[dict] = []
     for host, row in zip(hosts, rows, strict=True):
@@ -1188,10 +1210,15 @@ async def get_deployment_correlation(deployment_id: int, request: Request):
         LOGGER.warning("deployment %s: failed to parse host_ids: %s", deployment_id, exc)
 
     checkpoints = await db.get_deployment_checkpoints(deployment_id)
-    drift_events = (
-        await db.get_config_drift_events_in_range(host_ids, window_start, window_end)
-        if host_ids and window_start
-        else []
+    drift_events = await mask_config_rows(
+        request,
+        (
+            await db.get_config_drift_events_in_range(host_ids, window_start, window_end)
+            if host_ids and window_start
+            else []
+        ),
+        "diff_text",
+        keep_lines=True,
     )
     alerts = (
         await db.get_monitoring_alerts_in_range(host_ids, window_start, window_end) if host_ids and window_start else []
@@ -1275,13 +1302,11 @@ async def execute_deployment(deployment_id: int, request: Request):
             correlation_id=_corr_id(request),
         )
 
-    # Resolve credentials against the deployment's creator (see helper).
+    # Resolve credentials against the deployment's creator (see helper). The
+    # stored row goes to the SSH helpers, which decrypt it themselves.
     cred = await _resolve_deployment_credential(dep, session)
-    credentials = {
-        "username": cred["username"],
-        "password": decrypt(cred["password"]),
-        "secret": decrypt(cred["secret"]) if cred["secret"] else "",
-    }
+    # Run by anyone but the credential's owner: deferred use (managed_targets).
+    deferred = not session_owns_credential(session, cred)
 
     # Resolve hosts
     host_ids = json.loads(dep.get("host_ids", "[]") or "[]")
@@ -1293,9 +1318,11 @@ async def execute_deployment(deployment_id: int, request: Request):
         raise HTTPException(status_code=400, detail="No target hosts found")
 
     # A shared credential (the service or default credential) goes only to a
-    # confirmed address. Checked on the stored rows before any device is
-    # touched: a partly pushed config is worse than none.
-    awaiting = [h for h in hosts if not may_send_credential(h, cred)]
+    # confirmed address; a personal credential the owner is not running
+    # themselves, only to a confirmed address or one its owner set. Checked
+    # on the stored rows before any device is touched: a partly pushed
+    # config is worse than none.
+    awaiting = [h for h in hosts if not may_send_credential(h, cred, deferred=deferred)]
     if awaiting:
         await _audit(
             "deployments",
@@ -1304,11 +1331,20 @@ async def execute_deployment(deployment_id: int, request: Request):
             detail=f"id={deployment_id} reason=address_awaiting_confirmation hosts={len(awaiting)}",
             correlation_id=_corr_id(request),
         )
+        if credential_is_shared(cred):
+            held = (
+                f"it runs with a shared credential, and {len(awaiting)} target "
+                f"host(s) have an {ADDRESS_AWAITING_CONFIRMATION}"
+            )
+        else:
+            held = (
+                f"it runs with its creator's personal credential for someone else, and {len(awaiting)} target "
+                f"host(s) have an {ADDRESS_NOT_SET_BY_OWNER}"
+            )
         raise HTTPException(
             status_code=409,
             detail=(
-                f"Deployment not started: it runs with a shared credential, and {len(awaiting)} target "
-                f"host(s) have an {ADDRESS_AWAITING_CONFIRMATION}: {name_hosts(awaiting)}. An admin confirms "
+                f"Deployment not started: {held}: {name_hosts(awaiting)}. An admin confirms "
                 "the address on the Inventory page."
             ),
         )
@@ -1333,7 +1369,9 @@ async def execute_deployment(deployment_id: int, request: Request):
     _deployment_job_sockets[job_id] = []
 
     supervise_task(
-        asyncio.create_task(_run_deployment_job(job_id, deployment_id, hosts, commands, credentials, user)),
+        asyncio.create_task(
+            _run_deployment_job(job_id, deployment_id, hosts, commands, cred, user, deferred=deferred)
+        ),
         f"deployment job {job_id}",
     )
 
@@ -1459,12 +1497,9 @@ async def rollback_deployment(deployment_id: int, request: Request):
     session = _get_session(request)
     user = session["user"] if session else ""
 
+    # The stored row goes to the SSH helpers, which decrypt it themselves.
     cred = await _resolve_deployment_credential(dep, session)
-    credentials = {
-        "username": cred["username"],
-        "password": decrypt(cred["password"]),
-        "secret": decrypt(cred["secret"]) if cred["secret"] else "",
-    }
+    deferred = not session_owns_credential(session, cred)
 
     host_ids = json.loads(dep.get("host_ids", "[]") or "[]")
     if host_ids:
@@ -1484,7 +1519,7 @@ async def rollback_deployment(deployment_id: int, request: Request):
     _deployment_job_sockets[job_id] = []
 
     supervise_task(
-        asyncio.create_task(_run_rollback_job(job_id, deployment_id, hosts, credentials, user, credential_row=cred)),
+        asyncio.create_task(_run_rollback_job(job_id, deployment_id, hosts, cred, user, deferred=deferred)),
         f"rollback job {job_id}",
     )
 

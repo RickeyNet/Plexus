@@ -193,8 +193,9 @@ async def test_scheduled_backup_goes_through_the_shared_capture(monkeypatch):
 
     assert result == {"policies_run": 1, "hosts_backed_up": 1, "errors": 0}
     assert sorted(calls, key=lambda c: c[0]) == [
-        (11, {"capture_method": "scheduled", "policy_id": 3}),
-        (12, {"capture_method": "scheduled", "policy_id": 3}),
+        # A scheduled run is deferred use of the creator's credential.
+        (11, {"capture_method": "scheduled", "policy_id": 3, "deferred": True}),
+        (12, {"capture_method": "scheduled", "policy_id": 3, "deferred": True}),
     ]
 
 

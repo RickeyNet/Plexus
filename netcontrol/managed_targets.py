@@ -22,6 +22,22 @@ the flag as it is.
   reported with ``ADDRESS_AWAITING_CONFIRMATION``, never recorded as down.
 - ``credential_is_shared`` / ``may_send_credential``: the check for a path
   that is handed a credential (a user's own credential is not shared).
+
+A user's own (personal) credential follows a second rule when the work runs
+later for its stored owner rather than for the owner in the request (a
+scheduled backup or compliance scan, a queued or approved job, a deployment
+someone else runs): **a personal credential goes only to an address that an
+admin confirmed or that its owner set.** A host stores who last wrote its
+address (``hosts.address_set_by``, a user id; NULL when no signed-in user
+did, and for hosts stored before it was recorded). The owner choosing a
+target in the same request keeps sending their credential anywhere.
+
+- ``may_send_credential(..., deferred=True)`` / ``send_refusal``: that check
+  and the reason a skipped host is reported with.
+- ``session_owns_credential``: whether a request's signed-in user owns the
+  credential (their run is not deferred).
+- ``address_writer_id``: the user recorded as having set an address a
+  caller writes.
 - ``recorded_address_refusal``: the same check for an address a run
   recorded earlier (an upgrade campaign device), on the host's row read now.
 - ``unattended_credential``: the credential unattended collection signs in
@@ -51,6 +67,10 @@ from netcontrol.routes.shared import request_session, service_credential
 
 # The reason a collection path gives for a host it skipped under this rule.
 ADDRESS_AWAITING_CONFIRMATION = "address awaiting admin confirmation"
+# The reason a deferred run gives for a host it skipped under the personal
+# credential rule (it contains ADDRESS_AWAITING_CONFIRMATION: an admin's
+# confirmation clears both).
+ADDRESS_NOT_SET_BY_OWNER = f"{ADDRESS_AWAITING_CONFIRMATION}, and the credential's owner did not set it"
 
 
 def _address_key(value: object) -> str:
@@ -117,10 +137,64 @@ def credential_is_shared(credential: Mapping[str, Any] | None) -> bool:
     return isinstance(default_id, int) and cred_id is not None and str(cred_id) == str(default_id)
 
 
-def may_send_credential(host: Mapping[str, Any] | None, credential: Mapping[str, Any] | None) -> bool:
+def address_set_by_owner(host: Mapping[str, Any] | None, credential: Mapping[str, Any] | None) -> bool:
+    """Whether ``host``'s current address was last written by the user who
+    owns ``credential``. False when either is unknown (no recorded writer,
+    an unowned credential)."""
+    if not host or not credential:
+        return False
+    setter = host.get("address_set_by")
+    owner = credential.get("owner_id")
+    if setter is None or owner is None:
+        return False
+    try:
+        return int(setter) == int(owner)
+    except TypeError, ValueError:
+        return False
+
+
+def may_send_credential(
+    host: Mapping[str, Any] | None, credential: Mapping[str, Any] | None, *, deferred: bool = False
+) -> bool:
     """Whether ``credential`` may be sent to ``host``'s address: always for
-    a confirmed address, otherwise only a credential that is not shared."""
-    return address_confirmed(host) or not credential_is_shared(credential)
+    a confirmed address, never for a shared credential otherwise. A user's
+    own credential may, except in ``deferred`` use (the work runs for the
+    credential's stored owner, not for the owner in the request): then only
+    to an address its owner set."""
+    if address_confirmed(host):
+        return True
+    if credential_is_shared(credential):
+        return False
+    return not deferred or address_set_by_owner(host, credential)
+
+
+def send_refusal(
+    host: Mapping[str, Any] | None, credential: Mapping[str, Any] | None, *, deferred: bool = False
+) -> str | None:
+    """Why ``credential`` may not be sent to ``host``'s address
+    (``may_send_credential``), as text that starts with which credential
+    was held back, or None when it may."""
+    if may_send_credential(host, credential, deferred=deferred):
+        return None
+    if credential_is_shared(credential):
+        return f"Not signed in with the shared credential: {ADDRESS_AWAITING_CONFIRMATION}"
+    return f"Not signed in with the owner's personal credential: {ADDRESS_NOT_SET_BY_OWNER}"
+
+
+def session_owns_credential(session: Mapping[str, Any] | None, credential: Mapping[str, Any] | None) -> bool:
+    """Whether the signed-in user of ``session`` owns ``credential``: work
+    they start with it in this request is not deferred use. The server API
+    token owns no credential."""
+    if not session or not credential or session.get("auth_mode") == "token":
+        return False
+    user_id = session.get("user_id")
+    owner = credential.get("owner_id")
+    if user_id is None or owner is None:
+        return False
+    try:
+        return int(user_id) == int(owner)
+    except TypeError, ValueError:
+        return False
 
 
 async def recorded_address_refusal(
@@ -186,6 +260,27 @@ async def caller_confirms_addresses(request: Any = None) -> bool:
         return True
     user = await db.get_user_by_id(int(session.get("user_id") or 0))
     return bool(user and user.get("role") == "admin")
+
+
+async def address_writer_id(request: Any = None) -> int | None:
+    """The user recorded as having set a host address written for this
+    caller (``hosts.address_set_by``): the signed-in user's id; None for the
+    server API token. Without a request (or with one carrying no session)
+    the acting user of the request (``current_actor``) decides; a run with
+    no acting user records nobody."""
+    session = request_session(request) if request is not None else None
+    if session is None:
+        actor = str(current_actor.get() or "").strip()
+        if not actor:
+            return None
+        user = await db.get_user_by_username(actor)
+        return int(user["id"]) if user is not None else None
+    if session.get("auth_mode") == "token" or session.get("user_id") is None:
+        return None
+    try:
+        return int(session["user_id"])
+    except TypeError, ValueError:
+        return None
 
 
 async def unmanaged_addresses(addresses: Iterable[str], scope_or_request: Any) -> list[str]:

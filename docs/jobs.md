@@ -203,8 +203,18 @@ user)**. The list shows each secret's rule under **Usable by**.
 - A job launched with the server API token is stored as launched by
   `admin`; at the queue it counts as an admin only while an account named
   `admin` exists and is an admin, as for the other queue checks.
-- SNMPv3 profiles that reference a secret variable are admin settings and
-  polling is not a user's job: the rule does not apply to them.
+- Text that names a secret is checked against the user who saves it too:
+  a template or device-type variant, a secret input's default, or a
+  group's SNMP discovery profile that references a secret its saver may not
+  use is refused (403). A job resolves these for whoever runs it, and an
+  admin passes every rule, so the author must be allowed as well. As at
+  launch, a name that does not exist reads the same as one the saver may
+  not use; admins may name a secret that is yet to be created. Saving a
+  playbook's input fields again unchanged, or keeping a group SNMP key as
+  stored, is not checked again.
+- Admin SNMPv3 profiles that reference a secret variable are admin settings
+  and polling is not a user's job: the rule does not apply when they are
+  used.
 
 ### Secret variables and ad-hoc targets
 
@@ -331,13 +341,18 @@ days** or **Last 30 days**.
   secret variable](#who-may-use-a-secret-variable)), or if the task's
   permissions refuse you.
 - **Secrets in logs.** Secret values (from instruction sets and secret
-  inputs) are removed from Python and Ansible task output before it is
-  stored, together with their base64 (standard and URL-safe, with or
-  without `=` padding), URL-encoded and hex forms. Values shorter than 4
-  characters are not removed (masking them would blank common text all
-  over the log). This is best effort: a value the device changes in
-  another way (wrapped, hashed, part of a longer encoded blob) is not
-  recognized, so do not echo secrets back in commands.
+  inputs) and the job credential's password and enable secret are removed
+  from Python and Ansible task output before it is stored, in any letter
+  case, together with their base64 (standard and URL-safe, with or
+  without `=` padding), URL-encoded, hex and JSON- or backslash-escaped
+  forms; each line of a multi-line value is removed on its own. A value
+  split across two output events is removed too: an event that ends in the
+  first characters of a value has them held back until the next event (or
+  the end of the job). Values shorter than 4 characters are not removed
+  (masking them would blank common text all over the log). This is best
+  effort: a value the device changes in another way (wrapped, hashed, part
+  of a longer encoded blob) is not recognized, so do not echo secrets back
+  in commands.
 - **After a live job.** When a live job succeeds, Plexus waits 15 seconds and
   re-polls the inventory hosts by SNMP if SNMP discovery is on for their
   group.

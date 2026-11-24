@@ -37,6 +37,12 @@ Features: cloning copies the host's running config, so it also needs
 ``config-drift`` or ``config-backups``; promoting creates a deployment, so it
 also needs ``deployments`` + ``deployments.write`` and is planned by
 ``deployments.plan_deployment`` (the production approval rule).
+
+Device secrets: a twin's config is the source host's configuration, read
+under the rule of ``netcontrol.routes.config_visibility``. A caller who may
+not read that host's configuration as captured gets a twin cloned from the
+masked text, and reads every twin of that host (its config, the runs and
+diffs made on it) with the secrets masked, whoever cloned it.
 """
 
 from __future__ import annotations
@@ -59,6 +65,7 @@ from netcontrol.object_scope import (
     require_row,
     scoped,
 )
+from netcontrol.routes.config_visibility import mask_config_text, mask_fields, sees_raw_config
 from netcontrol.routes.deployments import plan_deployment
 from netcontrol.routes.risk_analysis import (
     _classify_change_areas,
@@ -277,6 +284,25 @@ async def visible_lab_devices(request: Request, devices: list[dict]) -> list[dic
     return await filter_rows("lab_device", devices, request)
 
 
+async def twin_config_masked(request: Request, device: dict | None) -> bool:
+    """Whether the caller reads ``device``'s configuration with its secrets
+    masked: a twin cloned from an inventory host, for a caller who may not
+    read that host's configuration as captured. A twin with no source host
+    holds text its authors typed and is shown as it is."""
+    source_host_id = (device or {}).get("source_host_id")
+    if source_host_id is None:
+        return False
+    return not await sees_raw_config(request, int(source_host_id))
+
+
+async def mask_twin_record(request: Request, device: dict | None, record: dict, *fields: str) -> dict:
+    """``record`` (the twin itself, or a run or drift run made on it) with
+    its configuration ``fields`` masked when ``twin_config_masked``."""
+    if not await twin_config_masked(request, device):
+        return record
+    return mask_fields(record, *fields, keep_lines=True)
+
+
 # ── Environment routes ───────────────────────────────────────────────────────
 
 
@@ -450,6 +476,11 @@ async def clone_host(env_id: int, body: CloneHostRequest, request: Request):
 
     snapshot = await db.get_latest_config_snapshot(body.host_id)
     config_text = (snapshot or {}).get("config_text", "") if snapshot else ""
+    # A caller who reads this host's configuration masked gets a twin of the
+    # masked text: the twin is theirs to read and change in full.
+    secrets_masked = bool(config_text) and not await sees_raw_config(request, body.host_id)
+    if secrets_masked:
+        config_text = mask_config_text(config_text, keep_lines=True)
 
     device_id = await db.create_lab_device(
         environment_id=env_id,
@@ -460,7 +491,7 @@ async def clone_host(env_id: int, body: CloneHostRequest, request: Request):
         source_host_id=body.host_id,
         running_config=config_text,
         notes=(
-            "Cloned from inventory host."
+            ("Cloned from inventory host (device secrets masked)." if secrets_masked else "Cloned from inventory host.")
             if config_text
             else "Cloned from inventory host (no config snapshot available - config is empty)."
         ),
@@ -476,6 +507,7 @@ async def clone_host(env_id: int, body: CloneHostRequest, request: Request):
         "id": device_id,
         "config_bytes": len(config_text),
         "snapshot_id": (snapshot or {}).get("id"),
+        "secrets_masked": secrets_masked,
     }
 
 
@@ -490,7 +522,7 @@ async def get_device(device_id: int, request: Request):
     session, _, role = await _resolve_session_user(request)
     if not _user_can_access_env(env or {}, session, role):
         raise HTTPException(status_code=403, detail="Not allowed")
-    return device
+    return await mask_twin_record(request, device, device, "running_config")
 
 
 @router.patch("/api/lab/devices/{device_id}")
@@ -631,18 +663,24 @@ async def simulate(device_id: int, body: SimulateRequest, request: Request):
         correlation_id=_corr_id(request),
     )
 
-    return {
-        "run_id": run_id,
-        "status": status,
-        "risk_score": risk_score,
-        "risk_level": risk_level,
-        "diff_text": diff_text,
-        "diff_added": diff_added,
-        "diff_removed": diff_removed,
-        "affected_areas": [a["label"] for a in affected_areas],
-        "post_config": post_config,
-        "risk_detail": risk_detail,
-    }
+    return await mask_twin_record(
+        request,
+        device,
+        {
+            "run_id": run_id,
+            "status": status,
+            "risk_score": risk_score,
+            "risk_level": risk_level,
+            "diff_text": diff_text,
+            "diff_added": diff_added,
+            "diff_removed": diff_removed,
+            "affected_areas": [a["label"] for a in affected_areas],
+            "post_config": post_config,
+            "risk_detail": risk_detail,
+        },
+        "diff_text",
+        "post_config",
+    )
 
 
 @router.get("/api/lab/devices/{device_id}/runs")
@@ -680,7 +718,7 @@ async def get_run(run_id: int, request: Request):
         run["risk_detail"] = json.loads(run.get("risk_detail") or "{}")
     except Exception:
         run["risk_detail"] = {}
-    return run
+    return await mask_twin_record(request, device, run, "pre_config", "post_config", "diff_text")
 
 
 @router.post("/api/lab/runs/{run_id}/apply-to-device")

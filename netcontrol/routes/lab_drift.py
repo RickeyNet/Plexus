@@ -26,6 +26,10 @@ Status values written to lab_drift_runs:
 Object scope: a twin follows the inventory host it was cloned from
 (``netcontrol.routes.lab.require_lab_device``); a twin of a host outside a
 scoped caller's read scope, and its drift runs, answer 404.
+
+Device secrets: a drift run's diff holds lines of the production config, so
+it is read under the source host's rule (``lab.mask_twin_record``). A twin
+cloned from masked text is compared with the masked production config.
 """
 
 from __future__ import annotations
@@ -38,9 +42,11 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from netcontrol.object_scope import scoped
+from netcontrol.routes.config_visibility import holds_mask, mask_config_text
 from netcontrol.routes.lab import (
     _resolve_session_user,
     _user_can_access_env,
+    mask_twin_record,
     require_lab_device,
 )
 from netcontrol.routes.shared import (
@@ -143,6 +149,10 @@ async def run_drift_check_for_device(
         }
 
     prod_config = snapshot["config_text"] or ""
+    if twin_config and holds_mask(twin_config) and mask_config_text(twin_config, keep_lines=True) == twin_config:
+        # A twin cloned from the masked configuration is compared with the
+        # masked production config, so its secrets do not show as drift.
+        prod_config = mask_config_text(prod_config, keep_lines=True)
     try:
         diff_text, diff_added, diff_removed = _compute_config_diff(
             twin_config,
@@ -302,4 +312,5 @@ async def get_drift_run_endpoint(run_id: int, request: Request):
     session, _, role = await _resolve_session_user(request)
     if not _user_can_access_env(env or {}, session, role):
         raise HTTPException(status_code=403, detail="Not allowed")
-    return run
+    # The diff holds lines of the source host's production configuration.
+    return await mask_twin_record(request, device, run, "diff_text")

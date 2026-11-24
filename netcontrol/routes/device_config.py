@@ -39,7 +39,7 @@ from dataclasses import dataclass
 
 import routes.database as db
 
-from netcontrol.managed_targets import ADDRESS_AWAITING_CONFIRMATION, credential_is_shared, may_send_credential
+from netcontrol.managed_targets import credential_is_shared, send_refusal
 from netcontrol.routes.intended_config import recompare_host
 from netcontrol.routes.network_objects import sync_host_bindings
 from netcontrol.routes.opnsense_backup_encryption import is_opnsense_backup, same_digest, seal
@@ -58,8 +58,10 @@ _last_capture: dict[int, tuple[int, int]] = {}
 
 
 class AddressNotConfirmedError(RuntimeError):
-    """A shared credential was refused for a host whose address awaits an
-    admin's confirmation (``netcontrol.managed_targets``)."""
+    """A credential was refused for a host's address
+    (``netcontrol.managed_targets``): a shared credential for an address
+    awaiting an admin's confirmation, or a personal credential in deferred
+    use for one its owner did not set either."""
 
 
 @dataclass(frozen=True)
@@ -158,18 +160,25 @@ async def get_device_config(
     capture_method: str,
     max_age_seconds: int = 0,
     policy_id: int | None = None,
+    deferred: bool = False,
 ) -> DeviceConfig:
     """An inventory host's configuration, from Config Backups when the
     device confirmed one within ``max_age_seconds``, otherwise read from the
     device and stored. Raises what the SSH capture raises, and
-    ``AddressNotConfirmedError`` before any session when ``credentials`` is
-    a shared credential (the service or default credential) and the host's
-    address awaits an admin's confirmation (``managed_targets``)."""
+    ``AddressNotConfirmedError`` before any session when ``credentials`` (the
+    stored credential row) may not be sent to the host's address
+    (``managed_targets.may_send_credential``): a shared credential (the
+    service or default credential) to an address awaiting an admin's
+    confirmation, or, in ``deferred`` use (a run for the credential's stored
+    owner: a scheduled backup or compliance scan, a deployment someone else
+    runs), a personal credential to an address its owner did not set either.
+    Decided on the host's stored row, read now."""
     host_id = int(host["id"])
-    if credential_is_shared(credentials):
+    if deferred or credential_is_shared(credentials):
         stored_host = await db.get_host(host_id)
-        if not may_send_credential(stored_host or host, credentials):
-            raise AddressNotConfirmedError(f"Not read with the shared credential: {ADDRESS_AWAITING_CONFIRMATION}")
+        reason = send_refusal(stored_host or host, credentials, deferred=deferred)
+        if reason:
+            raise AddressNotConfirmedError(reason)
     asked = next(_sequence)
     async with host_lock(host_id):
         last = _last_capture.get(host_id)
