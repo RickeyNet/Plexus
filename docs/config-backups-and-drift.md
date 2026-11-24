@@ -181,7 +181,11 @@ one.
 
 1. Open **Configuration > Config Drift** and click **Capture Snapshot**.
 2. Choose a **Single Host** or **Or Entire Group**, and the
-   **Credentials**.
+   **Credentials**. An OPNsense firewall is never read over SSH: its
+   snapshot is its newest config.xml backup, so it needs no credential.
+   **None (OPNsense firewalls only)** captures the OPNsense firewalls of
+   the choice; any other host fails with a message that it needs a
+   credential.
 3. Click **Capture**.
 
 A window shows progress for each host. After the capture Plexus runs the
@@ -397,6 +401,8 @@ POST   /api/config-drift/baselines
 POST   /api/config-drift/snapshots/capture-job          {"group_id", "credential_id"}
 POST   /api/config-drift/snapshots/capture-single-job   {"host_id", "credential_id"}
 POST   /api/config-drift/check                          {"host_id", "credential_id"}
+       (capture and check: credential_id optional; left out or null, only
+        OPNsense firewalls are captured, any other host answers 400)
 GET    /api/config-drift/events?status=open&host_id=&limit=
 PUT    /api/config-drift/events/{id}/status             {"status": "accepted"}
 POST   /api/config-drift/events/bulk-accept             {"event_ids": [..]}

@@ -355,7 +355,8 @@ export function useStartCaptureSingleJob() {
       credentialId,
     }: {
       hostId: number;
-      credentialId: number;
+      // null: no credential (only OPNsense firewalls are captured).
+      credentialId: number | null;
     }) =>
       apiRequest<{ job_id: string }>(
         '/config-drift/snapshots/capture-single-job',
@@ -374,7 +375,8 @@ export function useStartCaptureGroupJob() {
       credentialId,
     }: {
       groupId: number;
-      credentialId: number;
+      // null: no credential (only OPNsense firewalls are captured).
+      credentialId: number | null;
     }) =>
       apiRequest<{ job_id: string }>('/config-drift/snapshots/capture-job', {
         method: 'POST',

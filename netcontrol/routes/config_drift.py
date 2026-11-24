@@ -81,14 +81,17 @@ class ConfigDriftStatusUpdate(BaseModel):
     status: str  # "resolved" or "accepted"
 
 
+# A capture's credential_id may be left out (None): an OPNsense firewall is
+# never read over SSH (its snapshot is its newest config.xml backup), and
+# any other host of the capture then fails with NO_CREDENTIAL_MESSAGE.
 class ConfigSnapshotCaptureRequest(BaseModel):
     host_id: int
-    credential_id: int
+    credential_id: int | None = None
 
 
 class ConfigGroupCaptureRequest(BaseModel):
     group_id: int
-    credential_id: int
+    credential_id: int | None = None
 
 
 class ConfigDriftAnalyzeRequest(BaseModel):
@@ -101,7 +104,7 @@ class ConfigDriftAnalyzeGroupRequest(BaseModel):
 
 class ConfigDriftCheckRequest(BaseModel):
     host_id: int
-    credential_id: int
+    credential_id: int | None = None
 
 
 class ConfigDriftBulkEventsRequest(BaseModel):
@@ -154,15 +157,36 @@ def _group_ids(hosts: list[dict]) -> list[int | None]:
     return sorted({h.get("group_id") for h in hosts}, key=lambda g: (g is None, g or 0))
 
 
-async def _capture_for_drift(host: dict, credentials: dict, *, max_age_seconds: int = 0) -> str:
+NO_CREDENTIAL_MESSAGE = (
+    "No credential chosen: this device is read over SSH and needs one. "
+    "Without a credential only OPNsense firewalls are captured (from their config.xml backup)"
+)
+
+
+class CaptureCredentialMissing(ValueError):
+    """A host read over SSH was captured without a credential."""
+
+
+async def _capture_credential(request: Request, credential_id: int | None) -> dict | None:
+    """The credential a capture uses, or None when none was chosen."""
+    if credential_id is None:
+        return None
+    return await require_credential_access(credential_id, session=_get_session(request))
+
+
+async def _capture_for_drift(host: dict, credentials: dict | None, *, max_age_seconds: int = 0) -> str:
     """The configuration text a drift snapshot of ``host`` stores. An
     OPNsense firewall is never read over SSH: its snapshot is its newest
     config.xml backup, normalized and with secrets masked (raises
     ``OpnsenseBackupMissing`` without one). Any other host is read from the
-    device the usual way; ``max_age_seconds`` accepts a backup the device
-    confirmed within that window instead (``get_device_config``)."""
+    device the usual way, which needs ``credentials`` (raises
+    ``CaptureCredentialMissing`` without them); ``max_age_seconds`` accepts
+    a backup the device confirmed within that window instead
+    (``get_device_config``)."""
     if opnsense_masking.is_opnsense_host(host):
         return await opnsense_masking.drift_snapshot_text(host)
+    if not credentials:
+        raise CaptureCredentialMissing(NO_CREDENTIAL_MESSAGE)
     stored = await get_device_config(host, credentials, capture_method="drift", max_age_seconds=max_age_seconds)
     return stored.config_text
 
@@ -190,6 +214,8 @@ def _drift_form(text: str) -> str:
 def _capture_failed(host: dict, exc: Exception) -> HTTPException:
     if isinstance(exc, opnsense_masking.OpnsenseBackupMissing):
         return HTTPException(status_code=409, detail=opnsense_masking.NO_BACKUP_MESSAGE)
+    if isinstance(exc, CaptureCredentialMissing):
+        return HTTPException(status_code=400, detail=NO_CREDENTIAL_MESSAGE)
     LOGGER.error("config-drift: capture failed for host %s: %s", host["ip_address"], exc)
     return HTTPException(status_code=502, detail="SSH capture failed; see server logs")
 
@@ -251,7 +277,7 @@ async def _finish_capture_job(job_id: str, status: str) -> None:
 async def _run_config_capture_job(
     job_id: str,
     hosts: list[dict],
-    credentials: dict,
+    credentials: dict | None,
     user: str,
 ) -> None:
     """Background task: capture running-config from hosts, streaming progress.
@@ -276,7 +302,7 @@ async def _run_config_capture_job(
 async def _capture_job_body(
     job_id: str,
     hosts: list[dict],
-    credentials: dict,
+    credentials: dict | None,
     user: str,
 ) -> str:
     """Capture running-config from hosts, streaming progress. Returns the
@@ -902,7 +928,7 @@ async def get_config_snapshot(snapshot_id: int, request: Request):
 async def capture_config_snapshot(body: ConfigSnapshotCaptureRequest, request: Request):
     """SSH to a device and capture its running-config."""
     host = await require_host(request, body.host_id, write=True)
-    cred = await require_credential_access(body.credential_id, session=_get_session(request))
+    cred = await _capture_credential(request, body.credential_id)
     try:
         config_text = await _capture_for_drift(host, cred)
     except Exception as exc:
@@ -938,7 +964,7 @@ async def capture_group_config_snapshots(body: ConfigGroupCaptureRequest, reques
     hosts = await db.get_hosts_for_group(body.group_id)
     if not hosts:
         raise HTTPException(status_code=404, detail="No hosts found in group")
-    cred = await require_credential_access(body.credential_id, session=_get_session(request))
+    cred = await _capture_credential(request, body.credential_id)
 
     results = []
     sem = state.device_op_semaphore()
@@ -980,7 +1006,7 @@ async def capture_config_job(body: ConfigGroupCaptureRequest, request: Request):
     hosts = await db.get_hosts_for_group(body.group_id)
     if not hosts:
         raise HTTPException(status_code=404, detail="No hosts found in group")
-    cred = await require_credential_access(body.credential_id, session=_get_session(request))
+    cred = await _capture_credential(request, body.credential_id)
 
     session = _get_session(request)
     launched_by = session["user"] if session else "admin"
@@ -1015,7 +1041,7 @@ async def capture_config_job(body: ConfigGroupCaptureRequest, request: Request):
 async def capture_config_single_job(body: ConfigSnapshotCaptureRequest, request: Request):
     """Start a background config capture job for a single host, returning a job_id for WebSocket streaming."""
     host = await require_host(request, body.host_id, write=True)
-    cred = await require_credential_access(body.credential_id, session=_get_session(request))
+    cred = await _capture_credential(request, body.credential_id)
 
     session = _get_session(request)
     launched_by = session["user"] if session else "admin"
@@ -1497,7 +1523,7 @@ async def analyze_group_config_drift(body: ConfigDriftAnalyzeGroupRequest, reque
 async def full_config_drift_check(body: ConfigDriftCheckRequest, request: Request):
     """Full cycle: capture running-config then analyze drift for one host."""
     host = await require_host(request, body.host_id, write=True)
-    cred = await require_credential_access(body.credential_id, session=_get_session(request))
+    cred = await _capture_credential(request, body.credential_id)
     try:
         config_text = await _capture_for_drift(host, cred)
     except Exception as exc:

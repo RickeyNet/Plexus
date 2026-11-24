@@ -12,6 +12,8 @@ import { Modal } from '@/components/Modal';
 import { QueryError } from '@/components/QueryError';
 import { useObjectScope } from '@/lib/objectScope';
 
+import { NO_CREDENTIAL, type PolicyCredentialChoice, policyCredentialId } from './helpers';
+
 interface Props {
   onClose: () => void;
   onJobStarted: (jobId: string) => void;
@@ -28,7 +30,9 @@ export function CaptureSnapshotModal({ onClose, onJobStarted }: Props) {
   const group = useStartCaptureGroupJob();
   const [hostId, setHostId] = useState<number | null>(null);
   const [groupId, setGroupId] = useState<number | null>(null);
-  const [credId, setCredId] = useState<number | null>(null);
+  // null: nothing chosen yet; NO_CREDENTIAL: OPNsense firewalls only (their
+  // snapshot is their config.xml backup, never read over SSH).
+  const [credId, setCredId] = useState<PolicyCredentialChoice>(null);
   const [targetError, setTargetError] = useState<string | null>(null);
   const [credError, setCredError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -43,17 +47,18 @@ export function CaptureSnapshotModal({ onClose, onJobStarted }: Props) {
     setSaveError(null);
     const missingTarget = !hostId && !groupId;
     setTargetError(missingTarget ? 'Please select a host or group' : null);
-    setCredError(credId ? null : 'Select the credentials to log in with');
-    if (missingTarget || !credId) return;
+    setCredError(credId == null ? 'Choose a credential, or None for OPNsense firewalls only' : null);
+    if (missingTarget || credId == null) return;
+    const credentialId = policyCredentialId(credId);
     const onSuccess = (res: { job_id: string }) => {
       onClose();
       onJobStarted(res.job_id);
     };
     const onError = (err: unknown) => setSaveError((err as Error).message);
     if (groupId) {
-      group.mutate({ groupId, credentialId: credId }, { onSuccess, onError });
+      group.mutate({ groupId, credentialId }, { onSuccess, onError });
     } else if (hostId) {
-      single.mutate({ hostId, credentialId: credId }, { onSuccess, onError });
+      single.mutate({ hostId, credentialId }, { onSuccess, onError });
     }
   };
 
@@ -136,13 +141,16 @@ export function CaptureSnapshotModal({ onClose, onJobStarted }: Props) {
             className="form-select"
             value={credId ?? ''}
             onChange={(e) => {
-              setCredId(e.target.value ? Number(e.target.value) : null);
+              const value = e.target.value;
+              setCredId(value === NO_CREDENTIAL ? NO_CREDENTIAL : value ? Number(value) : null);
               setCredError(null);
             }}
             aria-invalid={!!credError}
+            aria-describedby={`${formId}-credential-hint`}
             required
           >
             <option value="">Select credentials…</option>
+            <option value={NO_CREDENTIAL}>None (OPNsense firewalls only)</option>
             {(creds.data || []).map((c) => (
               <option key={c.id} value={c.id}>
                 {c.name}
@@ -150,6 +158,15 @@ export function CaptureSnapshotModal({ onClose, onJobStarted }: Props) {
             ))}
           </select>
           <FieldError>{credError}</FieldError>
+          <p
+            id={`${formId}-credential-hint`}
+            className="text-muted"
+            style={{ fontSize: '0.85em', marginTop: '0.25rem' }}
+          >
+            Devices read over SSH use this credential. An OPNsense firewall is
+            captured from its newest config.xml backup and needs none; with
+            None, every SSH device of the group fails.
+          </p>
         </div>
       </form>
     </Modal>

@@ -372,6 +372,42 @@ async def test_capture_without_backup_is_409(fw_db):
 
 
 @pytest.mark.asyncio
+async def test_capture_without_credential(fw_db, monkeypatch):
+    # An OPNsense firewall needs no credential: the capture takes its backup.
+    await _store_backup(_sample())
+    lookup = AsyncMock(side_effect=AssertionError("no credential was chosen"))
+    monkeypatch.setattr(drift_routes, "require_credential_access", lookup)
+    req = DummyRequest()
+    captured = await drift_routes.capture_config_snapshot(drift_routes.ConfigSnapshotCaptureRequest(host_id=FW), req)
+    assert captured["snapshot_id"]
+    check = await drift_routes.full_config_drift_check(drift_routes.ConfigDriftCheckRequest(host_id=FW), req)
+    assert check["host_id"] == FW
+
+    # Any other host is refused with the reason, never read without one.
+    db = await db_module.get_db()
+    try:
+        await db.execute(
+            "INSERT INTO hosts (id, group_id, hostname, ip_address, device_type, status) "
+            "VALUES (301, 1, 'sw-lab-01', '192.0.2.20', 'cisco_ios', 'online')"
+        )
+        await db.commit()
+    finally:
+        await db.close()
+    with pytest.raises(HTTPException) as exc_info:
+        await drift_routes.capture_config_snapshot(drift_routes.ConfigSnapshotCaptureRequest(host_id=301), req)
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == drift_routes.NO_CREDENTIAL_MESSAGE
+
+    # A group capture job without a credential: the firewall is captured,
+    # the switch fails with the same reason in the job output.
+    status = await drift_routes._capture_job_body(
+        "job-no-cred", [await db_module.get_host(FW), await db_module.get_host(301)], None, "tester"
+    )
+    assert status == "partial"
+    lookup.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_drift_cycle_masks_everything_and_detects_a_secret_change(fw_db):
     raw = _sample()
     await _store_backup(raw)
