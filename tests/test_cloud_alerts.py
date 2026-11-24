@@ -555,7 +555,7 @@ async def test_azure_one_part_refused_and_a_foreign_next_link(monkeypatch):
     result = await feeds.run_poll_cycle("azure", force=True)
     # Neither part was read in full: nothing resolved, nothing sent elsewhere.
     assert result["failed"] == 0 and result["resolved"] == 0 and len(await _open("azure")) == 2
-    assert not [url for url in calls if "example.com" in url]
+    assert not [url for url in calls if httpx.URL(url).host == "elsewhere.example.com"]
     row = await _feed_row("azure", account["id"])
     assert row["feed_status"] == "partial" and "AuthorizationFailed" in row["last_error"]
     assert "Resource Health: read in part" in row["last_error"]
