@@ -49,7 +49,7 @@ All API endpoints and their required authentication/authorization levels.
 | CRUD | `/api/graph-templates/*` | graph_templates |
 | CRUD | `/api/reporting/*` | reporting |
 | CRUD | `/api/cdef/*` | cdef |
-| CRUD | `/api/mac-tracking/*` | mac_tracking |
+| CRUD | `/api/mac-tracking/*` (`POST /api/mac-tracking/collect` also needs `inventory.write`: it signs in to switches with the service credential) | mac_tracking |
 | CRUD | `/api/flow-collector/*` | flow_collector |
 | CRUD | `/api/baseline-alerting/*` | baseline_alerting |
 | GET | `/api/custom-fields` (`?object_type=`), `/api/tags` (with usage counts) | custom_fields |
@@ -91,7 +91,7 @@ below. Admins and the API token pass every feature check.
 | `compliance` | `/api/compliance/*` | compliance |
 | `compliance` | `/api/compliance/meraki/*` (scans use the organization's stored Dashboard API key, read-only; organizations themselves are managed under `/api/sources*`, admin-only) | meraki_compliance |
 | `risk-analysis` | `/api/risk-analysis/*` | risk_analysis |
-| `deployments` | `/api/deployments/*` (a plan needs approval when its group or the group of any target host is a production group, or its risk is high or critical; execute re-checks the target hosts' groups and, when one has become production, flags the plan for approval and answers `403`; the maintenance window check covers the same groups). `POST /api/deployments/{id}/request-approval` needs the plan's creator or an admin (`403`). `GET /api/deployments/job/{job_id}/status` needs the deployment's creator or an admin, like `/ws/deployment/{job_id}`; another user's job answers `404` like an unknown one | deployments |
+| `deployments` | `/api/deployments/*` (a plan needs approval when its group or the group of any target host is a production group, or its risk is high or critical; execute re-checks the target hosts' groups and, when one has become production, flags the plan for approval and answers `403`; the maintenance window check covers the same groups). `POST /api/deployments/{id}/request-approval` needs the plan's creator or an admin (`403`). `GET /api/deployments/job/{job_id}/status` needs the deployment's creator or an admin, like `/ws/deployment/{job_id}`; another user's job answers `404` like an unknown one. List, detail and correlation return `proposed_commands` and pre/post snapshots with secrets masked (`secrets_masked: true`) unless the caller holds the raw-config feature and may change every target (`config_visibility`); the job log lists commands masked for everyone; execute pushes the stored commands | deployments |
 | `lab` | `/api/lab/*` (writes need `lab.write`). `POST /api/lab/environments/{id}/clone-host` also needs `config-drift` or `config-backups` (checked in the handler, `403`; it copies the host's running config) and read scope on the source host. `POST /api/lab/runs/{id}/promote` also needs `deployments` and `deployments.write` and is planned by the deployments rule above (production approval by the hosts' groups) | lab |
 | `monitoring` | `/api/monitoring/*`, `/api/sla/*`. One manual fleet poll runs at a time: `POST /api/monitoring/poll-now`, `POST /api/monitoring/poll-now/stream` and `POST /api/admin/monitoring/run-now` answer `409` "A manual monitoring poll is already running" while another of them runs (the scheduled cycle is not affected) | monitoring |
 | `monitoring` | `GET/POST /api/availability/topology/mutes`, `DELETE /api/availability/topology/mutes/{mute_id}` (mute and unmute an integration entity or site; the writes need `monitoring.write`, like acknowledging an alert; audited as `topology.muted` / `topology.unmuted`) | monitoring |
@@ -240,7 +240,11 @@ owner's personal credential only to a confirmed address or one the owner
 set (`hosts.address_set_by`, migration 0141; written with the address by
 host create, update, bulk add, bulk import and discovery sync, left alone
 by an edit that keeps the address). Other hosts are skipped and reported
-with the reason; a deployment execute is refused with `409`. Hosts stored
+with the reason; a deployment execute is refused with `409`. An upgrade
+campaign phase that is scheduled, resumed after a restart, or started by
+someone other than the credential's owner applies the same rule per device
+(`managed_targets.recorded_address_refusal(..., deferred=True)`): a refused
+device fails with the reason and the others carry on. Hosts stored
 before migration 0141 have no recorded writer: an unconfirmed one needs an
 admin's confirmation first. Discovery scans and syncs by a non-admin send the group's SNMP
 settings only to the IP of a confirmed inventory host the caller may

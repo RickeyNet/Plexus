@@ -39,7 +39,8 @@ target in the same request keeps sending their credential anywhere.
 - ``address_writer_id``: the user recorded as having set an address a
   caller writes.
 - ``recorded_address_refusal``: the same check for an address a run
-  recorded earlier (an upgrade campaign device), on the host's row read now.
+  recorded earlier (an upgrade campaign device), on the host's row read now;
+  with ``deferred=True`` it applies the personal credential rule too.
 - ``unattended_credential``: the credential unattended collection signs in
   with (the service credential; the legacy default credential only when it
   is itself a service credential).
@@ -198,24 +199,31 @@ def session_owns_credential(session: Mapping[str, Any] | None, credential: Mappi
 
 
 async def recorded_address_refusal(
-    host_id: int | None, address: str, credential: Mapping[str, Any] | None
+    host_id: int | None, address: str, credential: Mapping[str, Any] | None, *, deferred: bool = False
 ) -> str | None:
     """Why ``credential`` may not be sent to ``address``, the address a run
     recorded for inventory host ``host_id`` (an upgrade campaign device),
-    or None when it may. Decided on the host's stored row read now: a
-    shared credential goes only to the host's confirmed address, so the
-    host must still exist (``host_id`` None: it was deleted) and the
-    recorded address must still be its address. A credential that is not
-    shared is never refused."""
-    if not credential_is_shared(credential):
+    or None when it may. Decided on the host's stored row read now
+    (``may_send_credential``): the host must still exist (``host_id`` None:
+    it was deleted), its address must pass the rule for ``credential``, and
+    the recorded address must still be its address. A shared credential is
+    always checked; a user's own credential only in ``deferred`` use (the
+    run is scheduled, or started by someone other than the credential's
+    owner), when the host's address must be confirmed or set by the owner."""
+    shared = credential_is_shared(credential)
+    if not shared and not deferred:
         return None
     host = await db.get_host(int(host_id)) if host_id is not None else None
     if host is None:
         return "the inventory host no longer exists"
-    if not address_confirmed(host):
-        return ADDRESS_AWAITING_CONFIRMATION
+    if not may_send_credential(host, credential, deferred=deferred):
+        return ADDRESS_AWAITING_CONFIRMATION if shared else ADDRESS_NOT_SET_BY_OWNER
     if not same_address(host.get("ip_address"), address):
-        return "address differs from the inventory host's confirmed address"
+        return (
+            "address differs from the inventory host's confirmed address"
+            if shared
+            else "address differs from the inventory host's address"
+        )
     return None
 
 

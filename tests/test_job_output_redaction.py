@@ -25,7 +25,7 @@ from netcontrol.routes import outbound_http, state
 from netcontrol.secrets_providers import base, service
 from routes.crypto import encrypt
 from routes.runner import BasePlaybook, LogEvent, register_playbook
-from routes.secret_resolver import SecretScrubber, redact_values, resolve_secret_bodies
+from routes.secret_resolver import SecretScrubber, redact_values, redaction_forms, resolve_secret_bodies
 
 from mcp_helpers import admin_client
 
@@ -45,14 +45,28 @@ def test_value_split_across_two_events_is_scrubbed():
     assert joined == "sw1(config)#username netops secret ********\n"
 
 
-def test_value_split_after_a_short_fragment_is_scrubbed_from_the_next_event():
-    # Fewer than MIN_REDACT_LENGTH characters are not held back (no delay);
-    # the rest of the value is masked from the next event's first character.
+def test_value_split_after_a_short_fragment_shows_none_of_it():
     scrubber = SecretScrubber({PLAIN_SECRET})
     first = scrubber.feed("secret Inv")
     second = scrubber.feed("entedPlainKey42 done")
-    assert first == "secret Inv"
+    assert first == "secret "
     assert second == "******** done"
+
+
+@pytest.mark.parametrize("value", [PLAIN_SECRET, SECRET])
+def test_no_part_of_a_value_split_at_any_position_is_shown(value):
+    # Every form (the value and each encoding), cut after every character.
+    for form in sorted(redaction_forms(value)):
+        for cut in range(1, len(form)):
+            out = _stream([f"key: {form[:cut]}", f"{form[cut:]} end\n"], value)
+            assert out == "key: ******** end\n", (form, cut, out)
+
+
+def test_a_trailing_fragment_that_never_completes_is_released_by_the_next_event():
+    scrubber = SecretScrubber({PLAIN_SECRET})
+    assert scrubber.feed("hosts In") == "hosts "
+    assert scrubber.feed("ventory ok\n") == "Inventory ok\n"
+    assert scrubber.flush() == ""
 
 
 def test_held_fragment_is_flushed_at_the_end_and_order_is_kept():
@@ -66,7 +80,7 @@ def test_held_fragment_is_flushed_at_the_end_and_order_is_kept():
 
 def test_output_that_starts_no_value_is_not_delayed():
     scrubber = SecretScrubber({PLAIN_SECRET})
-    assert scrubber.feed("hosts ok=4") == "hosts ok=4"
+    assert scrubber.feed("hosts ok=4\n") == "hosts ok=4\n"
     assert scrubber.flush() == ""
 
 

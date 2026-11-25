@@ -10,7 +10,7 @@ import threading
 from collections import defaultdict, deque
 from typing import Any
 
-from netcontrol.secret_keys import SECRET_KEY_FRAGMENTS, SECRET_KEY_REGEX, should_mask
+from netcontrol.secret_keys import SECRET_KEY_REGEX, SECRET_KEY_WORDS, should_mask
 
 _MASK = "***"
 
@@ -59,16 +59,25 @@ _AUTH_SCHEME_PATTERN = re.compile(
 # full set of device configuration rules).
 _COMMUNITY_PATTERN = re.compile(r"(?P<p>\bsnmp(?:-server)?[ \t]++community[ \t]++)(?P<v>[^\s,;]+)", re.IGNORECASE)
 
+# The password of URL userinfo (``scheme://user:password@host``), and the
+# whole userinfo of an http(s) URL without one (``https://token@host``, the
+# usual way a token is put in a Git remote). The user name stays.
+_URL_PASSWORD_PATTERN = re.compile(r"(?P<p>\b[A-Za-z][A-Za-z0-9+.\-]{0,31}://[^\s/?#@:]*+:)(?P<v>[^\s/?#@]++)(?=@)")
+_URL_TOKEN_PATTERN = re.compile(r"(?P<p>\bhttps?://)(?P<v>[^\s/?#@:]++)(?=@)", re.IGNORECASE)
+
 _STRING_PATTERNS = (
     _SENSITIVE_ASSIGNMENT_PATTERN,
     _SENSITIVE_WORD_PATTERN,
     _AUTH_SCHEME_PATTERN,
     _COMMUNITY_PATTERN,
+    _URL_PASSWORD_PATTERN,
+    _URL_TOKEN_PATTERN,
 )
 # A %-style placeholder of a log format string.
 _PLACEHOLDER = re.compile(r"%(?:\(\w+\))?[-#0 +]*\d*(?:\.\d+)?[sdrfixXoeEgGca%]")
 # A string holding none of these has nothing the patterns could match.
-_TRIGGERS = (*SECRET_KEY_FRAGMENTS, "api", "priv", "auth", "routing", "bearer", "basic", "snmp")
+# The first word of each secret key name stands for it ("bind" for "bind_pw").
+_TRIGGERS = (*dict.fromkeys(word.split()[0] for word in SECRET_KEY_WORDS), "bearer", "basic", "snmp", "@")
 
 _METRICS_LOCK = threading.Lock()
 _COUNTERS: dict[str, int] = defaultdict(int)

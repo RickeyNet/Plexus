@@ -36,6 +36,13 @@ from netcontrol.telemetry import RedactingFilter, redact_value
         ("credentials: credVal", "credVal"),
         ("GET /x?access_token=tokVal&page=2", "tokVal"),
         ('db_password="never closed', "never"),
+        ("secret_key=skVal42", "skVal42"),
+        ('{"secret_key": "skVal42"}', "skVal42"),
+        ("ldap bind_pw: bindVal42", "bindVal42"),
+        ("webhook_auth_value=hookVal42", "hookVal42"),
+        ("fetch https://netops:urlPass42@vault.example.com/v1/x", "urlPass42"),
+        ("dsn postgresql://plexus:dbPass42@db.example.com:5432/app", "dbPass42"),
+        ("remote https://tokVal42@git.example.com/org/repo.git", "tokVal42"),
     ],
 )
 def test_secret_shapes_are_masked(line, secret):
@@ -55,10 +62,18 @@ def test_secret_shapes_are_masked(line, secret):
         "basic authentication failed",
         "missing bearer token",
         "no keyword at all in this line",
+        "secret_key_id=7",
+        "clone ssh://git@git.example.com/org/repo.git",
+        "mail sent to ops@example.com",
+        "GET https://example.com:8443/a?b=c@d",
     ],
 )
 def test_words_that_only_name_a_secret_stay_readable(line):
     assert redact_value(line) == line
+
+
+def test_url_userinfo_keeps_the_user_name():
+    assert redact_value("https://netops:urlPass42@vault.example.com/x") == "https://netops:***@vault.example.com/x"
 
 
 def test_quotes_are_kept_around_a_masked_value():
@@ -91,9 +106,23 @@ def test_structured_values_mask_secrets_and_keep_references():
         "has_password": True,
         "secret": None,
         "nested": [{"api-key": "x", "name": "n"}],
+        "secret_key": "sk",
+        "bind_pw": "bp",
+        "webhook_auth_value": "wv",
     }
     out = redact_value(value)
-    for key in ("community", "private_key", "routing_key", "psk", "passphrase", "credentials", "Authorization"):
+    for key in (
+        "community",
+        "private_key",
+        "routing_key",
+        "psk",
+        "passphrase",
+        "credentials",
+        "Authorization",
+        "secret_key",
+        "bind_pw",
+        "webhook_auth_value",
+    ):
         assert out[key] == "***", key
     assert out["credential_id"] == 7 and out["credentialId"] == 8 and out["token_count"] == 2
     assert out["community_list"] == "CL1" and out["secret_variables"] == 3
@@ -134,6 +163,9 @@ def test_long_lines_do_not_backtrack():
         ("password " + " " * 1000) * 1000,
         "basic " * 200_000,
         "community:" * 100_000,
+        "a+" * 500_000 + "://",
+        "https://" + "u" * 1_000_000,
+        "x://u:" * 200_000,
     ]
     for line in lines:
         started = time.perf_counter()

@@ -15,6 +15,8 @@ import re
 from collections.abc import Iterable
 from datetime import UTC, datetime, timedelta
 
+from netcontrol.integrations.traffic import parse_time, store_time
+
 import routes.database as _dbcore
 from routes.database import (
     _LOGGER,
@@ -786,6 +788,16 @@ async def delete_old_interface_error_events(retention_days: int = 90) -> int:
     )
 
 
+def _stored_bound(value: str) -> str:
+    """A time window bound as the store writes its timestamps (UTC
+    ``YYYY-MM-DD HH:MM:SS``). Timestamps are text compared as text, so an
+    ISO bound (a ``T``, a fraction, a zone) would leave every row of its day
+    outside the window: ``"2026-01-05 10:00:00" < "2026-01-05T09:55:00"``.
+    A value that is no time is returned as it is."""
+    parsed = parse_time(value)
+    return store_time(parsed) if parsed is not None else value
+
+
 async def get_trap_syslog_events_in_range(
     host_id: int,
     start: str,
@@ -793,6 +805,7 @@ async def get_trap_syslog_events_in_range(
     limit: int = 100,
 ) -> list[dict]:
     """Return trap/syslog events for a host within a time range (for error correlation)."""
+    start, end = _stored_bound(start), _stored_bound(end)
     db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
@@ -813,6 +826,7 @@ async def get_topology_changes_in_range(
     limit: int = 50,
 ) -> list[dict]:
     """Return topology changes for a host within a time range."""
+    start, end = _stored_bound(start), _stored_bound(end)
     db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
@@ -1273,6 +1287,7 @@ async def get_config_drift_events_in_range(
     """Return config drift events for the given hosts within a time range."""
     if not host_ids:
         return []
+    start, end = _stored_bound(start), _stored_bound(end)
     db = await _dbcore.get_db(read_only=True)
     try:
         placeholders = ",".join("?" for _ in host_ids)
@@ -1298,6 +1313,7 @@ async def get_monitoring_alerts_in_range(
     """Return monitoring alerts for the given hosts within a time range."""
     if not host_ids:
         return []
+    start, end = _stored_bound(start), _stored_bound(end)
     db = await _dbcore.get_db(read_only=True)
     try:
         placeholders = ",".join("?" for _ in host_ids)
@@ -1321,6 +1337,7 @@ async def get_deployments_for_host_in_range(
     end: str,
 ) -> list[dict]:
     """Return deployments that include the given host within a time range."""
+    start, end = _stored_bound(start), _stored_bound(end)
     db = await _dbcore.get_db(read_only=True)
     try:
         # Explicit columns: consumers (alert-correlation API, root-cause
@@ -1354,6 +1371,7 @@ async def get_audit_events_for_deployment(
     end: str,
 ) -> list[dict]:
     """Return audit events related to a deployment within a time range."""
+    start, end = _stored_bound(start), _stored_bound(end)
     db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(

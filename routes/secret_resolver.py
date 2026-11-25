@@ -326,12 +326,11 @@ class SecretScrubber:
 
     Build one per job, so the forms are computed once. ``scrub`` masks one
     text on its own. ``feed`` masks a stream of event messages in order: a
-    message that ends in the first ``MIN_REDACT_LENGTH`` or more characters
-    of a form has that trailing fragment held back and put in front of the
-    next message, so a value split across two events is still masked;
-    ``flush`` returns what is held when the job ends. A shorter fragment is
-    not held (output is not delayed for it); a value it starts is masked
-    from the next message's first character on."""
+    message that ends in the first characters of a form (one or more, fewer
+    than the whole form) has that trailing fragment held back and put in
+    front of the next message, so no part of a value split across two
+    events is shown; ``flush`` returns what is held when the job ends.
+    Output that ends in no such fragment is returned whole."""
 
     def __init__(self, secret_values: Iterable[str]):
         forms: set[str] = set()
@@ -346,8 +345,6 @@ class SecretScrubber:
             self._by_first.setdefault(form[0], []).append(form)
         self._longest = len(lowered[0]) if lowered else 0
         self._held = ""
-        # The end of the text already returned, shorter than MIN_REDACT_LENGTH.
-        self._tail = ""
 
     def scrub(self, text: str) -> str:
         if self._pattern is None or not text:
@@ -358,37 +355,25 @@ class SecretScrubber:
         """The part of ``text`` (after what was held) that can be shown now."""
         if self._pattern is None:
             return text
-        carried = self._tail
-        work = carried + self._held + text
-        parts: list[str] = []
-        pos = len(carried)
-        for match in self._pattern.finditer(work):
-            if match.end() <= pos:
-                continue
-            parts.append(work[pos : max(match.start(), pos)])
-            parts.append(REDACTION_MASK)
-            pos = match.end()
-        parts.append(work[pos:])
-        scrubbed = "".join(parts)
+        # Every trailing fragment that may begin a form was held, so no form
+        # can start in text already returned: scrubbing held + text is enough.
+        scrubbed = self.scrub(self._held + text)
         cut = self._partial_start(scrubbed)
         self._held = scrubbed[cut:]
-        shown = scrubbed[:cut]
-        self._tail = (carried + shown)[-(MIN_REDACT_LENGTH - 1) :]
-        return shown
+        return scrubbed[:cut]
 
     def flush(self) -> str:
         """What ``feed`` holds back (the start of a form that never
         completed); empty when nothing is held."""
         held, self._held = self._held, ""
-        self._tail = ""
         return held
 
     def _partial_start(self, text: str) -> int:
-        """Where the longest trailing fragment of ``text`` of at least
-        ``MIN_REDACT_LENGTH`` characters that starts a form (and is not the
-        whole form) begins; ``len(text)`` when there is none."""
+        """Where the longest trailing fragment of ``text`` that starts a
+        form (and is not the whole form) begins; ``len(text)`` when there is
+        none. At most ``longest form - 1`` characters are held."""
         end = len(text)
-        for start in range(max(0, end - self._longest + 1), end - MIN_REDACT_LENGTH + 1):
+        for start in range(max(0, end - self._longest + 1), end):
             candidates = self._by_first.get(text[start].lower())
             if not candidates:
                 continue

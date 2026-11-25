@@ -35,6 +35,7 @@ SECRET_KEY_WORDS: tuple[str, ...] = (
     "password",
     "passwd",
     "secret",
+    "secret key",
     "token",
     "api key",
     "authorization",
@@ -46,6 +47,9 @@ SECRET_KEY_WORDS: tuple[str, ...] = (
     "passphrase",
     "routing key",
     "credential",
+    # The LDAP bind password and a webhook's auth header value.
+    "bind pw",
+    "auth value",
 )
 
 # Compared against the key lower-cased with "_", "-" and spaces removed.

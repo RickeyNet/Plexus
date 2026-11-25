@@ -45,7 +45,7 @@ from netcontrol.object_scope import (
     ws_scope,
 )
 from netcontrol.routes.config_drift import _analyze_drift_for_host
-from netcontrol.routes.config_visibility import mask_config_rows
+from netcontrol.routes.config_visibility import has_raw_config_feature, mask_commands, mask_config_rows
 from netcontrol.routes.device_config import get_device_config
 from netcontrol.routes.intended_config import RemediationTargets, remediation_for_hosts, resolve_remediation_targets
 from netcontrol.routes.maintenance_windows import evaluate_change_gate
@@ -540,7 +540,11 @@ async def _run_deployment_job(
         await _broadcast_deploy_line(
             job_id, f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Commands ({len(commands)}):\n"
         )
-        for cmd in commands:
+        # The log is read by the creator and every admin, whatever their
+        # right to device secrets, so it lists the commands masked; the
+        # devices get them as written. The detail view shows them raw to
+        # callers who may read them.
+        for cmd in mask_commands(commands):
             await _broadcast_deploy_line(job_id, f"  {cmd}\n")
 
         failed_hosts = []
@@ -899,6 +903,25 @@ async def _require_deployment(request: Request, deployment_id: int, *, write: bo
     return dep
 
 
+async def _deployments_as_read(request: Request, deps: list[dict]) -> list[dict]:
+    """``deps`` with their proposed commands as this caller may read them,
+    under the rule of ``netcontrol.routes.config_visibility``: as written for
+    a caller with the raw-config feature who may change every target (its
+    group, when it names no hosts), else with their secrets masked
+    (``secrets_masked: true``). Read side only: execute reads the stored
+    commands."""
+    raw = await has_raw_config_feature(request)
+    scope = await request_scope(request) if raw else None
+    for dep in deps:
+        if scope is not None and await _deployment_visible(scope, dep, write=True):
+            continue
+        commands = str(dep.get("proposed_commands") or "")
+        if commands:
+            dep["proposed_commands"] = "\n".join(mask_commands(commands.split("\n")))
+        dep["secrets_masked"] = True
+    return deps
+
+
 async def _resolve_deployment_credential(dep: dict, session: dict | None) -> dict:
     """Resolve and authorize the credential bound to a deployment.
 
@@ -1168,7 +1191,10 @@ async def list_deployments(
     group_id: int | None = Query(default=None),
     limit: int = Query(default=100, ge=1, le=500),
 ):
-    return await db.get_deployments(status=status, group_id=group_id, limit=limit, **await group_filter(request))
+    return await _deployments_as_read(
+        request,
+        await db.get_deployments(status=status, group_id=group_id, limit=limit, **await group_filter(request)),
+    )
 
 
 @router.get("/api/deployments/summary")
@@ -1183,7 +1209,8 @@ async def get_deployment_detail(deployment_id: int, request: Request):
     dep = await _require_deployment(request, deployment_id)
     await require_owner_or_admin(request, dep.get("created_by"))
     checkpoints = await db.get_deployment_checkpoints(deployment_id)
-    snapshots = await db.get_deployment_snapshots(deployment_id)
+    snapshots = await mask_config_rows(request, await db.get_deployment_snapshots(deployment_id), "config_text")
+    (dep,) = await _deployments_as_read(request, [dep])
     return {**dep, "checkpoints": checkpoints, "snapshots": snapshots}
 
 
@@ -1227,6 +1254,7 @@ async def get_deployment_correlation(deployment_id: int, request: Request):
         await db.get_audit_events_for_deployment(deployment_id, window_start, window_end) if window_start else []
     )
 
+    (dep,) = await _deployments_as_read(request, [dep])
     return {
         "deployment": dep,
         "checkpoints": checkpoints,

@@ -22,7 +22,7 @@ import time
 from typing import Any, TypedDict
 
 import routes.database as db
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 
 import netcontrol.routes.state as state
@@ -39,7 +39,7 @@ from netcontrol.object_scope import (
     scoped,
 )
 from netcontrol.routes import background_jobs
-from netcontrol.routes.shared import _audit, _corr_id, _get_session, supervise_task
+from netcontrol.routes.shared import _audit, _corr_id, _get_session, require_any_feature, supervise_task
 from netcontrol.routes.snmp import _build_snmp_auth, _snmp_str, _snmp_walk
 from netcontrol.telemetry import configure_logging
 
@@ -1213,7 +1213,15 @@ async def get_port_macs(host_id: int, port_name: str, request: Request = None): 
 _full_collection_running = False
 
 
-@router.post("/api/mac-tracking/collect")
+async def _require_inventory_write(request: Request) -> None:
+    """A collection logs in to the switches with the service credential and
+    walks them over SNMP, so it needs ``inventory.write`` (the read-only
+    ``mac-tracking`` feature only shows the tables), as other routes that
+    start device logins need their feature's write level."""
+    await require_any_feature(request, "inventory.write")
+
+
+@router.post("/api/mac-tracking/collect", dependencies=[Depends(_require_inventory_write)])
 @scoped("hosts")
 async def trigger_mac_collection(
     host_id: int | None = Query(None),

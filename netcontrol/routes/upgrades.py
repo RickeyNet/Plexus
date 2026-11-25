@@ -38,7 +38,12 @@ from netcontrol.drivers import DriverCapabilityError, get_driver
 from netcontrol.drivers.show_version import classify_show_version_os, parse_show_version
 from netcontrol.integrations.apc import upgrade as apc_upgrade
 from netcontrol.integrations.software.versions import version_tokens
-from netcontrol.managed_targets import ADDRESS_AWAITING_CONFIRMATION, recorded_address_refusal
+from netcontrol.managed_targets import (
+    ADDRESS_AWAITING_CONFIRMATION,
+    credential_is_shared,
+    recorded_address_refusal,
+    session_owns_credential,
+)
 from netcontrol.object_scope import (
     READ_ONLY_DETAIL,
     WRITE_SCOPE_DETAIL,
@@ -510,8 +515,17 @@ async def rehydrate_scheduled_upgrades():
                     started_at=_utc_now_iso(),
                 )
                 await _emit(_cid, None, "info", "Starting activate phase now")
+                # A scheduled run: deferred use of the credential.
                 await _run_phase(
-                    _cid, "activate", _devs, _creds, _imap, _opts, operation_id=_opid, credential_row=_cred_row
+                    _cid,
+                    "activate",
+                    _devs,
+                    _creds,
+                    _imap,
+                    _opts,
+                    operation_id=_opid,
+                    credential_row=_cred_row,
+                    deferred=True,
                 )
             except asyncio.CancelledError:
                 raise
@@ -1548,6 +1562,10 @@ async def execute_phase(campaign_id: int, body: CampaignPhaseRequest, request: R
         "password": decrypt(cred["password"]),
         "secret": decrypt(cred["secret"]) if cred.get("secret") else "",
     }
+    # A scheduled run, or one started by anyone but the credential's owner,
+    # is deferred use: a personal credential then goes only to an address
+    # its owner set or an admin confirmed (managed_targets).
+    deferred = scheduled_at_utc is not None or not session_owns_credential(session, cred)
 
     # Get devices
     all_devices = await db.get_upgrade_devices(campaign_id)
@@ -1636,6 +1654,7 @@ async def execute_phase(campaign_id: int, body: CampaignPhaseRequest, request: R
                     options,
                     operation_id=operation_id,
                     credential_row=cred,
+                    deferred=deferred,
                 )
             except asyncio.CancelledError:
                 raise
@@ -1667,6 +1686,7 @@ async def execute_phase(campaign_id: int, body: CampaignPhaseRequest, request: R
                 options,
                 operation_id=operation_id,
                 credential_row=cred,
+                deferred=deferred,
             )
         )
     _running_campaigns[campaign_id] = task
@@ -1971,6 +1991,7 @@ async def _run_phase(
     operation_id=None,
     *,
     credential_row: dict | None = None,
+    deferred: bool = False,
 ):
     """Orchestrate a phase across all devices with concurrency control.
 
@@ -1979,9 +2000,13 @@ async def _run_phase(
     inventory host is signed in to only when the host's stored row, read
     as the device's turn comes, holds its address as confirmed
     (``managed_targets.recorded_address_refusal``); otherwise the device
-    fails with the reason and the others continue. A device added from
-    inventory whose host was deleted since (``from_inventory``) fails the
-    same way; an address typed into the campaign is not checked."""
+    fails with the reason and the others continue. ``deferred``: the run
+    is scheduled or was started by someone other than the credential's
+    owner; a user's own credential is then checked the same way, and the
+    host's address must be confirmed or set by the credential's owner. A
+    device added from inventory whose host was deleted since
+    (``from_inventory``) fails the same way; an address typed into the
+    campaign (by its creator or an admin) is not checked."""
     max_workers = min(options.get("parallel", 4), 8)
     status_key = _phase_status_key(phase)
     phase_name = _phase_label(phase)
@@ -2021,18 +2046,25 @@ async def _run_phase(
                 # is deleted (host_id NULL); only an address typed into the
                 # campaign is exempt.
                 if dev.get("host_id") is not None or dev.get("from_inventory"):
-                    refusal = await recorded_address_refusal(dev.get("host_id"), dev["ip_address"], credential_row)
+                    refusal = await recorded_address_refusal(
+                        dev.get("host_id"), dev["ip_address"], credential_row, deferred=deferred
+                    )
                     if refusal:
                         hint = (
                             "An admin confirms the address on the Inventory page."
-                            if refusal == ADDRESS_AWAITING_CONFIRMATION
+                            if ADDRESS_AWAITING_CONFIRMATION in refusal
                             else "Edit the campaign so its devices match the inventory."
+                        )
+                        which = (
+                            "the shared credential"
+                            if credential_is_shared(credential_row)
+                            else "the owner's personal credential"
                         )
                         await _fail_upgrade_device(
                             campaign_id,
                             dev["id"],
                             dev["ip_address"],
-                            f"Not signed in with the shared credential: {refusal}. {hint}",
+                            f"Not signed in with {which}: {refusal}. {hint}",
                             status_keys=(status_key,),
                         )
                         return
