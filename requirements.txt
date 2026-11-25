@@ -14,7 +14,7 @@ defusedxml==0.7.1
 # XML-DSig verification of SAML 2.0 responses (netcontrol/saml.py). Pure
 # Python over lxml + cryptography: binary wheels on Linux and Windows, no
 # libxmlsec1 system package (python3-saml/pysaml2 need one).
-signxml==5.3.0
+signxml==5.3.1
 lxml==6.1.3
 pyyaml==6.0.4
 # Renders the user guides under Help (netcontrol/routes/help_docs.py).
