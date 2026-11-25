@@ -190,22 +190,18 @@ def test_nginx_upload_locations_match_the_app_allowlist():
 
 # ── First login ──────────────────────────────────────────────────────────────
 
-_OLD_DEFAULT = re.compile(r"PASSWORD\s*=\s*netcontrol\b|admin`?\s*/\s*`?netcontrol\b")
 
-
-def test_no_shipped_default_admin_password():
-    paths = _text_files(DEPLOY, ROOT / "README.md", *_compose_files())
-    for path in paths:
-        assert not _OLD_DEFAULT.search(_read(path)), path
-    # .env.example names the opt-in dev login in a comment, but ships the
-    # real setting empty (random password on first boot).
+def test_env_files_leave_the_first_login_password_to_the_app_default():
+    # Empty means the app's default (netcontrol, must-change at first login),
+    # so the password is never hard-coded into a generated .env.
     assert re.search(r"^PLEXUS_INITIAL_ADMIN_PASSWORD=$", _read(ROOT / ".env.example"), re.M)
+    assert re.search(r"^PLEXUS_INITIAL_ADMIN_PASSWORD=$", _read(DEPLOY / "setup.sh"), re.M)
 
 
-def test_setup_generates_the_first_login_password():
-    setup = _read(DEPLOY / "setup.sh")
-    assert re.search(r"ADMIN_PASSWORD=\$\(python3 -c \"import secrets; print\(secrets\.token_urlsafe", setup)
-    assert "PLEXUS_INITIAL_ADMIN_PASSWORD=${ADMIN_PASSWORD}" in setup
+def test_install_banners_name_the_default_login():
+    for name in ("setup.sh", "bootstrap.sh", "airgap/install.sh"):
+        assert "netcontrol" in _read(DEPLOY / name), name
+        assert "change it at first login" in _read(DEPLOY / name), name
 
 
 # ── Server API token (opt-in) ────────────────────────────────────────────────

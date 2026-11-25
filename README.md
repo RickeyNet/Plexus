@@ -48,8 +48,8 @@ docker compose up --build -d
 docker compose logs -f plexus
 ```
 4) Open `https://localhost` (accept the self-signed certificate warning), log in
-as `admin` with the one-time password `setup.sh` printed (also
-`PLEXUS_INITIAL_ADMIN_PASSWORD` in `.env`) and change it when prompted.
+as `admin` / `netcontrol` (or `PLEXUS_INITIAL_ADMIN_PASSWORD` if you set one
+in `.env`) and change it when prompted.
 
 Rebuild the app after code changes, or reset everything (deletes the database):
 

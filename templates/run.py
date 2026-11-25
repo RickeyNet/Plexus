@@ -134,11 +134,11 @@ if os.name == "nt":
     socket.socket.shutdown = ignore_connection_reset_error(original_shutdown)
 
 if __name__ == "__main__":
-    # Dev bootstrap (deterministic admin/netcontrol login) must be opted into
-    # explicitly via APP_ENV=dev or PLEXUS_DEV_BOOTSTRAP=true. Defaulting it on
-    # here would silently enable the well-known credentials in any deployment
+    # Dev bootstrap (admin/netcontrol with no forced change) must be opted
+    # into explicitly via APP_ENV=dev or PLEXUS_DEV_BOOTSTRAP=true. Defaulting
+    # it on here would leave the well-known password usable in any deployment
     # that launches via this script (including Docker). Without it, first boot
-    # creates an admin with a random password printed to stderr.
+    # creates admin/netcontrol flagged must-change.
 
     parser = argparse.ArgumentParser(description="Plexus Automation Hub")
     parser.add_argument("--version", action="version", version=f"Plexus {APP_VERSION}")

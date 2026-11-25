@@ -640,8 +640,9 @@ async def _ensure_default_admin():
     First-boot behavior:
       - If no admin user exists, create/promote one and print credentials.
       - ``PLEXUS_INITIAL_ADMIN_PASSWORD`` may provide the initial password.
-      - Dev mode defaults to ``netcontrol`` (or ``PLEXUS_DEFAULT_ADMIN_PASSWORD``).
-      - Non-dev mode defaults to a random password.
+      - Otherwise the password is ``netcontrol`` (or
+        ``PLEXUS_DEFAULT_ADMIN_PASSWORD``). Outside dev mode the account is
+        flagged must-change, so the first login forces a new password.
 
     Recovery behavior:
       - If ``PLEXUS_FORCE_ADMIN_PASSWORD_RESET=true`` is set, reset the
@@ -688,15 +689,10 @@ async def _ensure_default_admin():
                 await conn.close()
         return
 
-    if configured_password:
-        password = configured_password
-        must_change_password = True
-    elif dev_bootstrap:
-        password = default_bootstrap_password
-        must_change_password = False
-    else:
-        password = secrets.token_urlsafe(16)
-        must_change_password = True
+    password = configured_password or default_bootstrap_password
+    # Dev mode keeps the default login usable as is; everywhere else the
+    # first login must replace the bootstrap password.
+    must_change_password = bool(configured_password) or not dev_bootstrap
 
     salt = secrets.token_hex(16)
     pw_hash = await asyncio.to_thread(_hash_password, password, salt)

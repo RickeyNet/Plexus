@@ -61,18 +61,25 @@ async def test_default_admin_creation_sets_must_change_password(monkeypatch):
     async def fake_get_user_by_username(username):
         return None
 
+    monkeypatch.delenv("PLEXUS_DEFAULT_ADMIN_PASSWORD", raising=False)
+    monkeypatch.delenv("PLEXUS_INITIAL_ADMIN_USERNAME", raising=False)
+
     async def fake_create_user(username, pw_hash, salt, *, display_name="", role="user", must_change_password=False):
-        created["must_change_password"] = must_change_password
+        created.update(username=username, pw_hash=pw_hash, salt=salt, must_change_password=must_change_password)
         return 1
 
     with (
         patch.object(app_module.db, "get_all_users", fake_get_all_users),
         patch.object(app_module.db, "get_user_by_username", fake_get_user_by_username),
         patch.object(app_module.db, "create_user", fake_create_user),
+        patch.object(app_module, "_emit_bootstrap_admin_credentials", lambda *a, **k: None),
     ):
         await app_module._ensure_default_admin()
 
     assert created.get("must_change_password") is True
+    # The first-boot password is the documented default, netcontrol.
+    assert created["username"] == "admin"
+    assert created["pw_hash"] == app_module._hash_password("netcontrol", created["salt"])
 
 
 @pytest.mark.asyncio
