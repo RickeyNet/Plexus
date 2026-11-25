@@ -449,7 +449,10 @@ async def test_peer(peer_id: int, request: Request, _user=Depends(admin_session)
     except HTTPException as exc:
         return {"status": "error", "message": str(exc.detail)}
     except OutboundRequestError as exc:
-        return {"status": "error", "message": f"Peer URL rejected: {exc}"}
+        # The guard's reason can name the address the host resolved to; keep
+        # it in the server log, not in the response.
+        LOGGER.warning("Federation peer %s: test refused by the outbound guard: %s", peer_id, exc)
+        return {"status": "error", "message": "Peer URL rejected: the outbound address guard refused it"}
     except httpx.ConnectError:
         return {"status": "error", "message": "Connection refused or unreachable"}
     except httpx.TimeoutException:

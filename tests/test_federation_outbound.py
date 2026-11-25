@@ -52,6 +52,7 @@ async def test_peer_requests_rerun_the_guard(monkeypatch, request):
     assert resp.status_code == 200
     assert resp.json()["status"] == "error"
     assert "Peer URL rejected" in resp.json()["message"]
+    assert "fd00" not in resp.json()["message"]  # the resolved address stays in the server log
     resp = client.post(f"/api/federation/peers/{peer_id}/sync")
     assert resp.status_code == 502
     assert seen == []
