@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import hmac
+import inspect
 import json
 import threading
 import time
@@ -100,12 +101,18 @@ def _wait(predicate, timeout_s: float = 6.0) -> bool:
 
 
 async def _await(predicate, timeout_s: float = 6.0) -> bool:
+    """Poll ``predicate`` (plain or async) until it is true or time runs out."""
+
+    async def check() -> bool:
+        result = predicate()
+        return bool(await result if inspect.isawaitable(result) else result)
+
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
-        if predicate():
+        if await check():
             return True
         await asyncio.sleep(0.05)
-    return predicate()
+    return await check()
 
 
 def _ok(resp, status: int = 200) -> dict:
@@ -382,8 +389,18 @@ async def test_retries_on_5xx_then_succeeds(dispatcher, receiver):
     ids = {r["headers"]["X-Plexus-Delivery"] for r in rx.requests}
     assert len(ids) == 1  # every attempt carries the same delivery id
     assert len({r["body"] for r in rx.requests}) == 1
-    log = await db.list_webhook_deliveries(hook["id"])
-    assert [(d["attempt"], d["status"]) for d in reversed(log)] == [(1, "retrying"), (2, "retrying"), (3, "success")]
+    # The receiver sees the third request before the dispatcher records its
+    # outcome, so wait for the delivery log too.
+    expected = [(1, "retrying"), (2, "retrying"), (3, "success")]
+
+    async def logged() -> list:
+        return [(d["attempt"], d["status"]) for d in reversed(await db.list_webhook_deliveries(hook["id"]))]
+
+    async def done() -> bool:
+        return await logged() == expected
+
+    await _await(done)
+    assert await logged() == expected
 
 
 async def test_retries_stop_at_max_and_4xx_is_not_retried(dispatcher, receiver):
