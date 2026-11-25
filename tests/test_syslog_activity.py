@@ -139,8 +139,9 @@ async def test_a_stored_clear_message_drops_the_counter(restore):
 
 async def test_no_threshold_rule_enabled_skips_the_counters(restore):
     _gid, host_id = await _host()
-    await db.set_syslog_builtin_override("link_flap", False, "warning")
-    await db.set_syslog_builtin_override("auth_failure", False, "warning")
+    for rule in sr.BUILTIN_RULES:
+        if rule.threshold_count > 1:
+            await db.set_syslog_builtin_override(rule.key, False, rule.severity)
     sr.invalidate_rules_cache()
     await _store(DOWN, host_id, ago=60)
     assert await sr.restore_state() == {"messages": 0, "counters": 0, "config_changes": 0}

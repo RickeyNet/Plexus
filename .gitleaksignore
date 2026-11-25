@@ -48,3 +48,4 @@ e204ea8e3b85c20ebe691922c272a77e3717c561:tests/test_mcp_redact.py:private-key:53
 0fae994cd490210620f66f318373e02a0ccca9ef:netcontrol/routes/inventory.py:generic-api-key:2554
 0fae994cd490210620f66f318373e02a0ccca9ef:netcontrol/routes/inventory.py:generic-api-key:2701
 0fae994cd490210620f66f318373e02a0ccca9ef:netcontrol/routes/inventory.py:generic-api-key:2769
+d229474e915e08f8806ccc7db20fafc8b36763b4:tests/test_job_output_redaction.py:generic-api-key:33

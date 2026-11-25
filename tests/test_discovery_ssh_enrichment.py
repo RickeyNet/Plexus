@@ -502,7 +502,7 @@ async def test_onboard_persists_ssh_facts(monkeypatch):
     async def fake_index(_gid):
         return {}
 
-    async def fake_add(gid, hostname, ip, device_type, *, address_confirmed=False):
+    async def fake_add(gid, hostname, ip, device_type, *, address_confirmed=False, address_set_by=None):
         calls["add"].append((hostname, ip, device_type))
         return 50
 
