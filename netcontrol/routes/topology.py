@@ -25,6 +25,7 @@ import routes.database as db
 from fastapi import APIRouter, HTTPException, Query, Request
 
 import netcontrol.routes.state as state
+from netcontrol.db_errors import client_error_for
 from netcontrol.integrations.meraki.unified import external_key, external_keys
 from netcontrol.managed_targets import ADDRESS_AWAITING_CONFIRMATION, split_by_confirmation
 from netcontrol.object_scope import (
@@ -1829,6 +1830,8 @@ async def _build_topology(group_id: int | None, links_scope: LinkScope | None = 
             "unacknowledged_changes": change_count,
         }
     except Exception as exc:
+        if client_error_for(exc) is not None:
+            raise  # the caller's mistake: answered as one, not logged as a failure
         LOGGER.error("topology: failed to build graph: %s", exc, exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to build topology graph")
 
@@ -2041,6 +2044,10 @@ async def stream_topology_utilization(
     """SSE endpoint that pushes utilization updates at regular intervals."""
     # The caller's scope is read once, when the stream opens.
     links_scope = await _visible_links(request, group_id)
+    # The first tick is computed before the stream opens: a group id the
+    # database refuses is answered as an error, not as a stream that ends
+    # without data. The stream's first tick reads it from the cache.
+    await _get_util_map_and_links(group_id)
     # Held until the stream ends; nothing between the claim and the return
     # can fail and leave it held.
     slot = LIVE_STREAMS.claim(request)
@@ -2560,6 +2567,8 @@ async def get_host_topology(host_id: int, request: Request = None):  # type: ign
     except HTTPException:
         raise
     except Exception as exc:
+        if client_error_for(exc) is not None:
+            raise  # the caller's mistake: answered as one, not logged as a failure
         LOGGER.error("topology: host topology error: %s", exc, exc_info=True)
         raise HTTPException(status_code=500, detail="An internal error occurred.")
 
@@ -2864,6 +2873,8 @@ async def get_topology_stp_state(
             "unacknowledged_events": unacknowledged,
         }
     except Exception as exc:
+        if client_error_for(exc) is not None:
+            raise  # the caller's mistake: answered as one, not logged as a failure
         LOGGER.error("topology stp: state query failed: %s", exc, exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to fetch STP state")
 

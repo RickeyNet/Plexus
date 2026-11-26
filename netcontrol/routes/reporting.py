@@ -30,6 +30,7 @@ from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 
 from netcontrol.csv_cells import csv_text_row
+from netcontrol.db_errors import client_error_for
 from netcontrol.object_scope import (
     SCOPED_REFUSED_DETAIL,
     ScopeModel,
@@ -91,6 +92,14 @@ _SCOPED_REPORT_DETAIL = "Pick an inventory group or host in your scope for this 
 # The longest window a report export takes: ten years, far inside what the
 # date arithmetic of the queries holds.
 MAX_REPORT_DAYS = 3650
+# The day window a saved or generated report takes from its parameters, by
+# report type: the parameter's name and its default.
+_REPORT_DAY_PARAMS = {
+    "availability": ("days", 30),
+    "interface": ("days", 30),
+    "ipam_forecast": ("lookback_days", 30),
+    "ipam_history": ("days", 90),
+}
 
 
 def _int_or_none(value) -> int | None:
@@ -173,8 +182,13 @@ async def list_reports(request: Request):
 @router.post("/api/reports", status_code=201)
 @scoped("create")
 async def create_report(payload: ReportDefinitionCreate, request: Request):
+    params = _parse_report_params(payload.parameters_json)
+    # Refused at save, so a definition its scheduled runs would fail on is
+    # never stored.
+    report_type = payload.report_type.strip().lower()
+    if report_type in _REPORT_DAY_PARAMS:
+        _report_days(report_type, params)
     if (await request_scope(request)).restricted:
-        params = _parse_report_params(payload.parameters_json)
         await _report_scope(request, payload.report_type, params)
         await require_new_row(request, "report_definition", _scope_keys({"parameters_json": params}) or {})
     owner = _session_user(request)
@@ -304,17 +318,28 @@ def _is_report_definition_due(report_def: dict, now_utc: datetime) -> bool:
     return elapsed >= interval
 
 
+def _report_days(report_type: str, params: dict) -> int:
+    """The day window in the parameters of a report of ``report_type`` (one
+    of ``_REPORT_DAY_PARAMS``), held to the range the exports take (422
+    outside it)."""
+    key, default = _REPORT_DAY_PARAMS[report_type]
+    value = params.get(key)
+    days = default if value is None else _int_or_none(value)
+    if days is None or not 1 <= days <= MAX_REPORT_DAYS:
+        raise HTTPException(status_code=422, detail=f"{key} must be a whole number from 1 to {MAX_REPORT_DAYS}")
+    return days
+
+
 async def _generate_report_rows(report_type: str, params: dict) -> list[dict]:
     group_id = params.get("group_id")
-    days = params.get("days", 30)
     host_id = params.get("host_id")
 
     if report_type == "availability":
-        return await db.generate_availability_report_data(group_id, days)
+        return await db.generate_availability_report_data(group_id, _report_days(report_type, params))
     if report_type == "compliance":
         return await db.generate_compliance_report_data(group_id)
     if report_type == "interface":
-        return await db.generate_interface_report_data(host_id, group_id, days)
+        return await db.generate_interface_report_data(host_id, group_id, _report_days(report_type, params))
     if report_type == "network_documentation":
         return await db.generate_network_documentation_report_data(group_id)
     if report_type == "ipam_utilization":
@@ -325,7 +350,7 @@ async def _generate_report_rows(report_type: str, params: dict) -> list[dict]:
     if report_type == "ipam_forecast":
         return await db.generate_ipam_forecast_report_data(
             vrf_name=params.get("vrf_name"),
-            lookback_days=int(params.get("lookback_days", 30)),
+            lookback_days=_report_days(report_type, params),
             target_pct=float(params.get("target_pct", 90.0)),
             min_points=int(params.get("min_points", 2)),
         )
@@ -334,7 +359,7 @@ async def _generate_report_rows(report_type: str, params: dict) -> list[dict]:
             address=params.get("address"),
             hostname=params.get("hostname"),
             vrf_name=params.get("vrf_name"),
-            days=int(params.get("days", 90)),
+            days=_report_days(report_type, params),
             limit=int(params.get("limit", 1000)),
         )
     raise HTTPException(status_code=400, detail=f"Unknown report type: {report_type}")
@@ -475,8 +500,15 @@ async def _execute_report_run(
         await db.complete_report_run(run["id"], "{}", 0, "error")
         raise
     except Exception as exc:
-        LOGGER.error("Report generation failed (type=%s): %s", report_type, exc)
+        # A value the database refused is the caller's mistake: the run is
+        # closed as failed and the error answered as one, not logged as a
+        # failure of the server.
+        refused = client_error_for(exc) is not None
+        if not refused:
+            LOGGER.error("Report generation failed (type=%s): %s", report_type, exc)
         await db.complete_report_run(run["id"], json.dumps({"error": "generation_failed"}), 0, "error")
+        if refused:
+            raise
         raise HTTPException(status_code=500, detail="Report generation failed - see server logs")
 
 
@@ -1209,6 +1241,8 @@ async def export_network_documentation_svg(
             },
         )
     except Exception as exc:
+        if client_error_for(exc) is not None:
+            raise  # the caller's mistake: answered as one, not logged as a failure
         LOGGER.error("Network documentation SVG export failed: %s", exc)
         raise HTTPException(status_code=500, detail="Failed to export network documentation SVG")
 
@@ -1233,6 +1267,8 @@ async def export_network_documentation_drawio(
             },
         )
     except Exception as exc:
+        if client_error_for(exc) is not None:
+            raise  # the caller's mistake: answered as one, not logged as a failure
         LOGGER.error("Network documentation draw.io export failed: %s", exc)
         raise HTTPException(status_code=500, detail="Failed to export network documentation draw.io")
 
@@ -1256,6 +1292,8 @@ async def export_network_documentation_pdf(
             },
         )
     except Exception as exc:
+        if client_error_for(exc) is not None:
+            raise  # the caller's mistake: answered as one, not logged as a failure
         LOGGER.error("Network documentation PDF export failed: %s", exc)
         raise HTTPException(status_code=500, detail="Failed to export network documentation PDF")
 

@@ -23,6 +23,7 @@ from pydantic import BaseModel
 
 import netcontrol.routes.state as state
 from netcontrol.bounded_map import BoundedDict
+from netcontrol.db_errors import client_error_for
 from netcontrol.object_scope import (
     ObjectScope,
     group_filter,
@@ -889,6 +890,8 @@ async def list_config_baselines(request: Request, host_id: int | None = Query(de
         rows = await db.get_config_baselines(host_id=host_id, **scope_filter)
         return await mask_config_rows(request, rows, "config_text")
     except Exception as exc:
+        if client_error_for(exc) is not None:
+            raise  # the caller's mistake: answered as one, not logged as a failure
         LOGGER.error("config-drift: list baselines error: %s", exc, exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to list config baselines")
 

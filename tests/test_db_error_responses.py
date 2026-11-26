@@ -8,6 +8,10 @@ a general message (``netcontrol/db_errors.py`` and the handlers in
 
 from __future__ import annotations
 
+import json
+import logging
+from contextlib import contextmanager
+
 import asyncpg
 import pytest
 from netcontrol.db_errors import client_error_for
@@ -30,6 +34,29 @@ def _error(resp, status: int) -> dict:
     return body["error"]
 
 
+class _ErrorLines(logging.Handler):
+    """Collects what one logger writes at ERROR (the application loggers do
+    not propagate, so ``caplog`` does not see them)."""
+
+    def __init__(self) -> None:
+        super().__init__(level=logging.ERROR)
+        self.lines: list[str] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.lines.append(record.getMessage())
+
+
+@contextmanager
+def _error_lines(logger_name: str):
+    seen = _ErrorLines()
+    logger = logging.getLogger(logger_name)
+    logger.addHandler(seen)
+    try:
+        yield seen.lines
+    finally:
+        logger.removeHandler(seen)
+
+
 # ── Numbers the column cannot hold ───────────────────────────────────────────
 
 
@@ -46,6 +73,41 @@ def test_a_handler_that_wraps_the_database_error_still_answers_422(admin):
 
 def test_body_integer_past_the_column_range_is_422(admin):
     _error(admin.post("/api/graph-trees", json={"name": "range tree", "sort_order": PAST_INT32}), 422)
+
+
+@pytest.mark.parametrize(
+    ("logger_name", "path", "params"),
+    [
+        ("plexus.topology", "/api/topology", {"group_id": PAST_INT64}),
+        ("plexus.topology", f"/api/topology/host/{PAST_INT64}", None),
+        ("plexus.topology", "/api/topology/stp", {"group_id": PAST_INT64}),
+        ("plexus.topology", "/api/topology/stp", {"host_id": PAST_INT64}),
+        ("plexus.config_drift", "/api/config-drift/baselines", {"host_id": PAST_INT64}),
+        ("plexus.reporting", "/api/reports/export/network_documentation.svg", {"group_id": PAST_INT64}),
+        ("plexus.reporting", "/api/reports/export/network_documentation.drawio", {"group_id": PAST_INT64}),
+        ("plexus.reporting", "/api/reports/export/network_documentation.pdf", {"group_id": PAST_INT64}),
+    ],
+)
+def test_a_refused_value_is_not_logged_as_a_server_error(admin, logger_name, path, params):
+    with _error_lines(logger_name) as lines:
+        resp = admin.get(path, params=params)
+    _error(resp, 422)
+    assert not lines, f"logged at ERROR: {lines[0][:120]}"
+
+
+def test_a_report_run_on_a_refused_value_is_closed_and_answered_422(admin):
+    body = {"report_type": "availability", "parameters": {"group_id": PAST_INT64}}
+    with _error_lines("plexus.reporting") as lines:
+        resp = admin.post("/api/reports/generate", json=body)
+    _error(resp, 422)
+    assert not lines, f"logged at ERROR: {lines[0][:120]}"
+    runs = admin.get("/api/reports/runs").json()
+    assert [run["status"] for run in runs["runs"]] == ["error"]
+
+
+def test_a_stream_refuses_the_value_before_it_opens(admin):
+    resp = admin.get("/api/topology/utilization/stream", params={"group_id": PAST_INT64})
+    _error(resp, 422)
 
 
 # ── Missing parents and taken names ──────────────────────────────────────────
@@ -96,6 +158,34 @@ def test_day_count_is_bounded(admin, path, param):
     assert admin.get(path, params={param: PAST_INT32 - 1}).status_code == 422
     assert admin.get(path, params={param: 0}).status_code == 422
     assert admin.get(path, params={param: 30}).status_code == 200
+
+
+@pytest.mark.parametrize(
+    ("report_type", "param"),
+    [
+        ("availability", "days"),
+        ("interface", "days"),
+        ("ipam_forecast", "lookback_days"),
+        ("ipam_history", "days"),
+    ],
+)
+def test_report_run_day_count_is_bounded(admin, report_type, param):
+    def run(value):
+        return admin.post("/api/reports/generate", json={"report_type": report_type, "parameters": {param: value}})
+
+    for refused in (PAST_INT32 - 1, 0, "soon"):
+        assert _error(run(refused), 422)["message"] == f"{param} must be a whole number from 1 to 3650"
+    assert run(30).status_code == 200
+    assert run("30").status_code == 200
+
+
+def test_saved_report_with_a_day_count_out_of_range_is_refused(admin):
+    def save(days):
+        body = {"name": "long window", "report_type": "availability", "parameters_json": json.dumps({"days": days})}
+        return admin.post("/api/reports", json=body)
+
+    _error(save(400000), 422)
+    assert save(3650).status_code == 201
 
 
 # ── The mapping ──────────────────────────────────────────────────────────────
