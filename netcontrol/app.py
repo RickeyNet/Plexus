@@ -2944,10 +2944,11 @@ app.include_router(
     oid_profiles_router,
     dependencies=[Depends(require_auth), Depends(require_feature_method("monitoring"))],
 )
-# Audit Report Engine
+# Audit Report Engine: read with reports; starting a run and changing a
+# schedule or an override need reports.write.
 app.include_router(
     audit_router,
-    dependencies=[Depends(require_auth), Depends(require_feature("reports"))],
+    dependencies=[Depends(require_auth), Depends(require_feature_method("reports"))],
 )
 # CDEF Engine (calculated data sources)
 app.include_router(
@@ -2988,7 +2989,8 @@ app.include_router(
     interface_errors_router,
     dependencies=[Depends(require_auth), Depends(require_feature_method("monitoring"))],
 )
-# Bandwidth Billing & 95th Percentile
+# Bandwidth Billing & 95th Percentile: read with reports, changed with
+# reports.write.
 app.include_router(
     billing_router,
     dependencies=[Depends(require_auth), Depends(require_feature_method("reports"))],

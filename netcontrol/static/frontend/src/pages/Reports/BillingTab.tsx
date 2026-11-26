@@ -1,5 +1,6 @@
 import { useId, useState } from 'react';
 
+import { useAuthStatus } from '@/api/auth';
 import {
   billingExportUrl,
   useBillingCircuits,
@@ -15,6 +16,7 @@ import { useDialogs } from '@/components/DialogProvider-context';
 import { LoadingState } from '@/components/LoadingState';
 import { QueryError } from '@/components/QueryError';
 import { StatGrid, StatTile } from '@/components/StatTile';
+import { canWriteFeature } from '@/lib/tabGating';
 
 import { CircuitFormModal } from './CircuitFormModal';
 import { GenerateBillingModal } from './GenerateBillingModal';
@@ -22,6 +24,8 @@ import { BillingPeriodModal } from './BillingPeriodModal';
 import { formatBps } from './helpers';
 
 export function BillingTab() {
+  // Circuits and periods are changed by an admin or with `reports.write`.
+  const canWrite = canWriteFeature('reports', useAuthStatus().data);
   const fid = useId();
   const { confirm, alert } = useDialogs();
   const [customer, setCustomer] = useState('');
@@ -67,8 +71,12 @@ export function BillingTab() {
           <a className="btn btn-secondary" href={billingExportUrl(customer || undefined)} download>
             Export CSV
           </a>
-          <button className="btn btn-secondary" onClick={() => setGenerating(true)}>Generate Billing</button>
-          <button className="btn btn-primary" onClick={() => setEditingId('new')}>+ New Circuit</button>
+          {canWrite && (
+            <>
+              <button className="btn btn-secondary" onClick={() => setGenerating(true)}>Generate Billing</button>
+              <button className="btn btn-primary" onClick={() => setEditingId('new')}>+ New Circuit</button>
+            </>
+          )}
         </div>
       </div>
 
@@ -99,7 +107,11 @@ export function BillingTab() {
       {circuitsQuery.data && (circuits.length === 0 ? (
         <div className="empty-state">
           <h4>No billing circuits defined</h4>
-          <p className="text-muted">Create a billing circuit to start tracking 95th percentile bandwidth usage.</p>
+          <p className="text-muted">
+            {canWrite
+              ? 'Create a billing circuit to start tracking 95th percentile bandwidth usage.'
+              : 'An admin or a user who may modify Reports creates billing circuits.'}
+          </p>
         </div>
       ) : (
         <div style={{ overflowX: 'auto' }}>
@@ -125,8 +137,12 @@ export function BillingTab() {
                     : <span style={{ color: 'var(--text-muted)' }}>Disabled</span>}
                   </td>
                   <td style={{ display: 'flex', gap: '0.25rem' }}>
-                    <button className="btn btn-sm btn-secondary" onClick={() => setEditingId(c.id)}>Edit</button>
-                    <DeleteButton onClick={() => handleDelete(c)} />
+                    {canWrite && (
+                      <>
+                        <button className="btn btn-sm btn-secondary" onClick={() => setEditingId(c.id)}>Edit</button>
+                        <DeleteButton onClick={() => handleDelete(c)} />
+                      </>
+                    )}
                   </td>
                 </tr>
               ))}

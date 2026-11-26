@@ -172,12 +172,12 @@ narrows the circuits, the periods and the cards.
 | Generate reports, see History, download CSV and files | The `reports` feature |
 | Create or delete a scheduled report definition (API) | The `reports` feature |
 | See billing circuits, periods and cards | The `reports` feature |
-| Create, edit or delete a circuit, generate billing | Admin. These need `reports.write`, which an access group cannot grant because Reports is a read-only feature |
+| Create, edit or delete a circuit, generate billing | `reports.write` (**Modify** on Reports in the access group). Without it the buttons are not shown |
 
 ## API
 
 All routes need the `reports` feature, a session with CSRF token on writes,
-or the server API token. See [api-reference.md](api-reference.md) for the
+or the server API token. Billing writes also need `reports.write`. See [api-reference.md](api-reference.md) for the
 general rules.
 
 ```

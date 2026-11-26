@@ -557,8 +557,14 @@ _FEATURE_CATALOG = [
     {"key": "compliance", "label": "Compliance", "gateable": True, "writable": True, "visible_in_nav": True},
     {"key": "change-management", "label": "Changes", "gateable": False, "writable": False, "visible_in_nav": True},
     {"key": "risk-analysis", "label": "Risk Analysis", "gateable": True, "writable": True, "visible_in_nav": True},
-    {"key": "reports", "label": "Reports", "gateable": True, "writable": False, "visible_in_nav": True},
+    # Reports, the audit and bandwidth billing: read with reports (which also
+    # generates and saves reports); audit runs, schedules and overrides and
+    # billing circuits and periods are changed with reports.write
+    # (docs/reports.md, docs/compliance.md).
+    {"key": "reports", "label": "Reports", "gateable": True, "writable": True, "visible_in_nav": True},
     {"key": "graph-templates", "label": "Graph Templates", "gateable": True, "writable": True, "visible_in_nav": True},
+    # MAC and ARP tables: read with mac-tracking. A collection also needs
+    # inventory.write and the cleanup an admin, so there is no .write key.
     {"key": "mac-tracking", "label": "MAC Tracking", "gateable": True, "writable": False, "visible_in_nav": True},
     {"key": "software", "label": "Software Versions", "gateable": True, "writable": True, "visible_in_nav": True},
     # End-of-life notices and support contracts (Software > Lifecycle): read

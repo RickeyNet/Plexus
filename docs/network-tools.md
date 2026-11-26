@@ -176,8 +176,8 @@ to UDP 2055, or sFlow v5 to UDP 6343 (the default ports).
 ## Rules worth knowing
 
 - **MAC table entries are not removed on a schedule.** An entry stays until
-  a newer collection updates it or someone calls the cleanup endpoint, which
-  removes entries not seen for a number of days (default 30).
+  a newer collection updates it or an admin calls the cleanup endpoint, which
+  removes entries not seen for a number of days (default 30) on every host.
 - **Move events and MAC history are pruned** after 90 days by default. The
   pruning runs every hour.
 - **Search returns up to 5,000 rows** by default. The API allows up to
@@ -193,7 +193,9 @@ to UDP 2055, or sFlow v5 to UDP 6343 (the default ports).
 | Action | Needs |
 |---|---|
 | Search, view moves and the by-host table | The `mac-tracking` feature |
-| Collect now, acknowledge moves | The `mac-tracking` feature |
+| Acknowledge moves | The `mac-tracking` feature |
+| Collect now | `mac-tracking` and `inventory.write` (a collection signs in to the switches) |
+| Call the cleanup endpoint | Admin, or the server API token |
 | See traffic views and exporters | The `traffic-analysis` feature |
 | Turn the flow collector on or off, change its ports and retention | Admin |
 

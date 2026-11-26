@@ -13,6 +13,11 @@ The orchestrator is patterned on ``reporting._report_scheduler_loop``:
 a single background task polls for due runs (cron-style schedule) and
 also services on-demand ``POST /api/audit/runs`` triggers.
 
+Permissions: reads need the ``reports`` feature; starting a run and
+changing a schedule or an override need ``reports.write`` (the router is
+mounted with ``require_feature_method``). The ``created_by`` of a schedule
+and of an override is the caller, never a value from the request.
+
 Object scope: a run audits the whole estate, so accounts limited to
 selected inventory groups cannot start runs or change schedules (403); they
 read runs with the counters recomputed over the findings of their hosts,
@@ -50,7 +55,7 @@ from netcontrol.routes.reporting import (
     _parse_db_datetime_utc,
     _parse_schedule_interval_seconds,
 )
-from netcontrol.routes.shared import _compute_config_diff
+from netcontrol.routes.shared import _compute_config_diff, request_session
 from netcontrol.telemetry import configure_logging, increment_metric, redact_value
 
 LOGGER = configure_logging("plexus.audit")
@@ -1168,6 +1173,12 @@ async def _scope_runs(runs: list[dict], host_ids: frozenset[int] | None) -> list
     return runs
 
 
+def _caller_name(request: Request) -> str:
+    """The name recorded as ``created_by``: the signed-in user, or
+    ``api-token`` for the server API token."""
+    return str((request_session(request) or {}).get("user") or "")[:200]
+
+
 @router.post("/api/audit/runs", status_code=201)
 @scoped("refused")
 async def trigger_audit_run(request: Request):
@@ -1336,9 +1347,8 @@ async def create_audit_schedule(request: Request, payload: dict = Body(...)):
     name = str(payload.get("name") or "").strip()
     schedule = str(payload.get("schedule") or "").strip()
     enabled = bool(payload.get("enabled", True))
-    created_by = str(payload.get("created_by") or "").strip()[:200]
     _validate_schedule_payload(name, schedule)
-    return await _create_schedule(name, schedule, enabled, created_by)
+    return await _create_schedule(name, schedule, enabled, _caller_name(request))
 
 
 @router.put("/api/audit/schedules/{schedule_id}")
@@ -1554,7 +1564,6 @@ async def create_audit_override(payload: dict = Body(...), request: Request = No
     host_id = int(host_id_raw) if host_id_raw is not None and host_id_raw != "" else None
     mode = str(payload.get("mode") or "mute").strip()
     reason = str(payload.get("reason") or "").strip()[:1000]
-    created_by = str(payload.get("created_by") or "").strip()[:200]
     expires_raw = payload.get("expires_at")
     expires_at = str(expires_raw).strip() if expires_raw else None
     _validate_override_payload(rule_id, mode, expires_at)
@@ -1565,7 +1574,7 @@ async def create_audit_override(payload: dict = Body(...), request: Request = No
             host_id=host_id,
             mode=mode,
             reason=reason,
-            created_by=created_by,
+            created_by=_caller_name(request),
             expires_at=expires_at,
         )
     except Exception as exc:

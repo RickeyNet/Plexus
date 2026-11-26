@@ -28,9 +28,11 @@ import {
   type AuditOverrideMode,
   type AuditSeverity,
 } from '@/api/audit';
+import { useAuthStatus } from '@/api/auth';
 import { clickableProps } from '@/lib/clickable';
 import { formatBackendDateTime } from '@/lib/datetime';
 import { isCriticalSeverity, SEVERITY_LEVELS, severityRank, severityTone } from '@/lib/severity';
+import { canWriteFeature } from '@/lib/tabGating';
 import { usePendingKeys } from '@/lib/usePendingKeys';
 import { ShowMoreButton } from '@/components/ShowMoreButton';
 import { useShowMore } from '@/lib/useShowMore';
@@ -56,7 +58,14 @@ function severityCounts(run: AuditRunSummary) {
 // Body of the Compliance page's "CIS Audit" tab (formerly the standalone
 // /audit page). The tab bar supplies the heading, so this starts with the
 // run-now toolbar.
+/** Whether the user may start runs and change schedules and overrides
+ * (admin, or the `reports.write` feature). */
+function useCanWriteAudit(): boolean {
+  return canWriteFeature('reports', useAuthStatus().data);
+}
+
 export function AuditContent() {
+  const canWrite = useCanWriteAudit();
   const runs = useAuditRuns();
   const trigger = useTriggerAuditRun();
   const [selectedRunId, setSelectedRunId] = useState<number | null>(null);
@@ -78,13 +87,15 @@ export function AuditContent() {
         <span className="text-muted" style={{ fontSize: '0.9em' }}>
           Grades the live inventory against CIS-style checks: configuration drift, port hygiene, VLAN consistency and security posture.
         </span>
-        <button
-          className="btn btn-sm btn-primary"
-          disabled={trigger.isPending}
-          onClick={() => trigger.mutate()}
-        >
-          {trigger.isPending ? 'Running…' : 'Run audit now'}
-        </button>
+        {canWrite && (
+          <button
+            className="btn btn-sm btn-primary"
+            disabled={trigger.isPending}
+            onClick={() => trigger.mutate()}
+          >
+            {trigger.isPending ? 'Running…' : 'Run audit now'}
+          </button>
+        )}
       </div>
 
       {trigger.error && (
@@ -466,6 +477,7 @@ const SCHEDULE_PRESETS: { label: string; value: string }[] = [
 ];
 
 function SchedulesCard() {
+  const canWrite = useCanWriteAudit();
   const { confirm, alert } = useDialogs();
   const schedules = useAuditSchedules();
   const update = useUpdateAuditSchedule();
@@ -496,12 +508,14 @@ function SchedulesCard() {
         }}
       >
         <h3 style={{ margin: 0 }}>Schedules</h3>
-        <button
-          className="btn btn-secondary"
-          onClick={() => setEditing('new')}
-        >
-          Add schedule
-        </button>
+        {canWrite && (
+          <button
+            className="btn btn-secondary"
+            onClick={() => setEditing('new')}
+          >
+            Add schedule
+          </button>
+        )}
       </div>
 
       {schedules.isError && !schedules.data && (
@@ -544,6 +558,7 @@ function SchedulesCard() {
                     : 'never'}
                 </td>
                 <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
+                  {canWrite && (<>
                   <BusyButton
                     className="btn btn-sm"
                     busy={pending.isPending(`run:${s.id}`)}
@@ -587,6 +602,7 @@ function SchedulesCard() {
                       </MenuItem>
                     </KebabMenu>
                   </span>
+                  </>)}
                 </td>
               </tr>
             ))}
@@ -744,6 +760,7 @@ function ScheduleEditor({
 }
 
 function FindingsTable({ findings }: { findings: AuditFinding[] }) {
+  const canWrite = useCanWriteAudit();
   const [muting, setMuting] = useState<AuditFinding | null>(null);
   const { visible, hiddenCount, showMore } = useShowMore(findings);
   return (
@@ -774,13 +791,15 @@ function FindingsTable({ findings }: { findings: AuditFinding[] }) {
             </td>
             <td>{f.cis_control || '-'}</td>
             <td style={{ textAlign: 'right' }}>
-              <button
-                className="btn btn-sm"
-                title="Suppress this rule from future runs"
-                onClick={() => setMuting(f)}
-              >
-                Mute
-              </button>
+              {canWrite && (
+                <button
+                  className="btn btn-sm"
+                  title="Suppress this rule from future runs"
+                  onClick={() => setMuting(f)}
+                >
+                  Mute
+                </button>
+              )}
             </td>
           </tr>
         ))}
@@ -800,6 +819,7 @@ function FindingsTable({ findings }: { findings: AuditFinding[] }) {
 // ── Overrides card + Mute dialog (Phase 6) ─────────────────────────────────
 
 function OverridesCard() {
+  const canWrite = useCanWriteAudit();
   const { confirm, alert } = useDialogs();
   const overrides = useAuditOverrides();
   const remove = useDeleteAuditOverride();
@@ -861,6 +881,7 @@ function OverridesCard() {
                     : '-'}
                 </td>
                 <td style={{ textAlign: 'right' }}>
+                  {canWrite && (
                   <BusyButton
                     className="btn btn-sm btn-danger"
                     busy={removing.isPending(o.id)}
@@ -884,6 +905,7 @@ function OverridesCard() {
                   >
                     Remove
                   </BusyButton>
+                  )}
                 </td>
               </tr>
             ))}

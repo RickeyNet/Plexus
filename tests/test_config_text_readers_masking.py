@@ -203,7 +203,7 @@ def test_audit_drift_finding_masks_secrets_for_reports_users(env):
     call(functools.partial(db_module.create_config_snapshot, host_id, CONFIG, "manual"))
     reporter = user_client(env["admin"], "reports-only", features=["reports"])
 
-    run = reporter.post("/api/audit/runs")
+    run = env["admin"].post("/api/audit/runs")  # starting a run needs reports.write
     assert run.status_code == 201, run.text
     findings = reporter.get(f"/api/audit/runs/{run.json()['id']}/findings")
     assert findings.status_code == 200, findings.text

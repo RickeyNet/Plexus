@@ -170,7 +170,6 @@ export interface AuditOverridePayload {
   host_id?: number | null;
   mode?: AuditOverrideMode;
   reason?: string;
-  created_by?: string;
   expires_at?: string | null;
 }
 

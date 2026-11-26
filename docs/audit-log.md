@@ -27,8 +27,8 @@ their values before and after, see the [change log](change-log.md).
 Audit**. That tab is a different feature: it grades the inventory against
 CIS-style checks (configuration drift, port hygiene, VLAN consistency and
 security posture), with **Run audit now**, **Schedules**, **Suppressed
-findings** and **Recent runs**. It needs the `reports` feature. This guide
-does not cover it.
+findings** and **Recent runs**. It needs the `reports` feature to read and
+`reports.write` to run or change. This guide does not cover it.
 
 ## What an event contains
 

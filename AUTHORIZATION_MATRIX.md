@@ -65,10 +65,15 @@ gates: `POST /api/intended-config/remediation` (`config-drift`),
 and `/deny` (`jobs` plus `jobs.approve`), and the topology history routes
 below.
 
-`reports`, `dashboard`, `mac-tracking`, `traffic-analysis`, `organization`
-and `graphql` have no Modify column and no `.write` key. A write on one of
+`dashboard`, `mac-tracking`, `traffic-analysis`, `organization` and
+`graphql` have no Modify column and no `.write` key. A write on one of
 their routers needs the feature alone, unless its row names an admin check
 or another key.
+
+`reports` has a Modify column, but only the audit and billing routers check
+`reports.write`. The other `reports` routers are mounted with
+`require_feature`: generating a report and saving or deleting a report
+definition need `reports` alone.
 
 Admins and the API token pass every feature check. A row marked admin, here
 or under Admin-only, is refused to every other caller whatever features
@@ -131,15 +136,15 @@ they hold.
 | `floor-plan` | `/api/geo/*` (sites, floors, floor images and device placements; writes need `floor-plan.write`) | geolocation |
 | `software` | `/api/software/*` (overview, history, advisories, end-of-life entries, alerts and job status; writes need `software.write`. The settings, the PSIRT sync and test and the CVE enrichment run are admin only, see Admin-only) | software, software_eol |
 | `reports` | `GET /api/hosts/{host_id}/interface-addresses` (gated like `GET /api/hosts/{host_id}/interface-inventory`) | network_objects (host_router) |
-| `reports` | `/api/reports/*` (saved reports, runs, artifacts and the CSV, PDF, SVG and draw.io exports. `POST /api/reports`, `POST /api/reports/generate` and `DELETE /api/reports/{report_id}` need `reports` alone) | reporting |
-| `reports` | `/api/audit/*`, `GET /api/hosts/{host_id}/audit-findings`, `GET /api/hosts/{host_id}/interface-inventory`, `GET /api/hosts/{host_id}/vlans` (audit runs, schedules, findings and overrides. Starting a run and changing a schedule or an override need `reports` alone; a caller limited to selected inventory groups cannot start runs or change schedules, `403`) | audit |
+| `reports` | `/api/reports/*` (saved reports, runs, artifacts and the CSV, PDF, SVG and draw.io exports. `POST /api/reports`, `POST /api/reports/generate` and `DELETE /api/reports/{report_id}` need `reports` alone, no `reports.write`: the router is mounted with `require_feature`) | reporting |
+| `reports` | `/api/audit/*`, `GET /api/hosts/{host_id}/audit-findings`, `GET /api/hosts/{host_id}/interface-inventory`, `GET /api/hosts/{host_id}/vlans` (audit runs, schedules, findings and overrides. Starting a run and creating, changing, deleting or running a schedule or an override need `reports.write`; a caller limited to selected inventory groups cannot start runs or change schedules, `403`. The `created_by` of a schedule and of an override is the caller; a value in the request is ignored) | audit |
 | `reports` | `/api/graphs/*`, `GET /api/graph-image/{host_graph_id}.svg` (graph configuration, embed and image export) | graph_export |
-| `reports` | `/api/billing/*` (billing circuits, customers, periods, usage and summary. Writes need `reports.write`, a key no access group can hold because `reports` has no Modify column, so only an admin or the API token creates, changes or deletes billing circuits and periods or generates a period) | billing |
+| `reports` | `/api/billing/*` (billing circuits, customers, periods, usage and summary. Creating, changing or deleting a billing circuit or a period and generating a period need `reports.write`) | billing |
 | `dashboard` | `GET /api/dashboard` (each section needs its own feature too: `recent_jobs` needs `jobs` and shows a non-admin only the jobs they launched; `groups` needs `inventory`; `monitoring`, `device_health`, `open_alerts` and `topology` need `monitoring`. A section the caller may not see is left out of the response. A caller limited to selected inventory groups gets every section computed over those groups only) | app |
 | `dashboard` | `/api/dashboards/*`, `GET /api/annotations`, `GET /api/dashboard/top-interfaces` (dashboards, their panels, annotations and the top interfaces widget; writes need `dashboard` alone; a new dashboard belongs to the signed-in user who created it; non-admins list and open only their own; a dashboard created with the API token has no owner and is admin-only) | dashboards |
 | `graph-templates` | `/api/graph-templates/*`, `/api/host-templates/*`, `/api/host-graphs/*`, `/api/graph-trees/*`, `/api/data-source-profiles/*`, `POST /api/hosts/{host_id}/apply-graph-templates` (writes need `graph-templates.write`) | graph_templates |
 | `graph-templates` | `/api/cdefs/*`, `PUT/DELETE /api/data-sources/{ds_id}`, `GET /api/hosts/{host_id}/data-sources`, `POST /api/hosts/{host_id}/data-sources/discover` (calculated data sources; writes need `graph-templates.write`, except `POST /api/cdefs/evaluate`, which only reads) | cdef_engine |
-| `mac-tracking` | `/api/mac-tracking/*` (collect, cleanup and acknowledging moves need `mac-tracking` alone, except that `POST /api/mac-tracking/collect` also needs `inventory.write`: it signs in to switches with the service credential) | mac_tracking |
+| `mac-tracking` | `/api/mac-tracking/*` (acknowledging moves needs `mac-tracking` alone. `POST /api/mac-tracking/collect` also needs `inventory.write`: it signs in to switches with the service credential. `POST /api/mac-tracking/cleanup` is admin only, see Admin-only) | mac_tracking |
 | `traffic-analysis` | `GET /api/flows/*` (flow exporters, status, timeline and the top talkers, conversations, applications and interfaces; the collector settings are under `/api/admin/flows*`, admin only) | flow_collector |
 | `organization` | `GET /api/organization/*` (regions, sites, locations, tenant groups and tenants; their writes are admin only, see Admin-only) | organization |
 | `virtualization` | `/api/virtualization/*` (cluster types, cluster groups, clusters and their hosts, virtual machines and VM interfaces; writes need `virtualization.write`, audited as `virtualization`). Scope-enforced: clusters by tenant, site or member host, VMs by tenant or their cluster's site and hosts; types and groups are read-only shared catalogues for scoped users. See `docs/virtualization.md` | virtualization (router) |
@@ -180,6 +185,7 @@ they hold.
 | `GET /api/sources/{org_ref}/importable-devices`, `POST /api/sources/{org_ref}/import-devices` (importing a source's devices into the inventory) | source_import (`require_admin` in `app.py`) |
 | `POST /api/metrics/vendor-oids`, `DELETE /api/metrics/vendor-oids/{entry_id}` | metrics_engine (an admin dependency on each route) |
 | `POST /api/sla/evaluate` | monitoring (an admin dependency on the route) |
+| `POST /api/mac-tracking/cleanup` (deletes the MAC and client entries of every host not seen for `days`) | mac_tracking (an admin dependency on the route) |
 | `POST/PUT/PATCH/DELETE /api/ipam/*` (every IPAM write: prefixes, allocations, reservations, sources and their sync, reconcile and validate, the sync settings, utilization snapshots, resolving a reconciliation diff and prefix custom data) | ipam, custom_fields (an admin dependency on each route) |
 | `POST /api/import/ipam/{object_type}/preview`, `POST /api/import/ipam/{object_type}/commit` (CSV bulk import into IPAM) | bulk_import |
 | `POST /api/dhcp/servers`, `PATCH/DELETE /api/dhcp/servers/{server_id}`, `POST /api/dhcp/servers/{server_id}/sync` | dhcp (an admin dependency on each route) |

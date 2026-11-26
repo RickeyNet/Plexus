@@ -39,7 +39,14 @@ from netcontrol.object_scope import (
     scoped,
 )
 from netcontrol.routes import background_jobs
-from netcontrol.routes.shared import _audit, _corr_id, _get_session, require_any_feature, supervise_task
+from netcontrol.routes.shared import (
+    _audit,
+    _corr_id,
+    _get_session,
+    admin_session,
+    require_any_feature,
+    supervise_task,
+)
 from netcontrol.routes.snmp import _build_snmp_auth, _snmp_str, _snmp_walk
 from netcontrol.telemetry import configure_logging
 
@@ -1377,14 +1384,15 @@ async def get_mac_collection_job(job_id: str):
     return job
 
 
-@router.post("/api/mac-tracking/cleanup")
+@router.post("/api/mac-tracking/cleanup", dependencies=[Depends(admin_session)])
 @scoped("refused")
 async def cleanup_stale_entries(
     days: int = Query(30, ge=1),
     request: Request = None,  # type: ignore[assignment]
 ):
-    """Remove MAC entries not seen in the specified number of days (every
-    host's: refused to a scoped caller)."""
+    """Remove MAC entries not seen in the specified number of days. It
+    deletes across every host, so only an admin or the server API token
+    may call it (the read-only ``mac-tracking`` feature shows the tables)."""
     await refuse_scoped(request)
     removed = await db.cleanup_stale_mac_entries(days)
     removed += await db.cleanup_stale_meraki_clients(days)

@@ -218,6 +218,7 @@ then shows the new scan.
 | Push a fix | `compliance`, and a credential you may use |
 | Turn the scheduler on or off, change its interval and retention, run it now | Admin |
 | **CIS Audit** tab | `reports` |
+| **CIS Audit**: run the audit, add, change, run or delete a schedule, mute a finding, remove an override | `reports.write` (**Modify** on Reports in the access group). Without it the buttons are not shown. A schedule and an override record the user who created them |
 
 Changes, scans and fixes are written to the [audit log](audit-log.md)
 under the `compliance` category.
