@@ -194,9 +194,8 @@ async def generate_billing_for_circuit(
 
     if not samples:
         LOGGER.warning(
-            "No samples for circuit %s (%s) period %s–%s",
+            "No samples for circuit %s period %s–%s",
             circuit["id"],
-            circuit["name"],
             start,
             end,
         )
@@ -411,7 +410,7 @@ async def generate_billing(payload: BillingGenerateRequest, request: Request):
                 )
                 results.append(period)
             except Exception as exc:
-                LOGGER.error("Billing generation failed for circuit %s: %s", circuit["id"], exc)
+                LOGGER.error("Billing generation failed for circuit %s: %s", circuit["id"], type(exc).__name__)
                 results.append(
                     {
                         "circuit_id": circuit["id"],
