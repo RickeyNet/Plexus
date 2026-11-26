@@ -107,12 +107,11 @@ _ENFORCED_READ = (
     "chatops",
     "secrets-providers",
 )
-# Read-only catalog keys (no ``.write``): dashboard, reports, mac-tracking,
+# Read-only catalog keys (no ``.write``): dashboard, mac-tracking,
 # traffic-analysis, organization, graphql, chatops, secrets-providers.
 _NO_WRITE = frozenset(
     {
         "dashboard",
-        "reports",
         "mac-tracking",
         "traffic-analysis",
         "organization",
