@@ -181,7 +181,9 @@ never loses events from Plexus itself.
   does not list them.
 - **Best effort on write.** If writing an event fails, the action itself
   still completes and the server logs a warning. Each stored event is also
-  written to the application log at INFO level.
+  noted in the application log at INFO level by its id, category, action
+  and correlation id. The user and the detail are not written there: read
+  them in the audit trail or a SIEM sink.
 - **Order.** Writes are serialized (on PostgreSQL also across server worker
   processes), so the chain cannot fork.
 - **Times are UTC.**

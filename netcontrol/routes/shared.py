@@ -53,21 +53,23 @@ async def _audit(
     """Fire-and-forget audit record.  Never raises to the caller.
 
     ``user`` and ``detail`` may hold text an anonymous caller chose (the
-    name typed into the sign-in form), so both are stored and logged on one
-    line and cut to a fixed length: such text can then neither start a log
-    line of its own nor fill the audit table.
+    name typed into the sign-in form), so both are stored on one line and
+    cut to a fixed length: such text cannot fill the audit table.
+
+    The application log gets a pointer to the stored event (its id, category
+    and action), never ``user`` or ``detail``: those are free text, and the
+    log is read by more people and tools than the audit trail is.
     """
     user = single_line(user, _AUDIT_USER_MAX)
     detail = single_line(detail, _AUDIT_DETAIL_MAX)
     try:
-        await db.add_audit_event(category, action, user=user, detail=detail, correlation_id=correlation_id)
+        event_id = await db.add_audit_event(category, action, user=user, detail=detail, correlation_id=correlation_id)
         LOGGER.info(
-            "audit: category=%s action=%s user=%s correlation_id=%s detail=%s",
+            "audit: id=%s category=%s action=%s correlation_id=%s",
+            event_id,
             category,
             action,
-            user,
             correlation_id,
-            detail,
         )
     except Exception:
         LOGGER.warning("Failed to write audit event category=%s action=%s", category, action)

@@ -88,3 +88,13 @@ def test_audit_cuts_and_flattens_user_and_detail(admin):
     assert event["user"] == "u" * shared._AUDIT_USER_MAX
     assert event["detail"].startswith("first second")
     assert len(event["detail"]) == shared._AUDIT_DETAIL_MAX
+
+
+def test_the_log_points_at_the_event_without_its_user_or_detail(admin, caplog):
+    call = admin.raw.portal.call
+    with caplog.at_level(logging.INFO, logger=shared.LOGGER.name):
+        call(shared._audit, "config", "test.pointer", "walter", "changed the widget colour", "corr-1")
+    (event,) = [e for e in call(db_module.get_audit_events, 100) if e["action"] == "test.pointer"]
+    assert (event["user"], event["detail"]) == ("walter", "changed the widget colour")
+    (line,) = [r.getMessage() for r in caplog.records if r.getMessage().startswith("audit: ")]
+    assert line == f"audit: id={event['id']} category=config action=test.pointer correlation_id=corr-1"
