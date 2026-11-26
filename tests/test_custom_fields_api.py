@@ -555,3 +555,12 @@ def test_csv_cells_cannot_start_a_formula(admin):
     _header, *rows = _csv_rows(admin)
     (row,) = [r for r in rows if r[0] == "guard-sw1"]
     assert row[-3:] == ["'=cmd", "'@SUM(A1)", "-5"]
+
+
+def test_csv_host_and_group_names_cannot_start_a_formula(admin):
+    gid = _group(admin, "=1+1")
+    _host(admin, gid, "@SUM(A1)", "192.0.2.82")
+    header, *rows = _csv_rows(admin)
+    (row,) = [r for r in rows if r[header.index("IP Address")] == "192.0.2.82"]
+    assert row[header.index("Hostname")] == "'@SUM(A1)"
+    assert row[header.index("Group")] == "'=1+1"

@@ -49,6 +49,7 @@ from __future__ import annotations
 
 import json
 
+import asyncpg
 import routes.database as db
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
@@ -336,6 +337,8 @@ async def create_environment(body: EnvironmentCreate, request: Request):
     except ValueError as exc:
         # Validation errors carry a user-facing message; surface it.
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except asyncpg.UniqueViolationError as exc:
+        raise HTTPException(status_code=409, detail="A lab environment with that name already exists") from exc
     except Exception as exc:
         LOGGER.error("lab: create environment failed: %s", exc, exc_info=True)
         raise HTTPException(status_code=400, detail="Failed to create lab environment") from exc

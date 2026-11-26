@@ -37,6 +37,7 @@ sys.path.insert(0, project_root)
 
 import time
 
+import asyncpg
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -44,6 +45,7 @@ from netcontrol import listener_sources, syslog_tls
 from netcontrol.account_rules import API_TOKEN_USER
 from netcontrol.body_limit import BodyLimitMiddleware
 from netcontrol.bounded_map import prune_expired
+from netcontrol.db_errors import client_error_for
 from netcontrol.integrations.cisco_fdm.collector import fdm_poll_loop
 from netcontrol.mcp.server import build_mcp_app
 from netcontrol.object_scope import request_scope
@@ -2389,6 +2391,12 @@ async def http_exception_handler(request: Request, exc: HTTPException):
     if structured is not None:
         structured = {**structured, "message": safe_detail}
     return _api_error_response(exc.status_code, "http_error", safe_detail, structured)
+    # A handler that catches everything and answers 500 keeps what it caught
+    # as the cause or context. Input the database refused is the caller's
+    # mistake there too.
+    caught = (exc.__cause__ or exc.__context__) if exc.status_code == 500 else None
+    if isinstance(caught, Exception) and client_error_for(caught) is not None:
+        return await database_exception_handler(request, caught)
 
 
 @app.exception_handler(RequestValidationError)
@@ -2420,6 +2428,21 @@ async def _public_path_caller_authenticated(request: Request) -> bool:
     without refreshing the cookie)."""
     api_token = _extract_api_token(request)
     if APP_API_TOKEN and api_token and secrets.compare_digest(api_token, APP_API_TOKEN):
+@app.exception_handler(asyncpg.PostgresError)
+@app.exception_handler(asyncpg.InterfaceError)
+async def database_exception_handler(request: Request, exc: Exception):
+    """Input the database refuses (a number out of range, a missing parent,
+    a taken name) is a client error; any other database error is re-raised
+    for ``unhandled_exception_handler``."""
+    error = client_error_for(exc)
+    if error is None:
+        raise exc
+    LOGGER.warning("Refused by the database on %s: %s", request.url.path, redact_value(str(exc)))
+    if not request.url.path.startswith("/api/"):
+        return JSONResponse(status_code=error.status, content={"detail": error.message})
+    return _api_error_response(error.status, error.code, error.message)
+
+
         return True
     if _env_flag("APP_REQUIRE_API_TOKEN", False):
         return False

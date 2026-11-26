@@ -217,6 +217,9 @@ The API also knows three IPAM types that the UI does not list:
 (`address`, `hostname`, `vrf_name`, `days`, `limit`). Each also has a direct
 export under `/api/reports/export/`.
 
+On the direct exports `days` and `lookback_days` take 1 to 3650; a value
+outside that range gives `422`.
+
 Billing routes are under `/api/billing/`: `circuits`, `customers`,
 `summary`, `periods`, `periods/{id}`, `periods/{id}/usage` and
 `POST /api/billing/generate`:

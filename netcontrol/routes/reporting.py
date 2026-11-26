@@ -88,6 +88,9 @@ register_model(
 )
 _IPAM_REPORT_TYPES = frozenset({"ipam_utilization", "ipam_forecast", "ipam_history"})
 _SCOPED_REPORT_DETAIL = "Pick an inventory group or host in your scope for this report"
+# The longest window a report export takes: ten years, far inside what the
+# date arithmetic of the queries holds.
+MAX_REPORT_DAYS = 3650
 
 
 def _int_or_none(value) -> int | None:
@@ -1139,7 +1142,7 @@ def _csv_download_response(csv_data: str, file_name: str) -> Response:
 async def export_availability_csv(
     request: Request,
     group_id: int | None = Query(default=None),
-    days: int = Query(default=30),
+    days: int = Query(default=30, ge=1, le=MAX_REPORT_DAYS),
 ):
     await _report_scope(request, "availability", {"group_id": group_id})
     rows = await db.generate_availability_report_data(group_id, days)
@@ -1165,7 +1168,7 @@ async def export_interface_csv(
     request: Request,
     host_id: int | None = Query(default=None),
     group_id: int | None = Query(default=None),
-    days: int = Query(default=1),
+    days: int = Query(default=1, ge=1, le=MAX_REPORT_DAYS),
 ):
     await _report_scope(request, "interface", {"group_id": group_id, "host_id": host_id})
     rows = await db.generate_interface_report_data(host_id, group_id, days)
@@ -1320,7 +1323,7 @@ async def export_ipam_utilization_pdf(
 async def export_ipam_forecast_csv(
     request: Request,
     vrf_name: str | None = Query(default=None),
-    lookback_days: int = Query(default=30),
+    lookback_days: int = Query(default=30, ge=1, le=MAX_REPORT_DAYS),
     target_pct: float = Query(default=90.0),
     min_points: int = Query(default=2),
 ):
@@ -1339,7 +1342,7 @@ async def export_ipam_forecast_csv(
 async def export_ipam_forecast_pdf(
     request: Request,
     vrf_name: str | None = Query(default=None),
-    lookback_days: int = Query(default=30),
+    lookback_days: int = Query(default=30, ge=1, le=MAX_REPORT_DAYS),
     target_pct: float = Query(default=90.0),
     min_points: int = Query(default=2),
 ):
@@ -1368,7 +1371,7 @@ async def export_ipam_history_csv(
     address: str | None = Query(default=None),
     hostname: str | None = Query(default=None),
     vrf_name: str | None = Query(default=None),
-    days: int = Query(default=90),
+    days: int = Query(default=90, ge=1, le=MAX_REPORT_DAYS),
     limit: int = Query(default=1000, ge=1, le=10000),
 ):
     await _report_scope(request, "ipam_history", {})

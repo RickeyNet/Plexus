@@ -111,8 +111,8 @@ def unguard_cell(text: str) -> str:
 
 # ── Host export table (shared by the CSV and YAML exports and the import) ────
 
-# (CSV header, record key). The first seven are written as stored; the rest
-# are user text guarded against formulas in CSV.
+# (CSV header, record key). Every column is guarded against formulas in CSV:
+# names are user text, and model, version and status come from the device.
 HOST_EXPORT_COLUMNS: tuple[tuple[str, str], ...] = (
     ("Hostname", "hostname"),
     ("IP Address", "ip_address"),
@@ -129,7 +129,6 @@ HOST_EXPORT_COLUMNS: tuple[tuple[str, str], ...] = (
     ("Location Detail", "location_detail"),
     ("Tags", "tags"),
 )
-_HOST_UNGUARDED = 7
 
 
 def host_export_record(row: dict, group_path: str) -> dict[str, Any]:
@@ -166,9 +165,8 @@ def host_csv_header(fields: list[dict]) -> list[str]:
 def host_csv_row(record: dict[str, Any], fields: list[dict]) -> list[str]:
     """``host_export_record`` as a CSV row under ``host_csv_header``."""
     cells: list[str] = []
-    for index, (_, key) in enumerate(HOST_EXPORT_COLUMNS):
-        value = "; ".join(record["tags"]) if key == "tags" else record[key]
-        cells.append(str(value or "") if index < _HOST_UNGUARDED else csv_text_cell(value))
+    for _, key in HOST_EXPORT_COLUMNS:
+        cells.append(csv_text_cell("; ".join(record["tags"]) if key == "tags" else record[key]))
     values = record["custom_fields"]
     return cells + [csv_field_cell(f, values.get(f["key"])) for f in fields]
 
