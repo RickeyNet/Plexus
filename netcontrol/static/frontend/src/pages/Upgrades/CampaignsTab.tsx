@@ -18,6 +18,8 @@ import {
   formatScheduledTime,
 } from './helpers';
 
+const MANAGE_HINT = 'Only the campaign creator or an admin can change this campaign';
+
 export function CampaignsTab() {
   const query = useUpgradeCampaigns();
   const remove = useDeleteUpgradeCampaign();
@@ -287,7 +289,8 @@ export function CampaignsTab() {
                         e.stopPropagation();
                         setEditingId(c.id);
                       }}
-                      disabled={c.is_actively_running}
+                      disabled={c.is_actively_running || c.can_manage === false}
+                      title={c.can_manage === false ? MANAGE_HINT : undefined}
                     >
                       Edit
                     </button>
@@ -296,7 +299,10 @@ export function CampaignsTab() {
                         e.stopPropagation();
                         setDeleteTarget({ id: c.id, name: c.name });
                       }}
-                      disabled={c.is_actively_running || remove.isPending}
+                      disabled={
+                        c.is_actively_running || remove.isPending || c.can_manage === false
+                      }
+                      title={c.can_manage === false ? MANAGE_HINT : undefined}
                     />
                   </span>
                 </div>

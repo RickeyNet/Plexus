@@ -771,6 +771,8 @@ export function CampaignViewerModal({ campaignId, onClose }: Props) {
   };
 
   const title = campaign ? `Campaign: ${campaign.name}` : 'Campaign';
+  // Another user's campaign: its progress and logs are shown, its controls are off.
+  const readOnly = campaign?.can_manage === false;
   const selectedCount = selectedIds.size;
   const allSelected = devices.length > 0 && selectedCount === devices.length;
   const targetText =
@@ -815,6 +817,15 @@ export function CampaignViewerModal({ campaignId, onClose }: Props) {
               ))}
             </div>
 
+            {readOnly && (
+              <Callout tone="info">
+                You can follow this campaign but not change it. Only{' '}
+                {campaign.created_by || 'its creator'} or an admin can edit, run or
+                cancel it.
+              </Callout>
+            )}
+
+            <fieldset disabled={readOnly} className="fieldset-plain">
             {isScheduled && (
               <div
                 style={{
@@ -1031,6 +1042,7 @@ export function CampaignViewerModal({ campaignId, onClose }: Props) {
                 </PhaseStep>
               </div>
             </div>
+            </fieldset>
 
             <PhaseIconLegend ups={upsCampaign} />
 
@@ -1150,7 +1162,7 @@ export function CampaignViewerModal({ campaignId, onClose }: Props) {
                                 e.stopPropagation();
                                 setLogicResetTarget(d);
                               }}
-                              disabled={isRunning || confirmLogicReset.isPending}
+                              disabled={readOnly || isRunning || confirmLogicReset.isPending}
                             >
                               Confirm Logic Reset
                             </button>

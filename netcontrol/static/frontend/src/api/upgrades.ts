@@ -216,6 +216,8 @@ export interface UpgradeCampaignSummary {
   is_actively_running: boolean;
   created_at?: string | null;
   created_by?: string | null;
+  /** False when the caller may only watch: changing and running a campaign is for its creator and admins. */
+  can_manage?: boolean;
   scheduled_at?: string | null;
 }
 

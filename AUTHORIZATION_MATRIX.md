@@ -100,7 +100,7 @@ below. Admins and the API token pass every feature check.
 | `monitoring` | `GET /api/monitoring/meraki-alerts` (the Meraki alert list) | meraki_alerts |
 | `monitoring` | `GET /api/monitoring/vendor-alerts` (the vendor alert feed list: Cato events feed, AWS and Azure alerts; read only; object scope: a scoped caller sees the alerts raised on its readable hosts only) | vendor_alerts |
 | `monitoring` | `GET /api/monitoring/security-events` (the security event list: OPNsense IDS alerts and Cato IPS events; read only, bounded: `hours` 1 to 8760, `limit` 1 to 500, `offset` up to 100,000, `q` up to 200 characters; object scope: a scoped caller sees the events of its readable hosts only, never a host-less device's, and `host_id` out of scope answers `404`) | security_events |
-| `upgrades` | `/api/upgrades/*` | upgrades |
+| `upgrades` | `/api/upgrades/*` (a campaign's list entry, detail, events and live stream are read by every holder of the feature who may read all of its devices; only its creator or an admin edits, runs, cancels or deletes it or reads its prestage backups; the list and the detail carry `can_manage` for the caller) | upgrades |
 | `upgrades` | `POST /api/upgrades/campaigns/{campaign_id}/devices/{device_id}/logic-reset-confirm` (record that the manual Logic Reset of an APC Smart-UPS Ultra was done; write scope on the campaign like the device cancel, `409` while a step runs; audited as `upgrades` / `logic_reset_confirm`) | upgrades |
 | `inventory` | `POST /api/tags`, `GET/PUT /api/hosts/{host_id}/custom-data`, `GET/PUT /api/inventory/{group_id}/custom-data`, `POST /api/hosts/bulk-tags` | custom_fields (inventory_router) |
 | `inventory` | `POST /api/hosts/bulk-edit` (set device type, role, lifecycle status, site, location detail on many hosts; audited as `device_model` / `bulk_edit`) | device_model (inventory_router) |
@@ -160,7 +160,7 @@ below. Admins and the API token pass every feature check.
 | `/ws/config-capture/{job_id}` | session cookie | `config-drift` feature |
 | `/ws/config-revert/{job_id}` | session cookie | `config-drift` feature |
 | `/ws/deployment/{job_id}` | session cookie | `deployments` feature |
-| `/ws/upgrades/{campaign_id}` | session cookie | `upgrades` feature |
+| `/ws/upgrades/{campaign_id}` | session cookie | `upgrades` feature; read-only, for every holder who may read all of the campaign's devices |
 
 ### CSRF Protection
 

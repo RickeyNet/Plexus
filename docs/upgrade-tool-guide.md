@@ -435,7 +435,7 @@ The **Operation history** table inside the campaign records every phase run with
 - **Cancel scheduled reload** - cancels a pending scheduled Activate before it fires.
 - **Cancel selected activate** - during a running or scheduled Activate, cancels only the selected devices. The rest continue.
 - **Retry** - re-running a phase with failed or cancelled devices selected clears their state and runs them again.
-- Campaign details, logs, and backups are visible only to the campaign's creator and admins, and only they can edit, run, cancel or delete the campaign. Backups taken before backup names carried the campaign id are visible to admins only.
+- A campaign is the team's event: everyone with access to the Upgrades page who can see all of its devices can open it and follow its progress, device status and live logs. Only the campaign's creator and admins can edit, run, cancel or delete it; for everyone else the campaign opens read-only, with its controls disabled. Backups are visible only to the campaign's creator and admins. Backups taken before backup names carried the campaign id are visible to admins only.
 
 ---
 

@@ -1002,10 +1002,12 @@ def _campaign_owner(campaign: dict) -> str | None:
 
 
 async def _require_campaign(request: Request, campaign_id: int, *, write: bool = False) -> dict:
-    """The campaign; 404 when unknown or (scoped caller) not visible, 403 on
-    ``write`` when a device is not writable, and 403 unless the caller created
-    it or is an admin: a campaign runs with its creator's credential, and its
-    events carry device output."""
+    """The campaign; 404 when unknown or (scoped caller) not visible. Reading
+    it is open to every holder of the feature who may read its devices: a
+    campaign is the team's event, and they follow its progress. ``write``
+    (edit, run, cancel, delete) is 403 when a device is not writable, and 403
+    unless the caller created the campaign or is an admin: it runs with its
+    creator's credential."""
     campaign = await db.get_upgrade_campaign(campaign_id)
     if not campaign:
         raise HTTPException(404, _CAMPAIGN_NOT_FOUND)
@@ -1015,8 +1017,20 @@ async def _require_campaign(request: Request, campaign_id: int, *, write: bool =
             raise HTTPException(404, _CAMPAIGN_NOT_FOUND)
         if write and not await _campaign_visible(scope, campaign_id, write=True):
             raise HTTPException(403, READ_ONLY_DETAIL)
-    await require_owner_or_admin(request, _campaign_owner(campaign))
+    if write:
+        await require_owner_or_admin(request, _campaign_owner(campaign))
     return campaign
+
+
+async def _flag_can_manage(request: Request, campaigns: list[dict]) -> None:
+    """Set ``can_manage`` on each campaign: whether the caller created it or
+    is an admin, the rule ``_require_campaign`` applies to a write. The page
+    shows the others read-only."""
+    session = _get_session(request)
+    user = session.get("user") if session else None
+    admin = await caller_is_admin(request)
+    for campaign in campaigns:
+        campaign["can_manage"] = admin or (user is not None and user == _campaign_owner(campaign))
 
 
 async def _require_campaign_targets(request: Request, host_ids: list[int], ad_hoc_ips: list[str]) -> None:
@@ -1348,20 +1362,21 @@ async def list_campaigns(request: Request):
         c["device_count"] = tally["device_count"] if tally else 0
         c["devices_completed"] = tally["devices_completed"] if tally else 0
         c["devices_failed"] = tally["devices_failed"] if tally else 0
+    await _flag_can_manage(request, campaigns)
     return campaigns
 
 
 @router.get("/api/upgrades/campaigns/{campaign_id}")
 @scoped("campaign")
 async def get_campaign(campaign_id: int, request: Request):
-    # Object-level authz (in _require_campaign): a campaign's events/operations
-    # carry device output and config captures, so only its creator (or an
-    # admin) may read it - holding the `upgrades` feature is not enough.
+    # Read-only for the team (see _require_campaign); ``can_manage`` tells
+    # the page whether the caller may also change or run it.
     campaign = await _require_campaign(request, campaign_id)
     campaign = await _repair_stale_running_campaign(campaign)
     campaign["is_actively_running"] = campaign_id in _running_campaigns
     campaign["devices"] = await db.get_upgrade_devices(campaign_id)
     campaign["operations"] = await db.get_upgrade_operations(campaign_id)
+    await _flag_can_manage(request, [campaign])
     return campaign
 
 
@@ -1474,7 +1489,7 @@ async def get_campaign_events(
     device_id: int | None = None,
     limit: int = Query(default=1000, ge=1, le=10000),
 ):
-    # Owner-or-admin, as get_campaign - the events are device output.
+    # Readable by the team, as get_campaign.
     await _require_campaign(request, campaign_id)
     return await db.get_upgrade_events(campaign_id, device_id=device_id, limit=limit)
 
@@ -1960,13 +1975,9 @@ async def upgrade_websocket(ws: WebSocket, campaign_id: int):
         await ws.close(code=4001, reason="Unauthorized")
         return
 
-    # Object-level authz: only the campaign's creator (or an admin) may stream
-    # its output. Mirrors the REST get_campaign check and the jobs WS.
-    campaign = await db.get_upgrade_campaign(campaign_id)
-    if not campaign:
-        await ws.close(code=4001, reason="Unauthorized")
-        return
-    if user.get("role") != "admin" and campaign.get("created_by") != session.get("user"):
+    # As the REST get_campaign: the stream is read-only, so every holder of
+    # the feature who may read the campaign's devices may follow it.
+    if not await db.get_upgrade_campaign(campaign_id):
         await ws.close(code=4001, reason="Unauthorized")
         return
     # Object scope: every device of the campaign must be readable.
