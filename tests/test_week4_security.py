@@ -380,21 +380,28 @@ def test_write_playbook_file_succeeds_for_valid_name(tmp_path, monkeypatch):
 # ═════════════════════════════════════════════════════════════════════════════
 
 
+def _decoded_session(username: str, user_id: int = 1) -> dict:
+    return app_module.verify_session_token(app_module.create_session_token(username, user_id))
+
+
 def test_csrf_token_roundtrip():
-    """A generated CSRF token should validate for the same user."""
-    token = app_module._generate_csrf_token("testuser")
-    assert app_module._validate_csrf_token(token, "testuser") is True
+    """A generated CSRF token should validate for the session it was made for."""
+    session = _decoded_session("testuser")
+    token = app_module._generate_csrf_token(session)
+    assert app_module._validate_csrf_token(token, session) is True
 
 
 def test_csrf_token_rejects_wrong_user():
-    """A CSRF token generated for user A must not validate for user B."""
-    token = app_module._generate_csrf_token("userA")
-    assert app_module._validate_csrf_token(token, "userB") is False
+    """A CSRF token generated for user A must not validate for user B, even
+    for a session that carries the same id."""
+    session = _decoded_session("userA")
+    token = app_module._generate_csrf_token(session)
+    assert app_module._validate_csrf_token(token, {**session, "user": "userB"}) is False
 
 
 def test_csrf_token_rejects_garbage():
     """Garbage strings must not validate."""
-    assert app_module._validate_csrf_token("not-a-real-token", "any") is False
+    assert app_module._validate_csrf_token("not-a-real-token", _decoded_session("any")) is False
 
 
 @pytest.mark.asyncio

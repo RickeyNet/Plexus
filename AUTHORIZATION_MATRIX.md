@@ -212,8 +212,13 @@ they hold.
 ### CSRF Protection
 
 All `POST/PUT/PATCH/DELETE` requests to `/api/*` require a valid `X-CSRF-Token`
-header when authenticated via session cookie. API-token authenticated requests
-are exempt (not susceptible to CSRF). The webhook receivers in
+header when authenticated via session cookie. The token is signed, valid for
+24 hours and bound to the user and to the one session it was issued to (the
+session's `sid`, which the cookie keeps through every refresh and through the
+user's own password change): a token from another session of the same user,
+or from before a new sign-in, answers `403 csrf_error`. The sign-in response
+and `GET /api/auth/status` return it as `csrf_token`. API-token authenticated
+requests are exempt (not susceptible to CSRF). The webhook receivers in
 `WEBHOOK_PATHS` (`netcontrol/app.py`: `/api/webhooks/meraki` and the four
 ChatOps paths) are exempt by exact path: the sender cannot carry a session
 or a CSRF token, and the shared secret in the body (Meraki) or the request

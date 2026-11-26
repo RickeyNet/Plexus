@@ -3,7 +3,9 @@
  *
  * - Always sends cookies (session auth).
  * - Reads the CSRF token cached after login and attaches `X-CSRF-Token` to
- *   state-changing requests, matching the contract enforced by app.py.
+ *   state-changing requests, matching the contract enforced by app.py. A
+ *   write the server refuses for its token is sent once more with the token
+ *   of the current session.
  * - Throws ApiError with status + parsed body on non-2xx responses so
  *   TanStack Query can surface useful error UI.
  */
@@ -124,6 +126,34 @@ export function resetSessionExpiryFlag(): void {
   sessionExpiryHandled = false;
 }
 
+// A CSRF token belongs to one session. A tab keeps its token while another
+// tab signs in again, and the cookie both tabs share then names a session
+// the token was not issued to: the server answers 403 `csrf_error` before
+// the route runs.
+function isCsrfError(status: number, body: unknown): boolean {
+  if (status !== 403 || !body || typeof body !== 'object') return false;
+  const error = (body as { error?: unknown }).error;
+  return !!error && typeof error === 'object' && (error as { code?: unknown }).code === 'csrf_error';
+}
+
+// Cache the token of the session the cookie names now. Returns whether the
+// server gave one (it gives none to a signed-out browser).
+async function refreshCsrfToken(): Promise<boolean> {
+  try {
+    const res = await fetch(`${API_BASE}/auth/status`, {
+      credentials: 'include',
+      headers: { Accept: 'application/json' },
+    });
+    if (!res.ok) return false;
+    const body = (await res.json()) as { csrf_token?: unknown };
+    if (typeof body?.csrf_token !== 'string' || !body.csrf_token) return false;
+    setCsrfToken(body.csrf_token);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export interface ApiRequestOptions extends Omit<RequestInit, 'body' | 'headers'> {
   body?: unknown;
   headers?: Record<string, string>;
@@ -147,9 +177,7 @@ export async function apiRequest<T = unknown>(
     ...headers,
   };
 
-  if (csrfToken && MUTATION_METHODS.has(method.toUpperCase())) {
-    finalHeaders['X-CSRF-Token'] = csrfToken;
-  }
+  const isMutation = MUTATION_METHODS.has(method.toUpperCase());
 
   let serializedBody: BodyInit | undefined;
   if (body !== undefined) {
@@ -161,22 +189,33 @@ export async function apiRequest<T = unknown>(
     }
   }
 
-  const res = await fetch(`${API_BASE}${endpoint}`, {
-    ...rest,
-    method,
-    credentials: 'include',
-    headers: finalHeaders,
-    body: serializedBody,
-  });
-
-  const text = await res.text();
-  let parsed: unknown = text;
-  if (text && res.headers.get('content-type')?.includes('application/json')) {
-    try {
-      parsed = JSON.parse(text);
-    } catch {
-      // Leave as text if the server lied about content-type.
+  // The token is read at send time, so a second send carries a fresh one.
+  const send = async (): Promise<{ res: Response; parsed: unknown }> => {
+    const res = await fetch(`${API_BASE}${endpoint}`, {
+      ...rest,
+      method,
+      credentials: 'include',
+      headers:
+        csrfToken && isMutation ? { ...finalHeaders, 'X-CSRF-Token': csrfToken } : finalHeaders,
+      body: serializedBody,
+    });
+    const text = await res.text();
+    let parsed: unknown = text;
+    if (text && res.headers.get('content-type')?.includes('application/json')) {
+      try {
+        parsed = JSON.parse(text);
+      } catch {
+        // Leave as text if the server lied about content-type.
+      }
     }
+    return { res, parsed };
+  };
+
+  let { res, parsed } = await send();
+  // A refused token is replaced and the request sent once more: the server
+  // refused it before the route ran, so nothing happens twice.
+  if (isMutation && isCsrfError(res.status, parsed) && (await refreshCsrfToken())) {
+    ({ res, parsed } = await send());
   }
 
   if (!res.ok) {

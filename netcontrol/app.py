@@ -460,22 +460,30 @@ _csrf_serializer: URLSafeTimedSerializer | None = None  # initialised after secr
 CSRF_TOKEN_MAX_AGE = 86400  # 24 hours - aligned with session lifetime
 
 
-def _generate_csrf_token(session_user: str) -> str:
-    """Create a signed, time-limited CSRF token bound to the session user."""
+def _generate_csrf_token(session: dict) -> str:
+    """Create a signed, time-limited CSRF token bound to ``session`` (a
+    decoded session token): to its user and to that one session
+    (``shared.session_binding``)."""
     if _csrf_serializer is None:
         raise RuntimeError("CSRF serializer not initialised - check SECRET_KEY configuration")
-    return _csrf_serializer.dumps({"csrf_user": session_user})
+    return _csrf_serializer.dumps({"csrf_user": session["user"], "csrf_sid": shared.session_binding(session)})
 
 
-def _validate_csrf_token(token: str, session_user: str) -> bool:
-    """Return True when the token is valid, not expired, and bound to the user."""
+def _validate_csrf_token(token: str, session: dict) -> bool:
+    """Return True when the token is valid, not expired, and was issued to
+    ``session``: the same user and the same session. A token issued to
+    another session of that user, or to one that has ended, is refused, and
+    so is every token for a session that carries nothing to bind to."""
     if _csrf_serializer is None:
         raise RuntimeError("CSRF serializer not initialised - check SECRET_KEY configuration")
+    binding = shared.session_binding(session)
     try:
         data = _csrf_serializer.loads(token, max_age=CSRF_TOKEN_MAX_AGE)
-        return data.get("csrf_user") == session_user
     except BadSignature, SignatureExpired:
         return False
+    if not binding or not isinstance(data, dict):
+        return False
+    return data.get("csrf_user") == session.get("user") and data.get("csrf_sid") == binding
 
 
 def _validate_startup_config() -> None:
@@ -806,13 +814,17 @@ async def verify_user(username: str, password: str) -> dict | None:
     return None
 
 
-def create_session_token(username: str, user_id: int, session_epoch: int = 0) -> str:
+def create_session_token(username: str, user_id: int, session_epoch: int = 0, sid: str = "") -> str:
     # `originally_issued_at` is the absolute-cap anchor; `last_activity` is
     # bumped on every authenticated request to support idle-timeout. Both
     # are unix timestamps. The serializer also embeds its own issue time
     # (used by max_age=) but we need our own field that survives refreshes.
     # `session_epoch` binds the token to the user's current revocation
     # generation; bumping the user's epoch invalidates every prior token.
+    # `sid` is a random id of this one session, kept by every refresh; the
+    # CSRF token is bound to it (shared.session_binding). A caller passes
+    # `sid` only to re-issue the cookie of a session that goes on (a
+    # password change); a sign-in leaves it out and gets a new one.
     now = int(time.time())
     return _serializer.dumps(
         {
@@ -821,22 +833,26 @@ def create_session_token(username: str, user_id: int, session_epoch: int = 0) ->
             "session_epoch": int(session_epoch or 0),
             "originally_issued_at": now,
             "last_activity": now,
+            "sid": sid or secrets.token_urlsafe(16),
         }
     )
 
 
 def _refresh_session_token(data: dict) -> str:
     """Re-issue a session token with `last_activity` bumped to now, preserving
-    `originally_issued_at` so the absolute lifetime cap continues to apply."""
-    return _serializer.dumps(
-        {
-            "user": data["user"],
-            "user_id": data["user_id"],
-            "session_epoch": int(data.get("session_epoch") or 0),
-            "originally_issued_at": data.get("originally_issued_at", int(time.time())),
-            "last_activity": int(time.time()),
-        }
-    )
+    `originally_issued_at` so the absolute lifetime cap continues to apply,
+    and `sid` so the session's CSRF token stays valid. A token from before
+    `sid` existed stays without one: its binding is its creation time."""
+    refreshed = {
+        "user": data["user"],
+        "user_id": data["user_id"],
+        "session_epoch": int(data.get("session_epoch") or 0),
+        "originally_issued_at": data.get("originally_issued_at", int(time.time())),
+        "last_activity": int(time.time()),
+    }
+    if data.get("sid"):
+        refreshed["sid"] = data["sid"]
+    return _serializer.dumps(refreshed)
 
 
 def verify_session_token(token: str) -> dict | None:
@@ -2152,7 +2168,7 @@ async def csrf_protection_middleware(request: Request, call_next):
                             or request.headers.get("x-csrftoken", "")
                             or request.headers.get("x-xsrf-token", "")
                         )
-                        if not csrf_tok or not _validate_csrf_token(csrf_tok, session["user"]):
+                        if not csrf_tok or not _validate_csrf_token(csrf_tok, session):
                             return _api_error_response(403, "csrf_error", "Missing or invalid CSRF token")
                 # No session cookie + no API token on a mutating /api/ request:
                 # let require_auth reject it (don't silently skip CSRF)

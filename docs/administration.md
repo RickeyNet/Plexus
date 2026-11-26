@@ -652,8 +652,11 @@ section "Update from the web UI".
 ## API
 
 All routes below need an admin (or the server API token). Writes from a
-browser session need the CSRF token. See [api-reference.md](api-reference.md)
-for the general rules.
+browser session need the CSRF token in the `X-CSRF-Token` header. The token
+belongs to one session: use the `csrf_token` the sign-in returned, or the one
+`GET /api/auth/status` returns for the same session cookie. A token from
+another session of the same account, or from before a new sign-in, is refused
+with `403`. See [api-reference.md](api-reference.md) for the general rules.
 
 ```
 GET    /api/admin/users

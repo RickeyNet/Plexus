@@ -428,15 +428,28 @@ def init_shared(verify_session_token_fn):
     _verify_session_token_fn = verify_session_token_fn
 
 
+def session_from_token(token: str | None) -> dict | None:
+    """The session a cookie value holds, or None (no value, or a signature
+    that does not verify). Checks the signature only, like
+    ``verify_session_token``."""
+    if not token or _verify_session_token_fn is None:
+        return None
+    return _verify_session_token_fn(token)
+
+
 def _get_session(request) -> dict | None:
     """Extract session data from the request cookie without raising (None for
     an object with no cookies, e.g. a route function called directly)."""
-    token = (getattr(request, "cookies", None) or {}).get("session")
-    if not token:
-        return None
-    if _verify_session_token_fn is None:
-        return None
-    return _verify_session_token_fn(token)
+    return session_from_token((getattr(request, "cookies", None) or {}).get("session"))
+
+
+def session_binding(session: dict) -> str:
+    """What tells one session of a user from another: the random ``sid`` its
+    token was created with and keeps through every refresh. A token from
+    before ``sid`` existed has its creation time instead, which a refresh
+    keeps too. The CSRF token is bound to this value. ``""`` for a payload
+    with neither."""
+    return str(session.get("sid") or session.get("originally_issued_at") or "")
 
 
 def _session_user_id(request) -> int:

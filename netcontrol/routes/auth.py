@@ -26,7 +26,15 @@ from pydantic import BaseModel, Field
 import netcontrol.routes.state as state
 from netcontrol import account_rules, object_scope, oidc, saml
 from netcontrol.routes.net_guard import OutboundRequestError, validate_outbound_host
-from netcontrol.routes.shared import _audit, _corr_id, _get_session, _request_scheme, session_rejection
+from netcontrol.routes.shared import (
+    _audit,
+    _corr_id,
+    _get_session,
+    _request_scheme,
+    session_binding,
+    session_from_token,
+    session_rejection,
+)
 from netcontrol.routes.state import _env_flag
 from netcontrol.sso import (
     CONTROL_CHARS,
@@ -1534,10 +1542,20 @@ def _session_cookie_secure() -> bool:
     return bool(getattr(_app, "APP_COOKIE_SECURE", _APP_HTTPS_ENABLED) or getattr(_app, "APP_HTTPS_ENABLED", False))
 
 
-def _set_session_cookie(response: Response, user: dict) -> None:
-    """Issue the session cookie for ``user`` on ``response``: the one place
-    password login and the OIDC callback sign a browser in."""
-    token = _create_session_token_fn(user["username"], user["id"], user.get("session_epoch") or 0)
+def _new_session_token(user: dict) -> str:
+    """Start a session for ``user``: the value of its cookie. The one place
+    password login, registration and the SSO callbacks sign a browser in."""
+    return _create_session_token_fn(user["username"], user["id"], user.get("session_epoch") or 0)
+
+
+def _session_csrf_token(token: str) -> str:
+    """The CSRF token of the session whose cookie value is ``token``."""
+    return _generate_csrf_token(session_from_token(token))
+
+
+def _set_session_cookie(response: Response, token: str) -> None:
+    """Put the session token ``token`` on ``response`` as the session
+    cookie."""
     response.set_cookie(
         key="session",
         value=token,
@@ -1651,7 +1669,7 @@ async def _checked_login(
     await _audit_fn(
         "auth", "login.success", user=canonical_user, detail=f"source={auth_source}", correlation_id=_corr_id(request)
     )
-    csrf_token = _generate_csrf_token(canonical_user)
+    token = _new_session_token(user)
     response = JSONResponse(
         {
             "ok": True,
@@ -1664,10 +1682,10 @@ async def _checked_login(
             "feature_visibility_hidden": list(state.FEATURE_VISIBILITY_HIDDEN),
             "object_scope": (await object_scope.scope_for_user(user)).status(),
             "must_change_password": bool(user.get("must_change_password")),
-            "csrf_token": csrf_token,
+            "csrf_token": _session_csrf_token(token),
         }
     )
-    _set_session_cookie(response, user)
+    _set_session_cookie(response, token)
     return response
 
 
@@ -1693,7 +1711,7 @@ async def register(body: RegisterRequest, request: Request = None):
         raise HTTPException(status_code=400, detail="Username already taken")
     user = await db.get_user_by_id(user_id)
     await _audit("auth", "register", user=username, correlation_id=_corr_id(request) if request else "")
-    csrf_token = _generate_csrf_token(username)
+    token = _new_session_token(user)
     response = JSONResponse(
         {
             "ok": True,
@@ -1704,10 +1722,10 @@ async def register(body: RegisterRequest, request: Request = None):
             "feature_access": await _features_fn(user),
             "feature_visibility_hidden": list(state.FEATURE_VISIBILITY_HIDDEN),
             "object_scope": (await object_scope.scope_for_user(user)).status(),
-            "csrf_token": csrf_token,
+            "csrf_token": _session_csrf_token(token),
         }
     )
-    _set_session_cookie(response, user)
+    _set_session_cookie(response, token)
     return response
 
 
@@ -1715,7 +1733,7 @@ async def register(body: RegisterRequest, request: Request = None):
 async def logout(request: Request):
     """Sign out: revoke the session on the server, then drop the cookie.
 
-    A signed token carries no per-token id, so revocation bumps the user's
+    The server keeps no list of live sessions, so revocation bumps the user's
     session epoch, which ends every session of that account (all browsers
     and devices), the same mechanism a password change uses. Only a session
     that is still valid does this: a missing, forged, expired or already
@@ -1820,7 +1838,7 @@ async def auth_status(request: Request, response: Response):
         "feature_access": await _features_fn(user),
         "feature_visibility_hidden": list(state.FEATURE_VISIBILITY_HIDDEN),
         "object_scope": (await object_scope.scope_for_user(user)).status(),
-        "csrf_token": _generate_csrf_token(user["username"]),
+        "csrf_token": _generate_csrf_token(session),
         "must_change_password": bool(user.get("must_change_password")),
         # Drives the SPA idle-countdown banner. The SPA computes
         # remaining = (last_activity + idle_timeout) - now, accounting for
@@ -1884,18 +1902,13 @@ async def change_password(body: ChangePasswordRequest, request: Request):
     # Revoke all previously-issued sessions for this user (a password change
     # should log out other devices), then re-issue THIS request's cookie with
     # the new epoch so the user who just changed their password stays signed in.
+    # It is the same session going on, so it keeps its id and the CSRF token
+    # the page holds stays valid.
     new_epoch = await db.bump_user_session_epoch(user["id"])
     await _audit("auth", "password.change", user=session["user"], correlation_id=_corr_id(request))
-    token = _create_session_token_fn(session["user"], user["id"], new_epoch)
+    token = _create_session_token_fn(session["user"], user["id"], new_epoch, session_binding(session))
     response = JSONResponse({"ok": True})
-    response.set_cookie(
-        key="session",
-        value=token,
-        httponly=True,
-        samesite="strict",
-        max_age=_SESSION_MAX_AGE,
-        secure=_session_cookie_secure(),
-    )
+    _set_session_cookie(response, token)
     return response
 
 
@@ -2099,7 +2112,7 @@ class _SsoAttempt:
         )
         response = RedirectResponse(safe_next(next_path), status_code=303)
         response.headers["Cache-Control"] = "no-store"
-        _set_session_cookie(response, user)
+        _set_session_cookie(response, _new_session_token(user))
         self.drop_tx(response)
         return response
 
