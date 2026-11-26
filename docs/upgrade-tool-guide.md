@@ -654,6 +654,7 @@ Use **Schedule…** on the Activate step and pick a future date and time. The re
 - The campaign must use the site-wide **service credential**, or a credential that is available without an interactive session.
 - **Verify upgrade after reboot** should be on so the install is committed automatically.
 - The Plexus server must be running when the window arrives. Scheduled reloads survive a server restart, but if the server is down over the window the campaign is marked "Reload missed - reschedule" and nothing reloads.
+- The campaign's credential must still be usable when the window arrives. It is checked when you schedule the reload and again when the reload starts, and the reload signs in with the password stored at that time. If the campaign creator's account has been disabled or deleted since, no longer owns the credential, or is no longer an admin while the campaign runs with the service credential, the reload does not start: the operation is marked failed with the reason, no device is contacted, and an audit entry (`upgrades` / `phase_execute_refused`) is written. Fix the credential and schedule the reload again.
 
 Use **Cancel scheduled reload** to cancel a pending schedule before it fires.
 

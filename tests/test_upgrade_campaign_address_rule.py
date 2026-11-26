@@ -26,7 +26,7 @@ from netcontrol.managed_targets import ADDRESS_NOT_SET_BY_OWNER, recorded_addres
 from netcontrol.routes import state, upgrades
 from routes.crypto import encrypt
 
-from mcp_helpers import admin_client
+from mcp_helpers import admin_client, user_client
 
 CONFIRMED_IP = "192.0.2.71"
 OWNER_IP = "198.51.100.72"
@@ -223,6 +223,42 @@ def test_the_owner_running_now_is_not_deferred_but_scheduling_is(api, seen_runs)
 
     asyncio.run(rehydrate())
     assert seen_runs == [False, True, True]
+
+
+def test_only_its_owner_types_an_address_into_a_personal_credential_campaign(api, seen_runs):
+    """Why a typed address is not checked at run time: on a campaign that
+    runs with a user's own credential, only that user can type one. An
+    admin's edit is refused while the campaign keeps the credential, and a
+    campaign the admin saved without it does not run with any credential."""
+    owner = user_client(api, "camp-owner", features=["upgrades", "upgrades.write"])
+
+    async def seed() -> int:
+        user = await db.get_user_by_username("camp-owner")
+        assert user
+        return await db.create_credential("owner-device", "owner-login", encrypt("Owner-Pw-1"), owner_id=user["id"])
+
+    cred_id = asyncio.run(seed())
+    body = {"name": "c-typed", "ad_hoc_ips": [AD_HOC_IP], "image_map": IMAGE_MAP, "credential_id": cred_id}
+    r = owner.post("/api/upgrades/campaigns", json=body)
+    assert r.status_code == 200, r.text
+    cid = int(r.json()["id"])
+
+    def addresses() -> list[str]:
+        return sorted(d["ip_address"] for d in asyncio.run(db.get_upgrade_devices(cid)))
+
+    r = api.patch(f"/api/upgrades/campaigns/{cid}", json={**body, "ad_hoc_ips": [AD_HOC_IP, RETARGETED_IP]})
+    assert r.status_code == 403, r.text
+    assert addresses() == [AD_HOC_IP]
+
+    r = api.patch(
+        f"/api/upgrades/campaigns/{cid}",
+        json={**body, "ad_hoc_ips": [AD_HOC_IP, RETARGETED_IP], "credential_id": None},
+    )
+    assert r.status_code == 200, r.text
+    assert addresses() == sorted([AD_HOC_IP, RETARGETED_IP])
+    r = api.post(f"/api/upgrades/campaigns/{cid}/execute", json={"phase": "prestage"})
+    assert r.status_code in (400, 403), r.text
+    assert seen_runs == []
 
 
 def test_an_admin_running_a_users_campaign_is_deferred(api, seen_runs):

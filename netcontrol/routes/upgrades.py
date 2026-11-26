@@ -175,6 +175,90 @@ async def _resolve_campaign_credential(
     return cred
 
 
+def _device_login(cred: dict) -> dict:
+    """The decrypted sign-in values of a stored credential row, as the device
+    phases take them."""
+    return {
+        "username": cred["username"],
+        "password": decrypt(cred["password"]),
+        "secret": decrypt(cred["secret"]) if cred.get("secret") else "",
+    }
+
+
+async def _scheduled_run_credential(options: dict, created_by, scheduled_by: str | None = None) -> dict:
+    """The campaign's credential, resolved as a scheduled phase starts.
+
+    Decided on the accounts and the credential as they are now, with no
+    request session: the session of the request that scheduled the phase
+    says nothing about the account by the time the phase runs. The run is
+    for the campaign's creator; a campaign the API token created (recorded
+    as ``unknown``) runs for the user who scheduled the phase
+    (``scheduled_by``), or as the token's when the token scheduled it.
+
+    Raises HTTPException like ``_resolve_campaign_credential``.
+    """
+    run_for = (created_by or "").strip()
+    if not run_for or run_for.lower() == "unknown":
+        run_for = (scheduled_by or "").strip() or run_for
+    return await _resolve_campaign_credential(options.get("credential_id"), run_for)
+
+
+async def _start_scheduled_phase(
+    campaign_id: int,
+    phase: str,
+    devices: list[dict],
+    image_map,
+    options: dict,
+    operation_id: int,
+    *,
+    created_by,
+    scheduled_by: str | None = None,
+    started_message: str,
+) -> None:
+    """Run a phase whose scheduled time has come.
+
+    The credential is resolved now, not when the phase was scheduled
+    (``_scheduled_run_credential``), and its values are decrypted only now.
+    When the account the campaign runs for has been disabled or deleted, has
+    lost the admin role a service credential needs, or no longer owns the
+    credential, the phase is recorded as failed with the reason and no
+    device is contacted. A scheduled run is deferred use of the credential
+    (``_run_phase``).
+    """
+    try:
+        cred = await _scheduled_run_credential(options, created_by, scheduled_by)
+    except HTTPException as exc:
+        LOGGER.warning("Scheduled %s of campaign %s not started: %s", phase, campaign_id, exc.detail)
+        await _audit(
+            "upgrades",
+            "phase_execute_refused",
+            user=str(created_by or scheduled_by or "unknown"),
+            detail=f"Scheduled {phase} on campaign {campaign_id} not started: {exc.detail}",
+        )
+        await _mark_upgrade_operation_failed(
+            campaign_id,
+            operation_id,
+            phase,
+            f"Scheduled {phase} did not run: the campaign's credential can no longer be used "
+            f"({exc.detail}). No device was contacted. Check the campaign's credential and reschedule.",
+        )
+        return
+    await db.update_upgrade_campaign(campaign_id, status=f"running_{phase}", scheduled_at=None)
+    await db.update_upgrade_operation(operation_id, status="running", started_at=_utc_now_iso())
+    await _emit(campaign_id, None, "info", started_message)
+    await _run_phase(
+        campaign_id,
+        phase,
+        devices,
+        _device_login(cred),
+        image_map,
+        options,
+        operation_id=operation_id,
+        credential_row=cred,
+        deferred=True,
+    )
+
+
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
@@ -393,21 +477,15 @@ async def rehydrate_scheduled_upgrades():
         if campaign_id in _running_campaigns:
             continue  # already running (shouldn't happen on startup)
 
-        # Resolve credentials
+        # Check the credential and load the devices
         try:
             options = json.loads(campaign["options"]) if isinstance(campaign["options"], str) else campaign["options"]
-            # Rehydrating a scheduled activate after restart: resolve against
-            # the campaign creator (no live session here), falling back to the
-            # configured service credential when the campaign has none set.
-            cred = await _resolve_campaign_credential(
-                options.get("credential_id"),
-                campaign.get("created_by"),
-            )
-            credentials = {
-                "username": cred["username"],
-                "password": decrypt(cred["password"]),
-                "secret": decrypt(cred["secret"]) if cred.get("secret") else "",
-            }
+            # Rehydrating a scheduled activate after restart: an early check
+            # against the campaign creator (no live session here), falling
+            # back to the configured service credential when the campaign has
+            # none set. The credential the run signs in with is resolved again
+            # when the time comes (_start_scheduled_phase).
+            await _scheduled_run_credential(options, campaign.get("created_by"))
             devices = await db.get_upgrade_devices(campaign_id)
             image_map_raw = (
                 json.loads(campaign["image_map"]) if isinstance(campaign["image_map"], str) else campaign["image_map"]
@@ -492,11 +570,10 @@ async def rehydrate_scheduled_upgrades():
             _cid=campaign_id,
             _sat=scheduled_at_utc,
             _devs=devices,
-            _creds=credentials,
             _imap=image_map,
             _opts=options,
             _opid=operation_id,
-            _cred_row=cred,
+            _created_by=campaign.get("created_by"),
         ):
             try:
                 delay_seconds = (_sat - datetime.now(UTC)).total_seconds()
@@ -508,24 +585,15 @@ async def rehydrate_scheduled_upgrades():
                         f"Resuming scheduled activate (rehydrated after restart); fires at {_sat.isoformat()}",
                     )
                     await asyncio.sleep(delay_seconds)
-                await db.update_upgrade_campaign(_cid, status="running_activate", scheduled_at=None)
-                await db.update_upgrade_operation(
-                    _opid,
-                    status="running",
-                    started_at=_utc_now_iso(),
-                )
-                await _emit(_cid, None, "info", "Starting activate phase now")
-                # A scheduled run: deferred use of the credential.
-                await _run_phase(
+                await _start_scheduled_phase(
                     _cid,
                     "activate",
                     _devs,
-                    _creds,
                     _imap,
                     _opts,
-                    operation_id=_opid,
-                    credential_row=_cred_row,
-                    deferred=True,
+                    _opid,
+                    created_by=_created_by,
+                    started_message="Starting activate phase now",
                 )
             except asyncio.CancelledError:
                 raise
@@ -1557,15 +1625,12 @@ async def execute_phase(campaign_id: int, body: CampaignPhaseRequest, request: R
         session=session,
     )
 
-    credentials = {
-        "username": cred["username"],
-        "password": decrypt(cred["password"]),
-        "secret": decrypt(cred["secret"]) if cred.get("secret") else "",
-    }
-    # A scheduled run, or one started by anyone but the credential's owner,
-    # is deferred use: a personal credential then goes only to an address
-    # its owner set or an admin confirmed (managed_targets).
-    deferred = scheduled_at_utc is not None or not session_owns_credential(session, cred)
+    # A run started by anyone but the credential's owner is deferred use: a
+    # personal credential then goes only to an address its owner set or an
+    # admin confirmed (managed_targets). So is a scheduled run, which also
+    # resolves the credential again when its time comes
+    # (_start_scheduled_phase): what is resolved here only checks the request.
+    deferred = not session_owns_credential(session, cred)
 
     # Get devices
     all_devices = await db.get_upgrade_devices(campaign_id)
@@ -1634,27 +1699,16 @@ async def execute_phase(campaign_id: int, body: CampaignPhaseRequest, request: R
                 delay_seconds = (scheduled_at_utc - datetime.now(UTC)).total_seconds()
                 if delay_seconds > 0:
                     await asyncio.sleep(delay_seconds)
-                await db.update_upgrade_campaign(
-                    campaign_id,
-                    status=f"running_{body.phase}",
-                    scheduled_at=None,
-                )
-                await db.update_upgrade_operation(
-                    operation_id,
-                    status="running",
-                    started_at=_utc_now_iso(),
-                )
-                await _emit(campaign_id, None, "info", f"Starting scheduled {body.phase} phase now")
-                await _run_phase(
+                await _start_scheduled_phase(
                     campaign_id,
                     body.phase,
                     devices,
-                    credentials,
                     image_map,
                     options,
-                    operation_id=operation_id,
-                    credential_row=cred,
-                    deferred=deferred,
+                    operation_id,
+                    created_by=campaign.get("created_by"),
+                    scheduled_by=user,
+                    started_message=f"Starting scheduled {body.phase} phase now",
                 )
             except asyncio.CancelledError:
                 raise
@@ -1681,7 +1735,7 @@ async def execute_phase(campaign_id: int, body: CampaignPhaseRequest, request: R
                 campaign_id,
                 body.phase,
                 devices,
-                credentials,
+                _device_login(cred),
                 image_map,
                 options,
                 operation_id=operation_id,
@@ -2005,8 +2059,11 @@ async def _run_phase(
     owner; a user's own credential is then checked the same way, and the
     host's address must be confirmed or set by the credential's owner. A
     device added from inventory whose host was deleted since
-    (``from_inventory``) fails the same way; an address typed into the
-    campaign (by its creator or an admin) is not checked."""
+    (``from_inventory``) fails the same way. An address typed into the
+    campaign is not checked: only the owner of a campaign's personal
+    credential can type one into it (an admin's edit that keeps the
+    credential is refused), and a campaign that runs with a service
+    credential is an admin's."""
     max_workers = min(options.get("parallel", 4), 8)
     status_key = _phase_status_key(phase)
     phase_name = _phase_label(phase)

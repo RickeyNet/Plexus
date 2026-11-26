@@ -244,7 +244,13 @@ with the reason; a deployment execute is refused with `409`. An upgrade
 campaign phase that is scheduled, resumed after a restart, or started by
 someone other than the credential's owner applies the same rule per device
 (`managed_targets.recorded_address_refusal(..., deferred=True)`): a refused
-device fails with the reason and the others carry on. Hosts stored
+device fails with the reason and the others carry on. A scheduled phase
+(and one resumed after a restart) resolves the campaign's credential again
+when its time comes, for the campaign's creator as the account is then
+(`upgrades._start_scheduled_phase`): a creator who was disabled or deleted,
+no longer owns the credential, or lost the admin role a service credential
+needs gets no run; the operation is recorded as failed with the reason and
+audited as `upgrades` / `phase_execute_refused`. Hosts stored
 before migration 0141 have no recorded writer: an unconfirmed one needs an
 admin's confirmation first. Discovery scans and syncs by a non-admin send the group's SNMP
 settings only to the IP of a confirmed inventory host the caller may
