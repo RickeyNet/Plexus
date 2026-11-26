@@ -108,14 +108,14 @@ async def test_get_config_backup_diff_success(monkeypatch):
 
     captured = {}
 
-    def _fake_diff(before, after, baseline_label, actual_label):
+    async def _fake_diff(before, after, baseline_label, actual_label):
         captured["before"] = before
         captured["after"] = after
         captured["baseline_label"] = baseline_label
         captured["actual_label"] = actual_label
         return ("@@ diff @@\n-public\n+secure\n", 1, 1)
 
-    monkeypatch.setattr(config_backups_module, "_compute_config_diff", _fake_diff)
+    monkeypatch.setattr(config_backups_module, "compute_config_diff_async", _fake_diff)
 
     result = await config_backups_module.get_config_backup_diff(10)
     assert result["backup_id"] == 10

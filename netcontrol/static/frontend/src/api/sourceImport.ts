@@ -108,8 +108,8 @@ export interface ImportDevicesResult {
 export function useImportableDevices(orgRef: number | null) {
   return useQuery({
     queryKey: ["meraki", "importable-devices", orgRef],
-    queryFn: () =>
-      apiRequest<ImportableDevices>(`/sources/${orgRef}/importable-devices`),
+    queryFn: ({ signal }) =>
+      apiRequest<ImportableDevices>(`/sources/${orgRef}/importable-devices`, { signal }),
     enabled: orgRef != null,
   });
 }

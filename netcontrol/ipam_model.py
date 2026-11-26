@@ -24,6 +24,7 @@ from netcontrol.circuits import clean_date
 from netcontrol.custom_fields import CustomFieldError, clean_name
 from netcontrol.integrations.pathtrace.model import Network, contains, net
 from netcontrol.network_objects import DESCRIPTION_MAX, VID_MAX, VID_MIN, clean_description
+from netcontrol.prefix_index import longest_prefix_match
 
 __all__ = [
     "DESCRIPTION_MAX",
@@ -135,14 +136,8 @@ def containing_aggregate(subnet: str, aggregates: Iterable[dict]) -> dict | None
     inner = net(subnet)
     if inner is None:
         return None
-    best: tuple[int, dict] | None = None
-    for aggregate in aggregates:
-        outer = net(aggregate.get("prefix"))
-        if outer is None or not contains(outer, inner):
-            continue
-        if best is None or outer.prefixlen > best[0]:
-            best = (outer.prefixlen, aggregate)
-    return best[1] if best else None
+    parsed = ((net(aggregate.get("prefix")), aggregate) for aggregate in aggregates)
+    return longest_prefix_match(inner, [(outer, aggregate) for outer, aggregate in parsed if outer is not None])
 
 
 def aggregate_usage(prefix: str, subnets: Iterable[str]) -> dict:

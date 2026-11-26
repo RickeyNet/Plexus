@@ -38,12 +38,14 @@ from __future__ import annotations
 import asyncio
 import json
 import ssl
+import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
 import httpx
 
+from netcontrol.client_cache import fingerprint
 from netcontrol.routes.net_guard import (
     OutboundRequestError,
     validate_outbound_host,
@@ -51,6 +53,7 @@ from netcontrol.routes.net_guard import (
 from netcontrol.routes.outbound_http import (
     DELIVERY_RESPONSE_MAX_BYTES,
     MAX_PINNED_ADDRESSES,
+    cached_ssl_context,
     delivery_error_text,
     send_request,
     tls_verify,
@@ -140,6 +143,8 @@ class SinkRuntime:
     last_delivery_at: str = ""
     last_failure_at: str = ""
     _stop_event: asyncio.Event = field(default_factory=asyncio.Event)
+    # The open TCP / TLS stream, reused across events (unused by udp / https).
+    connection: StreamConnection = field(default_factory=lambda: StreamConnection())
 
 
 # ── Validation / sanitization ────────────────────────────────────────────────
@@ -451,15 +456,17 @@ async def _deliver_udp(sink: SinkConfig, message: str, address: str) -> None:
 
 async def _open_approved(
     addresses: list[str], port: int, timeout_s: float, **kwargs: Any
-) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
+) -> tuple[asyncio.StreamReader, asyncio.StreamWriter, str]:
     """A connection to the first of ``addresses`` (the IPs the SSRF check
     approved, at most ``MAX_PINNED_ADDRESSES``) that accepts one, so a sink
-    name with an unreachable IPv6 answer still works over IPv4. A TLS
-    failure is not a reason to try another address."""
+    name with an unreachable IPv6 answer still works over IPv4, and the
+    address it went to. A TLS failure is not a reason to try another
+    address."""
     tried = addresses[:MAX_PINNED_ADDRESSES]
     for index, address in enumerate(tried):
         try:
-            return await asyncio.wait_for(asyncio.open_connection(address, port, **kwargs), timeout=timeout_s)
+            reader, writer = await asyncio.wait_for(asyncio.open_connection(address, port, **kwargs), timeout=timeout_s)
+            return reader, writer, address
         except ssl.SSLError:
             raise
         except OSError:
@@ -468,28 +475,116 @@ async def _open_approved(
     raise AssertionError("unreachable")  # pragma: no cover - the loop returns or raises
 
 
-async def _deliver_tcp(sink: SinkConfig, message: str, addresses: list[str]) -> None:
-    """TCP with RFC 6587 octet-counting framing. Reconnects per event, to
-    one of ``addresses`` (the IPs the SSRF check approved)."""
-    reader, writer = await _open_approved(addresses, sink.port, DEFAULT_TCP_TIMEOUT)
+# A stream sink's connection is dropped after this long without an event, so
+# a receiver's idle timeout or a silent network drop does not eat the next
+# event, and an idle sink holds no socket.
+STREAM_IDLE_SECONDS = 120.0
+
+
+@dataclass
+class StreamConnection:
+    """The open TCP / TLS stream of one sink, reused across its events.
+
+    It is only reused for an event when it is still open, was used within
+    ``STREAM_IDLE_SECONDS`` and goes to an address that event's SSRF check
+    approved; otherwise it is closed and a new one opened. A failed write
+    closes it, so the retry reconnects. A sink's settings never change under
+    it: a changed sink gets a new runtime (``apply_sinks``)."""
+
+    reader: asyncio.StreamReader | None = None
+    writer: asyncio.StreamWriter | None = None
+    address: str = ""
+    last_used: float = 0.0
+
+    def usable(self, addresses: list[str], now: float) -> bool:
+        reader, writer = self.reader, self.writer
+        if reader is None or writer is None or writer.is_closing():
+            return False
+        # A receiver that closed its side has sent EOF: nothing else arrives
+        # on a syslog stream.
+        if reader.at_eof() or now - self.last_used > STREAM_IDLE_SECONDS:
+            return False
+        return self.address in addresses[:MAX_PINNED_ADDRESSES]
+
+    def close(self) -> None:
+        """Close the stream without waiting (also safe while cancelled)."""
+        writer = self.writer
+        self.reader = self.writer = None
+        self.address = ""
+        if writer is not None:
+            writer.close()
+
+
+async def _close_stream(sink: SinkConfig, writer: asyncio.StreamWriter) -> None:
+    writer.close()
     try:
-        writer.write(frame_octet_counting(message))
-        await asyncio.wait_for(writer.drain(), timeout=DEFAULT_TCP_TIMEOUT)
-    finally:
-        writer.close()
+        await writer.wait_closed()
+    except Exception as exc:
+        LOGGER.debug("siem sink %s: %s close failed: %s", sink.id, sink.protocol, exc)
+
+
+async def _deliver_stream(
+    sink: SinkConfig,
+    message: str,
+    addresses: list[str],
+    timeout_s: float,
+    conn: StreamConnection | None,
+    **kwargs: Any,
+) -> None:
+    """Send one octet-counted frame to one of ``addresses`` (the IPs the SSRF
+    check approved for this event). With ``conn`` the sink's open stream is
+    reused when it still fits (``StreamConnection.usable``); without it a
+    connection is opened and closed for this event alone."""
+    frame = frame_octet_counting(message)
+    if conn is None:
+        _reader, writer, _address = await _open_approved(addresses, sink.port, timeout_s, **kwargs)
         try:
-            await writer.wait_closed()
-        except Exception as exc:
-            LOGGER.debug("siem sink %s: tcp close failed: %s", sink.id, exc)
+            writer.write(frame)
+            await asyncio.wait_for(writer.drain(), timeout=timeout_s)
+        finally:
+            await _close_stream(sink, writer)
+        return
+    now = time.monotonic()
+    if not conn.usable(addresses, now):
+        conn.close()
+        conn.reader, conn.writer, conn.address = await _open_approved(addresses, sink.port, timeout_s, **kwargs)
+    stream = conn.writer
+    assert stream is not None
+    try:
+        stream.write(frame)
+        await asyncio.wait_for(stream.drain(), timeout=timeout_s)
+    except BaseException:
+        conn.close()
+        raise
+    conn.last_used = now
+
+
+async def _deliver_tcp(
+    sink: SinkConfig, message: str, addresses: list[str], conn: StreamConnection | None = None
+) -> None:
+    """TCP with RFC 6587 octet-counting framing, to one of ``addresses``
+    (the IPs the SSRF check approved), over the sink's open stream ``conn``
+    when there is one."""
+    await _deliver_stream(sink, message, addresses, DEFAULT_TCP_TIMEOUT, conn)
 
 
 def _build_tls_context(sink: SinkConfig) -> ssl.SSLContext:
-    """Build an SSLContext from the sink's TLS bundle.
+    """The SSLContext for the sink's TLS bundle, built once per distinct
+    bundle (``outbound_http.cached_ssl_context``).
 
     - tls_verify=False disables certificate verification entirely (DEV ONLY).
     - tls_ca_pem, when set, is used as the only trust anchor.
     - Client cert/key, when both set, are loaded for mutual TLS.
     """
+    key = (
+        "siem-tls",
+        sink.tls_verify,
+        fingerprint(sink.tls_ca_pem, sink.tls_client_cert_pem, sink.tls_client_key_pem),
+    )
+    return cached_ssl_context(key, lambda: _new_tls_context(sink))
+
+
+def _new_tls_context(sink: SinkConfig) -> ssl.SSLContext:
     ctx = ssl.create_default_context()
     if not sink.tls_verify:
         ctx.check_hostname = False
@@ -502,21 +597,15 @@ def _build_tls_context(sink: SinkConfig) -> ssl.SSLContext:
     return ctx
 
 
-async def _deliver_tls(sink: SinkConfig, message: str, addresses: list[str]) -> None:
+async def _deliver_tls(
+    sink: SinkConfig, message: str, addresses: list[str], conn: StreamConnection | None = None
+) -> None:
     """RFC 5425: syslog over TLS with octet-counting framing. Connects to
     one of ``addresses`` (the IPs the SSRF check approved); the TLS server
-    name and certificate check use the configured host name."""
+    name and certificate check use the configured host name. Reuses the
+    sink's open stream ``conn`` when there is one."""
     ctx = _build_tls_context(sink)
-    reader, writer = await _open_approved(addresses, sink.port, DEFAULT_TLS_TIMEOUT, ssl=ctx, server_hostname=sink.host)
-    try:
-        writer.write(frame_octet_counting(message))
-        await asyncio.wait_for(writer.drain(), timeout=DEFAULT_TLS_TIMEOUT)
-    finally:
-        writer.close()
-        try:
-            await writer.wait_closed()
-        except Exception as exc:
-            LOGGER.debug("siem sink %s: tls close failed: %s", sink.id, exc)
+    await _deliver_stream(sink, message, addresses, DEFAULT_TLS_TIMEOUT, conn, ssl=ctx, server_hostname=sink.host)
 
 
 async def _deliver_https(sink: SinkConfig, message: str) -> None:
@@ -554,8 +643,10 @@ async def _deliver_https(sink: SinkConfig, message: str) -> None:
         raise RuntimeError(f"https sink {sink.id}: HTTP {resp.status_code} {resp.text[:200]}")
 
 
-async def deliver(sink: SinkConfig, event: dict) -> None:
-    """Format and send one event. Raises on failure."""
+async def deliver(sink: SinkConfig, event: dict, conn: StreamConnection | None = None) -> None:
+    """Format and send one event. Raises on failure. ``conn`` is the sink's
+    open TCP / TLS stream, reused across its events (the sink loop passes
+    its own); without it the event gets a connection of its own."""
     rendered = render_event(event, sink.format)
     # For syslog-family sinks we wrap with a header; HTTPS sends the raw payload.
     if sink.protocol in ("udp", "tcp", "tls"):
@@ -582,9 +673,9 @@ async def deliver(sink: SinkConfig, event: dict) -> None:
         # Connectionless: there is no failed connect to fall back from.
         await _deliver_udp(sink, message, addresses[0])
     elif sink.protocol == "tcp":
-        await _deliver_tcp(sink, message, addresses)
+        await _deliver_tcp(sink, message, addresses, conn)
     elif sink.protocol == "tls":
-        await _deliver_tls(sink, message, addresses)
+        await _deliver_tls(sink, message, addresses, conn)
     else:
         raise ValueError(f"unsupported protocol: {sink.protocol}")
 
@@ -626,7 +717,7 @@ async def _sink_loop(rt: SinkRuntime) -> None:
                 attempt = 0
                 while True:
                     try:
-                        await deliver(sink, event)
+                        await deliver(sink, event, rt.connection)
                         rt.delivered += 1
                         rt.last_delivery_at = _utc_now_iso()
                         break
@@ -651,6 +742,8 @@ async def _sink_loop(rt: SinkRuntime) -> None:
     except asyncio.CancelledError:
         LOGGER.info("siem sink %s: stopping", sink.id)
         raise
+    finally:
+        rt.connection.close()
 
 
 async def enqueue_event(event: dict) -> None:

@@ -829,6 +829,83 @@ def test_api_psirt_sync_stores_advisories_for_the_tracked_versions(api, monkeypa
     assert api.get("/api/software/settings").json()["settings"]["psirt_last_sync_status"] == "failed"
 
 
+def _count_version_reads(monkeypatch) -> list[int]:
+    calls: list[int] = []
+    real = db_module.list_software_versions
+
+    async def _counted(*args, **kwargs):
+        calls.append(1)
+        return await real(*args, **kwargs)
+
+    monkeypatch.setattr(db_module, "list_software_versions", _counted)
+    return calls
+
+
+def test_overview_cache_serves_unscoped_callers_only_and_clears_on_writes(api, monkeypatch):
+    _seed_hosts()
+    first = api.get("/api/software/overview").json()
+    assert first["summary"]["devices"] == 2
+    reads = _count_version_reads(monkeypatch)
+    assert api.get("/api/software/overview").json() == first
+    assert reads == []  # served from the cache
+    assert len(software_routes._overview_cache) == 1
+
+    # A scoped caller is never served the cached unscoped payload, and its
+    # own (filtered) payload is never stored.
+    async def _scoped_scope(_request):
+        return type("Scope", (), {"unrestricted": False, "restricted": True})()
+
+    async def _no_groups(_request, **_kw):
+        return {"group_ids": frozenset()}
+
+    async def _nothing(_model, _rows, _request, **_kw):
+        return []
+
+    with monkeypatch.context() as scoped:
+        scoped.setattr(software_routes, "request_scope", _scoped_scope)
+        scoped.setattr(software_routes, "group_filter", _no_groups)
+        scoped.setattr(software_routes, "filter_rows", _nothing)
+        hidden = api.get("/api/software/overview").json()
+    assert hidden["devices"] == [] and hidden["summary"]["devices"] == 0 and hidden["alerts"] == []
+    assert reads == [1]
+    assert len(software_routes._overview_cache) == 1
+    assert api.get("/api/software/overview").json() == first
+
+    # Writes made through this module clear it.
+    _set_version(9002, "15.2(7)E8")
+    assert api.post("/api/software/refresh").status_code == 200
+    assert len(software_routes._overview_cache) == 0
+    after = api.get("/api/software/overview").json()
+    assert _device(after, "edge-1")["version"] == "15.2(7)E8"
+    created = api.post(
+        "/api/software/advisories",
+        json={"advisory_id": "cache-1", "platform": "ios", "affected_versions": ["15.2(7)E8"]},
+    )
+    assert created.status_code == 201
+    assert api.get("/api/software/overview").json()["summary"]["open_alerts"] == 1
+    alert_id = api.get("/api/software/alerts").json()["alerts"][0]["id"]
+    assert api.post(f"/api/software/alerts/{alert_id}/acknowledge").status_code == 200
+    assert api.get("/api/software/overview").json()["summary"]["unacknowledged_alerts"] == 0
+    assert api.delete("/api/software/advisories/cache-1").status_code == 200
+    assert api.get("/api/software/overview").json()["summary"]["advisories"] == 0
+
+
+def test_overview_build_overlapping_a_write_is_not_cached(api, monkeypatch):
+    _seed_hosts()
+    real = db_module.list_recent_version_changes
+
+    async def _write_meanwhile(*args, **kwargs):
+        software_routes._overview_changed()  # a write lands while the reads run
+        return await real(*args, **kwargs)
+
+    monkeypatch.setattr(db_module, "list_recent_version_changes", _write_meanwhile)
+    assert api.get("/api/software/overview").status_code == 200
+    assert len(software_routes._overview_cache) == 0
+    monkeypatch.setattr(db_module, "list_recent_version_changes", real)
+    assert api.get("/api/software/overview").status_code == 200
+    assert len(software_routes._overview_cache) == 1
+
+
 def test_api_requires_the_software_feature(monkeypatch, request):
     monkeypatch.setenv("APP_SECRET_KEY", "test-secret-key-software")
     monkeypatch.setenv("APP_API_TOKEN", "")

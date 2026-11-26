@@ -125,7 +125,7 @@ export const HARDWARE_KEYS = {
 export function useHostHardware(hostId: number | null, enabled = true) {
   return useQuery<HostHardware>({
     queryKey: HARDWARE_KEYS.host(hostId ?? 0),
-    queryFn: () => detailRequest<HostHardware>(`/hosts/${hostId}/hardware`),
+    queryFn: ({ signal }) => detailRequest<HostHardware>(`/hosts/${hostId}/hardware`, { signal }),
     enabled: enabled && hostId !== null,
   });
 }
@@ -134,9 +134,10 @@ export function useHostHardware(hostId: number | null, enabled = true) {
 export function useHostHardwareEvents(hostId: number | null, enabled = true) {
   return useInfiniteQuery({
     queryKey: HARDWARE_KEYS.hostEvents(hostId ?? 0),
-    queryFn: ({ pageParam }) =>
+    queryFn: ({ pageParam, signal }) =>
       detailRequest<HardwareEventPage>(
         `/hosts/${hostId}/hardware/events${queryString({ limit: HOST_EVENTS_PAGE_SIZE, offset: pageParam })}`,
+        { signal },
       ),
     initialPageParam: 0,
     getNextPageParam: (last, pages) => {
@@ -151,7 +152,7 @@ export function useHostHardwareEvents(hostId: number | null, enabled = true) {
 export function useHardwareComponents(q: ComponentQuery) {
   return useQuery<HardwareComponentPage>({
     queryKey: HARDWARE_KEYS.components(q),
-    queryFn: () => detailRequest<HardwareComponentPage>(`/hardware/components${queryString(q)}`),
+    queryFn: ({ signal }) => detailRequest<HardwareComponentPage>(`/hardware/components${queryString(q)}`, { signal }),
     placeholderData: keepPreviousData,
   });
 }
@@ -160,7 +161,7 @@ export function useHardwareComponents(q: ComponentQuery) {
 export function useHardwareEvents(q: EventQuery) {
   return useQuery<HardwareEventPage>({
     queryKey: HARDWARE_KEYS.events(q),
-    queryFn: () => detailRequest<HardwareEventPage>(`/hardware/events${queryString(q)}`),
+    queryFn: ({ signal }) => detailRequest<HardwareEventPage>(`/hardware/events${queryString(q)}`, { signal }),
     placeholderData: keepPreviousData,
   });
 }

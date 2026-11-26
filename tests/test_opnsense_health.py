@@ -618,3 +618,52 @@ async def test_a_backup_policy_finds_the_source_of_its_firewall_whatever_the_pol
     assert await health_poll.inventory_hosts([{**found, "provider": "meraki"}]) == {}
     other = await _host(8)
     assert await health_poll.source_of_host(other) is None
+
+
+async def test_the_poll_reuses_its_client_and_checks_the_address_every_time(firewall_source, monkeypatch):
+    host_id = await _host(9)
+    org_ref = await _source_with_host(host_id)
+    org = await db.get_meraki_org(org_ref)
+    built: list[OpnsenseClient] = []
+    make = topology_routes._opnsense_client
+
+    def counting(org, secret, options, **kwargs):
+        built.append(make(org, secret, options, **kwargs))
+        return built[-1]
+
+    guarded: list[str] = []
+    real_guard = health_poll.guard_api_host
+
+    async def guard(url, label, error):
+        guarded.append(url)
+        await real_guard(url, label, error)
+
+    monkeypatch.setattr(topology_routes, "_opnsense_client", counting)
+    monkeypatch.setattr(health_poll, "guard_api_host", guard)
+    health_poll._POLL_CLIENTS.discard()
+    try:
+        first, _vpn, _ids = await health_poll.read_firewall(org, f"{KEY}:{SECRET}")
+        second, _vpn, _ids = await health_poll.read_firewall(org, f"{KEY}:{SECRET}")
+        assert first and second and len(built) == 1
+        # A reused client runs the outbound address guard again (a new one
+        # runs it itself before connecting).
+        assert guarded == [built[0].base_url]
+
+        # A refused address stops the reused client before it sends anything.
+        async def refuse(url, label, error):
+            raise error("address refused by the outbound address guard")
+
+        monkeypatch.setattr(health_poll, "guard_api_host", refuse)
+        calls = len(firewall_source.calls)
+        with pytest.raises(health_poll.OpnsenseApiError, match="refused"):
+            await health_poll.read_firewall(org, f"{KEY}:{SECRET}")
+        assert len(firewall_source.calls) == calls
+
+        # A new key builds a new client.
+        monkeypatch.setattr(health_poll, "guard_api_host", guard)
+        # (the fake firewall refuses that key: the new client did send it).
+        with pytest.raises(health_poll.OpnsenseApiError, match="HTTP 401"):
+            await health_poll.read_firewall(org, f"{KEY}:other-secret-0003")
+        assert len(built) == 2 and built[1] is not built[0]
+    finally:
+        health_poll._POLL_CLIENTS.discard()

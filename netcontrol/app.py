@@ -1763,6 +1763,14 @@ async def lifespan(app: FastAPI):
             thread_name_prefix="plexus-io",
         )
     )
+    # Long blocking work (SSH polls, Ansible runs, CloudWatch Insights waits)
+    # has pools of its own, so it never queues logins on the default one.
+    from netcontrol import executors
+
+    # A scheduled sweep and a manual poll can overlap, each with
+    # poll_concurrency sessions; threads are only started when used.
+    executors.configure_pool("ssh", max(32, 2 * _poll_concurrency))
+    executors.configure_pool("ansible", _MAX_CONCURRENT_JOBS)
 
     def _on_background_loop_done(task: asyncio.Task) -> None:
         # Every loop is written to be immortal (internal try/except); if one
@@ -1962,6 +1970,14 @@ async def lifespan(app: FastAPI):
             await object_changes.stop_recorder()
         except Exception as exc:
             LOGGER.warning("change log: shutdown failed: %s", type(exc).__name__)
+        try:
+            # Cached API clients and connection pools, then the long-work pools.
+            from netcontrol.client_cache import close_all_caches
+
+            await close_all_caches()
+        except Exception as exc:
+            LOGGER.warning("client caches: shutdown failed: %s", type(exc).__name__)
+        executors.shutdown_pools()
         # Release DB connections last, after every consumer above has stopped.
         try:
             await db.close_db_pool()
@@ -2590,7 +2606,7 @@ async def _dashboard_data() -> dict:
 
 
 @app.get("/api/dashboard", dependencies=[Depends(require_auth), Depends(require_feature("dashboard"))])
-async def dashboard(request: Request):
+async def dashboard(request: Request) -> dict:
     scope = await request_scope(request)
     username = str((_get_session(request) or {}).get("user") or "")
     if scope.restricted:

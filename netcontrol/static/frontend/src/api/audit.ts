@@ -54,14 +54,14 @@ export interface AuditFinding {
 export function useAuditRuns() {
   return useQuery<{ runs: AuditRunSummary[] }>({
     queryKey: ['audit', 'runs'],
-    queryFn: () => apiRequest('/audit/runs'),
+    queryFn: ({ signal }) => apiRequest('/audit/runs', { signal }),
   });
 }
 
 export function useAuditFindings(runId: number | null) {
   return useQuery<{ findings: AuditFinding[] }>({
     queryKey: ['audit', 'findings', runId],
-    queryFn: () => apiRequest(`/audit/runs/${runId}/findings`),
+    queryFn: ({ signal }) => apiRequest(`/audit/runs/${runId}/findings`, { signal }),
     enabled: runId != null,
   });
 }
@@ -84,7 +84,7 @@ export function useTriggerAuditRun() {
 export function useAuditSchedules() {
   return useQuery<{ schedules: AuditSchedule[] }>({
     queryKey: ['audit', 'schedules'],
-    queryFn: () => apiRequest('/audit/schedules'),
+    queryFn: ({ signal }) => apiRequest('/audit/schedules', { signal }),
   });
 }
 
@@ -176,7 +176,7 @@ export interface AuditOverridePayload {
 export function useAuditOverrides() {
   return useQuery<{ overrides: AuditOverride[] }>({
     queryKey: ['audit', 'overrides'],
-    queryFn: () => apiRequest('/audit/overrides'),
+    queryFn: ({ signal }) => apiRequest('/audit/overrides', { signal }),
   });
 }
 

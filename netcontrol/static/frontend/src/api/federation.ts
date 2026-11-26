@@ -63,14 +63,14 @@ export interface FederationTestResult {
 export function useFederationPeers() {
   return useQuery({
     queryKey: ['federation', 'peers'],
-    queryFn: () => apiRequest<FederationPeer[]>('/federation/peers'),
+    queryFn: ({ signal }) => apiRequest<FederationPeer[]>('/federation/peers', { signal }),
   });
 }
 
 export function useFederationOverview() {
   return useQuery({
     queryKey: ['federation', 'overview'],
-    queryFn: () => apiRequest<FederationOverview>('/federation/overview'),
+    queryFn: ({ signal }) => apiRequest<FederationOverview>('/federation/overview', { signal }),
   });
 }
 

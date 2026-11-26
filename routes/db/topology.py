@@ -114,8 +114,10 @@ __all__ = [
     "get_config_backups",
     "get_latest_config_backups_per_host",
     "get_latest_config_texts_for_hosts",
+    "get_latest_config_backup_ids_for_hosts",
     "get_config_backup",
     "get_config_backup_encrypted_text",
+    "get_config_backup_downloads",
     "get_unsealed_config_backups",
     "seal_config_backup",
     "get_previous_successful_config_backup",
@@ -2312,6 +2314,32 @@ async def get_latest_config_texts_for_hosts(host_ids: list[int]) -> dict[int, di
         await db.close()
 
 
+# Each host's newest successful backup as ``sb``, joined after ``FROM hosts h``.
+_LATEST_SUCCESS_BACKUP_JOIN = latest_row_lateral("config_backups", "host_id = h.id AND status = 'success'", "sb")
+
+
+async def get_latest_config_backup_ids_for_hosts(host_ids: list[int]) -> dict[int, int]:
+    """``host_id -> id of its newest successful backup``, without the
+    configuration text: what a cache keyed by backup checks before reading
+    the text of the hosts that changed (``get_latest_config_texts_for_hosts``).
+    A host with no successful backup is left out."""
+    wanted = sorted({int(h) for h in host_ids})
+    if not wanted:
+        return {}
+    db = await _dbcore.get_db(read_only=True)
+    try:
+        placeholders = ",".join("?" * len(wanted))
+        cursor = await db.execute(
+            f"""SELECT h.id AS host_id, sb.id AS id FROM hosts h
+                {_LATEST_SUCCESS_BACKUP_JOIN}
+                WHERE h.id IN ({placeholders})""",  # nosec B608 - placeholders only
+            tuple(wanted),
+        )
+        return {int(row["host_id"]): int(row["id"]) for row in rows_to_list(await cursor.fetchall())}
+    finally:
+        await db.close()
+
+
 # Columns of an OPNsense backup that never leave the store: the encrypted
 # raw config.xml and its keyed digest. Read the first with
 # ``get_config_backup_encrypted_text`` (the raw download only).
@@ -2350,6 +2378,44 @@ async def get_config_backup_encrypted_text(backup_id: int) -> str:
         return str(row[0] or "") if row else ""
     finally:
         await db.close()
+
+
+async def get_config_backup_downloads(
+    backup_ids: list[int],
+    group_ids: Iterable[int] | None = None,
+) -> list[dict]:
+    """What a bulk raw download needs of many backups in one query, in the
+    order of ``backup_ids``: ``id``, ``host_id``, ``captured_at``,
+    ``config_text``, ``config_text_enc`` (``''`` unless sealed) and the
+    host's ``hostname`` and ``ip_address``. ``group_ids``: only hosts in
+    those inventory groups, as ``get_config_backups`` filters them. The
+    encrypted column is for the raw download only; never return it to a
+    client."""
+    wanted = [int(i) for i in backup_ids]
+    if not wanted:
+        return []
+    conditions = [f"b.id IN ({','.join('?' * len(wanted))})"]
+    params: list = list(wanted)
+    scope_sql, scope_params = group_ids_condition("h.group_id", group_ids)
+    if scope_sql:
+        conditions.append(scope_sql)
+        params.extend(scope_params)
+    db = await _dbcore.get_db(read_only=True)
+    try:
+        cursor = await db.execute(
+            f"""SELECT b.id, b.host_id, b.captured_at, b.config_text, b.config_text_enc,
+                       h.hostname, h.ip_address
+                FROM config_backups b
+                LEFT JOIN hosts h ON h.id = b.host_id
+                WHERE {" AND ".join(conditions)}""",  # nosec B608 - placeholders only
+            tuple(params),
+        )
+        rows = rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+    position = {backup_id: index for index, backup_id in enumerate(wanted)}
+    rows.sort(key=lambda row: position[int(row["id"])])
+    return rows
 
 
 async def get_unsealed_config_backups(

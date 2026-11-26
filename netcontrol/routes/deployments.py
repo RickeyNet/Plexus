@@ -53,10 +53,10 @@ from netcontrol.routes.risk_analysis import require_risk_analysis
 from netcontrol.routes.shared import (
     LIVE_STREAMS,
     _audit,
-    _compute_config_diff,
     _corr_id,
     _get_session,
     _push_config_to_device,
+    compute_config_diff_async,
     is_owner_or_admin,
     limit_websocket,
     require_credential_access,
@@ -612,7 +612,7 @@ async def _run_deployment_job(
                         pre_text = s.get("config_text", "")
                         break
 
-                diff_text, diff_added, diff_removed = _compute_config_diff(
+                diff_text, diff_added, diff_removed = await compute_config_diff_async(
                     pre_text,
                     post_config,
                     baseline_label="pre-deployment",
@@ -767,7 +767,7 @@ async def _run_rollback_job(
                         await get_device_config(host, credentials, capture_method="deployment", deferred=deferred)
                     ).config_text
 
-                    diff_text, _, _ = _compute_config_diff(
+                    diff_text, _, _ = await compute_config_diff_async(
                         snap["config_text"],
                         current_config,
                         baseline_label="pre-deployment",
@@ -795,7 +795,7 @@ async def _run_rollback_job(
                     verify_config = (
                         await get_device_config(host, credentials, capture_method="deployment", deferred=deferred)
                     ).config_text
-                    verify_diff, va, vr = _compute_config_diff(
+                    verify_diff, va, vr = await compute_config_diff_async(
                         snap["config_text"],
                         verify_config,
                         baseline_label="pre-deployment",

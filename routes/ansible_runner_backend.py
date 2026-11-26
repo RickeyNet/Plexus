@@ -15,6 +15,7 @@ import tempfile
 import time
 
 import ansible_runner
+from netcontrol.executors import run_long_blocking
 
 from routes.runner import LogEvent, PlaybookResult
 
@@ -356,8 +357,10 @@ async def execute_ansible_playbook(
                 )
             )
 
-        # Run ansible-runner in a thread to not block the event loop
-        runner = await asyncio.to_thread(
+        # A whole run holds its thread for minutes: it gets the dedicated
+        # pool, so it never queues logins and short to_thread calls.
+        runner = await run_long_blocking(
+            "ansible",
             ansible_runner.run,
             private_data_dir=tmpdir,
             playbook="playbook.yml",

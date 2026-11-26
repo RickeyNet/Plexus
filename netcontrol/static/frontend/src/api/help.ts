@@ -51,7 +51,7 @@ const STALE = Infinity;
 export function useHelpIndex() {
   return useQuery({
     queryKey: ['help', 'index'],
-    queryFn: () => apiRequest<HelpIndex>('/help'),
+    queryFn: ({ signal }) => apiRequest<HelpIndex>('/help', { signal }),
     staleTime: STALE,
   });
 }
@@ -59,7 +59,7 @@ export function useHelpIndex() {
 export function useHelpPage(name: string) {
   return useQuery({
     queryKey: ['help', 'page', name],
-    queryFn: () => apiRequest<HelpPage>(`/help/pages/${encodeURIComponent(name)}`),
+    queryFn: ({ signal }) => apiRequest<HelpPage>(`/help/pages/${encodeURIComponent(name)}`, { signal }),
     staleTime: STALE,
     enabled: name !== '',
   });
@@ -69,7 +69,7 @@ export function useHelpSearch(q: string) {
   const query = q.trim();
   return useQuery({
     queryKey: ['help', 'search', query],
-    queryFn: () => apiRequest<{ query: string; results: HelpSearchResult[] }>(`/help/search${queryString({ q: query })}`),
+    queryFn: ({ signal }) => apiRequest<{ query: string; results: HelpSearchResult[] }>(`/help/search${queryString({ q: query })}`, { signal }),
     staleTime: STALE,
     enabled: query.length >= 2,
     placeholderData: keepPreviousData,

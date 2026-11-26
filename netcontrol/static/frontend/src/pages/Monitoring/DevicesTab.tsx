@@ -94,6 +94,11 @@ export function DevicesTab() {
           </div>
           {progress.log.length > 0 && (
             <div style={{ marginTop: '0.5rem', maxHeight: 180, overflow: 'auto', fontSize: '0.85em', fontFamily: 'monospace' }}>
+              {(progress.logDropped ?? 0) > 0 && (
+                <div className="text-muted">
+                  Showing the last {progress.log.length.toLocaleString()} hosts; {progress.logDropped?.toLocaleString()} earlier hosts are not shown.
+                </div>
+              )}
               {progress.log.map((l, i) => (
                 <div key={i}>
                   <span style={{ color: l.ok ? 'var(--success)' : 'var(--danger)' }}>{l.ok ? '✓' : '✗'}</span>{' '}

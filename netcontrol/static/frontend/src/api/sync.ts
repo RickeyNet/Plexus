@@ -177,7 +177,7 @@ function invalidateAll(qc: QueryClient) {
 export function useSyncCatalog() {
   return useQuery<SyncCatalog>({
     queryKey: SYNC_KEYS.catalog,
-    queryFn: () => detailRequest<SyncCatalog>('/sync/catalog'),
+    queryFn: ({ signal }) => detailRequest<SyncCatalog>('/sync/catalog', { signal }),
     staleTime: Infinity,
   });
 }
@@ -185,14 +185,14 @@ export function useSyncCatalog() {
 export function useSyncConnections() {
   return useQuery<SyncConnection[]>({
     queryKey: SYNC_KEYS.connections,
-    queryFn: async () => listOf<SyncConnection>(await detailRequest('/sync/connections'), 'connections'),
+    queryFn: async ({ signal }) => listOf<SyncConnection>(await detailRequest('/sync/connections', { signal }), 'connections'),
   });
 }
 
 export function useSyncJobs() {
   return useQuery<SyncJob[]>({
     queryKey: SYNC_KEYS.jobs,
-    queryFn: async () => listOf<SyncJob>(await detailRequest('/sync/jobs'), 'jobs'),
+    queryFn: async ({ signal }) => listOf<SyncJob>(await detailRequest('/sync/jobs', { signal }), 'jobs'),
     // A running job finishes in the background: poll until none runs.
     refetchInterval: (q) => (q.state.data?.some((j) => j.running) ? 3000 : false),
   });
@@ -201,8 +201,8 @@ export function useSyncJobs() {
 export function useSyncRuns(jobId: number | null) {
   return useQuery<SyncRun[]>({
     queryKey: SYNC_KEYS.runs(jobId),
-    queryFn: async () =>
-      listOf<SyncRun>(await detailRequest(`/sync/runs${queryString({ job_id: jobId ?? undefined })}`), 'runs'),
+    queryFn: async ({ signal }) =>
+      listOf<SyncRun>(await detailRequest(`/sync/runs${queryString({ job_id: jobId ?? undefined })}`, { signal }), 'runs'),
     refetchInterval: (q) => (q.state.data?.some((r) => r.status === 'running') ? 3000 : false),
   });
 }
@@ -210,7 +210,7 @@ export function useSyncRuns(jobId: number | null) {
 export function useSyncRun(id: number | null) {
   return useQuery<SyncRun>({
     queryKey: SYNC_KEYS.run(id ?? 0),
-    queryFn: () => detailRequest<SyncRun>(`/sync/runs/${id}`),
+    queryFn: ({ signal }) => detailRequest<SyncRun>(`/sync/runs/${id}`, { signal }),
     enabled: id !== null,
     // Poll a run that is still going so its outcome shows when it ends.
     refetchInterval: (q) => (q.state.data?.status === 'running' ? 2000 : false),
@@ -227,7 +227,7 @@ export interface EntryFilter {
 export function useSyncRunEntries(id: number | null, filter: EntryFilter, enabled = true) {
   return useQuery<SyncEntryPage>({
     queryKey: SYNC_KEYS.entries(id ?? 0, filter),
-    queryFn: () => detailRequest<SyncEntryPage>(`/sync/runs/${id}/entries${queryString(filter)}`),
+    queryFn: ({ signal }) => detailRequest<SyncEntryPage>(`/sync/runs/${id}/entries${queryString(filter)}`, { signal }),
     enabled: enabled && id !== null,
   });
 }

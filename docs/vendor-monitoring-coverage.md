@@ -17,7 +17,13 @@ Inventory hosts (anything added to Inventory, polled by SNMP/SSH/ICMP) go
 through the poll pipeline in `netcontrol/routes/monitoring.py`: per-poll
 availability transitions, uptime %, latency, jitter, packet loss, MTTR/MTTD,
 hourly and daily rollups in `sla_metrics`, and SLA targets evaluated on the
-server into `monitoring_alerts` and notification channels. API-collected
+server into `monitoring_alerts` and notification channels. The SSH part of
+that poll (VPN tunnels and the route count, every vendor with a command line
+alike) is read every `cli_poll_interval_seconds` (900 s by default) instead
+of every poll, and the polls between carry its last reading; a host whose
+SNMP does not answer is still read over SSH at every poll, so its up / down
+state is detected as before (`docs/monitoring.md#how-a-host-is-polled`).
+API-collected
 entities go through the topology availability tracker
 (`netcontrol/integrations/availability.py`,
 `routes/db/topology_availability.py`), which diffs every stored snapshot

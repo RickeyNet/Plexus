@@ -105,7 +105,7 @@ export const PLUGINS_QUERY_KEY = ['plugins', 'manifest'] as const;
 export function usePluginManifest(enabled = true) {
   return useQuery({
     queryKey: PLUGINS_QUERY_KEY,
-    queryFn: () => apiRequest<PluginManifest>('/plugins'),
+    queryFn: ({ signal }) => apiRequest<PluginManifest>('/plugins', { signal }),
     staleTime: 5 * 60_000,
     enabled,
   });
@@ -138,7 +138,7 @@ export function tableRows(body: unknown): Record<string, unknown>[] {
 export function usePluginTable(plugin: string, source: string) {
   return useQuery({
     queryKey: pluginTableQueryKey(plugin, source),
-    queryFn: async () => tableRows(await apiRequest<unknown>(pluginApiPath(plugin, source))),
+    queryFn: async ({ signal }) => tableRows(await apiRequest<unknown>(pluginApiPath(plugin, source), { signal })),
   });
 }
 

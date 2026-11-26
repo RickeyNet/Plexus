@@ -63,6 +63,14 @@ function button(html: string, label: string): string {
   return m?.[0] ?? '';
 }
 
+describe('GroupCard rendering', () => {
+  // The page hands every card stable callbacks and the debounced search, so
+  // a keystroke re-renders only the page, not each group.
+  it('is memoised', () => {
+    expect((GroupCard as unknown as { $$typeof: symbol }).$$typeof).toBe(Symbol.for('react.memo'));
+  });
+});
+
 describe('GroupCard write controls', () => {
   it('are enabled for a writable group', () => {
     const html = render(true, [40]);

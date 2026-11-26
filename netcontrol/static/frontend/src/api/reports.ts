@@ -35,14 +35,14 @@ export interface ReportGenerateResult {
 export function useReportRuns() {
   return useQuery<{ runs: ReportRun[] } | ReportRun[]>({
     queryKey: ['report-runs'],
-    queryFn: () => apiRequest('/reports/runs'),
+    queryFn: ({ signal }) => apiRequest('/reports/runs', { signal }),
   });
 }
 
 export function useReportRunArtifacts(runId: number | null, limit = 100) {
   return useQuery<{ artifacts: ReportArtifact[] }>({
     queryKey: ['report-run-artifacts', runId, limit],
-    queryFn: () => apiRequest(`/reports/runs/${runId}/artifacts?limit=${limit}`),
+    queryFn: ({ signal }) => apiRequest(`/reports/runs/${runId}/artifacts?limit=${limit}`, { signal }),
     enabled: runId != null,
   });
 }
@@ -172,14 +172,14 @@ export function useBillingCircuits(customer?: string, enabledOnly?: boolean) {
   const tail = qs.toString();
   return useQuery<{ circuits: BillingCircuit[] }>({
     queryKey: ['billing-circuits', customer ?? '', !!enabledOnly],
-    queryFn: () => apiRequest(`/billing/circuits${tail ? '?' + tail : ''}`),
+    queryFn: ({ signal }) => apiRequest(`/billing/circuits${tail ? '?' + tail : ''}`, { signal }),
   });
 }
 
 export function useBillingCircuit(id: number | null) {
   return useQuery<BillingCircuit>({
     queryKey: ['billing-circuit', id],
-    queryFn: () => apiRequest(`/billing/circuits/${id}`),
+    queryFn: ({ signal }) => apiRequest(`/billing/circuits/${id}`, { signal }),
     enabled: id != null,
   });
 }
@@ -187,28 +187,28 @@ export function useBillingCircuit(id: number | null) {
 export function useBillingCustomers() {
   return useQuery<{ customers: string[] }>({
     queryKey: ['billing-customers'],
-    queryFn: () => apiRequest('/billing/customers'),
+    queryFn: ({ signal }) => apiRequest('/billing/customers', { signal }),
   });
 }
 
 export function useBillingSummary(customer?: string) {
   return useQuery<BillingSummary>({
     queryKey: ['billing-summary', customer ?? ''],
-    queryFn: () => apiRequest(`/billing/summary${billingQuery(customer)}`),
+    queryFn: ({ signal }) => apiRequest(`/billing/summary${billingQuery(customer)}`, { signal }),
   });
 }
 
 export function useBillingPeriods(customer?: string) {
   return useQuery<{ periods: BillingPeriod[] }>({
     queryKey: ['billing-periods', customer ?? ''],
-    queryFn: () => apiRequest(`/billing/periods${billingQuery(customer)}`),
+    queryFn: ({ signal }) => apiRequest(`/billing/periods${billingQuery(customer)}`, { signal }),
   });
 }
 
 export function useBillingPeriodUsage(id: number | null) {
   return useQuery<BillingPeriodUsage>({
     queryKey: ['billing-period-usage', id],
-    queryFn: () => apiRequest(`/billing/periods/${id}/usage`),
+    queryFn: ({ signal }) => apiRequest(`/billing/periods/${id}/usage`, { signal }),
     enabled: id != null,
   });
 }

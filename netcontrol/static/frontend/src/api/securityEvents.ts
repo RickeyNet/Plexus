@@ -85,7 +85,7 @@ export function useSecurityEvents(filters: SecurityEventFilters) {
   const query = securityEventQuery(filters);
   return useQuery<SecurityEventList>({
     queryKey: ['security-events', query],
-    queryFn: () => apiRequest(`/monitoring/security-events?${query}`),
+    queryFn: ({ signal }) => apiRequest(`/monitoring/security-events?${query}`, { signal }),
     placeholderData: keepPreviousData,
     refetchInterval: 60_000,
   });

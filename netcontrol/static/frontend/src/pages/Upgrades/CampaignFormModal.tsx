@@ -35,7 +35,7 @@ interface Group {
 function useInventoryGroupsWithHosts() {
   return useQuery({
     queryKey: ['inventory-groups', 'with-hosts'],
-    queryFn: () => apiRequest<Group[]>('/inventory?include_hosts=true'),
+    queryFn: ({ signal }) => apiRequest<Group[]>('/inventory?include_hosts=true', { signal }),
   });
 }
 

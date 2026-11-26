@@ -453,14 +453,14 @@ export interface CredentialSummary extends ReferencedRow {
 export function useAdminCapabilities() {
   return useQuery<AdminCapabilities>({
     queryKey: ['admin', 'capabilities'],
-    queryFn: () => apiRequest('/admin/capabilities'),
+    queryFn: ({ signal }) => apiRequest('/admin/capabilities', { signal }),
   });
 }
 
 export function useAdminUsers() {
   return useQuery<AdminUser[]>({
     queryKey: ['admin', 'users'],
-    queryFn: () => apiRequest('/admin/users'),
+    queryFn: ({ signal }) => apiRequest('/admin/users', { signal }),
   });
 }
 
@@ -468,7 +468,7 @@ export function useAdminUsers() {
 export function useAccessGroups(enabled = true) {
   return useQuery<AccessGroup[]>({
     queryKey: ['admin', 'access-groups'],
-    queryFn: () => apiRequest('/admin/access-groups'),
+    queryFn: ({ signal }) => apiRequest('/admin/access-groups', { signal }),
     enabled,
   });
 }
@@ -587,7 +587,7 @@ export function useDeleteAccessGroup() {
 export function useLoginRules() {
   return useQuery<LoginRules>({
     queryKey: ['admin', 'login-rules'],
-    queryFn: () => apiRequest('/admin/login-rules'),
+    queryFn: ({ signal }) => apiRequest('/admin/login-rules', { signal }),
   });
 }
 
@@ -605,7 +605,7 @@ export function useUpdateLoginRules() {
 export function useAuthConfig() {
   return useQuery<AuthConfig>({
     queryKey: ['admin', 'auth-config'],
-    queryFn: () => apiRequest('/admin/auth-config'),
+    queryFn: ({ signal }) => apiRequest('/admin/auth-config', { signal }),
   });
 }
 
@@ -632,7 +632,7 @@ export function useTestOidcConnection() {
 export function useSamlSpInfo() {
   return useQuery<SamlSpInfo>({
     queryKey: ['admin', 'auth-config', 'saml-sp'],
-    queryFn: () => apiRequest('/admin/auth-config/saml/sp'),
+    queryFn: ({ signal }) => apiRequest('/admin/auth-config/saml/sp', { signal }),
   });
 }
 
@@ -651,7 +651,7 @@ export function useImportSamlMetadata() {
 export function useSyslogConfig() {
   return useQuery<SyslogConfig>({
     queryKey: ['admin', 'syslog-config'],
-    queryFn: () => apiRequest('/admin/syslog-config'),
+    queryFn: ({ signal }) => apiRequest('/admin/syslog-config', { signal }),
   });
 }
 
@@ -718,7 +718,7 @@ export interface SiemSinksResponse {
 export function useSiemSinks() {
   return useQuery<SiemSinksResponse>({
     queryKey: ['admin', 'siem-sinks'],
-    queryFn: () => apiRequest('/admin/siem-sinks'),
+    queryFn: ({ signal }) => apiRequest('/admin/siem-sinks', { signal }),
     // Only polls while the SIEM settings tab is mounted. 15s keeps delivery
     // stats reasonably live for an admin watching a queue drain without
     // hammering the endpoint.
@@ -833,7 +833,7 @@ export interface NotificationChannelsResponse {
 export function useNotificationChannels(enabled = true, live = true) {
   return useQuery<NotificationChannelsResponse>({
     queryKey: ['admin', 'notification-channels'],
-    queryFn: () => apiRequest('/admin/notification-channels'),
+    queryFn: ({ signal }) => apiRequest('/admin/notification-channels', { signal }),
     // Keep delivery stats reasonably live while the tab is mounted.
     refetchInterval: live ? 15_000 : false,
     enabled,
@@ -917,7 +917,7 @@ export function useUpdateFeatureVisibility() {
 export function useTopologyDiscoveryConfig() {
   return useQuery<TopologyDiscoveryConfig>({
     queryKey: ['admin', 'topology-discovery'],
-    queryFn: () => apiRequest('/admin/topology-discovery'),
+    queryFn: ({ signal }) => apiRequest('/admin/topology-discovery', { signal }),
   });
 }
 
@@ -947,7 +947,7 @@ export function useRunTopologyDiscovery() {
 export function useStpDiscoveryConfig() {
   return useQuery<StpDiscoveryConfig>({
     queryKey: ['admin', 'topology-stp-discovery'],
-    queryFn: () => apiRequest('/admin/topology-stp-discovery'),
+    queryFn: ({ signal }) => apiRequest('/admin/topology-stp-discovery', { signal }),
   });
 }
 
@@ -976,8 +976,8 @@ export function useRunStpDiscovery() {
 export function useStpRootPolicies() {
   return useQuery<{ policies: StpRootPolicy[] }>({
     queryKey: ['admin', 'topology-stp-root-policies'],
-    queryFn: () =>
-      apiRequest('/admin/topology-stp-root-policies?limit=2000'),
+    queryFn: ({ signal }) =>
+      apiRequest('/admin/topology-stp-root-policies?limit=2000', { signal }),
   });
 }
 
@@ -1011,7 +1011,7 @@ export function useDeleteStpRootPolicy() {
 export function useMonitoringConfig() {
   return useQuery<MonitoringConfig>({
     queryKey: ['admin', 'monitoring'],
-    queryFn: () => apiRequest('/admin/monitoring'),
+    queryFn: ({ signal }) => apiRequest('/admin/monitoring', { signal }),
   });
 }
 
@@ -1038,7 +1038,7 @@ export function useRunMonitoringPoll() {
 export function useFlowCollectorConfig() {
   return useQuery<FlowCollectorConfig>({
     queryKey: ['admin', 'flows', 'config'],
-    queryFn: () => apiRequest('/admin/flows/config'),
+    queryFn: ({ signal }) => apiRequest('/admin/flows/config', { signal }),
   });
 }
 
@@ -1059,7 +1059,7 @@ export function useUpdateFlowCollectorConfig() {
 export function useEventReceiverConfig() {
   return useQuery<EventReceiverConfig>({
     queryKey: ['admin', 'event-receivers', 'config'],
-    queryFn: () => apiRequest('/admin/metrics/receivers/config'),
+    queryFn: ({ signal }) => apiRequest('/admin/metrics/receivers/config', { signal }),
     // Keeps the running state and counters current while the tab is open.
     refetchInterval: 15_000,
   });
@@ -1124,7 +1124,7 @@ const SYSLOG_TLS_KEY = ['admin', 'event-receivers', 'tls'];
 export function useSyslogTls() {
   return useQuery<SyslogTlsState>({
     queryKey: SYSLOG_TLS_KEY,
-    queryFn: () => apiRequest(SYSLOG_TLS_PATH),
+    queryFn: ({ signal }) => apiRequest(SYSLOG_TLS_PATH, { signal }),
   });
 }
 
@@ -1209,7 +1209,7 @@ export interface McpTokenCreated {
 export function useMcpSettings() {
   return useQuery<McpSettings>({
     queryKey: ['admin', 'mcp', 'settings'],
-    queryFn: () => apiRequest('/admin/mcp/settings'),
+    queryFn: ({ signal }) => apiRequest('/admin/mcp/settings', { signal }),
   });
 }
 
@@ -1225,7 +1225,7 @@ export function useUpdateMcpSettings() {
 export function useMcpTokens() {
   return useQuery<McpTokenList>({
     queryKey: ['admin', 'mcp', 'tokens'],
-    queryFn: () => apiRequest('/admin/mcp/tokens'),
+    queryFn: ({ signal }) => apiRequest('/admin/mcp/tokens', { signal }),
   });
 }
 
@@ -1251,14 +1251,14 @@ export function useRevokeMcpToken() {
 export function useInventoryGroupsList() {
   return useQuery<InventoryGroupSummary[]>({
     queryKey: ['inventory', 'groups-list'],
-    queryFn: () => apiRequest('/inventory'),
+    queryFn: ({ signal }) => apiRequest('/inventory', { signal }),
   });
 }
 
 export function useCredentialsList() {
   return useQuery<CredentialSummary[]>({
     queryKey: ['credentials', 'list'],
-    queryFn: () => apiRequest('/credentials'),
+    queryFn: ({ signal }) => apiRequest('/credentials', { signal }),
   });
 }
 
@@ -1283,7 +1283,7 @@ export interface ServiceCredentialUpdatePayload {
 export function useServiceCredentialsList(enabled = true) {
   return useQuery<CredentialSummary[]>({
     queryKey: ['credentials', 'service'],
-    queryFn: () => apiRequest('/credentials/service'),
+    queryFn: ({ signal }) => apiRequest('/credentials/service', { signal }),
     // The endpoint is admin-only; non-admin callers pass enabled=false so
     // the query never fires (and never retries a guaranteed 403).
     enabled,
@@ -1344,7 +1344,7 @@ export interface ScopeModelInfo {
 export function useObjectScopeModels(enabled = true) {
   return useQuery<ScopeModelInfo[]>({
     queryKey: ['admin', 'object-scope-models'],
-    queryFn: () => apiRequest('/admin/object-scope/models'),
+    queryFn: ({ signal }) => apiRequest('/admin/object-scope/models', { signal }),
     enabled,
     staleTime: Infinity,
   });
@@ -1353,7 +1353,7 @@ export function useObjectScopeModels(enabled = true) {
 export function useAccessGroupScopeRules(groupId: number | null) {
   return useQuery<ScopeRule[]>({
     queryKey: ['admin', 'access-groups', groupId, 'scope-rules'],
-    queryFn: () => apiRequest(`/admin/access-groups/${groupId}/scope-rules`),
+    queryFn: ({ signal }) => apiRequest(`/admin/access-groups/${groupId}/scope-rules`, { signal }),
     enabled: groupId != null,
   });
 }

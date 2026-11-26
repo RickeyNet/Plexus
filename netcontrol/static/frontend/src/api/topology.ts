@@ -207,14 +207,14 @@ export function useTopology(groupId?: number | string | null) {
   const params = groupId ? `?group_id=${groupId}` : '';
   return useQuery<TopologyData>({
     queryKey: ['topology', groupId ?? null],
-    queryFn: () => apiRequest(`/topology${params}`),
+    queryFn: ({ signal }) => apiRequest(`/topology${params}`, { signal }),
   });
 }
 
 export function useTopologyPositions() {
   return useQuery<TopologyPositions>({
     queryKey: ['topology-positions'],
-    queryFn: () => apiRequest('/topology/positions'),
+    queryFn: ({ signal }) => apiRequest('/topology/positions', { signal }),
   });
 }
 
@@ -461,7 +461,7 @@ export function openUtilizationStream(
 export function useInventoryGroupsLite() {
   return useQuery<InventoryGroupLite[]>({
     queryKey: ['inventory-groups'],
-    queryFn: () => apiRequest('/inventory'),
+    queryFn: ({ signal }) => apiRequest('/inventory', { signal }),
   });
 }
 
@@ -487,7 +487,7 @@ export interface TopologyOverlayStatus {
 export function useTopologyOverlayStatus(enabled = true) {
   return useQuery<TopologyOverlayStatus>({
     queryKey: ['topology', 'overlay', 'status'],
-    queryFn: () => apiRequest('/topology/overlay/status'),
+    queryFn: ({ signal }) => apiRequest('/topology/overlay/status', { signal }),
     enabled,
     refetchInterval: enabled ? 60_000 : false,
   });

@@ -17,9 +17,9 @@ import json
 import random
 import re
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterable
 from datetime import UTC, datetime, timedelta
-from typing import Literal
+from typing import Any, Literal
 
 import routes.database as db
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -29,6 +29,7 @@ from pydantic import BaseModel, Field
 import netcontrol.routes.state as state
 from netcontrol import device_restart, ha_health, hardware_components, health_checks, monitoring_repoll, snmp_health
 from netcontrol.drivers import supports_cli
+from netcontrol.executors import run_long_blocking
 from netcontrol.integrations.apc import snmp as apc_snmp
 from netcontrol.integrations.availability import ENTITY_TYPES as TOPOLOGY_ENTITY_TYPES
 from netcontrol.integrations.opnsense import health as opnsense_health
@@ -72,6 +73,7 @@ from netcontrol.routes.snmp import (
     PYSMNP_AVAILABLE,
     SNMP_TIMEOUT_ERROR,
     SnmpEngine,
+    _resolve_snmp_secrets,
     _snmp_get_values,
     _snmp_walk,
     by_last_index,
@@ -163,6 +165,54 @@ async def _track_availability_from_poll(
 # has elapsed; the cheap summary runs every tick.
 _ROUTE_POLL_STATE: dict[int, tuple[float, int | None]] = {}
 
+# Per-host CLI (SSH) cadence state: host_id -> (monotonic ts of the last
+# successful CLI read, its VPN and route fields of the poll result). The CLI
+# part runs every cli_poll_interval_seconds; the polls between carry these
+# fields forward, so a tunnel or route never seems to vanish (and fire or
+# clear an alert) because the CLI was not read. In memory: the first poll
+# after a restart reads it.
+_CLI_POLL_STATE: dict[int, tuple[float, dict[str, Any]]] = {}
+_CLI_RESULT_KEYS = ("vpn_tunnels_up", "vpn_tunnels_down", "vpn_details", "route_count")
+
+
+def _cli_poll_due(host_id: int, now: float) -> bool:
+    """Whether a poll of the host reads the CLI part now: never read, or
+    read ``cli_poll_interval_seconds`` ago (never less than the poll
+    interval). Half a poll interval early counts, since a host is polled a
+    little earlier or later in each sweep and an exact comparison would put
+    the read off by a whole poll."""
+    last = _CLI_POLL_STATE.get(host_id)
+    if last is None:
+        return True
+    config = state.MONITORING_CONFIG
+    poll_interval = float(config.get("interval_seconds", state.MONITORING_DEFAULTS["interval_seconds"]))
+    cli_interval = max(
+        poll_interval,
+        float(config.get("cli_poll_interval_seconds", state.MONITORING_DEFAULTS["cli_poll_interval_seconds"])),
+    )
+    return now - last[0] >= cli_interval - poll_interval / 2
+
+
+def _carry_cli_result(host_id: int, result: dict) -> None:
+    """Fill the VPN and route fields of a poll that skipped the CLI part
+    from the last CLI read (a part since switched off is not carried)."""
+    _taken, fields = _CLI_POLL_STATE[host_id]
+    config = state.MONITORING_CONFIG
+    if config.get("collect_vpn", True):
+        result["vpn_tunnels_up"] = fields["vpn_tunnels_up"]
+        result["vpn_tunnels_down"] = fields["vpn_tunnels_down"]
+        result["vpn_details"] = [dict(row) for row in fields["vpn_details"]]
+    if config.get("collect_routes", True):
+        # The count only: the snapshot is stored when it is read.
+        result["route_count"] = fields["route_count"]
+
+
+def _cli_poll_reset(host_ids: Iterable[int]) -> None:
+    """Make the CLI part of these hosts due (a manual poll reads it)."""
+    for host_id in host_ids:
+        _CLI_POLL_STATE.pop(host_id, None)
+
+
 # Exponential backoff for hosts whose polls raise or time out. Such hosts
 # produce no poll row or availability transition anyway, but each attempt
 # holds a semaphore slot and an executor thread for the full per-host timeout;
@@ -245,20 +295,24 @@ async def _poll_host_monitoring(host: dict, cred: dict, snmp_cfg: dict) -> dict:
     # as ping-only, so issuing v3 walks against them would just produce a
     # cycle of timeouts and noisy log lines.
     is_icmp_only_host = host.get("device_type") == "icmp_only"
-    # The one SNMP engine of a UPS poll (below), closed when the poll ends.
+    # The one SNMP engine of this poll (below), closed when the poll ends.
     snmp_engine = None
     if PYSMNP_AVAILABLE and snmp_cfg.get("enabled") and not is_icmp_only_host:
         try:
             from netcontrol.routes.metrics_engine import resolve_oids_for_device
 
             device_type = host.get("device_type", "cisco_ios")
+            # Every request of the poll goes through one engine: building one
+            # costs about 90 ms of CPU on the event loop, and an SNMPv3 device
+            # is discovered once instead of once per walk. Never shared with
+            # another device. The secrets are resolved once for all of them.
+            snmp_engine = SnmpEngine()
+            snmp_cfg = await _resolve_snmp_secrets(snmp_cfg)
             # An APC card's SNMP agent is small: it answers SNMPv3 slowly and
-            # holds few requests. The walks below, sent together and each an
-            # SNMP session of its own (an engine discovery apiece), lose
-            # requests on it, and the UPS state with them. A UPS is polled in
-            # one session, a request at a time.
-            if device_type == apc_snmp.STATUS_KIND:
-                snmp_engine = SnmpEngine()
+            # holds few requests, and loses some of the walks below when they
+            # are sent together, and the UPS state with them. A UPS is asked
+            # one request at a time.
+            one_at_a_time = device_type == apc_snmp.STATUS_KIND
             snmp_turn = asyncio.Lock()
             snmp_errors: list[str] = []
 
@@ -274,8 +328,8 @@ async def _poll_host_monitoring(host: dict, cred: dict, snmp_cfg: dict) -> dict:
                     return values
 
             async def _walk(oid: str) -> dict:
-                if snmp_engine is None:
-                    return await _snmp_walk(host["ip_address"], 5.0, snmp_cfg, oid)
+                if not one_at_a_time:
+                    return await _snmp_walk(host["ip_address"], 5.0, snmp_cfg, oid, engine=snmp_engine)
                 return await _in_turn(
                     lambda: _snmp_walk(host["ip_address"], 5.0, snmp_cfg, oid, return_errors=True, engine=snmp_engine)
                 )
@@ -285,9 +339,9 @@ async def _poll_host_monitoring(host: dict, cred: dict, snmp_cfg: dict) -> dict:
                 a timeout, or by the row cap (the walk stops there without an
                 error), must not read as rows that left it. ``cap``: the
                 health walks' cap, or a reader's own (hardware components)."""
-                if snmp_engine is None:
+                if not one_at_a_time:
                     rows, error = await _snmp_walk(
-                        host["ip_address"], 5.0, snmp_cfg, oid, max_rows=cap, return_errors=True
+                        host["ip_address"], 5.0, snmp_cfg, oid, max_rows=cap, return_errors=True, engine=snmp_engine
                     )
                 else:
                     errors_before = len(snmp_errors)
@@ -572,8 +626,16 @@ async def _poll_host_monitoring(host: dict, cred: dict, snmp_cfg: dict) -> dict:
 
     # ── SSH polling for VPN and routes ──
     # Not for a host that is only pinged, nor for a platform with no command
-    # line (an Aruba Instant On switch): it is polled over SNMP alone.
-    if cred and supports_cli(host.get("device_type")):
+    # line (an Aruba Instant On switch): it is polled over SNMP alone. Read
+    # every cli_poll_interval_seconds, not every poll (_cli_poll_due); between
+    # reads the last one is carried forward. A host whose SNMP did not answer
+    # is read every poll: the SSH session is then all that marks it up or down.
+    cli_host = bool(cred) and supports_cli(host.get("device_type"))
+    snmp_answered = result["cpu_percent"] is not None or result["if_up_count"] > 0
+    cli_now = time.monotonic()
+    if cli_host and snmp_answered and not _cli_poll_due(host["id"], cli_now):
+        _carry_cli_result(host["id"], result)
+    elif cli_host:
         try:
 
             def _ssh_poll():
@@ -653,7 +715,9 @@ async def _poll_host_monitoring(host: dict, cred: dict, snmp_cfg: dict) -> dict:
                     except Exception:
                         pass
 
-            ssh_outputs = await asyncio.to_thread(_ssh_poll)
+            # A session can hold its thread for the whole per-host timeout:
+            # the dedicated pool, not the one logins and short calls share.
+            ssh_outputs = await run_long_blocking("ssh", _ssh_poll)
 
             # Parse VPN output
             vpn_text = ssh_outputs.get("vpn", "")
@@ -695,8 +759,11 @@ async def _poll_host_monitoring(host: dict, cred: dict, snmp_cfg: dict) -> dict:
                 str(ssh_outputs.get("routes_vrf") or ""),
                 ssh_outputs.get("route_summary_count"),
             )
+            _CLI_POLL_STATE[host["id"]] = (cli_now, {key: result[key] for key in _CLI_RESULT_KEYS})
 
         except Exception as exc:
+            # The next poll reads again; nothing stale is carried meanwhile.
+            _CLI_POLL_STATE.pop(host["id"], None)
             LOGGER.warning(
                 "monitoring: SSH poll failed for %s: %s",
                 host.get("hostname", host["ip_address"]),
@@ -1361,6 +1428,9 @@ async def _run_monitoring_poll_once(*, force: bool = False, host_ids: frozenset[
             backed_off += 1
             continue
         targets.append((h, cred, snmp_cfg))
+    if force:
+        # A manual poll (or a re-poll after a trap) reads the CLI part too.
+        _cli_poll_reset(int(h["id"]) for h, _cred, _cfg in targets)
 
     tasks = [asyncio.create_task(_poll_target(h, c, s, sem, poll_timeout)) for h, c, s in targets]
 
@@ -1977,6 +2047,7 @@ async def monitoring_poll_now_stream(request: Request):
         sem = asyncio.Semaphore(max_concurrency)
 
         poll_timeout = float(state.MONITORING_CONFIG.get("per_host_timeout_seconds", 90))
+        _cli_poll_reset(int(h["id"]) for h, _cred, _cfg in all_hosts)
 
         # A client disconnect lands GeneratorExit at a yield below: fan_out
         # then cancels the outstanding polls instead of letting the whole

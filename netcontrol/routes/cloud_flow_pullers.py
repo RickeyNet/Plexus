@@ -19,6 +19,20 @@ from typing import Any
 
 import routes.database as db
 
+from netcontrol.cloud_sdk import (
+    EXPIRED_CREDENTIAL_CODES,
+    AwsAccountClients,
+    aws_account,
+    aws_error_code,
+    aws_sdk_errors,
+    boto3_client_config,
+    build_boto3_session,
+    cached_sdk_client,
+    forget_account,
+    region_client,
+    sdk_available,
+)
+from netcontrol.executors import run_long_blocking
 from netcontrol.routes.cloud_collectors import _aws_enabled_regions, _is_all_regions
 from netcontrol.routes.cloud_visibility import (
     _FLOW_TYPE_BY_PROVIDER,
@@ -54,14 +68,10 @@ def _account_lock(account_id: int) -> asyncio.Lock:
     return lock
 
 
-def _boto3_client_config():
-    from botocore.config import Config
+_boto3_client_config = boto3_client_config
 
-    return Config(
-        connect_timeout=10,
-        read_timeout=60,
-        retries={"max_attempts": 4, "mode": "adaptive"},
-    )
+# This puller's name in the shared SDK client cache (``netcontrol.cloud_sdk``).
+_SDK_PURPOSE = "flow"
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -148,15 +158,13 @@ async def pull_aws_flow_logs(account: dict, *, lookback_minutes: int = _DEFAULT_
         return {"ok": False, "error": "missing_log_group_name", "ingested": 0}
 
     try:
-        import boto3
-        from botocore.exceptions import BotoCoreError, ClientError
+        BotoCoreError, ClientError = await asyncio.to_thread(aws_sdk_errors)
     except ImportError:
         return {"ok": False, "error": "boto3_not_installed", "ingested": 0}
 
-    import asyncio
-
-    # Session build may call sts.assume_role (blocking network I/O)
-    session = await asyncio.to_thread(_build_boto3_session, auth)
+    # The session build may call sts.assume_role (blocking network I/O); it
+    # is cached per account, and its clients per region.
+    session = await asyncio.to_thread(_aws_account, account_id, auth)
     try:
         regions = await asyncio.to_thread(_resolve_regions, account, session)
     except Exception:
@@ -184,7 +192,7 @@ async def pull_aws_flow_logs(account: dict, *, lookback_minutes: int = _DEFAULT_
         if region_start >= end_dt:
             continue
         try:
-            client = session.client("logs", region_name=region, config=_boto3_client_config())
+            client = await asyncio.to_thread(region_client, session, "logs", region)
             records, truncated = await _cw_insights_query(
                 client,
                 log_group,
@@ -209,6 +217,8 @@ async def pull_aws_flow_logs(account: dict, *, lookback_minutes: int = _DEFAULT_
             if all_regions and _aws_error_code(exc) == "ResourceNotFoundException":
                 without_log_group.append(region)
                 continue
+            if _aws_error_code(exc) in EXPIRED_CREDENTIAL_CODES:
+                forget_account(_SDK_PURPOSE, account_id)
             msg = f"AWS flow pull failed region={region}: {type(exc).__name__}"
             LOGGER.warning(msg)
             errors.append(msg)
@@ -243,52 +253,17 @@ async def pull_aws_flow_logs(account: dict, *, lookback_minutes: int = _DEFAULT_
     }
 
 
-def _aws_error_code(exc: Exception) -> str:
-    response = getattr(exc, "response", None)
-    error = response.get("Error") if isinstance(response, dict) else None
-    return str(error.get("Code") or "") if isinstance(error, dict) else ""
+_aws_error_code = aws_error_code
 
 
-def _build_boto3_session(auth: dict):
-    import boto3
+def _build_boto3_session(auth: dict) -> Any:
+    return build_boto3_session(auth, role_session_name="plexus-flow-puller")
 
-    kwargs: dict[str, Any] = {}
-    if auth.get("profile_name"):
-        kwargs["profile_name"] = str(auth["profile_name"])
-    if auth.get("access_key_id"):
-        kwargs["aws_access_key_id"] = str(auth["access_key_id"])
-    if auth.get("secret_access_key"):
-        kwargs["aws_secret_access_key"] = str(auth["secret_access_key"])
-    if auth.get("session_token"):
-        kwargs["aws_session_token"] = str(auth["session_token"])
-    session = boto3.Session(**kwargs)
 
-    role_arn = str(auth.get("role_arn") or "").strip()
-    if role_arn:
-        from botocore.config import Config
-
-        sts = session.client(
-            "sts",
-            config=Config(
-                connect_timeout=10,
-                read_timeout=30,
-                retries={"max_attempts": 2},
-            ),
-        )
-        assume_args: dict[str, str] = {
-            "RoleArn": role_arn,
-            "RoleSessionName": str(auth.get("role_session_name") or "plexus-flow-puller"),
-        }
-        external_id = str(auth.get("external_id") or "").strip()
-        if external_id:
-            assume_args["ExternalId"] = external_id
-        creds = sts.assume_role(**assume_args)["Credentials"]
-        session = boto3.Session(
-            aws_access_key_id=creds["AccessKeyId"],
-            aws_secret_access_key=creds["SecretAccessKey"],
-            aws_session_token=creds["SessionToken"],
-        )
-    return session
+def _aws_account(account_id: int, auth: dict) -> AwsAccountClients:
+    """This puller's cached session of the account (``cloud_sdk.aws_account``).
+    Blocks: call it in a worker thread."""
+    return aws_account(_SDK_PURPOSE, account_id, auth, _build_boto3_session)
 
 
 async def _cw_insights_query(
@@ -302,11 +277,10 @@ async def _cw_insights_query(
     Returns ``(records, truncated)``. Raises on query failure or timeout so
     the caller can keep the watermark and retry the window.
 
-    This is executed in the calling event loop via ``asyncio.to_thread``
-    because the boto3 SDK is synchronous.
+    The boto3 SDK is synchronous and the query is waited on for up to a
+    minute, so it runs on the dedicated ``cloud`` pool
+    (``netcontrol.executors``), not the default one logins share.
     """
-    import asyncio
-
     query = (
         "fields @timestamp, srcAddr, dstAddr, srcPort, dstPort, protocol, "
         "bytes, packets, action, flowDirection, interfaceId, vpcId, subnetId "
@@ -371,7 +345,7 @@ async def _cw_insights_query(
             rows.append(mapped)
         return rows, len(rows) >= _MAX_RECORDS_PER_PULL
 
-    return await asyncio.to_thread(_run)
+    return await run_long_blocking("cloud", _run)
 
 
 def _parse_insights_timestamp(value) -> datetime | None:
@@ -417,9 +391,7 @@ async def pull_azure_flow_logs(account: dict, *, lookback_minutes: int = _DEFAUL
     if not storage_account or not container:
         return {"ok": False, "error": "missing_storage_config", "ingested": 0}
 
-    try:
-        from azure.storage.blob import BlobServiceClient
-    except ImportError:
+    if not await asyncio.to_thread(sdk_available, "azure.storage.blob"):
         return {"ok": False, "error": "azure_storage_blob_not_installed", "ingested": 0}
 
     cursor = await _get_cursor(account_id)
@@ -430,20 +402,17 @@ async def pull_azure_flow_logs(account: dict, *, lookback_minutes: int = _DEFAUL
     warnings: list[str] = []
 
     try:
-        blob_client = _build_azure_blob_client(auth, storage_account)
+        # Built (credential chain included) in a thread, once per account.
+        blob_client = await asyncio.to_thread(
+            cached_sdk_client,
+            _SDK_PURPOSE,
+            account_id,
+            auth,
+            lambda: _build_azure_blob_client(auth, storage_account),
+            builder=_build_azure_blob_client,
+        )
         container_client = blob_client.get_container_client(container)
-
-        async def _list_and_read():
-            import asyncio
-
-            return await asyncio.to_thread(
-                _read_azure_blobs,
-                container_client,
-                start_dt,
-                end_dt,
-            )
-
-        records, truncated = await _list_and_read()
+        records, truncated = await asyncio.to_thread(_read_azure_blobs, container_client, start_dt, end_dt)
         if truncated:
             warnings.append(f"results truncated at {_MAX_RECORDS_PER_PULL}")
 
@@ -622,9 +591,7 @@ async def pull_gcp_flow_logs(account: dict, *, lookback_minutes: int = _DEFAULT_
     if not project_id:
         return {"ok": False, "error": "missing_project_id", "ingested": 0}
 
-    try:
-        from google.cloud import logging as gcp_logging
-    except ImportError:
+    if not await asyncio.to_thread(sdk_available, "google.cloud.logging"):
         return {"ok": False, "error": "google_cloud_logging_not_installed", "ingested": 0}
 
     cursor = await _get_cursor(account_id)
@@ -635,7 +602,14 @@ async def pull_gcp_flow_logs(account: dict, *, lookback_minutes: int = _DEFAULT_
     warnings: list[str] = []
 
     try:
-        client = _build_gcp_logging_client(auth, project_id)
+        client = await asyncio.to_thread(
+            cached_sdk_client,
+            _SDK_PURPOSE,
+            account_id,
+            auth,
+            lambda: _build_gcp_logging_client(auth, project_id),
+            builder=_build_gcp_logging_client,
+        )
         records = await _gcp_logging_query(client, project_id, start_dt, end_dt)
         if len(records) >= _MAX_RECORDS_PER_PULL:
             warnings.append(f"results truncated at {_MAX_RECORDS_PER_PULL}")

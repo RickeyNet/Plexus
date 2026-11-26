@@ -136,14 +136,14 @@ export interface HostGraph {
 export function useGraphTemplates() {
   return useQuery<{ graph_templates: GraphTemplate[] }>({
     queryKey: ['graph-templates'],
-    queryFn: () => apiRequest('/graph-templates'),
+    queryFn: ({ signal }) => apiRequest('/graph-templates', { signal }),
   });
 }
 
 export function useGraphTemplate(id: number | null) {
   return useQuery<GraphTemplate>({
     queryKey: ['graph-template', id],
-    queryFn: () => apiRequest(`/graph-templates/${id}`),
+    queryFn: ({ signal }) => apiRequest(`/graph-templates/${id}`, { signal }),
     enabled: id != null,
   });
 }
@@ -226,14 +226,14 @@ export function useDeleteGraphTemplateItem() {
 export function useHostTemplates() {
   return useQuery<{ host_templates: HostTemplate[] }>({
     queryKey: ['host-templates'],
-    queryFn: () => apiRequest('/host-templates'),
+    queryFn: ({ signal }) => apiRequest('/host-templates', { signal }),
   });
 }
 
 export function useHostTemplate(id: number | null) {
   return useQuery<HostTemplate>({
     queryKey: ['host-template', id],
-    queryFn: () => apiRequest(`/host-templates/${id}`),
+    queryFn: ({ signal }) => apiRequest(`/host-templates/${id}`, { signal }),
     enabled: id != null,
   });
 }
@@ -301,7 +301,7 @@ export function useUnlinkHostTemplateGraph() {
 export function useHostGraphs(hostId: number | null) {
   return useQuery<{ host_graphs: HostGraph[] }>({
     queryKey: ['host-graphs', hostId],
-    queryFn: () => apiRequest(`/host-graphs?host_id=${hostId}`),
+    queryFn: ({ signal }) => apiRequest(`/host-graphs?host_id=${hostId}`, { signal }),
     enabled: hostId != null,
   });
 }
@@ -311,14 +311,14 @@ export function useHostGraphs(hostId: number | null) {
 export function useGraphTrees() {
   return useQuery<{ graph_trees: GraphTree[] }>({
     queryKey: ['graph-trees'],
-    queryFn: () => apiRequest('/graph-trees'),
+    queryFn: ({ signal }) => apiRequest('/graph-trees', { signal }),
   });
 }
 
 export function useGraphTree(id: number | null) {
   return useQuery<GraphTree>({
     queryKey: ['graph-tree', id],
-    queryFn: () => apiRequest(`/graph-trees/${id}`),
+    queryFn: ({ signal }) => apiRequest(`/graph-trees/${id}`, { signal }),
     enabled: id != null,
   });
 }

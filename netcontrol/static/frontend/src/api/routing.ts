@@ -255,15 +255,15 @@ const BASE = '/routing';
 export function useAutonomousSystems(search = '') {
   return useQuery<AutonomousSystem[]>({
     queryKey: ROUTING_KEYS.ases(search),
-    queryFn: async () =>
-      listOf<AutonomousSystem>(await detailRequest(`${BASE}/autonomous-systems${queryString({ search })}`), 'autonomous_systems'),
+    queryFn: async ({ signal }) =>
+      listOf<AutonomousSystem>(await detailRequest(`${BASE}/autonomous-systems${queryString({ search })}`, { signal }), 'autonomous_systems'),
   });
 }
 
 export function useAutonomousSystem(id: number | null) {
   return useQuery<AutonomousSystemDetail>({
     queryKey: ROUTING_KEYS.as(id ?? 0),
-    queryFn: () => detailRequest<AutonomousSystemDetail>(`${BASE}/autonomous-systems/${id}`),
+    queryFn: ({ signal }) => detailRequest<AutonomousSystemDetail>(`${BASE}/autonomous-systems/${id}`, { signal }),
     enabled: id !== null,
   });
 }
@@ -271,7 +271,7 @@ export function useAutonomousSystem(id: number | null) {
 export function useRoutingInstances(filter: InstanceFilter = {}, enabled = true) {
   return useQuery<RoutingInstance[]>({
     queryKey: ROUTING_KEYS.instances(filter),
-    queryFn: async () => listOf<RoutingInstance>(await detailRequest(`${BASE}/instances${queryString(filter)}`), 'routing_instances'),
+    queryFn: async ({ signal }) => listOf<RoutingInstance>(await detailRequest(`${BASE}/instances${queryString(filter)}`, { signal }), 'routing_instances'),
     enabled,
   });
 }
@@ -279,7 +279,7 @@ export function useRoutingInstances(filter: InstanceFilter = {}, enabled = true)
 export function useRoutingInstance(id: number | null) {
   return useQuery<RoutingInstanceDetail>({
     queryKey: ROUTING_KEYS.instance(id ?? 0),
-    queryFn: () => detailRequest<RoutingInstanceDetail>(`${BASE}/instances/${id}`),
+    queryFn: ({ signal }) => detailRequest<RoutingInstanceDetail>(`${BASE}/instances/${id}`, { signal }),
     enabled: id !== null,
   });
 }
@@ -287,14 +287,14 @@ export function useRoutingInstance(id: number | null) {
 export function useBgpPeerGroups(filter: { host_id?: number | null; search?: string } = {}) {
   return useQuery<BgpPeerGroup[]>({
     queryKey: ROUTING_KEYS.peerGroups(filter),
-    queryFn: async () => listOf<BgpPeerGroup>(await detailRequest(`${BASE}/peer-groups${queryString(filter)}`), 'peer_groups'),
+    queryFn: async ({ signal }) => listOf<BgpPeerGroup>(await detailRequest(`${BASE}/peer-groups${queryString(filter)}`, { signal }), 'peer_groups'),
   });
 }
 
 export function useBgpPeerings(filter: PeeringFilter = {}, enabled = true) {
   return useQuery<BgpPeering[]>({
     queryKey: ROUTING_KEYS.peerings(filter),
-    queryFn: async () => listOf<BgpPeering>(await detailRequest(`${BASE}/peerings${queryString(filter)}`), 'peerings'),
+    queryFn: async ({ signal }) => listOf<BgpPeering>(await detailRequest(`${BASE}/peerings${queryString(filter)}`, { signal }), 'peerings'),
     enabled,
   });
 }
@@ -302,7 +302,7 @@ export function useBgpPeerings(filter: PeeringFilter = {}, enabled = true) {
 export function useBgpPeering(id: number | null) {
   return useQuery<BgpPeering>({
     queryKey: ROUTING_KEYS.peering(id ?? 0),
-    queryFn: () => detailRequest<BgpPeering>(`${BASE}/peerings/${id}`),
+    queryFn: ({ signal }) => detailRequest<BgpPeering>(`${BASE}/peerings/${id}`, { signal }),
     enabled: id !== null,
   });
 }
@@ -311,7 +311,7 @@ export function useBgpPeering(id: number | null) {
 export function useRoutingCompliance(hostId: number | null, enabled = true) {
   return useQuery<ComplianceReport>({
     queryKey: ROUTING_KEYS.compliance(hostId),
-    queryFn: () => detailRequest<ComplianceReport>(`${BASE}/compliance${queryString({ host_id: hostId })}`),
+    queryFn: ({ signal }) => detailRequest<ComplianceReport>(`${BASE}/compliance${queryString({ host_id: hostId })}`, { signal }),
     enabled,
   });
 }
@@ -319,7 +319,7 @@ export function useRoutingCompliance(hostId: number | null, enabled = true) {
 export function useRoutingSuggestions(hostId: number | null) {
   return useQuery<Suggestions>({
     queryKey: ROUTING_KEYS.suggestions(hostId ?? 0),
-    queryFn: () => detailRequest<Suggestions>(`${BASE}/suggestions${queryString({ host_id: hostId })}`),
+    queryFn: ({ signal }) => detailRequest<Suggestions>(`${BASE}/suggestions${queryString({ host_id: hostId })}`, { signal }),
     enabled: hostId !== null,
   });
 }

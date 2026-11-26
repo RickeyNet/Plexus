@@ -35,12 +35,13 @@ __all__ = [
     "create_metric_rollup",
     "create_metric_rollups_batch",
     "query_metric_rollups",
-    "get_raw_samples_for_rollup",
+    "rollup_metric_samples",
     "delete_old_metric_rollups",
     "create_interface_ts_sample",
     "create_interface_ts_batch",
     "get_top_interfaces_by_bandwidth",
     "query_interface_ts",
+    "query_interface_ts_series",
     "query_interface_ts_multi",
     "delete_old_interface_ts",
     "get_interface_error_stats_for_host",
@@ -291,23 +292,65 @@ async def query_metric_rollups(
         await db.close()
 
 
-async def get_raw_samples_for_rollup(
-    metric_name: str,
+async def rollup_metric_samples(
+    metric_names: Iterable[str],
+    time_window: str,
     period_start: str,
     period_end: str,
-) -> list[dict]:
-    """Fetch raw samples in a time range, grouped by host+labels,
-    for the downsampling engine to aggregate."""
-    db = await _dbcore.get_db(read_only=True)
+) -> int:
+    """Write one ``metric_rollups`` row per (host, metric, labels) from the
+    raw samples in ``[period_start, period_end)``, in one statement.
+
+    ``val_p95`` is ``percentile_cont(0.95)``, the linear interpolation
+    between the two nearest ranks the Python rollup used. Idempotent: a
+    (host, metric, labels, window, period_start) that already has a row is
+    skipped, so re-running a window neither duplicates nor changes rows.
+    Returns the number of rows written.
+    """
+    names = list(dict.fromkeys(metric_names))
+    if not names:
+        return 0
+    placeholders = ",".join("?" for _ in names)
+    db = await _dbcore.get_db()
     try:
         cursor = await db.execute(
-            """SELECT host_id, labels_json, value
-               FROM metric_samples
-               WHERE metric_name = ? AND sampled_at >= ? AND sampled_at < ?
-               ORDER BY host_id, labels_json""",
-            (metric_name, period_start, period_end),
+            f"""INSERT INTO metric_rollups
+                   (host_id, metric_name, labels_json, time_window,
+                    period_start, period_end,
+                    val_min, val_avg, val_max, val_p95, sample_count)
+               SELECT a.host_id, a.metric_name, a.labels_json, ?, ?, ?,
+                      a.val_min, a.val_avg, a.val_max, a.val_p95, a.sample_count
+               FROM (
+                   SELECT s.host_id, s.metric_name, s.labels_json,
+                          MIN(s.value) AS val_min,
+                          AVG(s.value) AS val_avg,
+                          MAX(s.value) AS val_max,
+                          percentile_cont(0.95) WITHIN GROUP (ORDER BY s.value) AS val_p95,
+                          COUNT(*) AS sample_count
+                   FROM metric_samples s
+                   WHERE s.metric_name IN ({placeholders})
+                     AND s.sampled_at >= ? AND s.sampled_at < ?
+                   GROUP BY s.host_id, s.metric_name, s.labels_json
+               ) a
+               WHERE NOT EXISTS (
+                   SELECT 1 FROM metric_rollups r
+                   WHERE r.host_id = a.host_id AND r.metric_name = a.metric_name
+                     AND r.time_window = ? AND r.period_start = ?
+                     AND r.labels_json = a.labels_json
+               )""",  # nosec B608 - placeholders only; every value is bound
+            (
+                time_window,
+                period_start,
+                period_end,
+                *names,
+                period_start,
+                period_end,
+                time_window,
+                period_start,
+            ),
         )
-        return rows_to_list(await cursor.fetchall())
+        await db.commit()
+        return cursor.rowcount
     finally:
         await db.close()
 
@@ -450,6 +493,98 @@ async def query_interface_ts(
             tuple(params),
         )
         return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+async def query_interface_ts_series(
+    host_id: int,
+    start: str,
+    *,
+    bucket_seconds: int = 0,
+    if_index: int | None = None,
+    raw_limit_per: int = 720,
+) -> dict:
+    """Per-interface rate series of one host since ``start``, for charts.
+
+    ``bucket_seconds`` 0 returns raw samples, each interface capped to its
+    newest ``raw_limit_per``. Otherwise the samples are grouped into
+    UTC-aligned buckets of that width: rates and utilization are the bucket
+    average, octet counters the highest reading in the bucket, ``sampled_at``
+    the bucket start and ``sample_count`` the samples behind the point.
+    ``data`` is ordered by ``if_index`` then time ascending. ``latest`` is
+    each interface's newest raw sample in the range, ordered by
+    ``if_index``, so tables showing the current rate do not read a bucket
+    average.
+    """
+    index_sql = " AND if_index = ?" if if_index is not None else ""
+    index_params: tuple = (if_index,) if if_index is not None else ()
+    db = await _dbcore.get_db(read_only=True)
+    try:
+        if bucket_seconds <= 0:
+            cursor = await db.execute(
+                f"""SELECT * FROM (
+                        SELECT t.*, ROW_NUMBER() OVER (
+                            PARTITION BY if_index ORDER BY sampled_at DESC, id DESC
+                        ) AS rn
+                        FROM interface_ts t
+                        WHERE host_id = ? AND sampled_at >= ?{index_sql}
+                    ) sub
+                    WHERE rn <= ?
+                    ORDER BY if_index, sampled_at ASC, id ASC""",  # nosec B608 - fixed fragment
+                (host_id, start, *index_params, raw_limit_per),
+            )
+            data = rows_to_list(await cursor.fetchall())
+            latest_by_index: dict[int, dict] = {}
+            for row in data:
+                row.pop("rn", None)
+                latest_by_index[row["if_index"]] = row
+            return {"data": data, "latest": list(latest_by_index.values())}
+
+        # Buckets count from the Unix epoch, so they align to UTC; the bucket
+        # start is written back as naive UTC text like the stored samples.
+        cursor = await db.execute(
+            f"""SELECT b.host_id, b.if_index, b.if_name, b.if_speed_mbps,
+                       to_char(to_timestamp(b.bucket * CAST(? AS INTEGER)) AT TIME ZONE 'UTC',
+                               'YYYY-MM-DD HH24:MI:SS') AS sampled_at,
+                       b.in_octets, b.out_octets,
+                       b.in_rate_bps, b.out_rate_bps, b.utilization_pct, b.sample_count
+                FROM (
+                    SELECT host_id, if_index,
+                           floor(extract(epoch FROM sampled_at::timestamptz) / CAST(? AS INTEGER)) AS bucket,
+                           MAX(if_name) AS if_name,
+                           MAX(if_speed_mbps) AS if_speed_mbps,
+                           MAX(in_octets) AS in_octets,
+                           MAX(out_octets) AS out_octets,
+                           AVG(in_rate_bps) AS in_rate_bps,
+                           AVG(out_rate_bps) AS out_rate_bps,
+                           AVG(utilization_pct) AS utilization_pct,
+                           COUNT(*) AS sample_count
+                    FROM interface_ts
+                    WHERE host_id = ? AND sampled_at >= ?{index_sql}
+                    GROUP BY host_id, if_index, 3
+                ) b
+                ORDER BY b.if_index, b.bucket""",  # nosec B608 - fixed fragment
+            (bucket_seconds, bucket_seconds, host_id, start, *index_params),
+        )
+        data = rows_to_list(await cursor.fetchall())
+        indexes = list(dict.fromkeys(row["if_index"] for row in data))
+        latest: list[dict] = []
+        if indexes:
+            # One index probe per interface on (host_id, if_index, sampled_at).
+            values_sql = ", ".join("(CAST(? AS INTEGER))" for _ in indexes)
+            lcursor = await db.execute(
+                f"""SELECT t.* FROM (VALUES {values_sql}) AS i(if_index)
+                    CROSS JOIN LATERAL (
+                        SELECT * FROM interface_ts s
+                        WHERE s.host_id = ? AND s.if_index = i.if_index AND s.sampled_at >= ?
+                        ORDER BY s.sampled_at DESC, s.id DESC LIMIT 1
+                    ) t
+                    ORDER BY t.if_index""",  # nosec B608 - placeholders only
+                (*indexes, host_id, start),
+            )
+            latest = rows_to_list(await lcursor.fetchall())
+        return {"data": data, "latest": latest}
     finally:
         await db.close()
 
@@ -1535,19 +1670,21 @@ async def get_availability_summary(
     """Compute availability summary with outage counts and uptime % from
     transitions; ``group_ids`` keeps the hosts of those inventory groups
     (object scope)."""
-    db = await _dbcore.get_db()
+    db = await _dbcore.get_db(read_only=True)
     try:
         group_filter = ""
-        params: list = [days]
+        filter_params: list = []
         if group_id is not None:
             group_filter = "AND h.group_id = ?"
-            params.append(group_id)
+            filter_params.append(group_id)
         scope_sql, scope_params = group_ids_condition("h.group_id", group_ids)
         if scope_sql:
             group_filter += f" AND {scope_sql}"
-            params.extend(scope_params)
+            filter_params.extend(scope_params)
 
-        # Get all hosts and their transitions in the window
+        # One row per host with its outage count, the state the window opens
+        # with and its newest outage: a constant number of queries however
+        # many hosts, where each host used to cost three more.
         cursor = await db.execute(
             f"""SELECT h.id AS host_id, h.hostname, h.ip_address, h.status,
                        h.group_id,
@@ -1555,36 +1692,52 @@ async def get_availability_summary(
                         WHERE t.host_id = h.id AND t.entity_type = 'host'
                           AND t.new_state = 'down'
                           AND t.transition_at >= datetime('now', '-' || ? || ' days')
-                       ) AS outage_count
+                       ) AS outage_count,
+                       prev.new_state AS initial_state,
+                       lo.down_at AS last_down_at,
+                       lo.up_at AS last_up_at
                 FROM hosts h
+                LEFT JOIN LATERAL (
+                    SELECT p.new_state FROM availability_transitions p
+                    WHERE p.host_id = h.id AND p.entity_type = 'host'
+                      AND p.transition_at < datetime('now', '-' || ? || ' days')
+                    ORDER BY p.transition_at DESC, p.id DESC LIMIT 1
+                ) prev ON TRUE
+                LEFT JOIN LATERAL (
+                    SELECT t1.transition_at AS down_at,
+                           (SELECT MIN(t2.transition_at) FROM availability_transitions t2
+                            WHERE t2.host_id = t1.host_id AND t2.entity_type = 'host'
+                              AND t2.new_state = 'up' AND t2.transition_at > t1.transition_at
+                           ) AS up_at
+                    FROM availability_transitions t1
+                    WHERE t1.host_id = h.id AND t1.entity_type = 'host' AND t1.new_state = 'down'
+                    ORDER BY t1.transition_at DESC, t1.id DESC LIMIT 1
+                ) lo ON TRUE
                 WHERE 1=1 {group_filter}
                 ORDER BY h.hostname""",
-            tuple(params),
+            (days, days, *filter_params),
         )
         hosts_raw = rows_to_list(await cursor.fetchall())
 
+        # Every host's transitions in the window, oldest first per host.
+        tcursor = await db.execute(
+            f"""SELECT t.host_id, t.transition_at, t.new_state
+                FROM availability_transitions t
+                JOIN hosts h ON h.id = t.host_id
+                WHERE t.entity_type = 'host'
+                  AND t.transition_at >= datetime('now', '-' || ? || ' days')
+                  {group_filter}
+                ORDER BY t.host_id, t.transition_at ASC, t.id ASC""",
+            (days, *filter_params),
+        )
+        window_transitions: dict[int, list[dict]] = {}
+        for row in rows_to_list(await tcursor.fetchall()):
+            window_transitions.setdefault(row["host_id"], []).append(row)
+
         hosts = []
         for h in hosts_raw:
-            # Compute uptime from transitions
-            tcursor = await db.execute(
-                """SELECT transition_at, new_state FROM availability_transitions
-                   WHERE host_id = ? AND entity_type = 'host'
-                     AND transition_at >= datetime('now', '-' || ? || ' days')
-                   ORDER BY transition_at ASC""",
-                (h["host_id"], days),
-            )
-            transitions = rows_to_list(await tcursor.fetchall())
-
-            # Also get the state before the window started
-            pcursor = await db.execute(
-                """SELECT new_state FROM availability_transitions
-                   WHERE host_id = ? AND entity_type = 'host'
-                     AND transition_at < datetime('now', '-' || ? || ' days')
-                   ORDER BY transition_at DESC LIMIT 1""",
-                (h["host_id"], days),
-            )
-            prev = await pcursor.fetchone()
-            initial_state = dict(prev)["new_state"] if prev else "up"
+            transitions = window_transitions.get(h["host_id"], [])
+            initial_state = h["initial_state"] if h["initial_state"] is not None else "up"
 
             # Calculate downtime seconds in window
             total_seconds = days * 86400
@@ -1629,25 +1782,12 @@ async def get_availability_summary(
 
             uptime_pct = round(max(0, (1 - down_seconds / max(total_seconds, 1))) * 100, 3)
 
-            # Get last outage duration
+            # The host's newest outage (not limited to the window).
             last_outage = None
-            ocursor = await db.execute(
-                """SELECT t1.transition_at AS down_at,
-                          (SELECT MIN(t2.transition_at) FROM availability_transitions t2
-                           WHERE t2.host_id = t1.host_id AND t2.entity_type = 'host'
-                             AND t2.new_state = 'up' AND t2.transition_at > t1.transition_at
-                          ) AS up_at
-                   FROM availability_transitions t1
-                   WHERE t1.host_id = ? AND t1.entity_type = 'host' AND t1.new_state = 'down'
-                   ORDER BY t1.transition_at DESC LIMIT 1""",
-                (h["host_id"],),
-            )
-            orow = await ocursor.fetchone()
-            if orow:
-                odict = dict(orow)
+            if h["last_down_at"] is not None:
                 last_outage = {
-                    "down_at": odict.get("down_at"),
-                    "up_at": odict.get("up_at"),
+                    "down_at": h["last_down_at"],
+                    "up_at": h["last_up_at"],
                 }
 
             hosts.append(
@@ -1754,74 +1894,76 @@ async def get_interface_utilization_summary(
     host_id: int,
     days: int = 1,
 ) -> list[dict]:
-    """Per-interface utilization summary with avg, peak, and 95th percentile."""
-    db = await _dbcore.get_db()
+    """Per-interface utilization summary with avg, peak, and 95th percentile.
+
+    One query for every interface. The averages and peaks cover the samples
+    that have an inbound rate; each 95th percentile covers every sample in
+    the window with that column set, and is the nearest-rank value at
+    0-based index ``min(floor(n * 0.95), n - 1)`` of the sorted values (the
+    float8 cast keeps that index identical to the Python ``int(n * 0.95)``
+    it replaced; a ``numeric`` 0.95 or ``percentile_disc`` picks a
+    different sample for some ``n``).
+    """
+    db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
-            """SELECT if_index, MAX(if_name) AS if_name, MAX(if_speed_mbps) AS if_speed_mbps,
-                      COUNT(*) AS sample_count,
+            f"""SELECT if_index,
+                      MAX(if_name) FILTER (WHERE in_rate_bps IS NOT NULL) AS if_name,
+                      MAX(if_speed_mbps) FILTER (WHERE in_rate_bps IS NOT NULL) AS if_speed_mbps,
+                      COUNT(in_rate_bps) AS sample_count,
                       AVG(in_rate_bps) AS avg_in_bps,
-                      AVG(out_rate_bps) AS avg_out_bps,
+                      AVG(out_rate_bps) FILTER (WHERE in_rate_bps IS NOT NULL) AS avg_out_bps,
                       MAX(in_rate_bps) AS peak_in_bps,
-                      MAX(out_rate_bps) AS peak_out_bps,
-                      AVG(utilization_pct) AS avg_util,
-                      MAX(utilization_pct) AS peak_util
+                      MAX(out_rate_bps) FILTER (WHERE in_rate_bps IS NOT NULL) AS peak_out_bps,
+                      AVG(utilization_pct) FILTER (WHERE in_rate_bps IS NOT NULL) AS avg_util,
+                      MAX(utilization_pct) FILTER (WHERE in_rate_bps IS NOT NULL) AS peak_util,
+                      {_nearest_rank_p95_sql("utilization_pct")} AS p95_util,
+                      {_nearest_rank_p95_sql("in_rate_bps")} AS p95_in_bps,
+                      {_nearest_rank_p95_sql("out_rate_bps")} AS p95_out_bps
                FROM interface_ts
                WHERE host_id = ?
                  AND sampled_at >= datetime('now', '-' || ? || ' days')
-                 AND in_rate_bps IS NOT NULL
                GROUP BY if_index
-               ORDER BY MAX(if_name)""",
+               HAVING COUNT(in_rate_bps) > 0
+               ORDER BY MAX(if_name) FILTER (WHERE in_rate_bps IS NOT NULL), if_index""",
             (host_id, days),
         )
         interfaces = rows_to_list(await cursor.fetchall())
 
-        # Compute 95th percentile per interface
         for iface in interfaces:
-            pcursor = await db.execute(
-                """SELECT utilization_pct FROM interface_ts
-                   WHERE host_id = ? AND if_index = ?
-                     AND sampled_at >= datetime('now', '-' || ? || ' days')
-                     AND utilization_pct IS NOT NULL
-                   ORDER BY utilization_pct ASC""",
-                (host_id, iface["if_index"], days),
-            )
-            values = [r[0] for r in await pcursor.fetchall() if r[0] is not None]
-            if values:
-                idx = int(len(values) * 0.95)
-                idx = min(idx, len(values) - 1)
-                iface["p95_util"] = round(values[idx], 2)
-
-                # Also 95th for in/out bps
-                for direction in ("in", "out"):
-                    bcursor = await db.execute(
-                        f"""SELECT {direction}_rate_bps FROM interface_ts
-                            WHERE host_id = ? AND if_index = ?
-                              AND sampled_at >= datetime('now', '-' || ? || ' days')
-                              AND {direction}_rate_bps IS NOT NULL
-                            ORDER BY {direction}_rate_bps ASC""",
-                        (host_id, iface["if_index"], days),
-                    )
-                    bvals = [r[0] for r in await bcursor.fetchall() if r[0] is not None]
-                    if bvals:
-                        bidx = int(len(bvals) * 0.95)
-                        bidx = min(bidx, len(bvals) - 1)
-                        iface[f"p95_{direction}_bps"] = round(bvals[bidx], 2)
-                    else:
-                        iface[f"p95_{direction}_bps"] = None
-            else:
-                iface["p95_util"] = None
+            # The bps percentiles are only reported beside a utilization one.
+            if iface["p95_util"] is None:
                 iface["p95_in_bps"] = None
                 iface["p95_out_bps"] = None
-
-            # Round numeric fields
-            for k in ("avg_in_bps", "avg_out_bps", "peak_in_bps", "peak_out_bps", "avg_util", "peak_util"):
+            for k in (
+                "avg_in_bps",
+                "avg_out_bps",
+                "peak_in_bps",
+                "peak_out_bps",
+                "avg_util",
+                "peak_util",
+                "p95_util",
+                "p95_in_bps",
+                "p95_out_bps",
+            ):
                 if iface.get(k) is not None:
                     iface[k] = round(iface[k], 2)
 
         return interfaces
     finally:
         await db.close()
+
+
+def _nearest_rank_p95_sql(column: str) -> str:
+    """SQL for the 95th percentile of ``column`` per group, nearest rank:
+    the sorted non-NULL values at 0-based index ``min(floor(n * 0.95),
+    n - 1)``; NULL when the group has none. ``column`` is a fixed column
+    name from this module, never input."""
+    n = f"COUNT({column})"
+    return (
+        f"(array_agg({column} ORDER BY {column}) FILTER (WHERE {column} IS NOT NULL))"
+        f"[CAST(LEAST(floor({n} * CAST(0.95 AS DOUBLE PRECISION)), {n} - 1) AS INTEGER) + 1]"
+    )
 
 
 async def get_port_detail_ts(

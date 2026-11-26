@@ -75,9 +75,9 @@ from netcontrol.routes.risk_analysis import (
 )
 from netcontrol.routes.shared import (
     _audit,
-    _compute_config_diff,
     _corr_id,
     _get_session,
+    compute_config_diff_async,
     require_any_feature,
     require_credential_access,
 )
@@ -601,7 +601,7 @@ async def simulate(device_id: int, body: SimulateRequest, request: Request):
 
     affected_areas = _classify_change_areas(commands)
     post_config = _simulate_config_change(pre_config, commands)
-    diff_text, diff_added, diff_removed = _compute_config_diff(
+    diff_text, diff_added, diff_removed = await compute_config_diff_async(
         pre_config,
         post_config,
         baseline_label="lab-pre",

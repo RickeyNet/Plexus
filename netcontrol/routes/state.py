@@ -230,6 +230,12 @@ MONITORING_DEFAULTS = {
     # the legacy full-table-every-tick behavior.
     "route_full_interval_seconds": 900,
     "collect_vpn": True,
+    # Read the CLI part of the poll (VPN and routes, one SSH session) at most
+    # this often, never more often than interval_seconds; the polls between
+    # carry its last result. A manual poll reads it, and so does every poll
+    # of a host whose SNMP did not answer (the SSH session is then its only
+    # liveness signal).
+    "cli_poll_interval_seconds": 900,
     "escalation_enabled": True,
     "escalation_after_minutes": 30,
     "escalation_check_interval": 60,
@@ -1480,6 +1486,10 @@ def _sanitize_monitoring_config(data: dict | None) -> dict:
             0, min(86400, int(data.get("route_full_interval_seconds", cfg["route_full_interval_seconds"])))
         )
         cfg["collect_vpn"] = bool(data.get("collect_vpn", cfg["collect_vpn"]))
+        cfg["cli_poll_interval_seconds"] = max(
+            cfg["interval_seconds"],
+            min(MONITORING_MAX_INTERVAL, int(data.get("cli_poll_interval_seconds", cfg["cli_poll_interval_seconds"]))),
+        )
         cfg["escalation_enabled"] = bool(data.get("escalation_enabled", cfg["escalation_enabled"]))
         cfg["escalation_after_minutes"] = max(
             5, min(1440, int(data.get("escalation_after_minutes", cfg["escalation_after_minutes"])))

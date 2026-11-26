@@ -311,13 +311,13 @@ function invalidateAll(qc: ReturnType<typeof useQueryClient>) {
 export function useSoftwareOverview(platform: string, source: string, search: string) {
   return useQuery<SoftwareOverview>({
     queryKey: KEYS.overview(platform, source, search),
-    queryFn: () => {
+    queryFn: ({ signal }) => {
       const params: Record<string, string> = {};
       if (platform) params.platform = platform;
       if (source) params.source = source;
       if (search.trim()) params.search = search.trim();
       const qs = new URLSearchParams(params).toString();
-      return apiRequest(`/software/overview${qs ? `?${qs}` : ''}`);
+      return apiRequest(`/software/overview${qs ? `?${qs}` : ''}`, { signal });
     },
   });
 }
@@ -325,7 +325,7 @@ export function useSoftwareOverview(platform: string, source: string, search: st
 export function useSoftwareHistory(deviceKey: string | null) {
   return useQuery<{ device_key: string; history: SoftwareHistoryEntry[] }>({
     queryKey: KEYS.history(deviceKey ?? ''),
-    queryFn: () => apiRequest(`/software/history?device_key=${encodeURIComponent(deviceKey!)}`),
+    queryFn: ({ signal }) => apiRequest(`/software/history?device_key=${encodeURIComponent(deviceKey!)}`, { signal }),
     enabled: !!deviceKey,
   });
 }
@@ -333,7 +333,7 @@ export function useSoftwareHistory(deviceKey: string | null) {
 export function useSoftwareSettings(enabled: boolean) {
   return useQuery<{ settings: SoftwareSettings }>({
     queryKey: KEYS.settings,
-    queryFn: () => apiRequest('/software/settings'),
+    queryFn: ({ signal }) => apiRequest('/software/settings', { signal }),
     enabled,
   });
 }
@@ -341,7 +341,7 @@ export function useSoftwareSettings(enabled: boolean) {
 export function usePsirtSyncJob(jobId: string | null) {
   return useQuery<PsirtSyncJob>({
     queryKey: KEYS.psirtJob(jobId),
-    queryFn: () => apiRequest(`/software/psirt/jobs/${jobId}`),
+    queryFn: ({ signal }) => apiRequest(`/software/psirt/jobs/${jobId}`, { signal }),
     enabled: jobId != null,
     // A sync is a background job with no push channel; poll until it settles.
     refetchInterval: (query) => (query.state.data?.status === 'running' ? 2000 : false),
@@ -351,7 +351,7 @@ export function usePsirtSyncJob(jobId: string | null) {
 export function useCveEnrichmentJob(jobId: string | null) {
   return useQuery<CveEnrichmentJob>({
     queryKey: KEYS.cveJob(jobId),
-    queryFn: () => apiRequest(`/software/cve-enrichment/jobs/${jobId}`),
+    queryFn: ({ signal }) => apiRequest(`/software/cve-enrichment/jobs/${jobId}`, { signal }),
     enabled: jobId != null,
     // A run is a background job (NVD is asked at its rate limit); poll until it settles.
     refetchInterval: (query) => (query.state.data?.status === 'running' ? 2000 : false),

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 
 import { ChangelogPanel } from '@/components/ChangelogPanel';
@@ -20,6 +20,7 @@ import { type CustomDataFilterValue, EMPTY_CUSTOM_DATA_FILTER, isEmptyFilter } f
 import { hostModelText } from '@/lib/deviceModel';
 import { type FilterDraft, inventoryFilterToDraft } from '@/lib/dynamicGroupFilter';
 import { READ_ONLY_GROUP_REASON, TOP_LEVEL_GROUP_REASON, useObjectScope } from '@/lib/objectScope';
+import { useDebouncedValue } from '@/lib/useDebouncedValue';
 import { useLinkedParam } from '@/lib/useLinkedParam';
 import { bringIntoView, splitGridStyle, useWideDetail } from '@/lib/wideDetail';
 
@@ -92,6 +93,12 @@ type ModalState =
       group: InventoryGroupFull | null;
     };
 
+// Shared fallbacks, so a card without a selection or profiles gets the same
+// props each render and its memo holds.
+const NO_SELECTION: Set<number> = new Set();
+const NO_PROFILES: { id: string; name: string }[] = [];
+const NO_HOSTS: InventoryHost[] = [];
+
 export function Inventory() {
   const { confirm, alert } = useDialogs();
   const objectScope = useObjectScope();
@@ -102,6 +109,8 @@ export function Inventory() {
   const assignmentsQ = useGroupSnmpAssignments(groupIds);
 
   const [query, setQuery] = useState('');
+  // The box shows each keystroke; the groups filter and re-sort once typing pauses.
+  const filterQuery = useDebouncedValue(query);
   const [dataFilter, setDataFilter] = useState<CustomDataFilterValue>(EMPTY_CUSTOM_DATA_FILTER);
   const [sort, setSort] = useState<InventorySort>('custom');
   const [compact, setCompact] = useState<boolean>(() => loadCompactMode());
@@ -130,17 +139,18 @@ export function Inventory() {
 
   const openGroup = openHost ? groups.find((g) => g.id === openHost.groupId) : undefined;
   const openHostRow = openHost ? openGroup?.hosts?.find((h) => h.id === openHost.hostId) : undefined;
-  const openHostDetails = (groupId: number, hostId: number) => {
-    setOpenHost({ groupId, hostId });
+  const openHostDetails = useCallback((group: InventoryGroupFull, host: InventoryHost) => {
+    setOpenHost({ groupId: group.id, hostId: host.id });
     // Widened, the panel sits above the groups: bring it into view.
     if (wide) requestAnimationFrame(() => bringIntoView(panelRef.current));
-  };
+  }, [wide]);
 
-  const reorder = useReorderInventoryGroups();
-  const deleteGroup = useDeleteInventoryGroup();
-  const deleteHost = useDeleteHost();
-  const bulkDelete = useBulkDeleteHosts();
-  const assignProfile = useAssignSnmpProfile();
+  // `mutate` keeps its identity across renders, so the card callbacks below stay stable.
+  const { mutate: reorder } = useReorderInventoryGroups();
+  const { mutate: deleteGroup } = useDeleteInventoryGroup();
+  const { mutate: deleteHost } = useDeleteHost();
+  const { mutate: bulkDelete } = useBulkDeleteHosts();
+  const { mutate: assignProfile } = useAssignSnmpProfile();
 
   // Persist UI prefs.
   useEffect(() => saveCompactMode(compact), [compact]);
@@ -155,8 +165,8 @@ export function Inventory() {
 
   // The text search and the tag / custom field filter both apply.
   const filtered = useMemo(
-    () => sortGroups(filterGroupsByCustomData(filterGroups(orderedGroups, query), dataFilter), sort),
-    [orderedGroups, query, dataFilter, sort],
+    () => sortGroups(filterGroupsByCustomData(filterGroups(orderedGroups, filterQuery), dataFilter), sort),
+    [orderedGroups, filterQuery, dataFilter, sort],
   );
   const hasDataFilter = !isEmptyFilter(dataFilter);
   // The filter hides hosts, so a selection made before it could act on
@@ -177,16 +187,16 @@ export function Inventory() {
     return counts;
   }, [filtered]);
 
-  const isCustomOrder = sort === 'custom' && !query.trim() && !hasDataFilter;
+  const isCustomOrder = sort === 'custom' && !filterQuery.trim() && !hasDataFilter;
 
-  const toggleCollapsed = (id: number) => {
+  const toggleCollapsed = useCallback((group: InventoryGroupFull) => {
     setCollapsed((prev) => {
       const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
+      if (next.has(group.id)) next.delete(group.id);
+      else next.add(group.id);
       return next;
     });
-  };
+  }, []);
 
   const toggleAllCollapsed = () => {
     const anyExpanded = filtered.some((g) => !collapsed.has(g.id));
@@ -202,19 +212,21 @@ export function Inventory() {
 
   // Drag-reorder state.
   const dragIdRef = useRef<number | null>(null);
-  const onDragStart = (id: number) => {
-    dragIdRef.current = id;
-  };
+  const onDragStart = useCallback((group: InventoryGroupFull) => {
+    dragIdRef.current = group.id;
+  }, []);
   // Groups reorder among their siblings only; a move to another parent is
   // made in the group's Edit dialog.
-  const areSiblings = (a: number, b: number) => parentOf.get(a) === parentOf.get(b);
-  const onDragOver = (e: React.DragEvent, overId: number) => {
+  const areSiblings = useCallback((a: number, b: number) => parentOf.get(a) === parentOf.get(b), [parentOf]);
+  const onDragOver = useCallback((e: React.DragEvent, over: InventoryGroupFull) => {
+    const overId = over.id;
     if (!isCustomOrder) return;
     if (dragIdRef.current == null || dragIdRef.current === overId) return;
     if (!areSiblings(dragIdRef.current, overId)) return;
     e.preventDefault();
-  };
-  const onDrop = (overId: number) => {
+  }, [isCustomOrder, areSiblings]);
+  const onDrop = useCallback((over: InventoryGroupFull) => {
+    const overId = over.id;
     if (!isCustomOrder) return;
     const dragId = dragIdRef.current;
     dragIdRef.current = null;
@@ -228,7 +240,7 @@ export function Inventory() {
       ...without.slice(overIdx),
     ];
     setOrderOverride(next);
-    reorder.mutate(next, {
+    reorder(next, {
       onError: (err) => {
         void alert({
           message: `Failed to save group order: ${(err as Error).message}`,
@@ -236,9 +248,9 @@ export function Inventory() {
         });
       },
     });
-  };
+  }, [isCustomOrder, areSiblings, orderOverride, orderedGroups, reorder, alert]);
 
-  const handleDeleteGroup = async (g: InventoryGroupFull) => {
+  const handleDeleteGroup = useCallback(async (g: InventoryGroupFull) => {
     if (
       !(await confirm({
         title: 'Delete group',
@@ -247,14 +259,14 @@ export function Inventory() {
       }))
     )
       return;
-    deleteGroup.mutate(g.id, {
+    deleteGroup(g.id, {
       onError: (err) => {
         void alert({ message: (err as Error).message, variant: 'error' });
       },
     });
-  };
+  }, [confirm, alert, deleteGroup]);
 
-  const handleDeleteHost = async (host: InventoryHost) => {
+  const handleDeleteHost = useCallback(async (host: InventoryHost) => {
     if (
       !(await confirm({
         title: 'Delete host',
@@ -263,15 +275,15 @@ export function Inventory() {
       }))
     )
       return;
-    deleteHost.mutate(host.id, {
+    deleteHost(host.id, {
       onError: (err) => {
         void alert({ message: (err as Error).message, variant: 'error' });
       },
     });
-  };
+  }, [confirm, alert, deleteHost]);
 
-  const handleBulkDelete = async (groupId: number) => {
-    const ids = Array.from(selectedHosts.get(groupId) ?? []);
+  const handleBulkDelete = useCallback(async (group: InventoryGroupFull, ids: number[]) => {
+    const groupId = group.id;
     if (!ids.length) return;
     if (
       !(await confirm({
@@ -281,7 +293,7 @@ export function Inventory() {
       }))
     )
       return;
-    bulkDelete.mutate(ids, {
+    bulkDelete(ids, {
       onSuccess: () => {
         setSelectedHosts((prev) => {
           const next = new Map(prev);
@@ -293,7 +305,67 @@ export function Inventory() {
         void alert({ message: (err as Error).message, variant: 'error' });
       },
     });
-  };
+  }, [confirm, alert, bulkDelete]);
+
+  const assignGroupProfile = useCallback((group: InventoryGroupFull, profileId: string) => {
+    assignProfile(
+      { groupId: group.id, profileId },
+      {
+        onError: (e) => {
+          void alert({ message: (e as Error).message, variant: 'error' });
+        },
+      },
+    );
+  }, [assignProfile, alert]);
+
+  const changeSelection = useCallback((group: InventoryGroupFull, set: Set<number>) => {
+    setSelectedHosts((prev) => {
+      const next = new Map(prev);
+      if (set.size === 0) next.delete(group.id);
+      else next.set(group.id, set);
+      return next;
+    });
+  }, []);
+
+  // Card actions that only open a dialog: one stable set for every card.
+  const cardDialogs = useMemo(() => ({
+    onEditGroup: (group: InventoryGroupFull) => setModal({ kind: 'edit-group', group }),
+    onAddSubGroup: (group: InventoryGroupFull) => setModal({ kind: 'create-group', parentId: group.id }),
+    onSyncDiscovery: (group: InventoryGroupFull) => setModal({ kind: 'discovery', mode: 'sync', group }),
+    onBulkSerial: (group: InventoryGroupFull) =>
+      setModal({
+        kind: 'serial',
+        target: { mode: 'bulk', groupId: group.id, groupName: groupLabel(group) },
+      }),
+    onAddHost: (group: InventoryGroupFull) => setModal({ kind: 'add-host', groupId: group.id }),
+    onEditHost: (group: InventoryGroupFull, host: InventoryHost) =>
+      setModal({
+        kind: 'edit-host',
+        host: { ...host, group_id: group.id },
+      }),
+    onFetchSerial: (host: InventoryHost) =>
+      setModal({
+        kind: 'serial',
+        target: { mode: 'single', hostId: host.id, hostname: host.hostname },
+      }),
+    onBulkMove: (group: InventoryGroupFull, ids: number[]) => {
+      if (!ids.length) return;
+      setModal({
+        kind: 'bulk-move',
+        sourceGroupId: group.id,
+        hostIds: ids,
+      });
+    },
+    onBulkTag: (_group: InventoryGroupFull, ids: number[]) => {
+      if (ids.length) setModal({ kind: 'bulk-tag', hostIds: ids });
+    },
+    onBulkEdit: (_group: InventoryGroupFull, ids: number[]) => {
+      if (ids.length) setModal({ kind: 'bulk-edit', hostIds: ids });
+    },
+    onBulkSnmpProfile: (_group: InventoryGroupFull, ids: number[]) => {
+      if (ids.length) setModal({ kind: 'bulk-snmp', hostIds: ids });
+    },
+  }), []);
 
   const exportCsv = () => {
     window.open(inventoryCsvExportUrl(), '_blank');
@@ -459,7 +531,7 @@ export function Inventory() {
           <div className="card">
             <EmptyState
               message="No groups or hosts match this filter."
-              description={query ? 'The search box narrows the list as well.' : undefined}
+              description={filterQuery ? 'The search box narrows the list as well.' : undefined}
               action={
                 <button type="button" className="btn btn-sm btn-secondary" onClick={() => changeDataFilter(EMPTY_CUSTOM_DATA_FILTER)}>
                   Clear filter
@@ -473,7 +545,7 @@ export function Inventory() {
             className="card"
             style={{ padding: '1.5rem', textAlign: 'center', color: 'var(--text-muted)' }}
           >
-            {query ? 'No groups match your search.' : 'No inventory groups. Click "+ New Group" to create one.'}
+            {filterQuery ? 'No groups match your search.' : 'No inventory groups. Click "+ New Group" to create one.'}
           </div>
         )}
 
@@ -483,85 +555,25 @@ export function Inventory() {
             group={group}
             canWrite={objectScope.canWriteGroup(group.id)}
             subGroupCount={subGroupCounts.get(group.id) ?? 0}
-            query={query}
+            query={filterQuery}
             compact={compact}
             collapsed={collapsed.has(group.id)}
             draggable={isCustomOrder}
-            selectedSet={selectedHosts.get(group.id) ?? new Set()}
+            selectedSet={selectedHosts.get(group.id) ?? NO_SELECTION}
             assignedProfileId={assignmentsQ.data?.[group.id] ?? ''}
-            snmpProfiles={profilesQ.data ?? []}
-            onAssignProfile={(profileId) =>
-              assignProfile.mutate(
-                { groupId: group.id, profileId },
-                {
-                  onError: (e) => {
-                    void alert({ message: (e as Error).message, variant: 'error' });
-                  },
-                },
-              )
-            }
-            onToggleCollapse={() => toggleCollapsed(group.id)}
-            onDragStart={() => onDragStart(group.id)}
-            onDragOver={(e) => onDragOver(e, group.id)}
-            onDrop={() => onDrop(group.id)}
-            onSelectionChange={(set) =>
-              setSelectedHosts((prev) => {
-                const next = new Map(prev);
-                if (set.size === 0) next.delete(group.id);
-                else next.set(group.id, set);
-                return next;
-              })
-            }
-            onEditGroup={() => setModal({ kind: 'edit-group', group })}
-            onAddSubGroup={() => setModal({ kind: 'create-group', parentId: group.id })}
-            onDeleteGroup={() => handleDeleteGroup(group)}
-            onSyncDiscovery={() =>
-              setModal({ kind: 'discovery', mode: 'sync', group })
-            }
-            onBulkSerial={() =>
-              setModal({
-                kind: 'serial',
-                target: { mode: 'bulk', groupId: group.id, groupName: groupLabel(group) },
-              })
-            }
-            onAddHost={() => setModal({ kind: 'add-host', groupId: group.id })}
-            onEditHost={(host) =>
-              setModal({
-                kind: 'edit-host',
-                host: { ...host, group_id: group.id },
-              })
-            }
+            snmpProfiles={profilesQ.data ?? NO_PROFILES}
+            onAssignProfile={assignGroupProfile}
+            onToggleCollapse={toggleCollapsed}
+            onDragStart={onDragStart}
+            onDragOver={onDragOver}
+            onDrop={onDrop}
+            onSelectionChange={changeSelection}
+            onDeleteGroup={handleDeleteGroup}
             onDeleteHost={handleDeleteHost}
-            onFetchSerial={(host) =>
-              setModal({
-                kind: 'serial',
-                target: { mode: 'single', hostId: host.id, hostname: host.hostname },
-              })
-            }
-            onBulkMove={() => {
-              const ids = Array.from(selectedHosts.get(group.id) ?? []);
-              if (!ids.length) return;
-              setModal({
-                kind: 'bulk-move',
-                sourceGroupId: group.id,
-                hostIds: ids,
-              });
-            }}
-            onBulkDelete={() => handleBulkDelete(group.id)}
-            onBulkTag={() => {
-              const ids = Array.from(selectedHosts.get(group.id) ?? []);
-              if (ids.length) setModal({ kind: 'bulk-tag', hostIds: ids });
-            }}
-            onBulkEdit={() => {
-              const ids = Array.from(selectedHosts.get(group.id) ?? []);
-              if (ids.length) setModal({ kind: 'bulk-edit', hostIds: ids });
-            }}
-            onBulkSnmpProfile={() => {
-              const ids = Array.from(selectedHosts.get(group.id) ?? []);
-              if (ids.length) setModal({ kind: 'bulk-snmp', hostIds: ids });
-            }}
+            onBulkDelete={handleBulkDelete}
+            {...cardDialogs}
             openHostId={openHost?.groupId === group.id ? openHost.hostId : null}
-            onOpenHost={(host) => openHostDetails(group.id, host.id)}
+            onOpenHost={openHostDetails}
           />
         ))}
       </div>
@@ -649,36 +661,38 @@ interface GroupCardProps {
   selectedSet: Set<number>;
   assignedProfileId: string;
   snmpProfiles: { id: string; name: string }[];
-  onAssignProfile: (profileId: string) => void;
-  onToggleCollapse: () => void;
-  onDragStart: () => void;
-  onDragOver: (e: React.DragEvent) => void;
-  onDrop: () => void;
-  onSelectionChange: (next: Set<number>) => void;
-  onEditGroup: () => void;
-  onAddSubGroup: () => void;
-  onDeleteGroup: () => void;
-  onSyncDiscovery: () => void;
-  onBulkSerial: () => void;
-  onAddHost: () => void;
-  onEditHost: (host: InventoryHost) => void;
+  // Callbacks take the group (and the selected host ids for bulk actions), so
+  // the page passes one stable function to every card and `memo` holds.
+  onAssignProfile: (group: InventoryGroupFull, profileId: string) => void;
+  onToggleCollapse: (group: InventoryGroupFull) => void;
+  onDragStart: (group: InventoryGroupFull) => void;
+  onDragOver: (e: React.DragEvent, group: InventoryGroupFull) => void;
+  onDrop: (group: InventoryGroupFull) => void;
+  onSelectionChange: (group: InventoryGroupFull, next: Set<number>) => void;
+  onEditGroup: (group: InventoryGroupFull) => void;
+  onAddSubGroup: (group: InventoryGroupFull) => void;
+  onDeleteGroup: (group: InventoryGroupFull) => void;
+  onSyncDiscovery: (group: InventoryGroupFull) => void;
+  onBulkSerial: (group: InventoryGroupFull) => void;
+  onAddHost: (group: InventoryGroupFull) => void;
+  onEditHost: (group: InventoryGroupFull, host: InventoryHost) => void;
   onDeleteHost: (host: InventoryHost) => void;
   onFetchSerial: (host: InventoryHost) => void;
-  onBulkMove: () => void;
-  onBulkDelete: () => void;
-  onBulkTag: () => void;
-  onBulkEdit: () => void;
-  onBulkSnmpProfile: () => void;
+  onBulkMove: (group: InventoryGroupFull, hostIds: number[]) => void;
+  onBulkDelete: (group: InventoryGroupFull, hostIds: number[]) => void;
+  onBulkTag: (group: InventoryGroupFull, hostIds: number[]) => void;
+  onBulkEdit: (group: InventoryGroupFull, hostIds: number[]) => void;
+  onBulkSnmpProfile: (group: InventoryGroupFull, hostIds: number[]) => void;
   /** The host whose details panel is open, marked on its row. */
   openHostId?: number | null;
   /** A row click opens the host's details; without it rows are not clickable. */
-  onOpenHost?: (host: InventoryHost) => void;
+  onOpenHost?: (group: InventoryGroupFull, host: InventoryHost) => void;
 }
 
 /** How far each level of sub-groups is indented. */
 const GROUP_INDENT_REM = 1.5;
 
-export function GroupCard({
+export const GroupCard = memo(function GroupCard({
   group,
   canWrite,
   subGroupCount,
@@ -712,8 +726,8 @@ export function GroupCard({
   openHostId = null,
   onOpenHost,
 }: GroupCardProps) {
-  const hosts = group.hosts ?? [];
-  const sortedHosts = sortHostsForQuery(hosts, query);
+  const hosts = group.hosts ?? NO_HOSTS;
+  const sortedHosts = useMemo(() => sortHostsForQuery(hosts, query), [hosts, query]);
   // Write controls of a group the account may only read: disabled, with why.
   const readOnly = !canWrite;
   const readOnlyTitle = readOnly ? READ_ONLY_GROUP_REASON : undefined;
@@ -745,25 +759,26 @@ export function GroupCard({
   const selectedAwaitingIds = awaitingIds.filter((id) => selectedSet.has(id));
 
   const onToggleSelectAll = (checked: boolean) => {
-    onSelectionChange(checked ? new Set(hosts.map((h) => h.id)) : new Set());
+    onSelectionChange(group, checked ? new Set(hosts.map((h) => h.id)) : new Set());
   };
 
   const onToggleHost = (hostId: number, checked: boolean) => {
     const next = new Set(selectedSet);
     if (checked) next.add(hostId);
     else next.delete(hostId);
-    onSelectionChange(next);
+    onSelectionChange(group, next);
   };
+  const selectedIds = () => Array.from(selectedSet);
 
   return (
     <div
       className="card card-sm"
       draggable={draggable}
-      onDragStart={onDragStart}
-      onDragOver={onDragOver}
+      onDragStart={() => onDragStart(group)}
+      onDragOver={(e) => onDragOver(e, group)}
       onDrop={(e) => {
         e.preventDefault();
-        onDrop();
+        onDrop(group);
       }}
       style={{
         marginLeft: `${(group.depth ?? 0) * GROUP_INDENT_REM}rem`,
@@ -781,7 +796,7 @@ export function GroupCard({
         }}
       >
         <div
-          {...clickableProps(onToggleCollapse)}
+          {...clickableProps(() => onToggleCollapse(group))}
           aria-expanded={!collapsed}
           style={{
             display: 'flex',
@@ -843,7 +858,7 @@ export function GroupCard({
             className="form-select form-select-sm"
             style={{ minWidth: 130 }}
             value={assignedProfileId}
-            onChange={(e) => onAssignProfile(e.target.value)}
+            onChange={(e) => onAssignProfile(group, e.target.value)}
             disabled={readOnly}
             title={readOnlyTitle ?? "The group's SNMP profile; a host's own profile overrides it"}
             aria-label={`SNMP profile for ${groupLabel(group)}`}
@@ -858,25 +873,25 @@ export function GroupCard({
           <button
             type="button"
             className="btn btn-sm btn-secondary"
-            onClick={onSyncDiscovery}
+            onClick={() => onSyncDiscovery(group)}
             disabled={readOnly}
             title={readOnlyTitle}
           >
             Sync
           </button>
           <KebabMenu label={`Actions for ${groupLabel(group)}`}>
-            <MenuItem onSelect={onBulkSerial} disabled={readOnly} title={readOnlyTitle}>
+            <MenuItem onSelect={() => onBulkSerial(group)} disabled={readOnly} title={readOnlyTitle}>
               Fetch Serials
             </MenuItem>
-            <MenuItem onSelect={onEditGroup} disabled={readOnly} title={readOnlyTitle}>
+            <MenuItem onSelect={() => onEditGroup(group)} disabled={readOnly} title={readOnlyTitle}>
               Edit
             </MenuItem>
-            <MenuItem onSelect={onAddSubGroup} disabled={readOnly} title={readOnlyTitle}>
+            <MenuItem onSelect={() => onAddSubGroup(group)} disabled={readOnly} title={readOnlyTitle}>
               New Sub-group
             </MenuItem>
             <MenuItem onSelect={() => setShowChanges(true)}>Changelog</MenuItem>
             <MenuSeparator />
-            <MenuItem danger onSelect={onDeleteGroup} disabled={readOnly} title={readOnlyTitle}>
+            <MenuItem danger onSelect={() => onDeleteGroup(group)} disabled={readOnly} title={readOnlyTitle}>
               Delete
             </MenuItem>
           </KebabMenu>
@@ -927,7 +942,7 @@ export function GroupCard({
                   <button
                     type="button"
                     className="btn btn-sm btn-secondary"
-                    onClick={onBulkMove}
+                    onClick={() => onBulkMove(group, selectedIds())}
                     disabled={readOnly}
                     title={readOnlyTitle}
                   >
@@ -936,7 +951,7 @@ export function GroupCard({
                   <button
                     type="button"
                     className="btn btn-sm btn-secondary"
-                    onClick={onBulkTag}
+                    onClick={() => onBulkTag(group, selectedIds())}
                     disabled={readOnly}
                     title={readOnlyTitle}
                   >
@@ -945,7 +960,7 @@ export function GroupCard({
                   <button
                     type="button"
                     className="btn btn-sm btn-secondary"
-                    onClick={onBulkEdit}
+                    onClick={() => onBulkEdit(group, selectedIds())}
                     disabled={readOnly}
                     title={readOnlyTitle}
                   >
@@ -954,13 +969,13 @@ export function GroupCard({
                   <button
                     type="button"
                     className="btn btn-sm btn-secondary"
-                    onClick={onBulkSnmpProfile}
+                    onClick={() => onBulkSnmpProfile(group, selectedIds())}
                     disabled={readOnly}
                     title={readOnlyTitle}
                   >
                     Set SNMP…
                   </button>
-                  <DeleteButton onClick={onBulkDelete} disabled={readOnly} title={readOnlyTitle} />
+                  <DeleteButton onClick={() => onBulkDelete(group, selectedIds())} disabled={readOnly} title={readOnlyTitle} />
                   {selectedAwaitingIds.length > 0 && (
                     <ConfirmAddressButton hostIds={selectedAwaitingIds} label="Confirm addresses" />
                   )}
@@ -972,7 +987,7 @@ export function GroupCard({
               <button
                 type="button"
                 className="btn btn-sm btn-primary"
-                onClick={onAddHost}
+                onClick={() => onAddHost(group)}
                 disabled={readOnly}
                 title={readOnlyTitle}
               >
@@ -1043,7 +1058,7 @@ export function GroupCard({
                               }
                               aria-current={openHostId === host.id ? 'true' : undefined}
                               title={onOpenHost ? "Show the host's details" : undefined}
-                              {...(onOpenHost ? clickableProps(() => onOpenHost(host), { role: null }) : {})}
+                              {...(onOpenHost ? clickableProps(() => onOpenHost(group, host), { role: null }) : {})}
                               style={{
                                 background: isMatch
                                   ? 'var(--primary-soft)'
@@ -1122,7 +1137,7 @@ export function GroupCard({
                                   <button
                                     type="button"
                                     className="btn btn-sm btn-secondary"
-                                    onClick={() => onEditHost(host)}
+                                    onClick={() => onEditHost(group, host)}
                                     disabled={readOnly}
                                     title={readOnlyTitle}
                                   >
@@ -1159,4 +1174,4 @@ export function GroupCard({
       )}
     </div>
   );
-}
+});

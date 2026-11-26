@@ -2969,16 +2969,15 @@ async def replace_dhcp_server_snapshot(
         await db.execute("DELETE FROM dhcp_scopes WHERE server_id = ?", (server_id,))
         await db.execute("DELETE FROM dhcp_leases WHERE server_id = ?", (server_id,))
 
-        scope_count = 0
+        # One executemany per table: a server can report thousands of leases.
+        # INSERT OR IGNORE still skips each duplicate row on its own, and the
+        # counts stay "rows offered", as they were with a statement per row.
+        scope_rows = []
         for sc in scopes:
             subnet = (sc.get("subnet") or "").strip()
             if not subnet:
                 continue
-            await db.execute(
-                """INSERT OR IGNORE INTO dhcp_scopes
-                   (server_id, external_id, subnet, name, range_start, range_end,
-                    total_addresses, used_addresses, free_addresses, state, metadata_json)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            scope_rows.append(
                 (
                     server_id,
                     str(sc.get("external_id") or ""),
@@ -2991,20 +2990,23 @@ async def replace_dhcp_server_snapshot(
                     int(sc.get("free_addresses") or 0),
                     sc.get("state") or "",
                     json.dumps(sc.get("metadata") or {}, separators=(",", ":")),
-                ),
+                )
             )
-            scope_count += 1
+        if scope_rows:
+            await db.executemany(
+                """INSERT OR IGNORE INTO dhcp_scopes
+                   (server_id, external_id, subnet, name, range_start, range_end,
+                    total_addresses, used_addresses, free_addresses, state, metadata_json)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                scope_rows,
+            )
 
-        lease_count = 0
+        lease_rows = []
         for lease in leases:
             address = (lease.get("address") or "").strip()
             if not address:
                 continue
-            await db.execute(
-                """INSERT OR IGNORE INTO dhcp_leases
-                   (server_id, scope_subnet, address, mac_address, hostname,
-                    client_id, state, starts_at, ends_at, metadata_json)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            lease_rows.append(
                 (
                     server_id,
                     lease.get("scope_subnet") or "",
@@ -3016,9 +3018,18 @@ async def replace_dhcp_server_snapshot(
                     lease.get("starts_at") or None,
                     lease.get("ends_at") or None,
                     json.dumps(lease.get("metadata") or {}, separators=(",", ":")),
-                ),
+                )
             )
-            lease_count += 1
+        if lease_rows:
+            await db.executemany(
+                """INSERT OR IGNORE INTO dhcp_leases
+                   (server_id, scope_subnet, address, mac_address, hostname,
+                    client_id, state, starts_at, ends_at, metadata_json)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                lease_rows,
+            )
+        scope_count = len(scope_rows)
+        lease_count = len(lease_rows)
 
         now_iso = datetime.now(UTC).isoformat()
         await db.execute(

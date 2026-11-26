@@ -24,11 +24,18 @@ export interface InterfaceTimeSeriesEntry {
   in_rate_bps?: number | null;
   out_rate_bps?: number | null;
   utilization_pct?: number | null;
+  /** Samples behind a bucketed point (ranges over 6 h). */
+  sample_count?: number;
 }
 
 export interface InterfaceTimeSeriesResult {
+  /** Ordered by if_index, then time ascending; bucket averages when bucket_seconds > 0. */
   data?: InterfaceTimeSeriesEntry[];
   interfaces?: InterfaceTimeSeriesEntry[];
+  /** Each interface's newest raw sample in the range, ordered by if_index. */
+  latest?: InterfaceTimeSeriesEntry[];
+  /** Bucket width of `data` in seconds; 0 for raw samples. */
+  bucket_seconds?: number;
 }
 
 export interface PollIfDetail {
@@ -189,14 +196,14 @@ export function useMetricQuery(
 ) {
   return useQuery<MetricQueryResult>({
     queryKey: ['metrics', metric, hostId, range],
-    queryFn: () => {
+    queryFn: ({ signal }) => {
       const p = new URLSearchParams({
         metric,
         host: String(hostId ?? '*'),
         range,
         step: 'auto',
       });
-      return apiRequest(`/metrics/query?${p}`);
+      return apiRequest(`/metrics/query?${p}`, { signal });
     },
     enabled: hostId != null && enabled,
   });
@@ -205,7 +212,7 @@ export function useMetricQuery(
 export function useVendorStatus(hostId: number | null, enabled = true) {
   return useQuery<VendorStatus>({
     queryKey: ['device-vendor-status', hostId],
-    queryFn: () => apiRequest(`/monitoring/hosts/${hostId}/vendor-status`),
+    queryFn: ({ signal }) => apiRequest(`/monitoring/hosts/${hostId}/vendor-status`, { signal }),
     enabled: hostId != null && enabled,
   });
 }
@@ -217,7 +224,7 @@ export function useInterfaceTimeSeries(
 ) {
   return useQuery<InterfaceTimeSeriesResult>({
     queryKey: ['interface-timeseries', hostId, range],
-    queryFn: () => apiRequest(`/metrics/interfaces/${hostId}?range=${range}`),
+    queryFn: ({ signal }) => apiRequest(`/metrics/interfaces/${hostId}?range=${range}`, { signal }),
     enabled: hostId != null && enabled,
   });
 }
@@ -229,9 +236,10 @@ export function useMonitoringAlerts(hostId: number | null, limit = 50, enabled =
     queryKey: ['device-alerts', hostId, limit],
     // Bare-array endpoint; normalize to the declared wrapper shape (same
     // bug class as the poll-history hooks below — the tab reads .alerts).
-    queryFn: async () => {
+    queryFn: async ({ signal }) => {
       const data = await apiRequest<MonitoringAlert[] | MonitoringAlertsResult>(
         `/monitoring/alerts?host_id=${hostId}&limit=${limit}`,
+        { signal },
       );
       return Array.isArray(data) ? { alerts: data } : data;
     },
@@ -248,11 +256,12 @@ export function useMonitoringPollHistory(hostId: number | null, limit = 1) {
     // Device-scoped: distinct prefix so page-level ['monitoring-poll-history']
     // invalidations don't refetch this (differently-shaped) device query.
     queryKey: ['device-poll-history', hostId, limit],
-    queryFn: async () => {
+    queryFn: async ({ signal }) => {
       // include_details: the interface/VLAN tables parse if_details from the
       // latest poll; the API omits the blob columns unless asked.
       const data = await apiRequest<MonitoringPoll[] | PollHistoryResult>(
         `/monitoring/polls/${hostId}/history?limit=${limit}&include_details=true`,
+        { signal },
       );
       return Array.isArray(data) ? { polls: data } : data;
     },
@@ -266,10 +275,10 @@ export function useMonitoringPolls(limit = 100) {
     // Device-scoped: distinct prefix so page-level ['monitoring-polls']
     // invalidations (poll-now / time-range refresh) don't refetch this shape.
     queryKey: ['device-polls', limit],
-    queryFn: async () => {
+    queryFn: async ({ signal }) => {
       const data = await apiRequest<
         (MonitoringPoll & { host_id?: number })[] | PollsResult
-      >(`/monitoring/polls?limit=${limit}`);
+      >(`/monitoring/polls?limit=${limit}`, { signal });
       return Array.isArray(data) ? { polls: data } : data;
     },
   });
@@ -279,9 +288,10 @@ export function useComplianceResults(hostId: number | null, limit = 20, enabled 
   return useQuery<{ results?: ComplianceResult[] }>({
     queryKey: ['compliance-results', hostId, limit],
     // Bare-array endpoint; the tab reads .results — normalize like the hooks above.
-    queryFn: async () => {
+    queryFn: async ({ signal }) => {
       const data = await apiRequest<ComplianceResult[] | { results?: ComplianceResult[] }>(
         `/compliance/results?host_id=${hostId}&limit=${limit}`,
+        { signal },
       );
       return Array.isArray(data) ? { results: data } : data;
     },
@@ -293,9 +303,10 @@ export function useSyslogEvents(hostId: number | null, limit = 100, enabled = tr
   return useQuery<{ events?: SyslogEvent[] }>({
     queryKey: ['syslog-events', hostId, limit],
     // Bare-array endpoint; the tab reads .events — normalize like the hooks above.
-    queryFn: async () => {
+    queryFn: async ({ signal }) => {
       const data = await apiRequest<SyslogEvent[] | { events?: SyslogEvent[] }>(
         `/metrics/events?host_id=${hostId}&limit=${limit}&event_type=syslog`,
+        { signal },
       );
       return Array.isArray(data) ? { events: data } : data;
     },
@@ -306,7 +317,7 @@ export function useSyslogEvents(hostId: number | null, limit = 100, enabled = tr
 export function useInterfaceErrorSummary(hostId: number | null, days = 1) {
   return useQuery<InterfaceErrorSummary>({
     queryKey: ['interface-error-summary', hostId, days],
-    queryFn: () => apiRequest(`/interfaces/${hostId}/errors?days=${days}`),
+    queryFn: ({ signal }) => apiRequest(`/interfaces/${hostId}/errors?days=${days}`, { signal }),
     enabled: hostId != null,
   });
 }
@@ -314,7 +325,7 @@ export function useInterfaceErrorSummary(hostId: number | null, days = 1) {
 export function useInterfaceErrorEvents(hostId: number | null, limit = 50) {
   return useQuery<InterfaceErrorEvent[]>({
     queryKey: ['interface-error-events', hostId, limit],
-    queryFn: () => apiRequest(`/interface-error-events?host_id=${hostId}&limit=${limit}`),
+    queryFn: ({ signal }) => apiRequest(`/interface-error-events?host_id=${hostId}&limit=${limit}`, { signal }),
     enabled: hostId != null,
   });
 }
@@ -326,7 +337,7 @@ export function useInterfaceErrorDetail(
 ) {
   return useQuery<InterfaceErrorDetail>({
     queryKey: ['interface-error-detail', hostId, ifIndex],
-    queryFn: () => apiRequest(`/interfaces/${hostId}/port/${ifIndex}/errors`),
+    queryFn: ({ signal }) => apiRequest(`/interfaces/${hostId}/port/${ifIndex}/errors`, { signal }),
     enabled: enabled && hostId != null && ifIndex != null,
   });
 }
@@ -334,9 +345,9 @@ export function useInterfaceErrorDetail(
 export function useIpamAddressContext(ip: string | null, vrf: string | null) {
   return useQuery<IpamAddressContext>({
     queryKey: ['ipam-address-context', ip, vrf],
-    queryFn: () => {
+    queryFn: ({ signal }) => {
       const qs = vrf ? `?vrf=${encodeURIComponent(vrf)}` : '';
-      return apiRequest(`/ipam/address/${encodeURIComponent(ip ?? '')}${qs}`);
+      return apiRequest(`/ipam/address/${encodeURIComponent(ip ?? '')}${qs}`, { signal });
     },
     enabled: !!ip,
   });

@@ -801,30 +801,35 @@ async def replace_host_bindings(host_id: int, rows: list[dict], vrfs: dict[str, 
             return False
         await db.execute("DELETE FROM interface_addresses WHERE host_id = ?", (int(host_id),))
         await db.execute("DELETE FROM host_vrfs WHERE host_id = ?", (int(host_id),))
-        for row in rows:
-            await db.execute(
+        # One executemany per table rather than a statement per address; rows
+        # keep their order, so ids (the read-back tiebreak) are unchanged.
+        if rows:
+            await db.executemany(
                 """INSERT INTO interface_addresses
                    (host_id, interface, interface_key, address, prefix_length, network, vrf_name, role,
                     protocol, svi_vid, collected_at)
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING""",
-                (
-                    int(host_id),
-                    row["interface"],
-                    row["interface_key"],
-                    row["address"],
-                    int(row["prefix_length"]),
-                    row["network"],
-                    row["vrf_name"],
-                    row["role"],
-                    row["protocol"],
-                    int(row["svi_vid"]),
-                    now,
-                ),
+                [
+                    (
+                        int(host_id),
+                        row["interface"],
+                        row["interface_key"],
+                        row["address"],
+                        int(row["prefix_length"]),
+                        row["network"],
+                        row["vrf_name"],
+                        row["role"],
+                        row["protocol"],
+                        int(row["svi_vid"]),
+                        now,
+                    )
+                    for row in rows
+                ],
             )
-        for name, count in vrfs.items():
-            await db.execute(
+        if vrfs:
+            await db.executemany(
                 "INSERT INTO host_vrfs (host_id, vrf_name, interface_count, collected_at) VALUES (?, ?, ?, ?)",
-                (int(host_id), name, int(count), now),
+                [(int(host_id), name, int(count), now) for name, count in vrfs.items()],
             )
         await _insert_vrfs(db, [*vrfs, *(r["vrf_name"] for r in rows)], "discovered")
         await db.commit()

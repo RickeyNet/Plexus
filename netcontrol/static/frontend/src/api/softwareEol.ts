@@ -66,7 +66,7 @@ function invalidate(qc: ReturnType<typeof useQueryClient>) {
 export function useSoftwareEolEntries() {
   return useQuery<{ entries: SoftwareEolEntry[]; warn_days: number }>({
     queryKey: ENTRIES_KEY,
-    queryFn: () => apiRequest('/software/eol-entries'),
+    queryFn: ({ signal }) => apiRequest('/software/eol-entries', { signal }),
   });
 }
 

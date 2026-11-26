@@ -37,7 +37,7 @@ export interface ConfigBackup {
 export function useUpgradeBackups() {
   return useQuery({
     queryKey: ['upgrade-backups'],
-    queryFn: () => apiRequest<ConfigBackup[]>('/upgrades/backups'),
+    queryFn: ({ signal }) => apiRequest<ConfigBackup[]>('/upgrades/backups', { signal }),
   });
 }
 
@@ -97,7 +97,7 @@ export interface UploadImageResult {
 export function useUpgradeImages() {
   return useQuery({
     queryKey: ['upgrade-images'],
-    queryFn: () => apiRequest<UpgradeImage[]>('/upgrades/images'),
+    queryFn: ({ signal }) => apiRequest<UpgradeImage[]>('/upgrades/images', { signal }),
   });
 }
 
@@ -312,14 +312,14 @@ export interface CancelUpgradeDevicesPayload {
 export function useUpgradeCampaigns() {
   return useQuery({
     queryKey: ['upgrade-campaigns'],
-    queryFn: () => apiRequest<UpgradeCampaignSummary[]>('/upgrades/campaigns'),
+    queryFn: ({ signal }) => apiRequest<UpgradeCampaignSummary[]>('/upgrades/campaigns', { signal }),
   });
 }
 
 export function useUpgradeCampaign(id: number | null) {
   return useQuery({
     queryKey: ['upgrade-campaign', id],
-    queryFn: () => apiRequest<UpgradeCampaign>(`/upgrades/campaigns/${id}`),
+    queryFn: ({ signal }) => apiRequest<UpgradeCampaign>(`/upgrades/campaigns/${id}`, { signal }),
     enabled: id !== null,
   });
 }
@@ -470,9 +470,10 @@ export function useUpgradeDeviceEvents(
 ) {
   return useQuery({
     queryKey: ['upgrade-events', campaignId, deviceId],
-    queryFn: () =>
+    queryFn: ({ signal }) =>
       apiRequest<UpgradeEvent[]>(
         `/upgrades/campaigns/${campaignId}/events?device_id=${deviceId}`,
+        { signal },
       ),
     enabled: campaignId !== null && deviceId !== null,
   });

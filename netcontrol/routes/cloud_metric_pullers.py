@@ -20,6 +20,19 @@ from typing import Any
 
 import routes.database as db
 
+from netcontrol.cloud_sdk import (
+    EXPIRED_CREDENTIAL_CODES,
+    AwsAccountClients,
+    aws_account,
+    aws_error_code,
+    aws_sdk_errors,
+    boto3_client_config,
+    build_boto3_session,
+    cached_sdk_client,
+    forget_account,
+    region_client,
+    sdk_available,
+)
 from netcontrol.routes.cloud_collectors import _aws_enabled_regions, _is_all_regions
 from netcontrol.routes.cloud_visibility import (
     _build_traffic_metric_rows_for_ingest,
@@ -50,14 +63,10 @@ def _account_lock(account_id: int) -> asyncio.Lock:
     return lock
 
 
-def _boto3_client_config():
-    from botocore.config import Config
+_boto3_client_config = boto3_client_config
 
-    return Config(
-        connect_timeout=10,
-        read_timeout=60,
-        retries={"max_attempts": 4, "mode": "adaptive"},
-    )
+# This puller's name in the shared SDK client cache (``netcontrol.cloud_sdk``).
+_SDK_PURPOSE = "metrics"
 
 
 async def _get_cursor(account_id: int) -> dict:
@@ -135,15 +144,13 @@ async def pull_aws_traffic_metrics(account: dict, *, lookback_minutes: int = _DE
         return {"ok": False, "error": "missing_resource_ids", "ingested": 0}
 
     try:
-        import boto3  # noqa: F401
-        from botocore.exceptions import BotoCoreError, ClientError
+        BotoCoreError, ClientError = await asyncio.to_thread(aws_sdk_errors)
     except ImportError:
         return {"ok": False, "error": "boto3_not_installed", "ingested": 0}
 
-    import asyncio
-
-    # Session build may call sts.assume_role (blocking network I/O)
-    session = await asyncio.to_thread(_build_boto3_session, auth)
+    # The session build may call sts.assume_role (blocking network I/O); it
+    # is cached per account, and its clients per region.
+    session = await asyncio.to_thread(_aws_account, account_id, auth)
     try:
         regions = await asyncio.to_thread(_resolve_regions, account, session)
     except Exception:
@@ -169,7 +176,7 @@ async def pull_aws_traffic_metrics(account: dict, *, lookback_minutes: int = _DE
         if region_start >= end_dt:
             continue
         try:
-            client = session.client("cloudwatch", region_name=region, config=_boto3_client_config())
+            client = await asyncio.to_thread(region_client, session, "cloudwatch", region)
             records = await _aws_cloudwatch_fetch(
                 client,
                 namespace=namespace,
@@ -193,6 +200,8 @@ async def pull_aws_traffic_metrics(account: dict, *, lookback_minutes: int = _DE
                     total_ingested += await db.create_cloud_traffic_metrics_batch(rows)
             region_marks[region] = end_dt.isoformat()
         except (BotoCoreError, ClientError) as exc:
+            if aws_error_code(exc) in EXPIRED_CREDENTIAL_CODES:
+                forget_account(_SDK_PURPOSE, account_id)
             msg = f"AWS traffic pull failed region={region}: {type(exc).__name__}"
             LOGGER.warning(msg)
             errors.append(msg)
@@ -375,9 +384,7 @@ async def pull_azure_traffic_metrics(account: dict, *, lookback_minutes: int = _
     if not resource_ids:
         return {"ok": False, "error": "missing_resource_ids", "ingested": 0}
 
-    try:
-        from azure.monitor.query import MetricsQueryClient  # noqa: F401
-    except ImportError:
+    if not await asyncio.to_thread(sdk_available, "azure.monitor.query"):
         return {"ok": False, "error": "azure_monitor_query_not_installed", "ingested": 0}
 
     cursor = await _get_cursor(account_id)
@@ -393,7 +400,15 @@ async def pull_azure_traffic_metrics(account: dict, *, lookback_minutes: int = _
     ]
 
     try:
-        client = _build_azure_metrics_client(auth)
+        # Built (credential chain included) in a thread, once per account.
+        client = await asyncio.to_thread(
+            cached_sdk_client,
+            _SDK_PURPOSE,
+            account_id,
+            auth,
+            lambda: _build_azure_metrics_client(auth),
+            builder=_build_azure_metrics_client,
+        )
         records = await _azure_monitor_fetch(
             client,
             resource_ids=resource_ids,
@@ -525,9 +540,7 @@ async def pull_gcp_traffic_metrics(account: dict, *, lookback_minutes: int = _DE
     if not project_id:
         return {"ok": False, "error": "missing_project_id", "ingested": 0}
 
-    try:
-        from google.cloud import monitoring_v3  # noqa: F401
-    except ImportError:
+    if not await asyncio.to_thread(sdk_available, "google.cloud.monitoring_v3"):
         return {"ok": False, "error": "google_cloud_monitoring_not_installed", "ingested": 0}
 
     cursor = await _get_cursor(account_id)
@@ -537,7 +550,14 @@ async def pull_gcp_traffic_metrics(account: dict, *, lookback_minutes: int = _DE
     errors: list[str] = []
 
     try:
-        client = _build_gcp_monitoring_client(auth)
+        client = await asyncio.to_thread(
+            cached_sdk_client,
+            _SDK_PURPOSE,
+            account_id,
+            auth,
+            lambda: _build_gcp_monitoring_client(auth),
+            builder=_build_gcp_monitoring_client,
+        )
         records = await _gcp_monitoring_fetch(
             client,
             project_id=project_id,
@@ -741,46 +761,14 @@ async def pull_traffic_metrics_all_accounts(*, lookback_minutes: int = _DEFAULT_
     }
 
 
-def _build_boto3_session(auth: dict):
-    import boto3
+def _build_boto3_session(auth: dict) -> Any:
+    return build_boto3_session(auth, role_session_name="plexus-metric-puller")
 
-    kwargs: dict[str, Any] = {}
-    if auth.get("profile_name"):
-        kwargs["profile_name"] = str(auth["profile_name"])
-    if auth.get("access_key_id"):
-        kwargs["aws_access_key_id"] = str(auth["access_key_id"])
-    if auth.get("secret_access_key"):
-        kwargs["aws_secret_access_key"] = str(auth["secret_access_key"])
-    if auth.get("session_token"):
-        kwargs["aws_session_token"] = str(auth["session_token"])
-    session = boto3.Session(**kwargs)
 
-    role_arn = str(auth.get("role_arn") or "").strip()
-    if role_arn:
-        from botocore.config import Config
-
-        sts = session.client(
-            "sts",
-            config=Config(
-                connect_timeout=10,
-                read_timeout=30,
-                retries={"max_attempts": 2},
-            ),
-        )
-        assume_args: dict[str, str] = {
-            "RoleArn": role_arn,
-            "RoleSessionName": str(auth.get("role_session_name") or "plexus-metric-puller"),
-        }
-        external_id = str(auth.get("external_id") or "").strip()
-        if external_id:
-            assume_args["ExternalId"] = external_id
-        creds = sts.assume_role(**assume_args)["Credentials"]
-        session = boto3.Session(
-            aws_access_key_id=creds["AccessKeyId"],
-            aws_secret_access_key=creds["SecretAccessKey"],
-            aws_session_token=creds["SessionToken"],
-        )
-    return session
+def _aws_account(account_id: int, auth: dict) -> AwsAccountClients:
+    """This puller's cached session of the account (``cloud_sdk.aws_account``).
+    Blocks: call it in a worker thread."""
+    return aws_account(_SDK_PURPOSE, account_id, auth, _build_boto3_session)
 
 
 def _parse_auth_config(account: dict) -> dict:

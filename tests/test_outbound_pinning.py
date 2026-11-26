@@ -62,7 +62,10 @@ def network(monkeypatch):
 
     monkeypatch.setattr(outbound_http.httpx, "AsyncHTTPTransport", factory)
     monkeypatch.setattr(outbound_http, "_env_proxy_applies", lambda url: False)
-    return built
+    # Pools are reused across requests: start and end each test without one.
+    outbound_http._POOLED_TRANSPORTS.discard()
+    yield built
+    outbound_http._POOLED_TRANSPORTS.discard()
 
 
 @pytest.mark.asyncio
@@ -214,7 +217,8 @@ async def test_an_identity_provider_request_goes_to_the_checked_address(monkeypa
     assert sent.headers["host"] == "idp.example.com"
     assert sent.extensions["sni_hostname"] == "idp.example.com"
     assert sent.headers["content-type"] == "application/x-www-form-urlencoded"
-    assert network[0].kwargs["verify"] is True
+    # The system trust, as a context built once rather than per request.
+    assert network[0].kwargs["verify"] is outbound_http._system_trust_context()
     assert resolver.calls["n"] == 1
 
 
@@ -380,3 +384,166 @@ async def test_an_identity_provider_answer_past_the_limit_is_refused(monkeypatch
     with pytest.raises(sso.SsoError, match="too large") as refused:
         await sso.provider_request("GET", "https://idp.example.com/jwks", transport=big, code="token")
     assert refused.value.code == "token"
+
+
+# ── Reused TLS contexts and connection pools ─────────────────────────────────
+
+
+class _ClosableRecorder(_Recorder):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.closed = 0
+
+    async def aclose(self) -> None:
+        self.closed += 1
+
+
+@pytest.fixture
+def pooled_network(monkeypatch):
+    """Like ``network``, with transports that count their closes."""
+    built: list[_ClosableRecorder] = []
+
+    def factory(*args, **kwargs):
+        rec = _ClosableRecorder(*args, **kwargs)
+        built.append(rec)
+        return rec
+
+    monkeypatch.setattr(outbound_http.httpx, "AsyncHTTPTransport", factory)
+    monkeypatch.setattr(outbound_http, "_env_proxy_applies", lambda url: False)
+    outbound_http._POOLED_TRANSPORTS.discard()
+    yield built
+    outbound_http._POOLED_TRANSPORTS.discard()
+
+
+@pytest.mark.asyncio
+async def test_two_requests_with_the_same_settings_share_one_pool(monkeypatch, pooled_network):
+    monkeypatch.setattr(net_guard, "_getaddrinfo", _rebinding_resolver(["192.0.2.10"]))
+
+    await send_request("POST", "https://hooks.example.com/in", content=b"a")
+    await send_request("POST", "https://hooks.example.com/in", content=b"b")
+
+    assert len(pooled_network) == 1
+    assert [r.url.host for r in pooled_network[0].requests] == ["192.0.2.10", "192.0.2.10"]
+    # The request's client closing does not close the shared pool.
+    assert pooled_network[0].closed == 0
+
+
+@pytest.mark.asyncio
+async def test_different_tls_settings_or_hosts_never_share_a_pool(monkeypatch, pooled_network):
+    monkeypatch.setattr(net_guard, "_getaddrinfo", _rebinding_resolver(["192.0.2.10"]))
+
+    await send_request("GET", "https://hooks.example.com/x")
+    await send_request("GET", "https://hooks.example.com/x", verify=False)
+    # Same address, another name: its own pool (the TLS name differs).
+    await send_request("GET", "https://other.example.com/x")
+    await send_request("GET", "http://hooks.example.com/x")
+    await send_request("GET", "https://hooks.example.com:8443/x")
+
+    assert len(pooled_network) == 5
+    assert pooled_network[1].kwargs["verify"] is False
+    assert all(len(rec.requests) == 1 for rec in pooled_network)
+
+
+@pytest.mark.asyncio
+async def test_a_new_dns_answer_gets_a_new_pool_and_a_refused_one_is_never_sent(monkeypatch, pooled_network):
+    resolver = _rebinding_resolver(["192.0.2.10", "192.0.2.11", "169.254.169.254"])
+    monkeypatch.setattr(net_guard, "_getaddrinfo", resolver)
+
+    await send_request("GET", "https://hooks.example.com/x")
+    await send_request("GET", "https://hooks.example.com/x")
+    with pytest.raises(OutboundRequestError):
+        await send_request("GET", "https://hooks.example.com/x")
+
+    # Each request was checked on its own; the pool opened to the first
+    # answer never served the second, and the refused one reached nothing.
+    assert resolver.calls["n"] == 3
+    assert [[r.url.host for r in rec.requests] for rec in pooled_network] == [["192.0.2.10"], ["192.0.2.11"]]
+
+
+@pytest.mark.asyncio
+async def test_a_context_the_caller_built_is_not_pooled(monkeypatch, pooled_network):
+    import ssl
+
+    monkeypatch.setattr(net_guard, "_getaddrinfo", _rebinding_resolver(["192.0.2.10"]))
+    own = ssl.create_default_context()
+
+    await send_request("GET", "https://hooks.example.com/x", verify=own)
+    await send_request("GET", "https://hooks.example.com/x", verify=own)
+
+    assert len(pooled_network) == 2
+    # Each request's own transport is closed with it.
+    assert [rec.closed for rec in pooled_network] == [1, 1]
+
+
+@pytest.mark.asyncio
+async def test_a_dropped_pool_stays_open_until_its_request_ends(monkeypatch, pooled_network):
+    monkeypatch.setattr(net_guard, "_getaddrinfo", _rebinding_resolver(["192.0.2.10"]))
+    monkeypatch.setattr(outbound_http._POOLED_TRANSPORTS, "max_entries", 1)
+    started, finish = asyncio.Event(), asyncio.Event()
+
+    async def handle(self, request):
+        self.requests.append(request)
+        if request.headers.get("host", "").startswith("slow."):
+            started.set()
+            await finish.wait()
+        return httpx.Response(204)
+
+    monkeypatch.setattr(_ClosableRecorder, "handle_async_request", handle)
+    in_flight = asyncio.create_task(send_request("GET", "https://slow.example.com/x"))
+    await asyncio.wait_for(started.wait(), 30)
+    # Another target pushes the slow request's pool out of the cache.
+    await send_request("GET", "https://other.example.com/x")
+    await asyncio.sleep(0)
+    assert len(outbound_http._POOLED_TRANSPORTS) == 1
+    assert pooled_network[0].closed == 0
+
+    finish.set()
+    assert (await in_flight).status_code == 204
+    assert pooled_network[0].closed == 1
+
+
+def test_tls_verify_builds_one_context_per_bundle(monkeypatch):
+    import ssl
+
+    built: list[str] = []
+
+    def fake_context(*, cadata):
+        built.append(cadata)
+        return ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+
+    monkeypatch.setattr(outbound_http.ssl, "create_default_context", fake_context)
+    outbound_http._SSL_CONTEXTS.clear()
+    try:
+        first = outbound_http.tls_verify(True, "-----BEGIN CERTIFICATE-----\nAAAA\n")
+        again = outbound_http.tls_verify(True, "-----BEGIN CERTIFICATE-----\nAAAA\n")
+        other = outbound_http.tls_verify(True, "-----BEGIN CERTIFICATE-----\nBBBB\n")
+    finally:
+        outbound_http._SSL_CONTEXTS.clear()
+
+    assert first is again
+    assert other is not first
+    assert len(built) == 2
+    assert outbound_http.tls_verify(False, "-----BEGIN CERTIFICATE-----\nAAAA\n") is False
+    assert outbound_http.tls_verify(True, "") is True
+
+
+def test_a_bundle_that_does_not_parse_still_raises_and_is_not_cached():
+    import ssl
+
+    with pytest.raises(ssl.SSLError):
+        outbound_http.tls_verify(True, "-----BEGIN CERTIFICATE-----\nnot a certificate\n-----END CERTIFICATE-----\n")
+    with pytest.raises(ssl.SSLError):
+        outbound_http.tls_verify(True, "-----BEGIN CERTIFICATE-----\nnot a certificate\n-----END CERTIFICATE-----\n")
+
+
+@pytest.mark.asyncio
+async def test_the_pool_is_bounded_and_closes_what_it_drops(monkeypatch, pooled_network):
+    monkeypatch.setattr(net_guard, "_getaddrinfo", _rebinding_resolver(["192.0.2.10"]))
+    monkeypatch.setattr(outbound_http._POOLED_TRANSPORTS, "max_entries", 2)
+
+    for name in ("a", "b", "c"):
+        await send_request("GET", f"https://{name}.example.com/x")
+    await asyncio.sleep(0)  # the drop's close runs as a task
+
+    assert len(outbound_http._POOLED_TRANSPORTS) == 2
+    assert [rec.closed for rec in pooled_network] == [1, 0, 0]

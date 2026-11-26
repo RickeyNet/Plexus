@@ -51,11 +51,14 @@ from __future__ import annotations
 
 import asyncio
 import time
+from collections.abc import Callable
 from typing import Any
 
 import routes.database as db
 
-from netcontrol.integrations.opnsense.client import OpnsenseApiError
+from netcontrol.client_cache import ClientCache, fingerprint
+from netcontrol.integrations.http_common import guard_api_host
+from netcontrol.integrations.opnsense.client import OpnsenseApiError, OpnsenseClient
 from netcontrol.integrations.opnsense.collector import (
     POLL_HEALTH_PARTS,
     call_reader,
@@ -167,6 +170,42 @@ def merge_health(result: dict, summary: dict[str, Any]) -> None:
         result["poll_error"] = ""
 
 
+# The poll's API clients, one per source, reused from poll to poll so a poll
+# does not load a new TLS context. Keyed by event loop and source; a changed
+# base URL, TLS choice or API key (or client factory) builds a new client and
+# closes the old one.
+_POLL_CLIENTS: ClientCache[OpnsenseClient] = ClientCache(
+    "opnsense_health",
+    max_entries=256,
+    max_idle_s=2 * 3600.0,
+    close=lambda client: client.close(),
+)
+
+
+async def _poll_client(
+    org: dict, secret: str, options: dict[str, Any], factory: Callable[..., OpnsenseClient]
+) -> OpnsenseClient:
+    """The cached poll client of ``org`` (built with ``factory``, the
+    topology module's client helper). A reused client runs the outbound
+    address guard again first, as a new one does before it connects; a
+    refusal raises ``OpnsenseApiError``."""
+    built: list[OpnsenseClient] = []
+
+    def build() -> OpnsenseClient:
+        client = factory(org, secret, options, max_retries=1, timeout=POLL_TIMEOUT_SECONDS)
+        built.append(client)
+        return client
+
+    client = _POLL_CLIENTS.get(
+        (asyncio.get_running_loop(), int(org["id"])),
+        (str(org.get("base_url") or ""), bool(options.get("verify_tls", True)), fingerprint(secret), factory),
+        build,
+    )
+    if not built:
+        await guard_api_host(client.base_url, "OPNsense", lambda message: OpnsenseApiError(message, transport=True))
+    return client
+
+
 async def read_firewall(
     org: dict, secret: str
 ) -> tuple[dict[str, Any] | None, dict[str, Any] | None, tuple[dict[str, Any], dict[str, Any]] | None]:
@@ -183,25 +222,23 @@ async def read_firewall(
     summary: dict[str, Any] | None = None
     vpn: dict[str, Any] | None = None
     ids: tuple[dict[str, Any], dict[str, Any]] | None = None
-    async with _opnsense_client(org, secret, options, max_retries=1, timeout=POLL_TIMEOUT_SECONDS) as client:
-        if options["include_health"]:
-            raw, answered = await collect_health(client, errors, POLL_HEALTH_PARTS)
-            summary = health_summary(raw) if answered else None
-        if options["include_vpn"]:
-            try:
-                vpn = await collect_vpn(call_reader(client, errors), configured=False)
-            except Exception as exc:  # noqa: BLE001 - the health part stands on its own
-                LOGGER.warning(
-                    "opnsense vpn counters: %s not read: %s", org.get("name") or org.get("id"), type(exc).__name__
-                )
-        if options["include_ids_alerts"] and opnsense_ids.poll_wanted(int(org["id"])):
-            try:
-                found, state = await opnsense_ids.read_in_session(client, int(org["id"]), errors)
-                ids = (found, state) if found is not None else None
-            except Exception as exc:  # noqa: BLE001 - the health part stands on its own
-                LOGGER.warning(
-                    "opnsense ids alerts: %s not read: %s", org.get("name") or org.get("id"), type(exc).__name__
-                )
+    client = await _poll_client(org, secret, options, _opnsense_client)
+    if options["include_health"]:
+        raw, answered = await collect_health(client, errors, POLL_HEALTH_PARTS)
+        summary = health_summary(raw) if answered else None
+    if options["include_vpn"]:
+        try:
+            vpn = await collect_vpn(call_reader(client, errors), configured=False)
+        except Exception as exc:  # noqa: BLE001 - the health part stands on its own
+            LOGGER.warning(
+                "opnsense vpn counters: %s not read: %s", org.get("name") or org.get("id"), type(exc).__name__
+            )
+    if options["include_ids_alerts"] and opnsense_ids.poll_wanted(int(org["id"])):
+        try:
+            found, state = await opnsense_ids.read_in_session(client, int(org["id"]), errors)
+            ids = (found, state) if found is not None else None
+        except Exception as exc:  # noqa: BLE001 - the health part stands on its own
+            LOGGER.warning("opnsense ids alerts: %s not read: %s", org.get("name") or org.get("id"), type(exc).__name__)
     for error in errors:
         if not error.get("info"):
             LOGGER.debug("opnsense poll: %s", redact_value(str(error.get("message") or "")))

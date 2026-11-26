@@ -18,6 +18,7 @@ import {
   type JobEvent,
 } from '@/api/jobs';
 import { formatBackendTime } from '@/lib/datetime';
+import { LOG_BUFFER_CAP, useBufferedLog } from '@/lib/logBuffer';
 
 import { isJobFinished, isJobRetryable, priorityLabel, priorityTone } from './helpers';
 import { formatJobInputs } from './jobInputs';
@@ -44,7 +45,7 @@ export function JobOutputModal({ jobId, onClose, onRetried }: Props) {
   const retryMut = useRetryJob();
   const rerunMut = useRerunJobLive();
 
-  const [liveEvents, setLiveEvents] = useState<LiveEvent[]>([]);
+  const { lines: liveEvents, dropped: liveDropped, buffer: liveLog } = useBufferedLog<LiveEvent>();
   const [liveStatus, setLiveStatus] = useState<string | null>(null);
   const [wsState, setWsState] = useState<'idle' | 'connecting' | 'open' | 'closed' | 'error'>('idle');
   const [confirmRunLive, setConfirmRunLive] = useState(false);
@@ -58,7 +59,7 @@ export function JobOutputModal({ jobId, onClose, onRetried }: Props) {
   const [prevJobId, setPrevJobId] = useState(jobId);
   if (jobId !== prevJobId) {
     setPrevJobId(jobId);
-    setLiveEvents([]);
+    liveLog.reset();
     setLiveStatus(null);
     setWsState('idle');
     setConfirmRunLive(false);
@@ -90,18 +91,16 @@ export function JobOutputModal({ jobId, onClose, onRetried }: Props) {
       try {
         const data = JSON.parse(e.data);
         if (data.type === 'job_complete') {
+          liveLog.flush();
           setLiveStatus(data.status || 'completed');
           ws.close();
         } else {
-          setLiveEvents((prev) => {
-            const next = [...prev, {
-              level: data.level || 'info',
-              message: data.message ?? '',
-              host: data.host,
-              timestamp: data.timestamp,
-            }];
-            // Cap to last 5000 lines so long-running jobs don't blow memory.
-            return next.length > 5000 ? next.slice(-5000) : next;
+          // Batched per frame and capped, so long-running jobs don't blow memory.
+          liveLog.push({
+            level: data.level || 'info',
+            message: data.message ?? '',
+            host: data.host,
+            timestamp: data.timestamp,
           });
         }
       } catch {
@@ -109,8 +108,13 @@ export function JobOutputModal({ jobId, onClose, onRetried }: Props) {
       }
     };
     ws.onerror = () => setWsState('error');
-    ws.onclose = () => setWsState((s) => (s === 'open' ? 'closed' : s));
+    ws.onclose = () => {
+      liveLog.flush();
+      setWsState((s) => (s === 'open' ? 'closed' : s));
+    };
     return () => {
+      // Keep the tail that arrived in the last frame before the socket went.
+      liveLog.flush();
       wsRef.current = null;
       ws.onopen = null;
       ws.onmessage = null;
@@ -118,13 +122,13 @@ export function JobOutputModal({ jobId, onClose, onRetried }: Props) {
       ws.onclose = null;
       try { ws.close(); } catch { /* ignore */ }
     };
-  }, [isOpen, jobId, isLive]);
+  }, [isOpen, jobId, isLive, liveLog]);
 
-  // auto-scroll
+  // auto-scroll; on the array, since its length stops changing once capped
   useEffect(() => {
     const el = outputRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [liveEvents.length, eventsQuery.data]);
+  }, [liveEvents, eventsQuery.data]);
 
   // Single source of truth for the output area.  The WebSocket handler
   // replays the entire persisted backlog on connect and then streams
@@ -178,7 +182,7 @@ export function JobOutputModal({ jobId, onClose, onRetried }: Props) {
 
   // The one list both the output area and the clipboard read, so neither
   // gets the duplicated history+live concatenation.
-  const shownEvents: (LiveEvent | JobEvent)[] = showLive ? liveEvents : historicalEvents;
+  const shownEvents: readonly (LiveEvent | JobEvent)[] = showLive ? liveEvents : historicalEvents;
   const eventLine = (e: LiveEvent | JobEvent) =>
     `[${formatBackendTime(e.timestamp, '')}] ${e.host ? `${e.host}: ` : ''}${e.message}`;
 
@@ -261,8 +265,14 @@ export function JobOutputModal({ jobId, onClose, onRetried }: Props) {
           )}
 
           <div ref={outputRef} className="job-output">
+            {showLive && liveDropped > 0 && (
+              <div className="job-output-line info text-muted">
+                Showing the last {LOG_BUFFER_CAP.toLocaleString()} lines; {liveDropped.toLocaleString()} earlier lines are not shown.
+              </div>
+            )}
             {shownEvents.map((e, i) => (
-              <div key={`${showLive ? 'l' : 'h'}-${i}`} className={`job-output-line ${e.level || 'info'}`}>
+              // Keyed by position in the whole stream, so dropping lines from the front keeps the rest in place.
+              <div key={showLive ? `l-${liveDropped + i}` : `h-${i}`} className={`job-output-line ${e.level || 'info'}`}>
                 {eventLine(e)}
               </div>
             ))}

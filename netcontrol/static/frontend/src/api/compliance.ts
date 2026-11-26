@@ -146,21 +146,21 @@ export interface RemediationResult {
 export function useComplianceSummary() {
   return useQuery<ComplianceSummary>({
     queryKey: ['compliance-summary'],
-    queryFn: () => apiRequest('/compliance/summary'),
+    queryFn: ({ signal }) => apiRequest('/compliance/summary', { signal }),
   });
 }
 
 export function useComplianceProfiles() {
   return useQuery<ComplianceProfile[]>({
     queryKey: ['compliance-profiles'],
-    queryFn: () => apiRequest('/compliance/profiles'),
+    queryFn: ({ signal }) => apiRequest('/compliance/profiles', { signal }),
   });
 }
 
 export function useComplianceProfile(id: number | null) {
   return useQuery<ComplianceProfile>({
     queryKey: ['compliance-profile', id],
-    queryFn: () => apiRequest(`/compliance/profiles/${id}`),
+    queryFn: ({ signal }) => apiRequest(`/compliance/profiles/${id}`, { signal }),
     enabled: id != null,
   });
 }
@@ -169,21 +169,21 @@ export function useComplianceAssignments(profileId?: number) {
   const qs = profileId ? `?profile_id=${profileId}` : '';
   return useQuery<ComplianceAssignment[]>({
     queryKey: ['compliance-assignments', profileId ?? 'all'],
-    queryFn: () => apiRequest(`/compliance/assignments${qs}`),
+    queryFn: ({ signal }) => apiRequest(`/compliance/assignments${qs}`, { signal }),
   });
 }
 
 export function useComplianceScanResults(limit = 200) {
   return useQuery<ComplianceScanResult[]>({
     queryKey: ['compliance-results', limit],
-    queryFn: () => apiRequest(`/compliance/results?limit=${limit}`),
+    queryFn: ({ signal }) => apiRequest(`/compliance/results?limit=${limit}`, { signal }),
   });
 }
 
 export function useComplianceScanResult(id: number | null) {
   return useQuery<ComplianceScanResult>({
     queryKey: ['compliance-result', id],
-    queryFn: () => apiRequest(`/compliance/results/${id}`),
+    queryFn: ({ signal }) => apiRequest(`/compliance/results/${id}`, { signal }),
     enabled: id != null,
   });
 }
@@ -191,15 +191,15 @@ export function useComplianceScanResult(id: number | null) {
 export function useComplianceHostStatus() {
   return useQuery<ComplianceHostStatus[]>({
     queryKey: ['compliance-host-status'],
-    queryFn: () => apiRequest('/compliance/status'),
+    queryFn: ({ signal }) => apiRequest('/compliance/status', { signal }),
   });
 }
 
 export function useInventoryGroups(includeHosts = false, enabled = true) {
   return useQuery<InventoryGroup[]>({
     queryKey: ['inventory-groups', includeHosts],
-    queryFn: () =>
-      apiRequest(includeHosts ? '/inventory?include_hosts=true' : '/inventory'),
+    queryFn: ({ signal }) =>
+      apiRequest(includeHosts ? '/inventory?include_hosts=true' : '/inventory', { signal }),
     enabled,
   });
 }
@@ -207,7 +207,7 @@ export function useInventoryGroups(includeHosts = false, enabled = true) {
 export function useCredentials() {
   return useQuery<Credential[]>({
     queryKey: ['credentials'],
-    queryFn: () => apiRequest('/credentials'),
+    queryFn: ({ signal }) => apiRequest('/credentials', { signal }),
   });
 }
 
@@ -328,8 +328,8 @@ function useScanJobPoll<J extends { status: string }>(queryKey: readonly unknown
   const qc = useQueryClient();
   return useQuery<J>({
     queryKey,
-    queryFn: async () => {
-      const job = await apiRequest<J>(path as string);
+    queryFn: async ({ signal }) => {
+      const job = await apiRequest<J>(path as string, { signal });
       if (job.status !== 'running') invalidateCompliance(qc);
       return job;
     },
@@ -504,7 +504,7 @@ export interface MerakiSummary {
 export function useMerakiChecks() {
   return useQuery<{ checks: MerakiCheck[]; categories: Record<string, string> }>({
     queryKey: ['compliance-meraki', 'checks'],
-    queryFn: () => apiRequest('/compliance/meraki/checks'),
+    queryFn: ({ signal }) => apiRequest('/compliance/meraki/checks', { signal }),
     staleTime: 10 * 60 * 1000,
   });
 }
@@ -512,7 +512,7 @@ export function useMerakiChecks() {
 export function useMerakiComplianceOrgs() {
   return useQuery<MerakiComplianceOrg[]>({
     queryKey: ['compliance-meraki', 'orgs'],
-    queryFn: () => apiRequest('/compliance/meraki/orgs'),
+    queryFn: ({ signal }) => apiRequest('/compliance/meraki/orgs', { signal }),
   });
 }
 
@@ -520,7 +520,7 @@ export function useMerakiAssignments(profileId?: number) {
   const qs = profileId ? `?profile_id=${profileId}` : '';
   return useQuery<MerakiAssignment[]>({
     queryKey: ['compliance-meraki', 'assignments', profileId ?? 'all'],
-    queryFn: () => apiRequest(`/compliance/meraki/assignments${qs}`),
+    queryFn: ({ signal }) => apiRequest(`/compliance/meraki/assignments${qs}`, { signal }),
     // Keeps the "Scanning" state honest for scans started elsewhere.
     refetchInterval: (query) => (query.state.data?.some((a) => a.scanning) ? 4000 : false),
   });
@@ -529,14 +529,14 @@ export function useMerakiAssignments(profileId?: number) {
 export function useMerakiResults(limit = 200) {
   return useQuery<MerakiResult[]>({
     queryKey: ['compliance-meraki', 'results', limit],
-    queryFn: () => apiRequest(`/compliance/meraki/results?limit=${limit}`),
+    queryFn: ({ signal }) => apiRequest(`/compliance/meraki/results?limit=${limit}`, { signal }),
   });
 }
 
 export function useMerakiResult(id: number | null) {
   return useQuery<MerakiResultDetail>({
     queryKey: ['compliance-meraki', 'result', id],
-    queryFn: () => apiRequest(`/compliance/meraki/results/${id}`),
+    queryFn: ({ signal }) => apiRequest(`/compliance/meraki/results/${id}`, { signal }),
     enabled: id != null,
   });
 }
@@ -544,14 +544,14 @@ export function useMerakiResult(id: number | null) {
 export function useMerakiStatus() {
   return useQuery<MerakiResult[]>({
     queryKey: ['compliance-meraki', 'status'],
-    queryFn: () => apiRequest('/compliance/meraki/status'),
+    queryFn: ({ signal }) => apiRequest('/compliance/meraki/status', { signal }),
   });
 }
 
 export function useMerakiSummary() {
   return useQuery<MerakiSummary>({
     queryKey: ['compliance-meraki', 'summary'],
-    queryFn: () => apiRequest('/compliance/meraki/summary'),
+    queryFn: ({ signal }) => apiRequest('/compliance/meraki/summary', { signal }),
   });
 }
 

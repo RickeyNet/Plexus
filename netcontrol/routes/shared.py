@@ -855,6 +855,21 @@ def _compute_config_diff(
     return diff_text, added, removed
 
 
+async def compute_config_diff_async(
+    baseline_text: str,
+    actual_text: str,
+    baseline_label: str = "baseline",
+    actual_label: str = "actual",
+) -> tuple[str, int, int]:
+    """``_compute_config_diff`` in a worker thread.
+
+    difflib on a large config takes about a second of pure CPU, which would
+    stall every request sharing the event loop. Callers already in a thread
+    use ``_compute_config_diff`` directly.
+    """
+    return await asyncio.to_thread(_compute_config_diff, baseline_text, actual_text, baseline_label, actual_label)
+
+
 def _open_netmiko_session(
     host: dict, credentials: dict, *, autodetect: bool = True, enable_optional: bool = False, **connect_options
 ):

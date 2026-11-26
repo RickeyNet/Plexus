@@ -151,7 +151,7 @@ function usePatchBuiltinAt(path: string, key: string[]) {
 }
 
 export function useSyslogRules() {
-  return useQuery<SyslogRule[]>({ queryKey: KEY, queryFn: () => apiRequest(PATH) });
+  return useQuery<SyslogRule[]>({ queryKey: KEY, queryFn: ({ signal }) => apiRequest(PATH, { signal }) });
 }
 
 export function useCreateSyslogRule() {
@@ -180,7 +180,7 @@ const TRAP_PATH = '/monitoring/trap-rules';
 const TRAP_KEY = ['trap-rules'];
 
 export function useTrapRules() {
-  return useQuery<SyslogRule[]>({ queryKey: TRAP_KEY, queryFn: () => apiRequest(TRAP_PATH) });
+  return useQuery<SyslogRule[]>({ queryKey: TRAP_KEY, queryFn: ({ signal }) => apiRequest(TRAP_PATH, { signal }) });
 }
 
 export function usePatchBuiltinTrapRule() {
@@ -332,7 +332,7 @@ export interface SyslogActivity {
 export function useSyslogActivity(hours: number) {
   return useQuery<SyslogActivity>({
     queryKey: [...ACTIVITY_KEY, hours],
-    queryFn: () => apiRequest(`${PATH}/activity${queryString({ hours })}`),
+    queryFn: ({ signal }) => apiRequest(`${PATH}/activity${queryString({ hours })}`, { signal }),
     staleTime: 60_000,
   });
 }

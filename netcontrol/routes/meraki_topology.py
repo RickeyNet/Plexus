@@ -75,6 +75,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, Response
 from pydantic import BaseModel, Field
 
 from netcontrol import xlsx
+from netcontrol.bounded_map import BoundedDict
 from netcontrol.integrations.appgate.client import (
     AppgateApiError,
     AppgateClient,
@@ -2175,13 +2176,34 @@ async def gcp_reachability_api(
 
 # ── Path trace ───────────────────────────────────────────────────────────────
 
-# (host id, route snapshot id, config backup id, inventory group, alias
-# tables read at) -> {"block": forwarding block, "subnets": its subnet index
-# rows} of an inventory host. A new route capture or backup gets a new id
-# and new OPNsense alias tables a new read time, so an entry never goes
-# stale; the dict is cleared when it grows past the limit.
-_HOST_FORWARDING: dict[tuple, dict[str, Any]] = {}
+# host id -> (key, {"block": forwarding block, "subnets": its subnet index
+# rows}) of an inventory host; the key is (route snapshot id, config backup
+# id, inventory group, group name, alias tables read at). A new route
+# capture or backup gets a new id and new OPNsense alias tables a new read
+# time, so a changed key rebuilds the host's entry and replaces the old one.
+# Past the limit the hosts written longest ago are dropped. Every entry is
+# the same for every caller; scope filtering happens on the graph before.
 _HOST_FORWARDING_LIMIT = 5000
+_HOST_FORWARDING: BoundedDict = BoundedDict(_HOST_FORWARDING_LIMIT)
+
+
+def _parse_host_forwarding(jobs: list[tuple[int, dict, dict[str, Any]]]) -> dict[int, dict[str, Any]]:
+    """``host id -> {"block", "subnets"}`` of each ``(host id, graph node,
+    forwarding_for_host inputs)``: the CPU-bound config and route parsing,
+    run off the event loop."""
+    built: dict[int, dict[str, Any]] = {}
+    for host_id, node, inputs in jobs:
+        host = {"ip_address": node.get("ip") or "", "device_type": node.get("device_type") or ""}
+        block = forwarding_for_host(
+            host,
+            inputs["aliases"],
+            inputs["capture"],
+            inputs["interfaces"],
+            config_backup=inputs["backup"],
+            alias_tables=inputs["alias_tables"],
+        )
+        built[host_id] = {"block": block, "subnets": subnets_for_host(node, block)}
+    return built
 
 
 async def _inventory_forwarding(nodes: list[dict]) -> dict[int, dict[str, Any]]:
@@ -2189,47 +2211,69 @@ async def _inventory_forwarding(nodes: list[dict]) -> dict[int, dict[str, Any]]:
     graph: its forwarding block, from its interfaces, addresses, latest SSH
     route capture, latest successful configuration backup and, for an
     OPNsense firewall, its collected alias tables (bulk queries), and the
-    subnet index rows of its networks."""
+    subnet index rows of its networks. Only the ids of the captures and
+    backups are read for every host; their text only for the hosts whose
+    cached entry is missing or out of date."""
     hosts = {n["id"]: n for n in nodes if isinstance(n.get("id"), int) and n.get("in_inventory", True)}
     if not hosts:
         return {}
-    captures = await db.get_latest_route_snapshots_for_hosts(list(hosts))
-    backups = await db.get_latest_config_texts_for_hosts(list(hosts))
+    capture_ids = await db.get_latest_route_snapshot_ids_for_hosts(list(hosts))
+    backup_ids = await db.get_latest_config_backup_ids_for_hosts(list(hosts))
     table_versions = await db.get_opnsense_alias_table_versions(list(hosts))
-    keys = {
-        host_id: (
-            host_id,
-            (captures.get(host_id) or {}).get("id"),
-            (backups.get(host_id) or {}).get("id"),
+
+    def key_of(host_id: int, capture_id: Any, backup_id: Any) -> tuple:
+        node = hosts[host_id]
+        return (
+            capture_id,
+            backup_id,
             node.get("group_id"),
             str(node.get("group_name") or ""),
             table_versions.get(host_id, ""),
         )
-        for host_id, node in hosts.items()
-    }
-    missing = [host_id for host_id, key in keys.items() if key not in _HOST_FORWARDING]
+
+    entries: dict[int, dict[str, Any]] = {}
+    missing: list[int] = []
+    for host_id in hosts:
+        cached = _HOST_FORWARDING.get(host_id)
+        if cached is not None and cached[0] == key_of(host_id, capture_ids.get(host_id), backup_ids.get(host_id)):
+            entries[host_id] = cached[1]
+        else:
+            missing.append(host_id)
     if missing:
+        captures = await db.get_latest_route_snapshots_for_hosts(missing)
+        backups = await db.get_latest_config_texts_for_hosts(missing)
         aliases: dict[int, list[str]] = {}
         for row in await db.get_ip_aliases_for_hosts(missing):
             aliases.setdefault(int(row["host_id"]), []).append(str(row.get("ip_address") or ""))
         interfaces = await db.get_interface_inventory_for_hosts(missing)
         # The OPNsense alias tables, only of the hosts that have them.
         tables = await db.get_opnsense_alias_tables([h for h in missing if h in table_versions])
-        if len(_HOST_FORWARDING) + len(missing) > _HOST_FORWARDING_LIMIT:
-            _HOST_FORWARDING.clear()
-        for host_id in missing:
-            node = hosts[host_id]
-            host = {"ip_address": node.get("ip") or "", "device_type": node.get("device_type") or ""}
-            block = forwarding_for_host(
-                host,
-                aliases.get(host_id, []),
-                captures.get(host_id),
-                interfaces.get(host_id, []),
-                config_backup=backups.get(host_id),
-                alias_tables=(tables.get(host_id) or {}).get("tables"),
+        jobs = [
+            (
+                host_id,
+                hosts[host_id],
+                {
+                    "aliases": aliases.get(host_id, []),
+                    "capture": captures.get(host_id),
+                    "interfaces": interfaces.get(host_id, []),
+                    "backup": backups.get(host_id),
+                    "alias_tables": (tables.get(host_id) or {}).get("tables"),
+                },
             )
-            _HOST_FORWARDING[keys[host_id]] = {"block": block, "subnets": subnets_for_host(node, block)}
-    return {host_id: _HOST_FORWARDING[key] for host_id, key in keys.items() if key in _HOST_FORWARDING}
+            for host_id in missing
+        ]
+        built = await asyncio.to_thread(_parse_host_forwarding, jobs)
+        for host_id, entry in built.items():
+            # Keyed by the rows actually parsed: a capture or backup written
+            # after the id read gets its own key on the next call.
+            key = key_of(
+                host_id,
+                (captures.get(host_id) or {}).get("id"),
+                (backups.get(host_id) or {}).get("id"),
+            )
+            _HOST_FORWARDING[host_id] = (key, entry)
+            entries[host_id] = entry
+    return {host_id: entries[host_id] for host_id in hosts if host_id in entries}
 
 
 async def _inventory_subnets(nodes: list[dict] | None = None, scope: ObjectScope | None = None) -> list[dict[str, Any]]:

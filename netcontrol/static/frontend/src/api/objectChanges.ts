@@ -65,7 +65,7 @@ export interface ObjectChangeFilter {
 export function useObjectChanges(filter: ObjectChangeFilter, enabled = true) {
   return useQuery<ObjectChangePage>({
     queryKey: ['object-changes', filter],
-    queryFn: () => apiRequest(`/changes${queryString(filter)}`),
+    queryFn: ({ signal }) => apiRequest(`/changes${queryString(filter)}`, { signal }),
     placeholderData: keepPreviousData,
     enabled,
   });

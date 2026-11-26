@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import json
 import socket
+import ssl
 
 import pytest
 import routes.database as db_module
@@ -615,3 +616,187 @@ async def test_send_test_event_error_keeps_no_secret_the_receiver_echoed(monkeyp
     finally:
         async with sf._runtime_lock:
             sf._sinks.pop(rt.config.id, None)
+
+
+# ── One connection per stream sink ───────────────────────────────────────────
+
+
+def _frames(data: bytes) -> list[bytes]:
+    """The messages of an octet-counted byte stream."""
+    out: list[bytes] = []
+    while data:
+        length, rest = data.split(b" ", 1)
+        out.append(rest[: int(length)])
+        data = rest[int(length) :]
+    return out
+
+
+async def test_a_tcp_sink_sends_events_over_one_connection_and_reconnects_after_a_close():
+    streams: list[bytearray] = []
+    writers: list[asyncio.StreamWriter] = []
+
+    async def handle(reader, writer):
+        received = bytearray()
+        streams.append(received)
+        writers.append(writer)
+        while data := await reader.read(8192):
+            received += data
+        writer.close()
+
+    server = await asyncio.start_server(handle, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    sink = sf.sanitize_sink({"id": "tcp-reuse", "protocol": "tcp", "host": "127.0.0.1", "port": port})
+    conn = sf.StreamConnection()
+    try:
+        await sf.deliver(sink, {**_EVENT, "id": 1}, conn)
+        await sf.deliver(sink, {**_EVENT, "id": 2}, conn)
+        for _ in range(100):
+            if streams and len(_frames(bytes(streams[0]))) == 2:
+                break
+            await asyncio.sleep(0.02)
+        assert len(streams) == 1
+        assert len(_frames(bytes(streams[0]))) == 2
+
+        # The receiver closes its side: the next event opens a new connection.
+        writers[0].close()
+        for _ in range(100):
+            if conn.reader is not None and conn.reader.at_eof():
+                break
+            await asyncio.sleep(0.02)
+        await sf.deliver(sink, {**_EVENT, "id": 3}, conn)
+        for _ in range(100):
+            if len(streams) == 2 and streams[1]:
+                break
+            await asyncio.sleep(0.02)
+        assert len(streams) == 2
+        assert len(_frames(bytes(streams[1]))) == 1
+    finally:
+        conn.close()
+        server.close()
+        await server.wait_closed()
+
+
+class _StreamWriter(_FakeWriter):
+    def __init__(self, fail_drain: bool = False):
+        super().__init__()
+        self.fail_drain = fail_drain
+        self.closed = False
+
+    async def drain(self) -> None:
+        if self.fail_drain:
+            raise ConnectionResetError("reset by peer")
+
+    def close(self) -> None:
+        self.closed = True
+
+    def is_closing(self) -> bool:
+        return self.closed
+
+
+class _StreamReader:
+    def at_eof(self) -> bool:
+        return False
+
+
+def _fake_streams(monkeypatch, *, failing: set[int] = frozenset()):
+    """``asyncio.open_connection`` handing out writers; the ones whose index
+    is in ``failing`` fail their drain."""
+    opened: list[tuple[str, _StreamWriter]] = []
+
+    async def fake_open(address, port, **kwargs):
+        writer = _StreamWriter(fail_drain=len(opened) in failing)
+        opened.append((address, writer))
+        return _StreamReader(), writer
+
+    monkeypatch.setattr(sf.asyncio, "open_connection", fake_open)
+    return opened
+
+
+async def test_a_failed_write_closes_the_stream_and_the_retry_reconnects(monkeypatch):
+    _resolve_to(monkeypatch, "192.0.2.50")
+    opened = _fake_streams(monkeypatch, failing={0})
+    sink = sf.sanitize_sink({"id": "s", "protocol": "tcp", "host": "siem.example.com", "port": 6514})
+    conn = sf.StreamConnection()
+
+    with pytest.raises(ConnectionResetError):
+        await sf.deliver(sink, _EVENT, conn)
+    assert opened[0][1].closed and conn.writer is None
+    await sf.deliver(sink, _EVENT, conn)
+    await sf.deliver(sink, _EVENT, conn)
+
+    assert len(opened) == 2
+    assert len(_frames(opened[1][1].sent)) == 2
+
+
+async def test_a_stream_is_not_reused_for_an_address_the_check_no_longer_approves(monkeypatch):
+    opened = _fake_streams(monkeypatch)
+    sink = sf.sanitize_sink({"id": "s", "protocol": "tcp", "host": "siem.example.com", "port": 6514})
+    conn = sf.StreamConnection()
+
+    _resolve_to(monkeypatch, "192.0.2.60")
+    await sf.deliver(sink, _EVENT, conn)
+    _resolve_to(monkeypatch, "192.0.2.61")
+    await sf.deliver(sink, _EVENT, conn)
+
+    assert [address for address, _writer in opened] == ["192.0.2.60", "192.0.2.61"]
+    assert opened[0][1].closed
+    assert len(_frames(opened[1][1].sent)) == 1
+
+    # A refused answer sends nothing, over the open stream or a new one.
+    def refuse(host):
+        raise sf.OutboundRequestError("cloud metadata address")
+
+    monkeypatch.setattr(sf, "validate_outbound_host", refuse)
+    with pytest.raises(RuntimeError, match="target rejected"):
+        await sf.deliver(sink, _EVENT, conn)
+    assert len(opened) == 2 and len(_frames(opened[1][1].sent)) == 1
+
+
+async def test_an_idle_stream_is_reopened(monkeypatch):
+    _resolve_to(monkeypatch, "192.0.2.70")
+    opened = _fake_streams(monkeypatch)
+    sink = sf.sanitize_sink({"id": "s", "protocol": "tcp", "host": "siem.example.com", "port": 6514})
+    conn = sf.StreamConnection()
+
+    await sf.deliver(sink, _EVENT, conn)
+    conn.last_used -= sf.STREAM_IDLE_SECONDS + 1
+    await sf.deliver(sink, _EVENT, conn)
+
+    assert len(opened) == 2 and opened[0][1].closed
+
+
+async def test_the_sink_loop_keeps_order_on_one_stream_and_closes_it_when_stopped(monkeypatch):
+    _resolve_to(monkeypatch, "192.0.2.80")
+    opened = _fake_streams(monkeypatch)
+    sink = sf.sanitize_sink({"id": "s", "protocol": "tcp", "format": "json", "host": "siem.example.com", "port": 6514})
+    rt = sf.SinkRuntime(config=sink, queue=asyncio.Queue(maxsize=10))
+    rt.task = asyncio.create_task(sf._sink_loop(rt))
+    try:
+        for n in (1, 2, 3):
+            await rt.queue.put({**_EVENT, "id": n})
+        for _ in range(200):
+            if rt.delivered == 3:
+                break
+            await asyncio.sleep(0.01)
+        assert rt.delivered == 3
+    finally:
+        rt.task.cancel()
+        try:
+            await rt.task
+        except asyncio.CancelledError:
+            pass
+
+    assert len(opened) == 1 and opened[0][1].closed
+    ids = [json.loads(frame.split(b" ", 7)[7])["event"]["id"] for frame in _frames(opened[0][1].sent)]
+    assert ids == [1, 2, 3]
+
+
+async def test_tls_sinks_with_the_same_bundle_share_one_context():
+    one = sf.sanitize_sink({"id": "a", "protocol": "tls", "host": "siem.example.com", "port": 6514})
+    two = sf.sanitize_sink({"id": "b", "protocol": "tls", "host": "siem2.example.com", "port": 6514})
+    off = sf.sanitize_sink(
+        {"id": "c", "protocol": "tls", "host": "siem.example.com", "port": 6514, "tls_verify": False}
+    )
+    assert sf._build_tls_context(one) is sf._build_tls_context(two)
+    assert sf._build_tls_context(off) is not sf._build_tls_context(one)
+    assert sf._build_tls_context(off).verify_mode == ssl.CERT_NONE

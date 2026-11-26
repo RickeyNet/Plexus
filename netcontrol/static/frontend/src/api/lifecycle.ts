@@ -188,21 +188,21 @@ export const LIFECYCLE_KEYS = {
 export function useFleetLifecycle(filter: LifecycleFilter) {
   return useQuery<FleetStatus>({
     queryKey: LIFECYCLE_KEYS.status(filter),
-    queryFn: () => detailRequest<FleetStatus>(`/lifecycle/status${queryString(filter)}`),
+    queryFn: ({ signal }) => detailRequest<FleetStatus>(`/lifecycle/status${queryString(filter)}`, { signal }),
   });
 }
 
 export function useHardwareNotices() {
   return useQuery<HardwareNotice[]>({
     queryKey: LIFECYCLE_KEYS.notices,
-    queryFn: async () => listOf<HardwareNotice>(await detailRequest('/lifecycle/notices'), 'notices'),
+    queryFn: async ({ signal }) => listOf<HardwareNotice>(await detailRequest('/lifecycle/notices', { signal }), 'notices'),
   });
 }
 
 export function useHardwareNotice(id: number | null) {
   return useQuery<NoticeDetail>({
     queryKey: LIFECYCLE_KEYS.notice(id ?? 0),
-    queryFn: () => detailRequest<NoticeDetail>(`/lifecycle/notices/${id}`),
+    queryFn: ({ signal }) => detailRequest<NoticeDetail>(`/lifecycle/notices/${id}`, { signal }),
     enabled: id !== null,
   });
 }
@@ -210,7 +210,7 @@ export function useHardwareNotice(id: number | null) {
 export function useSupportContracts() {
   return useQuery<SupportContract[]>({
     queryKey: LIFECYCLE_KEYS.contracts,
-    queryFn: async () => listOf<SupportContract>(await detailRequest('/lifecycle/contracts'), 'contracts'),
+    queryFn: async ({ signal }) => listOf<SupportContract>(await detailRequest('/lifecycle/contracts', { signal }), 'contracts'),
   });
 }
 
@@ -218,7 +218,7 @@ export function useSupportContracts() {
 export function useHostLifecycle(hostId: number | null, enabled = true) {
   return useQuery<HostLifecycle>({
     queryKey: LIFECYCLE_KEYS.host(hostId ?? 0),
-    queryFn: () => detailRequest<HostLifecycle>(`/lifecycle/hosts/${hostId}`),
+    queryFn: ({ signal }) => detailRequest<HostLifecycle>(`/lifecycle/hosts/${hostId}`, { signal }),
     enabled: enabled && hostId !== null,
   });
 }
@@ -226,14 +226,14 @@ export function useHostLifecycle(hostId: number | null, enabled = true) {
 export function useLifecycleChoices() {
   return useQuery<LifecycleChoices>({
     queryKey: LIFECYCLE_KEYS.choices,
-    queryFn: () => detailRequest<LifecycleChoices>('/lifecycle/choices'),
+    queryFn: ({ signal }) => detailRequest<LifecycleChoices>('/lifecycle/choices', { signal }),
   });
 }
 
 export function useLifecycleSettings() {
   return useQuery<LifecycleSettings>({
     queryKey: LIFECYCLE_KEYS.settings,
-    queryFn: () => detailRequest<LifecycleSettings>('/lifecycle/settings'),
+    queryFn: ({ signal }) => detailRequest<LifecycleSettings>('/lifecycle/settings', { signal }),
   });
 }
 

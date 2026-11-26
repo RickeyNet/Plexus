@@ -17,6 +17,7 @@ import json
 import os
 import re
 import time
+import weakref
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -35,6 +36,7 @@ from netcontrol.object_scope import (
     require_host,
     scoped,
 )
+from netcontrol.prefix_index import PrefixIndex
 from netcontrol.routes.shared import DISCOVERY_RUNS, LIVE_STREAMS, fan_out
 from netcontrol.routes.snmp import _discover_neighbors, _infer_device_category, _snmp_walk  # noqa: F401
 from netcontrol.telemetry import configure_logging, increment_metric, redact_value
@@ -180,7 +182,9 @@ def _normalize_ip_text(raw_ip: str) -> str:
         return ""
 
 
-def _build_ipam_subnet_index(subnets: list[dict]) -> list[tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, dict]]:
+def _build_ipam_subnet_index(subnets: list[dict]) -> PrefixIndex[dict]:
+    """The IPAM subnets indexed once per build, so each node is one lookup
+    instead of a scan of every subnet."""
     indexed: list[tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, dict]] = []
     for row in subnets:
         subnet_text = str(row.get("subnet") or "").strip()
@@ -191,12 +195,10 @@ def _build_ipam_subnet_index(subnets: list[dict]) -> list[tuple[ipaddress.IPv4Ne
         except ValueError:
             continue
         indexed.append((network, row))
-    return indexed
+    return PrefixIndex(indexed)
 
 
-def _match_ipam_subnet(
-    ip_text: str, subnet_index: list[tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, dict]]
-) -> dict | None:
+def _match_ipam_subnet(ip_text: str, subnet_index: PrefixIndex[dict]) -> dict | None:
     normalized = _normalize_ip_text(ip_text)
     if not normalized:
         return None
@@ -205,15 +207,9 @@ def _match_ipam_subnet(
     except ValueError:
         return None
 
-    best_match: tuple[int, dict] | None = None
-    for network, row in subnet_index:
-        if addr.version != network.version or addr not in network:
-            continue
-        if best_match is None or network.prefixlen > best_match[0]:
-            best_match = (network.prefixlen, row)
-    if best_match is None:
+    row = subnet_index.match(addr)
+    if row is None:
         return None
-    row = best_match[1]
     return {
         "subnet": row.get("subnet") or "",
         "utilization_pct": row.get("utilization_pct"),
@@ -1133,77 +1129,17 @@ async def _run_topology_discovery_once() -> dict:
         walk_results = await asyncio.gather(*[_walk_host(h) for h in hosts])
         walk_results, _inferred_count = await _apply_inferred_topology(list(walk_results), snmp_cfgs)
 
-        for host, neighbors, if_stats in walk_results:
-            if neighbors is None:
-                total_errors += 1
-                continue
-            try:
-                # Snapshot old links for change detection
-                old_links = await db.get_topology_links_for_host(host["id"])
-                old_link_keys = {
-                    _normalize_link_key(
-                        link["source_host_id"],
-                        link["source_interface"],
-                        link["target_device_name"],
-                        link["target_interface"],
-                    )
-                    for link in old_links
-                    if link["source_host_id"] == host["id"]
-                }
-                new_link_keys = {
-                    _normalize_link_key(
-                        n["source_host_id"], n["local_interface"], n["remote_device_name"], n["remote_interface"]
-                    )
-                    for n in neighbors
-                }
-
-                await _write_links_and_stats(host["id"], neighbors, if_stats)
-                # Auto-apply interface-scope graph templates
-                if if_stats:
-                    try:
-                        await db.apply_interface_graph_templates_to_host(host["id"], if_stats)
-                    except Exception as exc:
-                        LOGGER.warning(
-                            "topology scheduled: graph template apply failed for %s: %s", host["ip_address"], exc
-                        )
-                # Auto-discover SNMP data sources (interfaces, storage)
-                try:
-                    from netcontrol.routes.snmp import auto_discover_data_sources
-
-                    await auto_discover_data_sources(host["id"], host["ip_address"], snmp_cfgs[host["id"]])
-                except Exception as exc:
-                    LOGGER.warning(
-                        "topology scheduled: data source auto-discovery failed for %s: %s", host["ip_address"], exc
-                    )
-                # Collect MAC/ARP tables during topology discovery
-                try:
-                    from netcontrol.routes.mac_tracking import collect_mac_arp_tables
-
-                    await collect_mac_arp_tables(
-                        host["id"],
-                        host["ip_address"],
-                        snmp_cfgs[host["id"]],
-                        device_type=host.get("device_type", ""),
-                        host=host,
-                    )
-                except Exception as exc:
-                    LOGGER.warning("topology scheduled: MAC/ARP collection failed for %s: %s", host["ip_address"], exc)
-                # Per-port inventory + VLAN definitions (feeds audit rules)
-                try:
-                    from netcontrol.routes.mac_tracking import collect_interface_inventory
-
-                    await collect_interface_inventory(host["id"], host["ip_address"], snmp_cfgs[host["id"]])
-                except Exception as exc:
-                    LOGGER.warning(
-                        "topology scheduled: interface inventory collection failed for %s: %s", host["ip_address"], exc
-                    )
-                # Record topology changes (only if there were previous links)
-                if old_link_keys:
-                    await _record_topology_changes(host, old_link_keys, new_link_keys, neighbors, old_links)
-                total_links += len(neighbors)
-            except Exception as exc:
-                LOGGER.warning("topology scheduled: DB write failed for %s: %s", host["ip_address"], exc)
-                total_errors += 1
+        total_errors += sum(1 for _host, neighbors, _stats in walk_results if neighbors is None)
+        # Hosts run side by side under the shared device-op cap; each catches
+        # its own failures, so one host cannot cancel the others.
+        follow_ups = [
+            _discovery_follow_up(host, neighbors, if_stats, snmp_cfgs[host["id"]])
+            for host, neighbors, if_stats in walk_results
+            if neighbors is not None
+        ]
+        for links_found, failed in await asyncio.gather(*follow_ups):
+            total_links += links_found
+            total_errors += failed
 
     if groups_scanned > 0:
         try:
@@ -1224,6 +1160,80 @@ async def _run_topology_discovery_once() -> dict:
         "links_discovered": total_links,
         "errors": total_errors,
     }
+
+
+async def _discovery_follow_up(host: dict, neighbors: list[dict], if_stats: list[dict], cfg: dict) -> tuple[int, int]:
+    """Store one walked host's links and stats and run its collectors, under
+    a permit of the shared device-op semaphore; ``(links found, errors)``.
+    Nothing in here may take that semaphore again (it would deadlock)."""
+    async with state.device_op_semaphore():
+        try:
+            # Snapshot old links for change detection
+            old_links = await db.get_topology_links_for_host(host["id"])
+            old_link_keys = {
+                _normalize_link_key(
+                    link["source_host_id"],
+                    link["source_interface"],
+                    link["target_device_name"],
+                    link["target_interface"],
+                )
+                for link in old_links
+                if link["source_host_id"] == host["id"]
+            }
+            new_link_keys = {
+                _normalize_link_key(
+                    n["source_host_id"], n["local_interface"], n["remote_device_name"], n["remote_interface"]
+                )
+                for n in neighbors
+            }
+
+            await _write_links_and_stats(host["id"], neighbors, if_stats)
+            # Auto-apply interface-scope graph templates
+            if if_stats:
+                try:
+                    await db.apply_interface_graph_templates_to_host(host["id"], if_stats)
+                except Exception as exc:
+                    LOGGER.warning(
+                        "topology scheduled: graph template apply failed for %s: %s", host["ip_address"], exc
+                    )
+            # Auto-discover SNMP data sources (interfaces, storage)
+            try:
+                from netcontrol.routes.snmp import auto_discover_data_sources
+
+                await auto_discover_data_sources(host["id"], host["ip_address"], cfg)
+            except Exception as exc:
+                LOGGER.warning(
+                    "topology scheduled: data source auto-discovery failed for %s: %s", host["ip_address"], exc
+                )
+            # Collect MAC/ARP tables during topology discovery
+            try:
+                from netcontrol.routes.mac_tracking import collect_mac_arp_tables
+
+                await collect_mac_arp_tables(
+                    host["id"],
+                    host["ip_address"],
+                    cfg,
+                    device_type=host.get("device_type", ""),
+                    host=host,
+                )
+            except Exception as exc:
+                LOGGER.warning("topology scheduled: MAC/ARP collection failed for %s: %s", host["ip_address"], exc)
+            # Per-port inventory + VLAN definitions (feeds audit rules)
+            try:
+                from netcontrol.routes.mac_tracking import collect_interface_inventory
+
+                await collect_interface_inventory(host["id"], host["ip_address"], cfg)
+            except Exception as exc:
+                LOGGER.warning(
+                    "topology scheduled: interface inventory collection failed for %s: %s", host["ip_address"], exc
+                )
+            # Record topology changes (only if there were previous links)
+            if old_link_keys:
+                await _record_topology_changes(host, old_link_keys, new_link_keys, neighbors, old_links)
+            return len(neighbors), 0
+        except Exception as exc:
+            LOGGER.warning("topology scheduled: DB write failed for %s: %s", host["ip_address"], exc)
+            return 0, 1
 
 
 async def _topology_discovery_loop() -> None:
@@ -1468,9 +1478,20 @@ async def _change_count(links: LinkScope | None) -> int:
 # invalidate_topology_cache() is called when discovery rewrites links or a user
 # acknowledges changes; the short TTL bounds staleness otherwise.
 # A scoped caller's graph is cached under (group_id, its readable groups).
+# The coalescing lock is per cache key, so one slow build does not hold up
+# the graphs of other groups or scopes; a key's lock goes away with its last
+# holder.
 _TOPOLOGY_CACHE: dict[Any, tuple[float, dict]] = {}
 _TOPOLOGY_CACHE_TTL = 15.0  # seconds
-_topology_cache_lock = asyncio.Lock()
+_topology_build_locks: weakref.WeakValueDictionary[Any, asyncio.Lock] = weakref.WeakValueDictionary()
+
+
+def _topology_build_lock(key: Any) -> asyncio.Lock:
+    lock = _topology_build_locks.get(key)
+    if lock is None:
+        lock = asyncio.Lock()
+        _topology_build_locks[key] = lock
+    return lock
 
 
 def invalidate_topology_cache() -> None:
@@ -1480,7 +1501,7 @@ def invalidate_topology_cache() -> None:
 
 @router.get("/api/topology")
 @scoped("list")
-async def get_topology(group_id: int | None = Query(default=None), request: Request = None):  # type: ignore[assignment]
+async def get_topology(group_id: int | None = Query(default=None), request: Request = None) -> dict:  # type: ignore[assignment]
     """Return topology graph data (nodes + edges) for vis-network rendering.
 
     Served from a short-TTL per-group cache (see _TOPOLOGY_CACHE). A scoped
@@ -1500,7 +1521,7 @@ async def topology_graph(group_id: int | None, scope: ObjectScope | None = None)
     hit = _TOPOLOGY_CACHE.get(key)
     if hit is not None and now - hit[0] < _TOPOLOGY_CACHE_TTL:
         return hit[1]
-    async with _topology_cache_lock:
+    async with _topology_build_lock(key):
         # Re-check: a request that held the lock ahead of us may have just built it.
         hit = _TOPOLOGY_CACHE.get(key)
         if hit is not None and time.monotonic() - hit[0] < _TOPOLOGY_CACHE_TTL:
@@ -1579,7 +1600,7 @@ async def _build_topology(group_id: int | None, links_scope: LinkScope | None = 
             ipam_overview = await db.get_ipam_overview(group_id=group_id, include_cloud=True, include_external=True)
             ipam_subnet_index = _build_ipam_subnet_index(ipam_overview.get("subnets") or [])
         except Exception:
-            ipam_subnet_index = []
+            ipam_subnet_index = PrefixIndex([])
 
         def _host_node(h: dict) -> dict:
             ipam_match = _match_ipam_subnet(h.get("ip_address") or "", ipam_subnet_index)

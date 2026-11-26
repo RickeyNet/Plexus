@@ -156,7 +156,7 @@ function invalidateAll(qc: QC) {
 export function useRegions(enabled = true) {
   return useQuery<Region[]>({
     queryKey: ORGANIZATION_KEYS.regions,
-    queryFn: async () => listOf<Region>(await detailRequest('/organization/regions'), 'regions'),
+    queryFn: async ({ signal }) => listOf<Region>(await detailRequest('/organization/regions', { signal }), 'regions'),
     enabled,
     // A caller without the organization feature gets a 403; the filter menus just offer no regions.
     retry: false,
@@ -166,21 +166,21 @@ export function useRegions(enabled = true) {
 export function useLocationTree() {
   return useQuery<LocationTree>({
     queryKey: ORGANIZATION_KEYS.locations,
-    queryFn: () => detailRequest<LocationTree>('/organization/locations'),
+    queryFn: ({ signal }) => detailRequest<LocationTree>('/organization/locations', { signal }),
   });
 }
 
 export function useOrgSites() {
   return useQuery<OrgSite[]>({
     queryKey: ORGANIZATION_KEYS.sites,
-    queryFn: async () => listOf<OrgSite>(await detailRequest('/organization/sites'), 'sites'),
+    queryFn: async ({ signal }) => listOf<OrgSite>(await detailRequest('/organization/sites', { signal }), 'sites'),
   });
 }
 
 export function useTenantGroups() {
   return useQuery<TenantGroup[]>({
     queryKey: ORGANIZATION_KEYS.tenantGroups,
-    queryFn: async () => listOf<TenantGroup>(await detailRequest('/organization/tenant-groups'), 'tenant_groups'),
+    queryFn: async ({ signal }) => listOf<TenantGroup>(await detailRequest('/organization/tenant-groups', { signal }), 'tenant_groups'),
   });
 }
 
@@ -188,7 +188,7 @@ export function useTenantGroups() {
 export function useTenants(enabled = true) {
   return useQuery<Tenant[]>({
     queryKey: ORGANIZATION_KEYS.tenants,
-    queryFn: async () => listOf<Tenant>(await detailRequest('/organization/tenants'), 'tenants'),
+    queryFn: async ({ signal }) => listOf<Tenant>(await detailRequest('/organization/tenants', { signal }), 'tenants'),
     enabled,
     retry: false,
   });
@@ -197,7 +197,7 @@ export function useTenants(enabled = true) {
 export function useTenant(id: number | null) {
   return useQuery<TenantDetail>({
     queryKey: ORGANIZATION_KEYS.tenant(id ?? 0),
-    queryFn: () => detailRequest<TenantDetail>(`/organization/tenants/${id}`),
+    queryFn: ({ signal }) => detailRequest<TenantDetail>(`/organization/tenants/${id}`, { signal }),
     enabled: id !== null,
   });
 }

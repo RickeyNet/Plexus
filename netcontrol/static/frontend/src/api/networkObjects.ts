@@ -223,14 +223,14 @@ function invalidateAll(qc: QC) {
 export function useVrfs() {
   return useQuery<Vrf[]>({
     queryKey: NETWORK_OBJECT_KEYS.vrfs,
-    queryFn: async () => listOf<Vrf>(await detailRequest('/ipam/vrfs'), 'vrfs'),
+    queryFn: async ({ signal }) => listOf<Vrf>(await detailRequest('/ipam/vrfs', { signal }), 'vrfs'),
   });
 }
 
 export function useVrf(id: number | null) {
   return useQuery<VrfDetail>({
     queryKey: NETWORK_OBJECT_KEYS.vrf(id ?? 0),
-    queryFn: () => detailRequest<VrfDetail>(`/ipam/vrfs/${id}`),
+    queryFn: ({ signal }) => detailRequest<VrfDetail>(`/ipam/vrfs/${id}`, { signal }),
     enabled: id !== null,
   });
 }
@@ -239,14 +239,14 @@ export function useVrf(id: number | null) {
 export function useVlans(site: VlanSiteFilter = 'all') {
   return useQuery<Vlan[]>({
     queryKey: NETWORK_OBJECT_KEYS.vlans(site),
-    queryFn: async () => listOf<Vlan>(await detailRequest(vlanListPath(site)), 'vlans'),
+    queryFn: async ({ signal }) => listOf<Vlan>(await detailRequest(vlanListPath(site), { signal }), 'vlans'),
   });
 }
 
 export function useVlan(id: number | null) {
   return useQuery<VlanDetail>({
     queryKey: NETWORK_OBJECT_KEYS.vlan(id ?? 0),
-    queryFn: () => detailRequest<VlanDetail>(`/ipam/vlans/${id}`),
+    queryFn: ({ signal }) => detailRequest<VlanDetail>(`/ipam/vlans/${id}`, { signal }),
     enabled: id !== null,
   });
 }
@@ -255,7 +255,7 @@ export function useVlan(id: number | null) {
 export function useHostInterfaceAddresses(hostId: number | null, enabled = true) {
   return useQuery<HostInterfaceAddresses>({
     queryKey: NETWORK_OBJECT_KEYS.hostAddresses(hostId ?? 0),
-    queryFn: () => detailRequest<HostInterfaceAddresses>(`/hosts/${hostId}/interface-addresses`),
+    queryFn: ({ signal }) => detailRequest<HostInterfaceAddresses>(`/hosts/${hostId}/interface-addresses`, { signal }),
     enabled: enabled && hostId !== null,
   });
 }

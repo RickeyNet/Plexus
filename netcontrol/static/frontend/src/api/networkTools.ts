@@ -57,7 +57,7 @@ export interface MacTrackingStats {
 export function useMacTrackingStats() {
   return useQuery({
     queryKey: ['mac-tracking', 'stats'],
-    queryFn: () => apiRequest<MacTrackingStats>('/mac-tracking/stats'),
+    queryFn: ({ signal }) => apiRequest<MacTrackingStats>('/mac-tracking/stats', { signal }),
   });
 }
 
@@ -79,7 +79,7 @@ export interface MacHostRollup {
 export function useMacTrackingByHost() {
   return useQuery({
     queryKey: ['mac-tracking', 'by-host'],
-    queryFn: () => apiRequest<MacHostRollup[]>('/mac-tracking/by-host'),
+    queryFn: ({ signal }) => apiRequest<MacHostRollup[]>('/mac-tracking/by-host', { signal }),
   });
 }
 
@@ -89,9 +89,10 @@ export function useMacSearch(query: string) {
   // the user having to type a search term.
   return useQuery({
     queryKey: ['mac-tracking', 'search', query],
-    queryFn: () =>
+    queryFn: ({ signal }) =>
       apiRequest<MacEntry[]>(
         `/mac-tracking/search?query=${encodeURIComponent(query)}`,
+        { signal },
       ),
   });
 }
@@ -99,9 +100,10 @@ export function useMacSearch(query: string) {
 export function useMacHistory(macAddress: string | null) {
   return useQuery({
     queryKey: ['mac-tracking', 'history', macAddress],
-    queryFn: () =>
+    queryFn: ({ signal }) =>
       apiRequest<MacHistoryEntry[]>(
         `/mac-tracking/history/${encodeURIComponent(macAddress ?? '')}`,
+        { signal },
       ),
     enabled: !!macAddress,
   });
@@ -158,24 +160,25 @@ export function useMacMoveEvents(
   params.set('limit', String(limit));
   return useQuery({
     queryKey: ['mac-tracking', 'moves', status, limit, hostId ?? null],
-    queryFn: () =>
-      apiRequest<MacMoveEvent[]>(`/mac-tracking/moves?${params}`),
+    queryFn: ({ signal }) =>
+      apiRequest<MacMoveEvent[]>(`/mac-tracking/moves?${params}`, { signal }),
   });
 }
 
 export function useMacMoveSummary() {
   return useQuery({
     queryKey: ['mac-tracking', 'moves-summary'],
-    queryFn: () => apiRequest<MacMoveSummary>('/mac-tracking/moves/summary'),
+    queryFn: ({ signal }) => apiRequest<MacMoveSummary>('/mac-tracking/moves/summary', { signal }),
   });
 }
 
 export function useMacMoveEventHistory(eventId: number | null, limit = 500) {
   return useQuery({
     queryKey: ['mac-tracking', 'move-history', eventId, limit],
-    queryFn: () =>
+    queryFn: ({ signal }) =>
       apiRequest<MacMoveEventHistoryEntry[]>(
         `/mac-tracking/moves/${eventId}/history?limit=${limit}`,
+        { signal },
       ),
     enabled: eventId != null,
   });
@@ -268,7 +271,7 @@ export function useMacCollectionJob(jobId: string | null) {
     // invalidates that whole prefix, and the job query itself must not be
     // caught in its own invalidation.
     queryKey: ['mac-collect-job', jobId],
-    queryFn: () => apiRequest<MacCollectJob>(`/mac-tracking/collect/jobs/${jobId}`),
+    queryFn: ({ signal }) => apiRequest<MacCollectJob>(`/mac-tracking/collect/jobs/${jobId}`, { signal }),
     enabled: jobId != null,
     refetchInterval: (query) =>
       query.state.data && query.state.data.status !== 'running' ? false : 2000,
@@ -364,7 +367,7 @@ function withHost(base: string, hostId?: number | null): string {
 export function useFlowStatus(enabled = true) {
   return useQuery({
     queryKey: ['flows', 'status'],
-    queryFn: () => apiRequest<FlowStatus>('/flows/status'),
+    queryFn: ({ signal }) => apiRequest<FlowStatus>('/flows/status', { signal }),
     staleTime: 10_000,
     enabled,
   });
@@ -379,12 +382,13 @@ export function useFlowTopTalkers(args: {
   const { hours, direction, hostId, limit = 15 } = args;
   return useQuery({
     queryKey: ['flows', 'top-talkers', hours, direction, limit, hostId ?? null],
-    queryFn: () =>
+    queryFn: ({ signal }) =>
       apiRequest<FlowTalker[]>(
         withHost(
           `/flows/top-talkers?hours=${hours}&direction=${direction}&limit=${limit}`,
           hostId,
         ),
+        { signal },
       ),
   });
 }
@@ -397,9 +401,10 @@ export function useFlowTopApplications(args: {
   const { hours, hostId, limit = 15 } = args;
   return useQuery({
     queryKey: ['flows', 'top-applications', hours, limit, hostId ?? null],
-    queryFn: () =>
+    queryFn: ({ signal }) =>
       apiRequest<FlowApplication[]>(
         withHost(`/flows/top-applications?hours=${hours}&limit=${limit}`, hostId),
+        { signal },
       ),
   });
 }
@@ -412,9 +417,10 @@ export function useFlowTopConversations(args: {
   const { hours, hostId, limit = 15 } = args;
   return useQuery({
     queryKey: ['flows', 'top-conversations', hours, limit, hostId ?? null],
-    queryFn: () =>
+    queryFn: ({ signal }) =>
       apiRequest<FlowConversation[]>(
         withHost(`/flows/top-conversations?hours=${hours}&limit=${limit}`, hostId),
+        { signal },
       ),
   });
 }
@@ -427,9 +433,10 @@ export function useFlowTopInterfaces(args: {
   const { hours, hostId, limit = 15 } = args;
   return useQuery({
     queryKey: ['flows', 'top-interfaces', hours, limit, hostId ?? null],
-    queryFn: () =>
+    queryFn: ({ signal }) =>
       apiRequest<FlowInterface[]>(
         withHost(`/flows/top-interfaces?hours=${hours}&limit=${limit}`, hostId),
+        { signal },
       ),
   });
 }
@@ -441,12 +448,13 @@ export function useFlowTimeline(args: { hours: number; hostId?: number | null })
   const bucketMinutes = hours <= 1 ? 1 : hours <= 6 ? 5 : 15;
   return useQuery({
     queryKey: ['flows', 'timeline', hours, bucketMinutes, hostId ?? null],
-    queryFn: () =>
+    queryFn: ({ signal }) =>
       apiRequest<FlowTimelinePoint[]>(
         withHost(
           `/flows/timeline?hours=${hours}&bucket_minutes=${bucketMinutes}`,
           hostId,
         ),
+        { signal },
       ),
   });
 }
@@ -454,7 +462,7 @@ export function useFlowTimeline(args: { hours: number; hostId?: number | null })
 export function useFlowExporters() {
   return useQuery({
     queryKey: ['flows', 'exporters'],
-    queryFn: () => apiRequest<FlowExportersResponse>('/flows/exporters'),
+    queryFn: ({ signal }) => apiRequest<FlowExportersResponse>('/flows/exporters', { signal }),
     staleTime: 15_000,
   });
 }

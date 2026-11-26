@@ -42,14 +42,14 @@ export interface UpdatesStatus {
 export function useUpdatesStatus() {
   return useQuery<UpdatesStatus>({
     queryKey: ['admin', 'updates', 'status'],
-    queryFn: () => apiRequest('/admin/updates/status'),
+    queryFn: ({ signal }) => apiRequest('/admin/updates/status', { signal }),
   });
 }
 
 export function useUpdatesConfig() {
   return useQuery<UpdatesConfig>({
     queryKey: ['admin', 'updates', 'config'],
-    queryFn: () => apiRequest('/admin/updates/config'),
+    queryFn: ({ signal }) => apiRequest('/admin/updates/config', { signal }),
   });
 }
 
@@ -118,7 +118,7 @@ export function isUpdateBusy(p: UpdateProgress | undefined): boolean {
 export function useUpdateProgress() {
   return useQuery<UpdateProgress>({
     queryKey: ['admin', 'updates', 'progress'],
-    queryFn: () => apiRequest('/admin/updates/progress'),
+    queryFn: ({ signal }) => apiRequest('/admin/updates/progress', { signal }),
     // The host updater runs outside the app; poll fast only while it works.
     refetchInterval: (query) => (isUpdateBusy(query.state.data) ? 3000 : 15000),
   });
@@ -127,7 +127,7 @@ export function useUpdateProgress() {
 export function useAppVersion(poll: boolean) {
   return useQuery<CurrentVersion>({
     queryKey: ['app-version'],
-    queryFn: () => apiRequest('/version'),
+    queryFn: ({ signal }) => apiRequest('/version', { signal }),
     // While an upgrade runs, watch for the restarted container's new version.
     refetchInterval: poll ? 3000 : false,
     retry: false,

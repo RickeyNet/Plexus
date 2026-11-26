@@ -55,7 +55,7 @@ from netcontrol.routes.reporting import (
     _parse_db_datetime_utc,
     _parse_schedule_interval_seconds,
 )
-from netcontrol.routes.shared import _compute_config_diff, request_session
+from netcontrol.routes.shared import compute_config_diff_async, request_session
 from netcontrol.telemetry import configure_logging, increment_metric, redact_value
 
 LOGGER = configure_logging("plexus.audit")
@@ -186,7 +186,7 @@ class ConfigDriftRule(Rule):
                 )
                 continue
 
-            diff_text, lines_added, lines_removed = _compute_config_diff(
+            diff_text, lines_added, lines_removed = await compute_config_diff_async(
                 baseline["config_text"],
                 snapshot["config_text"],
                 baseline_label="baseline",

@@ -57,14 +57,14 @@ export interface GateVerdict {
 export function useMaintenanceWindows() {
   return useQuery<MaintenanceWindow[]>({
     queryKey: ['maintenance-windows'],
-    queryFn: () => apiRequest('/maintenance-windows'),
+    queryFn: ({ signal }) => apiRequest('/maintenance-windows', { signal }),
   });
 }
 
 export function useMaintenanceWindow(id: number | null) {
   return useQuery<MaintenanceWindow>({
     queryKey: ['maintenance-window', id],
-    queryFn: () => apiRequest(`/maintenance-windows/${id}`),
+    queryFn: ({ signal }) => apiRequest(`/maintenance-windows/${id}`, { signal }),
     enabled: id != null,
     // Only the edit form reads this, and it must seed from the server's
     // current values: drop the cached copy as soon as the form closes.

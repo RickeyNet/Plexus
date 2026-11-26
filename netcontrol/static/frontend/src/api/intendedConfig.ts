@@ -7,6 +7,7 @@
  */
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
+import type { ReadOptions } from './client';
 import { detailRequest, listOf } from './customData';
 import type { GitOwnership } from './gitSources';
 
@@ -184,22 +185,22 @@ export function intendedHostsPath(filter: IntendedHostFilter): string {
  * the method, URL and body each sends.
  */
 export const intendedConfigApi = {
-  templates: async () => listOf<ConfigTemplate>(await detailRequest(`${BASE}/templates`), 'templates'),
-  template: (id: number) => detailRequest<ConfigTemplate>(`${BASE}/templates/${id}`),
+  templates: async (opts?: ReadOptions) => listOf<ConfigTemplate>(await detailRequest(`${BASE}/templates`, opts), 'templates'),
+  template: (id: number, opts?: ReadOptions) => detailRequest<ConfigTemplate>(`${BASE}/templates/${id}`, opts),
   createTemplate: (data: ConfigTemplateInput) => detailRequest<ConfigTemplate>(`${BASE}/templates`, { method: 'POST', body: data }),
   updateTemplate: (id: number, data: ConfigTemplateInput) =>
     detailRequest<ConfigTemplate>(`${BASE}/templates/${id}`, { method: 'PUT', body: data }),
   deleteTemplate: (id: number) => detailRequest<{ ok: boolean }>(`${BASE}/templates/${id}`, { method: 'DELETE' }),
-  contexts: async () => listOf<ConfigContext>(await detailRequest(`${BASE}/contexts`), 'contexts'),
-  context: (id: number) => detailRequest<ConfigContext>(`${BASE}/contexts/${id}`),
+  contexts: async (opts?: ReadOptions) => listOf<ConfigContext>(await detailRequest(`${BASE}/contexts`, opts), 'contexts'),
+  context: (id: number, opts?: ReadOptions) => detailRequest<ConfigContext>(`${BASE}/contexts/${id}`, opts),
   createContext: (data: ConfigContextInput) => detailRequest<ConfigContext>(`${BASE}/contexts`, { method: 'POST', body: data }),
   updateContext: (id: number, data: ConfigContextInput) =>
     detailRequest<ConfigContext>(`${BASE}/contexts/${id}`, { method: 'PUT', body: data }),
   deleteContext: (id: number) => detailRequest<{ ok: boolean }>(`${BASE}/contexts/${id}`, { method: 'DELETE' }),
   preview: (body: PreviewRequest) => detailRequest<PreviewResult>(`${BASE}/preview`, { method: 'POST', body }),
-  variables: (hostId: number) => detailRequest<HostVariables>(`${BASE}/hosts/${hostId}/variables`),
-  hosts: (filter: IntendedHostFilter) => detailRequest<IntendedHosts>(intendedHostsPath(filter)),
-  host: (hostId: number) => detailRequest<IntendedDetail>(`${BASE}/hosts/${hostId}`),
+  variables: (hostId: number, opts?: ReadOptions) => detailRequest<HostVariables>(`${BASE}/hosts/${hostId}/variables`, opts),
+  hosts: (filter: IntendedHostFilter, opts?: ReadOptions) => detailRequest<IntendedHosts>(intendedHostsPath(filter), opts),
+  host: (hostId: number, opts?: ReadOptions) => detailRequest<IntendedDetail>(`${BASE}/hosts/${hostId}`, opts),
   generate: (body: GenerateRequest) => detailRequest<GenerateResult>(`${BASE}/generate`, { method: 'POST', body }),
 };
 
@@ -225,14 +226,14 @@ function invalidateAll(qc: QC) {
 export function useIntendedTemplates() {
   return useQuery<ConfigTemplate[]>({
     queryKey: INTENDED_CONFIG_KEYS.templates,
-    queryFn: intendedConfigApi.templates,
+    queryFn: ({ signal }) => intendedConfigApi.templates({ signal }),
   });
 }
 
 export function useIntendedTemplate(id: number | null) {
   return useQuery<ConfigTemplate>({
     queryKey: INTENDED_CONFIG_KEYS.template(id ?? 0),
-    queryFn: () => intendedConfigApi.template(id!),
+    queryFn: ({ signal }) => intendedConfigApi.template(id!, { signal }),
     enabled: id !== null,
   });
 }
@@ -240,14 +241,14 @@ export function useIntendedTemplate(id: number | null) {
 export function useIntendedContexts() {
   return useQuery<ConfigContext[]>({
     queryKey: INTENDED_CONFIG_KEYS.contexts,
-    queryFn: intendedConfigApi.contexts,
+    queryFn: ({ signal }) => intendedConfigApi.contexts({ signal }),
   });
 }
 
 export function useIntendedContext(id: number | null) {
   return useQuery<ConfigContext>({
     queryKey: INTENDED_CONFIG_KEYS.context(id ?? 0),
-    queryFn: () => intendedConfigApi.context(id!),
+    queryFn: ({ signal }) => intendedConfigApi.context(id!, { signal }),
     enabled: id !== null,
   });
 }
@@ -256,7 +257,7 @@ export function useIntendedContext(id: number | null) {
 export function useIntendedHosts(filter: IntendedHostFilter) {
   return useQuery<IntendedHosts>({
     queryKey: INTENDED_CONFIG_KEYS.hosts(filter),
-    queryFn: () => intendedConfigApi.hosts(filter),
+    queryFn: ({ signal }) => intendedConfigApi.hosts(filter, { signal }),
     // Keep the counts and rows on screen while a filter change loads.
     placeholderData: keepPreviousData,
   });
@@ -266,7 +267,7 @@ export function useIntendedHosts(filter: IntendedHostFilter) {
 export function useIntendedHost(hostId: number | null) {
   return useQuery<IntendedDetail>({
     queryKey: INTENDED_CONFIG_KEYS.host(hostId ?? 0),
-    queryFn: () => intendedConfigApi.host(hostId!),
+    queryFn: ({ signal }) => intendedConfigApi.host(hostId!, { signal }),
     enabled: hostId !== null,
   });
 }
@@ -275,7 +276,7 @@ export function useIntendedHost(hostId: number | null) {
 export function useIntendedVariables(hostId: number | null) {
   return useQuery<HostVariables>({
     queryKey: INTENDED_CONFIG_KEYS.variables(hostId ?? 0),
-    queryFn: () => intendedConfigApi.variables(hostId!),
+    queryFn: ({ signal }) => intendedConfigApi.variables(hostId!, { signal }),
     enabled: hostId !== null,
   });
 }

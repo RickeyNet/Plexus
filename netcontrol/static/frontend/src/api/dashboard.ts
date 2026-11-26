@@ -114,7 +114,7 @@ export interface DashboardResponse {
 export function useDashboard() {
   return useQuery<DashboardResponse>({
     queryKey: ['dashboard'],
-    queryFn: () => apiRequest('/dashboard'),
+    queryFn: ({ signal }) => apiRequest('/dashboard', { signal }),
   });
 }
 
@@ -158,8 +158,8 @@ interface DashboardsListResponse {
 export function useCustomDashboards() {
   return useQuery<CustomDashboard[]>({
     queryKey: ['custom-dashboards'],
-    queryFn: async () => {
-      const data = await apiRequest<DashboardsListResponse | CustomDashboard[]>('/dashboards');
+    queryFn: async ({ signal }) => {
+      const data = await apiRequest<DashboardsListResponse | CustomDashboard[]>('/dashboards', { signal });
       return Array.isArray(data) ? data : (data?.dashboards ?? []);
     },
   });
@@ -168,7 +168,7 @@ export function useCustomDashboards() {
 export function useCustomDashboard(id: number | null) {
   return useQuery<CustomDashboard>({
     queryKey: ['custom-dashboard', id],
-    queryFn: () => apiRequest(`/dashboards/${id}`),
+    queryFn: ({ signal }) => apiRequest(`/dashboards/${id}`, { signal }),
     enabled: id != null,
   });
 }
@@ -279,10 +279,10 @@ export function useMetricsQuery({
 }: MetricsQueryArgs) {
   return useQuery<MetricsQueryResponse>({
     queryKey: ['metrics-query', metric, host, range, step, group],
-    queryFn: () => {
+    queryFn: ({ signal }) => {
       const params = new URLSearchParams({ metric, host, range, step });
       if (group != null) params.set('group', String(group));
-      return apiRequest(`/metrics/query?${params.toString()}`);
+      return apiRequest(`/metrics/query?${params.toString()}`, { signal });
     },
     enabled,
   });
@@ -321,7 +321,7 @@ export interface AnnotationsArgs {
 export function useAnnotations({ host = '*', range = '24h', enabled = true }: AnnotationsArgs) {
   return useQuery<Annotation[]>({
     queryKey: ['annotations', host, range],
-    queryFn: async () => {
+    queryFn: async ({ signal }) => {
       const end = new Date();
       const start = new Date(end.getTime() - rangeToMs(range));
       const params = new URLSearchParams({
@@ -331,7 +331,7 @@ export function useAnnotations({ host = '*', range = '24h', enabled = true }: An
       });
       // Legacy only sends host_id when a specific host is selected.
       if (host && host !== '*') params.set('host_id', host);
-      const res = await apiRequest<AnnotationsResponse>(`/annotations?${params.toString()}`);
+      const res = await apiRequest<AnnotationsResponse>(`/annotations?${params.toString()}`, { signal });
       return res?.annotations ?? [];
     },
     enabled,
@@ -374,10 +374,11 @@ export function useTopInterfaces({
 }: TopInterfacesArgs) {
   return useQuery<TopInterface[]>({
     queryKey: ['top-interfaces', range, limit],
-    queryFn: async () => {
+    queryFn: async ({ signal }) => {
       const params = new URLSearchParams({ range, limit: String(limit) });
       const res = await apiRequest<TopInterfacesResponse>(
         `/dashboard/top-interfaces?${params.toString()}`,
+        { signal },
       );
       return res?.interfaces ?? [];
     },
@@ -406,9 +407,9 @@ interface InventoryListResponse {
 export function useInventoryGroupsForDashboard(includeHosts: boolean) {
   return useQuery<InventoryGroupWithHosts[]>({
     queryKey: ['dashboard-inventory-groups', includeHosts],
-    queryFn: async () => {
+    queryFn: async ({ signal }) => {
       const path = includeHosts ? '/inventory?include_hosts=true' : '/inventory';
-      const res = await apiRequest<InventoryListResponse | InventoryGroupWithHosts[]>(path);
+      const res = await apiRequest<InventoryListResponse | InventoryGroupWithHosts[]>(path, { signal });
       return Array.isArray(res) ? res : (res?.groups ?? []);
     },
   });

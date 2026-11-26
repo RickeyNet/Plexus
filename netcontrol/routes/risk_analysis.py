@@ -34,9 +34,9 @@ from netcontrol.routes.config_visibility import mask_commands, mask_config_rows,
 from netcontrol.routes.device_config import ON_DEMAND_MAX_AGE_SECONDS, get_device_config
 from netcontrol.routes.shared import (
     _audit,
-    _compute_config_diff,
     _corr_id,
     _get_session,
+    compute_config_diff_async,
     require_credential_access,
 )
 from netcontrol.telemetry import configure_logging
@@ -369,7 +369,7 @@ async def _run_risk_analysis_for_host(
     simulated_config = _simulate_config_change(current_config, commands)
 
     # 4. Compute diff
-    diff_text, diff_added, diff_removed = _compute_config_diff(
+    diff_text, diff_added, diff_removed = await compute_config_diff_async(
         current_config,
         simulated_config,
         baseline_label="current",
@@ -695,7 +695,7 @@ async def run_offline_risk_analysis(request: Request):
 
     affected_areas = _classify_change_areas(commands)
     simulated_config = _simulate_config_change(current_config, commands)
-    diff_text, diff_added, diff_removed = _compute_config_diff(
+    diff_text, diff_added, diff_removed = await compute_config_diff_async(
         current_config,
         simulated_config,
         baseline_label="current",

@@ -107,7 +107,7 @@ export interface MerakiAlertPollResult {
 export function useMerakiAlerts(includeResolved = false) {
   return useQuery<{ alerts: MerakiAlert[] }>({
     queryKey: ['meraki-alerts', includeResolved],
-    queryFn: () => apiRequest(`/monitoring/meraki-alerts?include_resolved=${includeResolved}`),
+    queryFn: ({ signal }) => apiRequest(`/monitoring/meraki-alerts?include_resolved=${includeResolved}`, { signal }),
   });
 }
 
@@ -115,7 +115,7 @@ export function useMerakiAlerts(includeResolved = false) {
 export function useMerakiAlertSettings(enabled: boolean) {
   return useQuery<MerakiAlertSettings>({
     queryKey: ['meraki-alert-settings'],
-    queryFn: () => apiRequest('/monitoring/meraki-alerts/settings'),
+    queryFn: ({ signal }) => apiRequest('/monitoring/meraki-alerts/settings', { signal }),
     enabled,
   });
 }

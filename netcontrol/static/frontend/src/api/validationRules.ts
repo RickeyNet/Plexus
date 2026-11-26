@@ -97,14 +97,14 @@ const KEY = ['validation-rules'] as const;
 export function useValidationRules() {
   return useQuery<{ rules: ValidationRule[] }>({
     queryKey: KEY,
-    queryFn: () => detailRequest('/validation-rules'),
+    queryFn: ({ signal }) => detailRequest('/validation-rules', { signal }),
   });
 }
 
 export function useRuleFields() {
   return useQuery<RuleFieldCatalogue>({
     queryKey: [...KEY, 'fields'],
-    queryFn: () => detailRequest('/validation-rules/fields'),
+    queryFn: ({ signal }) => detailRequest('/validation-rules/fields', { signal }),
   });
 }
 

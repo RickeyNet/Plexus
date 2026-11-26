@@ -299,7 +299,7 @@ export interface OpnsenseRulesDiff {
 export function useOpnsenseRules(hostId: number | null, enabled = true) {
   return useQuery<OpnsenseRulesView>({
     queryKey: ['opnsense-rules', hostId],
-    queryFn: () => apiRequest(`/opnsense/hosts/${hostId}/rules`),
+    queryFn: ({ signal }) => apiRequest(`/opnsense/hosts/${hostId}/rules`, { signal }),
     enabled: enabled && hostId != null,
   });
 }
@@ -307,8 +307,8 @@ export function useOpnsenseRules(hostId: number | null, enabled = true) {
 export function useOpnsenseRulesDiff(hostId: number | null, fromBackup: number | null, toBackup: number | null) {
   return useQuery<OpnsenseRulesDiff>({
     queryKey: ['opnsense-rules-diff', hostId, fromBackup, toBackup],
-    queryFn: () =>
-      apiRequest(`/opnsense/hosts/${hostId}/rules/diff?from_backup=${fromBackup}&to_backup=${toBackup}`),
+    queryFn: ({ signal }) =>
+      apiRequest(`/opnsense/hosts/${hostId}/rules/diff?from_backup=${fromBackup}&to_backup=${toBackup}`, { signal }),
     enabled: hostId != null && fromBackup != null && toBackup != null && fromBackup !== toBackup,
   });
 }

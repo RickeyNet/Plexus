@@ -268,14 +268,14 @@ export interface SecretVariablePayload {
 export function usePlaybooks() {
   return useQuery<Playbook[]>({
     queryKey: ['playbooks'],
-    queryFn: () => apiRequest<Playbook[]>('/playbooks'),
+    queryFn: ({ signal }) => apiRequest<Playbook[]>('/playbooks', { signal }),
   });
 }
 
 export function usePlaybook(id: number | null) {
   return useQuery<Playbook>({
     queryKey: ['playbook', id],
-    queryFn: () => apiRequest<Playbook>(`/playbooks/${id}`),
+    queryFn: ({ signal }) => apiRequest<Playbook>(`/playbooks/${id}`, { signal }),
     enabled: id != null,
   });
 }
@@ -319,7 +319,7 @@ export const JOB_LIST_MAX = 200;
 export function useJobs(limit = 100) {
   return useQuery<Job[]>({
     queryKey: ['jobs', limit],
-    queryFn: () => apiRequest<Job[]>(`/jobs?limit=${limit}`),
+    queryFn: ({ signal }) => apiRequest<Job[]>(`/jobs?limit=${limit}`, { signal }),
     refetchInterval: 30_000,
     // Keep the list on screen while a larger page loads.
     placeholderData: keepPreviousData,
@@ -329,7 +329,7 @@ export function useJobs(limit = 100) {
 export function useJob(id: number | null) {
   return useQuery<Job>({
     queryKey: ['job', id],
-    queryFn: () => apiRequest<Job>(`/jobs/${id}`),
+    queryFn: ({ signal }) => apiRequest<Job>(`/jobs/${id}`, { signal }),
     enabled: id != null,
   });
 }
@@ -337,7 +337,7 @@ export function useJob(id: number | null) {
 export function useJobEvents(id: number | null) {
   return useQuery<JobEvent[]>({
     queryKey: ['job-events', id],
-    queryFn: () => apiRequest<JobEvent[]>(`/jobs/${id}/events`),
+    queryFn: ({ signal }) => apiRequest<JobEvent[]>(`/jobs/${id}/events`, { signal }),
     enabled: id != null,
   });
 }
@@ -345,7 +345,7 @@ export function useJobEvents(id: number | null) {
 export function useJobQueue() {
   return useQuery<JobQueueData>({
     queryKey: ['job-queue'],
-    queryFn: () => apiRequest<JobQueueData>('/jobs/queue'),
+    queryFn: ({ signal }) => apiRequest<JobQueueData>('/jobs/queue', { signal }),
     refetchInterval: 15_000,
   });
 }
@@ -414,7 +414,7 @@ export function useRerunJobLive() {
 export function useJobApprovals(enabled = true) {
   return useQuery<Job[]>({
     queryKey: ['job-approvals'],
-    queryFn: () => apiRequest<Job[]>('/jobs/approvals'),
+    queryFn: ({ signal }) => apiRequest<Job[]>('/jobs/approvals', { signal }),
     refetchInterval: 30_000,
     enabled,
   });
@@ -453,14 +453,14 @@ export function useDenyJob() {
 export function useTemplates() {
   return useQuery<ConfigTemplate[]>({
     queryKey: ['config-templates'],
-    queryFn: () => apiRequest<ConfigTemplate[]>('/templates'),
+    queryFn: ({ signal }) => apiRequest<ConfigTemplate[]>('/templates', { signal }),
   });
 }
 
 export function useTemplate(id: number | null) {
   return useQuery<ConfigTemplate>({
     queryKey: ['config-template', id],
-    queryFn: () => apiRequest<ConfigTemplate>(`/templates/${id}`),
+    queryFn: ({ signal }) => apiRequest<ConfigTemplate>(`/templates/${id}`, { signal }),
     enabled: id != null,
   });
 }
@@ -497,7 +497,7 @@ export function useDeleteTemplate() {
 export function useJobCredentials() {
   return useQuery<Credential[]>({
     queryKey: ['credentials'],
-    queryFn: () => apiRequest<Credential[]>('/credentials'),
+    queryFn: ({ signal }) => apiRequest<Credential[]>('/credentials', { signal }),
   });
 }
 
@@ -533,7 +533,7 @@ export function useDeleteCredential() {
 export function useSecretVariables(enabled = true) {
   return useQuery<SecretVariable[]>({
     queryKey: ['secret-variables'],
-    queryFn: () => apiRequest<SecretVariable[]>('/secret-variables'),
+    queryFn: ({ signal }) => apiRequest<SecretVariable[]>('/secret-variables', { signal }),
     enabled,
   });
 }

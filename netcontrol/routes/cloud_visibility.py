@@ -2121,7 +2121,7 @@ async def cloud_topology_api(
     account_id: int | None = Query(default=None),
     provider: str | None = Query(default=None),
     request: Request = None,  # type: ignore[assignment]
-):
+) -> dict:
     try:
         normalized_provider = _normalize_provider(provider) if provider else None
     except ValueError:

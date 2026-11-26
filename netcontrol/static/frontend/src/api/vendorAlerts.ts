@@ -106,9 +106,10 @@ export interface VendorAlertPollResult {
 export function useVendorAlerts(provider: string, includeResolved = false) {
   return useQuery<{ alerts: VendorAlert[] }>({
     queryKey: ['vendor-alerts', provider, includeResolved],
-    queryFn: () =>
+    queryFn: ({ signal }) =>
       apiRequest(
         `/monitoring/vendor-alerts?provider=${encodeURIComponent(provider)}&include_resolved=${includeResolved}`,
+        { signal },
       ),
   });
 }
@@ -117,7 +118,7 @@ export function useVendorAlerts(provider: string, includeResolved = false) {
 export function useVendorAlertSettings(provider: string, enabled: boolean) {
   return useQuery<VendorAlertSettings>({
     queryKey: ['vendor-alert-settings', provider],
-    queryFn: () => apiRequest(`/monitoring/vendor-alerts/${encodeURIComponent(provider)}/settings`),
+    queryFn: ({ signal }) => apiRequest(`/monitoring/vendor-alerts/${encodeURIComponent(provider)}/settings`, { signal }),
     enabled,
   });
 }

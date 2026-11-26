@@ -113,7 +113,13 @@ async def raw_backup_text(backup: dict) -> str:
     returns: the decrypted config.xml of an OPNsense backup, the stored
     text of any other. Raises ``RawBackupUnavailable`` when the encrypted
     copy cannot be decrypted; never returns part of it."""
-    sealed = await db.get_config_backup_encrypted_text(int(backup["id"]))
+    return raw_text_of(backup, await db.get_config_backup_encrypted_text(int(backup["id"])))
+
+
+def raw_text_of(backup: dict, sealed: str) -> str:
+    """``raw_backup_text`` for a caller that already read the backup's
+    encrypted copy ``sealed`` (``''`` when it has none): no query, so it
+    also runs in a worker thread (the bulk download)."""
     if not sealed:
         return str(backup.get("config_text") or "")
     try:

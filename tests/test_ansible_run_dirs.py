@@ -115,3 +115,24 @@ async def test_a_run_reads_its_events_and_files_off_the_event_loop(backend, tmp_
     assert event_threads and event_threads[0] != loop_thread
     assert not backend._ACTIVE_RUN_DIRS
     assert not [p for p in tmp_path.iterdir() if p.name.startswith(backend.RUN_DIR_PREFIX)]
+
+
+async def test_the_run_itself_holds_a_thread_of_the_ansible_pool(backend, tmp_path, monkeypatch):
+    """A whole run takes minutes: it runs on the dedicated pool
+    (``netcontrol.executors``), not the default one logins share."""
+    import threading
+
+    monkeypatch.setattr(backend.tempfile, "tempdir", str(tmp_path))
+    run_threads: list[str] = []
+
+    class _Runner:
+        status = "successful"
+        events: list[dict] = []
+
+    def fake_run(**kwargs):
+        run_threads.append(threading.current_thread().name)
+        return _Runner()
+
+    monkeypatch.setattr(backend.ansible_runner, "run", fake_run, raising=False)
+    await backend.execute_ansible_playbook("- hosts: all\n", [], {"username": "u", "password": "p"})
+    assert len(run_threads) == 1 and run_threads[0].startswith("plexus-ansible")

@@ -403,7 +403,9 @@ accepts 60.
 threshold (%)** and **Memory threshold (%)** (default 90; 1 to 100),
 **Cooldown (min)** (default 15; 1 to 1440), **Escalate after (min)**
 (default 30; 5 to 1440) and **Escalation check (s)** (default 60; 30 to 3600). Choose **Save Monitoring
-Settings**. **Poll Now** runs one poll with the saved settings. Retention of
+Settings**. **Poll Now** runs one poll with the saved settings. How often the
+SSH part of the poll runs (`cli_poll_interval_seconds`, default 900) is not on
+the form; see [Monitoring](monitoring.md#how-a-host-is-polled). Retention of
 other monitoring data is in [DATA_RETENTION.md](../DATA_RETENTION.md).
 
 ### NetFlow

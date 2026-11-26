@@ -157,6 +157,14 @@ URL host, CA PEM or turns certificate checks off: then type them again. The
 sink connects to the address the outbound check approved (see
 [webhooks.md](webhooks.md#outbound-address-check)).
 
+A **TCP** or **TLS** sink keeps one connection open and sends its events
+over it. Plexus opens a new one after 120 seconds without an event, when
+the receiver closes the connection, after a write error and when the host
+name resolves to another address; the address check still runs for every
+event. A receiver or firewall that drops an idle connection without closing
+it can lose the first event sent afterwards, so keep its idle timeout above
+two minutes.
+
 Events have no severity of their own; Plexus gives each one a severity for
 this filter:
 

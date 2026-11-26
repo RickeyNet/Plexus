@@ -333,7 +333,7 @@ export function useMonitoringSummary(groupId: number | null = null) {
   const qs = groupId ? `?group_id=${groupId}` : '';
   return useQuery<MonitoringSummary>({
     queryKey: ['monitoring-summary', groupId],
-    queryFn: () => apiRequest(`/monitoring/summary${qs}`),
+    queryFn: ({ signal }) => apiRequest(`/monitoring/summary${qs}`, { signal }),
     refetchInterval: 60_000,
   });
 }
@@ -344,7 +344,7 @@ export function useMonitoringPolls(groupId: number | null = null, limit = 200) {
   if (limit) params.set('limit', String(limit));
   return useQuery<MonitoringPoll[]>({
     queryKey: ['monitoring-polls', groupId, limit],
-    queryFn: () => apiRequest(`/monitoring/polls?${params}`),
+    queryFn: ({ signal }) => apiRequest(`/monitoring/polls?${params}`, { signal }),
     refetchInterval: 60_000,
   });
 }
@@ -352,7 +352,7 @@ export function useMonitoringPolls(groupId: number | null = null, limit = 200) {
 export function useMonitoringPollHistory(hostId: number | null, limit = 50) {
   return useQuery<MonitoringPoll[]>({
     queryKey: ['monitoring-poll-history', hostId, limit],
-    queryFn: () => apiRequest(`/monitoring/polls/${hostId}/history?limit=${limit}`),
+    queryFn: ({ signal }) => apiRequest(`/monitoring/polls/${hostId}/history?limit=${limit}`, { signal }),
     enabled: hostId != null,
   });
 }
@@ -365,7 +365,7 @@ export function useMonitoringAlerts(params: { acknowledged?: boolean | null; sev
   qs.set('limit', String(params.limit ?? 200));
   return useQuery<MonitoringAlert[]>({
     queryKey: ['monitoring-alerts', params.acknowledged ?? null, params.severity ?? '', params.limit ?? 200],
-    queryFn: () => apiRequest(`/monitoring/alerts?${qs}`),
+    queryFn: ({ signal }) => apiRequest(`/monitoring/alerts?${qs}`, { signal }),
     refetchInterval: 60_000,
   });
 }
@@ -373,7 +373,7 @@ export function useMonitoringAlerts(params: { acknowledged?: boolean | null; sev
 export function useMonitoringRouteSnapshots(hostId: number | null, limit = 10) {
   return useQuery<MonitoringRouteSnapshot[]>({
     queryKey: ['monitoring-route-snapshots', hostId, limit],
-    queryFn: () => apiRequest(`/monitoring/routes/${hostId}?limit=${limit}`),
+    queryFn: ({ signal }) => apiRequest(`/monitoring/routes/${hostId}?limit=${limit}`, { signal }),
     enabled: hostId != null,
   });
 }
@@ -381,14 +381,14 @@ export function useMonitoringRouteSnapshots(hostId: number | null, limit = 10) {
 export function useAlertRules() {
   return useQuery<AlertRule[]>({
     queryKey: ['alert-rules'],
-    queryFn: () => apiRequest('/monitoring/rules'),
+    queryFn: ({ signal }) => apiRequest('/monitoring/rules', { signal }),
   });
 }
 
 export function useAlertSuppressions() {
   return useQuery<AlertSuppression[]>({
     queryKey: ['alert-suppressions'],
-    queryFn: () => apiRequest('/monitoring/suppressions'),
+    queryFn: ({ signal }) => apiRequest('/monitoring/suppressions', { signal }),
   });
 }
 
@@ -398,14 +398,14 @@ export function useSlaSummary(days = 30, groupId: number | null = null) {
   if (groupId) params.set('group_id', String(groupId));
   return useQuery<SlaSummary>({
     queryKey: ['sla-summary', days, groupId],
-    queryFn: () => apiRequest(`/sla/summary?${params}`),
+    queryFn: ({ signal }) => apiRequest(`/sla/summary?${params}`, { signal }),
   });
 }
 
 export function useSlaHostDetail(hostId: number | null, days = 30) {
   return useQuery<SlaHostDetail>({
     queryKey: ['sla-host-detail', hostId, days],
-    queryFn: () => apiRequest(`/sla/host/${hostId}?days=${days}`),
+    queryFn: ({ signal }) => apiRequest(`/sla/host/${hostId}?days=${days}`, { signal }),
     enabled: hostId != null,
   });
 }
@@ -413,7 +413,7 @@ export function useSlaHostDetail(hostId: number | null, days = 30) {
 export function useSlaTargets() {
   return useQuery<SlaTarget[]>({
     queryKey: ['sla-targets'],
-    queryFn: () => apiRequest('/sla/targets'),
+    queryFn: ({ signal }) => apiRequest('/sla/targets', { signal }),
   });
 }
 
@@ -423,7 +423,7 @@ export function useSlaCompliance(hostId: number | null = null, groupId: number |
   if (groupId != null) params.set('group_id', String(groupId));
   return useQuery<SlaComplianceRow[]>({
     queryKey: ['sla-compliance', hostId, groupId],
-    queryFn: () => apiRequest(`/sla/compliance?${params}`),
+    queryFn: ({ signal }) => apiRequest(`/sla/compliance?${params}`, { signal }),
   });
 }
 
@@ -433,7 +433,7 @@ export function useSlaComplianceHistory(hostId: number | null = null, limit = 20
   params.set('limit', String(limit));
   return useQuery<SlaComplianceChange[]>({
     queryKey: ['sla-compliance-history', hostId, limit],
-    queryFn: () => apiRequest(`/sla/compliance/history?${params}`),
+    queryFn: ({ signal }) => apiRequest(`/sla/compliance/history?${params}`, { signal }),
   });
 }
 
@@ -443,7 +443,7 @@ export function useAvailabilitySummary(groupId: number | null = null, days = 7) 
   if (groupId) params.set('group_id', String(groupId));
   return useQuery<AvailabilitySummary>({
     queryKey: ['availability-summary', groupId, days],
-    queryFn: () => apiRequest(`/availability/summary?${params}`),
+    queryFn: ({ signal }) => apiRequest(`/availability/summary?${params}`, { signal }),
   });
 }
 
@@ -454,7 +454,7 @@ export function useAvailabilityOutages(params: { groupId?: number | null; days?:
   qs.set('limit', String(params.limit ?? 200));
   return useQuery<{ outages: AvailabilityOutage[] }>({
     queryKey: ['availability-outages', params.groupId ?? null, params.days ?? 7, params.limit ?? 200],
-    queryFn: () => apiRequest(`/availability/outages?${qs}`),
+    queryFn: ({ signal }) => apiRequest(`/availability/outages?${qs}`, { signal }),
   });
 }
 
@@ -465,7 +465,7 @@ export function useAvailabilityTransitions(params: { groupId?: number | null; da
   qs.set('limit', String(params.limit ?? 500));
   return useQuery<{ transitions: AvailabilityTransition[] }>({
     queryKey: ['availability-transitions', params.groupId ?? null, params.days ?? null, params.limit ?? 500],
-    queryFn: () => apiRequest(`/availability/transitions?${qs}`),
+    queryFn: ({ signal }) => apiRequest(`/availability/transitions?${qs}`, { signal }),
   });
 }
 
@@ -485,7 +485,7 @@ export function useCapacityPlanning(params: {
   if (params.threshold != null) qs.set('threshold', String(params.threshold));
   return useQuery<CapacityPlanningResponse>({
     queryKey: ['capacity-planning', params.metric, params.range, params.group ?? null, params.projectionDays ?? 90, params.threshold ?? null],
-    queryFn: () => apiRequest(`/metrics/capacity-planning?${qs}`),
+    queryFn: ({ signal }) => apiRequest(`/metrics/capacity-planning?${qs}`, { signal }),
     // Keep the chart on screen while a new threshold or filter loads.
     placeholderData: keepPreviousData,
   });
@@ -757,7 +757,7 @@ export function useSyslogEvents(params: SyslogEventsParams) {
   if (params.limit != null) qs.set('limit', String(params.limit));
   return useQuery<{ events: SyslogEvent[] } | SyslogEvent[]>({
     queryKey: ['syslog-events', params.hostId ?? null, params.severity ?? '', params.eventType ?? 'syslog', params.limit ?? 500],
-    queryFn: () => apiRequest(`/metrics/events?${qs}`),
+    queryFn: ({ signal }) => apiRequest(`/metrics/events?${qs}`, { signal }),
   });
 }
 
@@ -785,14 +785,14 @@ export function useOidProfiles(vendor?: string | null) {
   const qs = vendor ? `?vendor=${encodeURIComponent(vendor)}` : '';
   return useQuery<{ profiles: OidProfile[] } | OidProfile[]>({
     queryKey: ['oid-profiles', vendor ?? ''],
-    queryFn: () => apiRequest(`/oid-profiles${qs}`),
+    queryFn: ({ signal }) => apiRequest(`/oid-profiles${qs}`, { signal }),
   });
 }
 
 export function useOidProfile(id: number | null) {
   return useQuery<OidProfile>({
     queryKey: ['oid-profile', id],
-    queryFn: () => apiRequest(`/oid-profiles/${id}`),
+    queryFn: ({ signal }) => apiRequest(`/oid-profiles/${id}`, { signal }),
     enabled: id != null,
   });
 }
@@ -967,7 +967,7 @@ function topologyAvailabilityQuery(f: TopologyAvailabilityFilters, defaultLimit?
 export function useTopologyAvailabilitySummary(f: TopologyAvailabilityFilters = {}) {
   return useQuery<TopologyAvailabilitySummary>({
     queryKey: ['topology-availability-summary', f.provider ?? null, f.orgRef ?? null, f.entityType ?? null, f.days ?? 7],
-    queryFn: () => apiRequest(`/availability/topology/summary?${topologyAvailabilityQuery(f)}`),
+    queryFn: ({ signal }) => apiRequest(`/availability/topology/summary?${topologyAvailabilityQuery(f)}`, { signal }),
   });
 }
 
@@ -985,7 +985,7 @@ export function useTopologyEntityMetrics(
   });
   return useQuery<TopologyEntityMetricHistory>({
     queryKey: ['topology-entity-metrics', entity?.provider, entity?.org_ref, entity?.entity_type, entity?.entity_id, days],
-    queryFn: () => apiRequest(`/availability/topology/metrics?${params.toString()}`),
+    queryFn: ({ signal }) => apiRequest(`/availability/topology/metrics?${params.toString()}`, { signal }),
     enabled: entity != null,
   });
 }
@@ -993,14 +993,14 @@ export function useTopologyEntityMetrics(
 export function useTopologyAvailabilityOutages(f: TopologyAvailabilityFilters = {}) {
   return useQuery<{ outages: TopologyAvailabilityOutage[] }>({
     queryKey: ['topology-availability-outages', f.provider ?? null, f.orgRef ?? null, f.entityType ?? null, f.days ?? 7, f.limit ?? 200],
-    queryFn: () => apiRequest(`/availability/topology/outages?${topologyAvailabilityQuery(f, 200)}`),
+    queryFn: ({ signal }) => apiRequest(`/availability/topology/outages?${topologyAvailabilityQuery(f, 200)}`, { signal }),
   });
 }
 
 export function useTopologyAvailabilityTransitions(f: TopologyAvailabilityFilters = {}) {
   return useQuery<{ transitions: TopologyAvailabilityTransition[] }>({
     queryKey: ['topology-availability-transitions', f.provider ?? null, f.orgRef ?? null, f.entityType ?? null, f.days ?? 7, f.limit ?? 500],
-    queryFn: () => apiRequest(`/availability/topology/transitions?${topologyAvailabilityQuery(f, 500)}`),
+    queryFn: ({ signal }) => apiRequest(`/availability/topology/transitions?${topologyAvailabilityQuery(f, 500)}`, { signal }),
   });
 }
 
@@ -1104,7 +1104,7 @@ type CatoCheck = 'cato-egress' | 'cato-shared-hosts';
 function useCatoCheckFindings(check: CatoCheck, includeResolved: boolean) {
   return useQuery<{ findings: CatoCheckFinding[] }>({
     queryKey: [`${check}-findings`, includeResolved],
-    queryFn: () => apiRequest(`/monitoring/${check}/findings?include_resolved=${includeResolved}`),
+    queryFn: ({ signal }) => apiRequest(`/monitoring/${check}/findings?include_resolved=${includeResolved}`, { signal }),
   });
 }
 

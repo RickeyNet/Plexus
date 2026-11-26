@@ -109,21 +109,21 @@ export interface RiskInventoryGroup {
 export function useRiskAnalysisSummary() {
   return useQuery<RiskAnalysisSummary>({
     queryKey: ['risk-analysis-summary'],
-    queryFn: () => apiRequest('/risk-analysis/summary'),
+    queryFn: ({ signal }) => apiRequest('/risk-analysis/summary', { signal }),
   });
 }
 
 export function useRiskAnalyses(limit = 200) {
   return useQuery<RiskAnalysis[]>({
     queryKey: ['risk-analyses', limit],
-    queryFn: () => apiRequest(`/risk-analysis?limit=${limit}`),
+    queryFn: ({ signal }) => apiRequest(`/risk-analysis?limit=${limit}`, { signal }),
   });
 }
 
 export function useRiskAnalysis(id: number | null) {
   return useQuery<RiskAnalysis>({
     queryKey: ['risk-analysis', id],
-    queryFn: () => apiRequest(`/risk-analysis/${id}`),
+    queryFn: ({ signal }) => apiRequest(`/risk-analysis/${id}`, { signal }),
     enabled: id != null,
   });
 }
@@ -131,21 +131,21 @@ export function useRiskAnalysis(id: number | null) {
 export function useRiskTemplates() {
   return useQuery<RiskTemplate[]>({
     queryKey: ['templates'],
-    queryFn: () => apiRequest('/templates'),
+    queryFn: ({ signal }) => apiRequest('/templates', { signal }),
   });
 }
 
 export function useRiskCredentials() {
   return useQuery<RiskCredential[]>({
     queryKey: ['credentials'],
-    queryFn: () => apiRequest('/credentials'),
+    queryFn: ({ signal }) => apiRequest('/credentials', { signal }),
   });
 }
 
 export function useRiskInventoryGroups() {
   return useQuery<RiskInventoryGroup[]>({
     queryKey: ['inventory-groups', false],
-    queryFn: () => apiRequest('/inventory'),
+    queryFn: ({ signal }) => apiRequest('/inventory', { signal }),
   });
 }
 

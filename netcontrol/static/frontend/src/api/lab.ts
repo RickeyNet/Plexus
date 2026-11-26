@@ -138,16 +138,17 @@ const KEYS = {
 export function useEnvironments() {
   return useQuery({
     queryKey: KEYS.envs,
-    queryFn: () => apiRequest<LabEnvironment[]>('/lab/environments'),
+    queryFn: ({ signal }) => apiRequest<LabEnvironment[]>('/lab/environments', { signal }),
   });
 }
 
 export function useEnvironment(envId: number | null) {
   return useQuery({
     queryKey: envId ? KEYS.env(envId) : ['lab', 'environment', 'none'],
-    queryFn: () =>
+    queryFn: ({ signal }) =>
       apiRequest<LabEnvironment & { devices: LabDeviceSummary[] }>(
         `/lab/environments/${envId}`,
+        { signal },
       ),
     enabled: envId !== null && envId !== undefined,
   });
@@ -181,7 +182,7 @@ export function useDeleteEnvironment() {
 export function useDevice(deviceId: number | null) {
   return useQuery({
     queryKey: deviceId ? KEYS.device(deviceId) : ['lab', 'device', 'none'],
-    queryFn: () => apiRequest<LabDevice>(`/lab/devices/${deviceId}`),
+    queryFn: ({ signal }) => apiRequest<LabDevice>(`/lab/devices/${deviceId}`, { signal }),
     enabled: deviceId !== null && deviceId !== undefined,
   });
 }
@@ -250,7 +251,7 @@ export function useSimulate(deviceId: number) {
 export function useRuns(deviceId: number | null) {
   return useQuery({
     queryKey: deviceId ? KEYS.runs(deviceId) : ['lab', 'runs', 'none'],
-    queryFn: () => apiRequest<LabRunSummary[]>(`/lab/devices/${deviceId}/runs`),
+    queryFn: ({ signal }) => apiRequest<LabRunSummary[]>(`/lab/devices/${deviceId}/runs`, { signal }),
     enabled: deviceId !== null && deviceId !== undefined,
   });
 }
@@ -258,7 +259,7 @@ export function useRuns(deviceId: number | null) {
 export function useRun(runId: number | null) {
   return useQuery({
     queryKey: runId ? KEYS.run(runId) : ['lab', 'run', 'none'],
-    queryFn: () => apiRequest<LabRunDetail>(`/lab/runs/${runId}`),
+    queryFn: ({ signal }) => apiRequest<LabRunDetail>(`/lab/runs/${runId}`, { signal }),
     enabled: runId !== null && runId !== undefined,
   });
 }
@@ -268,7 +269,7 @@ export function useRun(runId: number | null) {
 export function useRuntimeStatus() {
   return useQuery({
     queryKey: KEYS.runtime,
-    queryFn: () => apiRequest<LabRuntimeStatus>('/lab/runtime'),
+    queryFn: ({ signal }) => apiRequest<LabRuntimeStatus>('/lab/runtime', { signal }),
     staleTime: 60_000,
   });
 }
@@ -276,8 +277,8 @@ export function useRuntimeStatus() {
 export function useRuntimeEvents(deviceId: number | null) {
   return useQuery({
     queryKey: deviceId ? KEYS.runtimeEvents(deviceId) : ['lab', 'runtime-events', 'none'],
-    queryFn: () =>
-      apiRequest<LabRuntimeEvent[]>(`/lab/devices/${deviceId}/runtime/events`),
+    queryFn: ({ signal }) =>
+      apiRequest<LabRuntimeEvent[]>(`/lab/devices/${deviceId}/runtime/events`, { signal }),
     enabled: deviceId !== null && deviceId !== undefined,
   });
 }
@@ -359,9 +360,10 @@ const DRIFT_KEYS = {
 export function useLatestDriftRun(deviceId: number | null) {
   return useQuery({
     queryKey: deviceId ? DRIFT_KEYS.latest(deviceId) : ['lab', 'drift', 'latest', 'none'],
-    queryFn: () =>
+    queryFn: ({ signal }) =>
       apiRequest<LabDriftRunSummary | { status: 'never_checked' }>(
         `/lab/devices/${deviceId}/drift/latest`,
+        { signal },
       ),
     enabled: deviceId !== null && deviceId !== undefined,
   });
@@ -370,8 +372,8 @@ export function useLatestDriftRun(deviceId: number | null) {
 export function useDriftRuns(deviceId: number | null) {
   return useQuery({
     queryKey: deviceId ? DRIFT_KEYS.runs(deviceId) : ['lab', 'drift', 'runs', 'none'],
-    queryFn: () =>
-      apiRequest<LabDriftRunSummary[]>(`/lab/devices/${deviceId}/drift/runs`),
+    queryFn: ({ signal }) =>
+      apiRequest<LabDriftRunSummary[]>(`/lab/devices/${deviceId}/drift/runs`, { signal }),
     enabled: deviceId !== null && deviceId !== undefined,
   });
 }
@@ -379,7 +381,7 @@ export function useDriftRuns(deviceId: number | null) {
 export function useDriftRun(runId: number | null) {
   return useQuery({
     queryKey: runId ? DRIFT_KEYS.run(runId) : ['lab', 'drift', 'run', 'none'],
-    queryFn: () => apiRequest<LabDriftRunDetail>(`/lab/drift/runs/${runId}`),
+    queryFn: ({ signal }) => apiRequest<LabDriftRunDetail>(`/lab/drift/runs/${runId}`, { signal }),
     enabled: runId !== null && runId !== undefined,
   });
 }
@@ -448,8 +450,8 @@ const TOPO_KEYS = {
 export function useTopologies(envId: number | null) {
   return useQuery({
     queryKey: envId ? TOPO_KEYS.list(envId) : ['lab', 'topologies', 'none'],
-    queryFn: () =>
-      apiRequest<LabTopologySummary[]>(`/lab/environments/${envId}/topologies`),
+    queryFn: ({ signal }) =>
+      apiRequest<LabTopologySummary[]>(`/lab/environments/${envId}/topologies`, { signal }),
     enabled: envId !== null && envId !== undefined,
   });
 }
@@ -457,7 +459,7 @@ export function useTopologies(envId: number | null) {
 export function useTopology(topologyId: number | null) {
   return useQuery({
     queryKey: topologyId ? TOPO_KEYS.topo(topologyId) : ['lab', 'topology', 'none'],
-    queryFn: () => apiRequest<LabTopology>(`/lab/topologies/${topologyId}`),
+    queryFn: ({ signal }) => apiRequest<LabTopology>(`/lab/topologies/${topologyId}`, { signal }),
     enabled: topologyId !== null && topologyId !== undefined,
   });
 }

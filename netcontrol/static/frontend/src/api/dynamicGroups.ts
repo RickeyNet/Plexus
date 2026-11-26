@@ -52,7 +52,7 @@ const ROOT = ['dynamic-groups'] as const;
 export function useDynamicGroups(enabled = true) {
   return useQuery<DynamicGroup[]>({
     queryKey: ROOT,
-    queryFn: () => detailRequest('/dynamic-groups'),
+    queryFn: ({ signal }) => detailRequest('/dynamic-groups', { signal }),
     enabled,
   });
 }
@@ -60,7 +60,7 @@ export function useDynamicGroups(enabled = true) {
 export function useDynamicGroupMembers(id: number | null) {
   return useQuery<DynamicGroupMembers>({
     queryKey: [...ROOT, id, 'members'],
-    queryFn: () => detailRequest(`/dynamic-groups/${id}/members`),
+    queryFn: ({ signal }) => detailRequest(`/dynamic-groups/${id}/members`, { signal }),
     enabled: id != null,
   });
 }
@@ -72,7 +72,7 @@ export function useDynamicGroupMembers(id: number | null) {
 export function useDynamicGroupPreview(filter: DynamicGroupFilter | null, filterKey: string | null) {
   return useQuery<DynamicGroupMembers>({
     queryKey: [...ROOT, 'preview', filterKey],
-    queryFn: () => detailRequest('/dynamic-groups/preview', { method: 'POST', body: { filter } }),
+    queryFn: ({ signal }) => detailRequest('/dynamic-groups/preview', { method: 'POST', body: { filter }, signal }),
     enabled: filter != null && filterKey != null,
     placeholderData: keepPreviousData,
     retry: false,

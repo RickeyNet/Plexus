@@ -232,7 +232,7 @@ export type DcimFilters = Record<string, string | number | null | undefined>;
 export function useDcimList(kind: DcimKind, filters: DcimFilters = {}, enabled = true) {
   return useQuery<DcimRecord[]>({
     queryKey: [...ROOT, kind, filters],
-    queryFn: async () => listOf<DcimRecord>(await detailRequest(`/${DCIM_PATHS[kind]}${queryString(filters)}`), listKey(kind)),
+    queryFn: async ({ signal }) => listOf<DcimRecord>(await detailRequest(`/${DCIM_PATHS[kind]}${queryString(filters)}`, { signal }), listKey(kind)),
     enabled,
   });
 }
@@ -240,7 +240,7 @@ export function useDcimList(kind: DcimKind, filters: DcimFilters = {}, enabled =
 export function useDcimChoices() {
   return useQuery<DcimChoices>({
     queryKey: [...ROOT, 'choices'],
-    queryFn: () => detailRequest<DcimChoices>('/dcim/choices'),
+    queryFn: ({ signal }) => detailRequest<DcimChoices>('/dcim/choices', { signal }),
     staleTime: Infinity,
   });
 }
@@ -248,7 +248,7 @@ export function useDcimChoices() {
 export function useRackElevation(rackId: number | null) {
   return useQuery<RackElevation>({
     queryKey: [...ROOT, 'elevation', rackId],
-    queryFn: () => detailRequest<RackElevation>(`/dcim/racks/${rackId}/elevation`),
+    queryFn: ({ signal }) => detailRequest<RackElevation>(`/dcim/racks/${rackId}/elevation`, { signal }),
     enabled: rackId !== null,
   });
 }
@@ -256,7 +256,7 @@ export function useRackElevation(rackId: number | null) {
 export function useRackPower(rackId: number | null) {
   return useQuery<RackPower>({
     queryKey: [...ROOT, 'rack-power', rackId],
-    queryFn: () => detailRequest<RackPower>(`/dcim/racks/${rackId}/power`),
+    queryFn: ({ signal }) => detailRequest<RackPower>(`/dcim/racks/${rackId}/power`, { signal }),
     enabled: rackId !== null,
   });
 }
@@ -264,7 +264,7 @@ export function useRackPower(rackId: number | null) {
 export function useCables(filters: DcimFilters = {}, enabled = true) {
   return useQuery<Cable[]>({
     queryKey: [...ROOT, 'cables', filters],
-    queryFn: async () => listOf<Cable>(await detailRequest(`/dcim/cables${queryString(filters)}`), 'cables'),
+    queryFn: async ({ signal }) => listOf<Cable>(await detailRequest(`/dcim/cables${queryString(filters)}`, { signal }), 'cables'),
     enabled,
   });
 }
@@ -272,7 +272,7 @@ export function useCables(filters: DcimFilters = {}, enabled = true) {
 export function useTrace(endpoint: EndpointInput | null) {
   return useQuery<TraceResult>({
     queryKey: [...ROOT, 'trace', endpoint],
-    queryFn: () => detailRequest<TraceResult>(`/dcim/trace${queryString(endpoint ?? {})}`),
+    queryFn: ({ signal }) => detailRequest<TraceResult>(`/dcim/trace${queryString(endpoint ?? {})}`, { signal }),
     enabled: endpoint !== null,
   });
 }
@@ -280,7 +280,7 @@ export function useTrace(endpoint: EndpointInput | null) {
 export function useHostDcim(hostId: number | null, enabled = true) {
   return useQuery<HostDcim>({
     queryKey: [...ROOT, 'host', hostId],
-    queryFn: () => detailRequest<HostDcim>(`/dcim/hosts/${hostId}`),
+    queryFn: ({ signal }) => detailRequest<HostDcim>(`/dcim/hosts/${hostId}`, { signal }),
     enabled: enabled && hostId !== null,
   });
 }
@@ -288,7 +288,7 @@ export function useHostDcim(hostId: number | null, enabled = true) {
 export function useDcimHostInterfaces(hostId: number | null) {
   return useQuery<string[]>({
     queryKey: [...ROOT, 'host-interfaces', hostId],
-    queryFn: async () => listOf<string>(await detailRequest(`/dcim/hosts/${hostId}/interfaces`), 'interfaces'),
+    queryFn: async ({ signal }) => listOf<string>(await detailRequest(`/dcim/hosts/${hostId}/interfaces`, { signal }), 'interfaces'),
     enabled: hostId !== null,
   });
 }
@@ -327,7 +327,7 @@ export function useDeleteDcimRecord(kind: DcimKind) {
 export function useDcimRecord<T = DcimRecord>(kind: DcimKind, id: number | null) {
   return useQuery<T>({
     queryKey: [...ROOT, kind, 'detail', id],
-    queryFn: () => detailRequest<T>(`/${DCIM_PATHS[kind]}/${id}`),
+    queryFn: ({ signal }) => detailRequest<T>(`/${DCIM_PATHS[kind]}/${id}`, { signal }),
     enabled: id !== null,
   });
 }

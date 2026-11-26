@@ -13,6 +13,7 @@ intended configuration.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import uuid
 from datetime import UTC, datetime
 
@@ -21,6 +22,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, WebSocket
 from pydantic import BaseModel
 
 import netcontrol.routes.state as state
+from netcontrol.bounded_map import BoundedDict
 from netcontrol.object_scope import (
     ObjectScope,
     group_filter,
@@ -411,6 +413,52 @@ async def _capture_job_body(
     return "completed" if fail_count == 0 else ("partial" if ok_count > 0 else "failed")
 
 
+# host_id -> (key of the baseline/snapshot pair last compared, its diff). The
+# scheduled check compares every baselined host each interval, and a large
+# config takes about a second of difflib, so an unchanged pair reuses its
+# diff. Only the diff is reused: the open/duplicate event handling in
+# _analyze_drift_for_host still runs every time. The key holds the texts'
+# digests beside the ids because a baseline is edited in place (same id) and
+# ids can repeat after a database restore.
+# Past the limit the hosts compared longest ago are dropped.
+_DRIFT_DIFF_CACHE_MAX = 5000
+_DRIFT_DIFF_CACHE: BoundedDict = BoundedDict(_DRIFT_DIFF_CACHE_MAX)
+
+
+def _text_digest(text: str | None) -> str:
+    return hashlib.sha256((text or "").encode("utf-8", "surrogatepass")).hexdigest()
+
+
+def _compare_drift_texts(baseline_text: str, snapshot_text: str) -> tuple[str, int, int]:
+    """Diff a baseline and a snapshot. An OPNsense baseline or snapshot
+    stored before masking (or pasted by hand) is compared in drift form too,
+    so the diff never holds a secret."""
+    return _compute_config_diff(
+        _drift_form(baseline_text),
+        _drift_form(snapshot_text),
+        baseline_label="baseline",
+        actual_label="running-config",
+    )
+
+
+async def _drift_diff(host_id: int, baseline: dict, snapshot: dict) -> tuple[str, int, int]:
+    """``(diff_text, added, removed)`` of a host's baseline against its
+    snapshot, computed in a worker thread unless this exact pair was the
+    last one compared for the host."""
+    key = (
+        int(baseline["id"]),
+        _text_digest(baseline.get("config_text")),
+        int(snapshot["id"]),
+        _text_digest(snapshot.get("config_text")),
+    )
+    cached = _DRIFT_DIFF_CACHE.get(host_id)
+    if cached is not None and cached[0] == key:
+        return cached[1]
+    result = await asyncio.to_thread(_compare_drift_texts, baseline["config_text"], snapshot["config_text"])
+    _DRIFT_DIFF_CACHE[host_id] = (key, result)
+    return result
+
+
 async def _analyze_drift_for_host(host_id: int) -> dict:
     """Compare latest snapshot vs baseline for a single host.
 
@@ -423,14 +471,7 @@ async def _analyze_drift_for_host(host_id: int) -> dict:
     if not snapshot:
         return {"drifted": False, "event_id": None, "diff_summary": "No snapshot available"}
 
-    # An OPNsense baseline or snapshot stored before masking (or pasted by
-    # hand) is compared in drift form too, so the diff never holds a secret.
-    diff_text, added, removed = _compute_config_diff(
-        _drift_form(baseline["config_text"]),
-        _drift_form(snapshot["config_text"]),
-        baseline_label="baseline",
-        actual_label="running-config",
-    )
+    diff_text, added, removed = await _drift_diff(host_id, baseline, snapshot)
     if not diff_text:
         return {"drifted": False, "event_id": None, "diff_summary": "In compliance"}
 

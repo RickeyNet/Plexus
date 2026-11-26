@@ -24,6 +24,7 @@ from netcontrol.object_scope import (
     scoped,
     sql_condition,
 )
+from netcontrol.prefix_index import longest_prefix_match
 from netcontrol.routes.custom_fields import attach_custom_data, matching_keys
 from netcontrol.routes.device_model import check_device_values
 from netcontrol.routes.ipam_adapters import (
@@ -300,28 +301,21 @@ async def ipam_address_context_api(
     overview = await db.get_ipam_overview(include_cloud=False, include_external=True, **await overview_filters(request))
     subnets = overview.get("subnets", [])
 
-    best: dict | None = None
-    best_prefixlen = -1
-    best_vrf_match = False
+    candidates: list[tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, dict]] = []
     for s in subnets:
         try:
-            network = ipaddress.ip_network(s["subnet"], strict=False)
+            candidates.append((ipaddress.ip_network(s["subnet"], strict=False), s))
         except ValueError:
             continue
-        if addr not in network:
-            continue
-        s_vrf = (s.get("vrf_name") or "").strip()
-        vrf_match = bool(target_vrf) and s_vrf == target_vrf
-        # Prefer same-VRF matches; among same VRF-match status, prefer longer prefix.
-        better = (
-            best is None
-            or (vrf_match and not best_vrf_match)
-            or (vrf_match == best_vrf_match and network.prefixlen > best_prefixlen)
+    # Prefer same-VRF matches; among those (or, without one, among all) the
+    # longest prefix.
+    best: dict | None = None
+    if target_vrf:
+        best = longest_prefix_match(
+            addr, [(n, s) for n, s in candidates if (s.get("vrf_name") or "").strip() == target_vrf]
         )
-        if better:
-            best = s
-            best_prefixlen = network.prefixlen
-            best_vrf_match = vrf_match
+    if best is None:
+        best = longest_prefix_match(addr, candidates)
 
     duplicates = overview.get("duplicate_ips", [])
     if target_vrf:

@@ -235,15 +235,15 @@ const MONITOR_REFETCH_MS = 60_000;
 export function useCloudProviders() {
   return useQuery({
     queryKey: ['cloud-providers'],
-    queryFn: () => apiRequest<{ providers: CloudProvider[] }>('/cloud/providers'),
+    queryFn: ({ signal }) => apiRequest<{ providers: CloudProvider[] }>('/cloud/providers', { signal }),
   });
 }
 
 export function useCloudAccounts(provider?: string) {
   return useQuery({
     queryKey: ['cloud-accounts', provider ?? ''],
-    queryFn: () =>
-      apiRequest<{ accounts: CloudAccount[] }>(`/cloud/accounts${qs({ provider })}`),
+    queryFn: ({ signal }) =>
+      apiRequest<{ accounts: CloudAccount[] }>(`/cloud/accounts${qs({ provider })}`, { signal }),
     refetchInterval: MONITOR_REFETCH_MS,
   });
 }
@@ -255,7 +255,7 @@ const TOPOLOGY_REFETCH_MS = 5 * 60_000;
 export function useCloudTopology(filter: CloudFilter) {
   return useQuery({
     queryKey: ['cloud-topology', filter.provider ?? '', filter.account_id ?? ''],
-    queryFn: () => apiRequest<CloudTopology>(`/cloud/topology${qs(filter)}`),
+    queryFn: ({ signal }) => apiRequest<CloudTopology>(`/cloud/topology${qs(filter)}`, { signal }),
     refetchInterval: TOPOLOGY_REFETCH_MS,
     refetchOnWindowFocus: true,
   });
@@ -271,8 +271,8 @@ export interface FlowAnalyticsParams extends CloudFilter {
 export function useCloudFlowSummary(params: FlowAnalyticsParams) {
   return useQuery({
     queryKey: ['cloud-flow-summary', params],
-    queryFn: () =>
-      apiRequest<{ summary: CloudFlowSummary }>(`/cloud/flow-logs/summary${qs(params)}`),
+    queryFn: ({ signal }) =>
+      apiRequest<{ summary: CloudFlowSummary }>(`/cloud/flow-logs/summary${qs(params)}`, { signal }),
     refetchInterval: MONITOR_REFETCH_MS,
   });
 }
@@ -280,8 +280,8 @@ export function useCloudFlowSummary(params: FlowAnalyticsParams) {
 export function useCloudFlowTopTalkers(params: FlowAnalyticsParams) {
   return useQuery({
     queryKey: ['cloud-flow-talkers', params],
-    queryFn: () =>
-      apiRequest<{ talkers: CloudFlowTalker[] }>(`/cloud/flow-logs/top-talkers${qs(params)}`),
+    queryFn: ({ signal }) =>
+      apiRequest<{ talkers: CloudFlowTalker[] }>(`/cloud/flow-logs/top-talkers${qs(params)}`, { signal }),
     refetchInterval: MONITOR_REFETCH_MS,
   });
 }
@@ -289,8 +289,8 @@ export function useCloudFlowTopTalkers(params: FlowAnalyticsParams) {
 export function useCloudFlowTimeline(params: FlowAnalyticsParams) {
   return useQuery({
     queryKey: ['cloud-flow-timeline', params],
-    queryFn: () =>
-      apiRequest<{ timeline: CloudFlowTimelinePoint[] }>(`/cloud/flow-logs/timeline${qs(params)}`),
+    queryFn: ({ signal }) =>
+      apiRequest<{ timeline: CloudFlowTimelinePoint[] }>(`/cloud/flow-logs/timeline${qs(params)}`, { signal }),
     refetchInterval: MONITOR_REFETCH_MS,
   });
 }
@@ -298,9 +298,10 @@ export function useCloudFlowTimeline(params: FlowAnalyticsParams) {
 export function useCloudTrafficMetricSummary(params: FlowAnalyticsParams) {
   return useQuery({
     queryKey: ['cloud-traffic-summary', params],
-    queryFn: () =>
+    queryFn: ({ signal }) =>
       apiRequest<{ summary: CloudTrafficMetricSummary }>(
         `/cloud/traffic-metrics/summary${qs(params)}`,
+        { signal },
       ),
     refetchInterval: MONITOR_REFETCH_MS,
   });
@@ -309,9 +310,10 @@ export function useCloudTrafficMetricSummary(params: FlowAnalyticsParams) {
 export function useCloudTrafficMetricTopResources(params: FlowAnalyticsParams) {
   return useQuery({
     queryKey: ['cloud-traffic-resources', params],
-    queryFn: () =>
+    queryFn: ({ signal }) =>
       apiRequest<{ resources: CloudTrafficMetricResource[] }>(
         `/cloud/traffic-metrics/top-resources${qs(params)}`,
+        { signal },
       ),
     refetchInterval: MONITOR_REFETCH_MS,
   });
@@ -320,9 +322,10 @@ export function useCloudTrafficMetricTopResources(params: FlowAnalyticsParams) {
 export function useCloudTrafficMetricTimeline(params: FlowAnalyticsParams) {
   return useQuery({
     queryKey: ['cloud-traffic-timeline', params],
-    queryFn: () =>
+    queryFn: ({ signal }) =>
       apiRequest<{ timeline: CloudTrafficMetricTimelinePoint[] }>(
         `/cloud/traffic-metrics/timeline${qs(params)}`,
+        { signal },
       ),
     refetchInterval: MONITOR_REFETCH_MS,
   });
@@ -338,9 +341,10 @@ export interface PolicyParams extends CloudFilter {
 export function useCloudPolicyEffective(params: PolicyParams) {
   return useQuery({
     queryKey: ['cloud-policy-effective', params],
-    queryFn: () =>
+    queryFn: ({ signal }) =>
       apiRequest<{ resources: CloudPolicyEffectiveView[] }>(
         `/cloud/policies/effective${qs(params)}`,
+        { signal },
       ),
   });
 }
@@ -348,8 +352,8 @@ export function useCloudPolicyEffective(params: PolicyParams) {
 export function useCloudPolicyRules(params: PolicyParams) {
   return useQuery({
     queryKey: ['cloud-policy-rules', params],
-    queryFn: () =>
-      apiRequest<{ rules: CloudPolicyRule[] }>(`/cloud/policies/rules${qs(params)}`),
+    queryFn: ({ signal }) =>
+      apiRequest<{ rules: CloudPolicyRule[] }>(`/cloud/policies/rules${qs(params)}`, { signal }),
     // Keep the table on screen while a new filter or drilldown loads.
     placeholderData: keepPreviousData,
   });
@@ -358,7 +362,7 @@ export function useCloudPolicyRules(params: PolicyParams) {
 export function useCloudFlowSyncConfig() {
   return useQuery({
     queryKey: ['cloud-flow-sync-config'],
-    queryFn: () => apiRequest<CloudSyncConfigResponse>('/cloud/flow-sync/config'),
+    queryFn: ({ signal }) => apiRequest<CloudSyncConfigResponse>('/cloud/flow-sync/config', { signal }),
     refetchInterval: MONITOR_REFETCH_MS,
   });
 }
@@ -366,7 +370,7 @@ export function useCloudFlowSyncConfig() {
 export function useCloudFlowSyncCursors() {
   return useQuery({
     queryKey: ['cloud-flow-sync-cursors'],
-    queryFn: () => apiRequest<{ cursors: CloudSyncCursor[] }>('/cloud/flow-sync/cursors'),
+    queryFn: ({ signal }) => apiRequest<{ cursors: CloudSyncCursor[] }>('/cloud/flow-sync/cursors', { signal }),
     refetchInterval: MONITOR_REFETCH_MS,
   });
 }
@@ -374,7 +378,7 @@ export function useCloudFlowSyncCursors() {
 export function useCloudTrafficSyncConfig() {
   return useQuery({
     queryKey: ['cloud-traffic-sync-config'],
-    queryFn: () => apiRequest<CloudSyncConfigResponse>('/cloud/traffic-sync/config'),
+    queryFn: ({ signal }) => apiRequest<CloudSyncConfigResponse>('/cloud/traffic-sync/config', { signal }),
     refetchInterval: MONITOR_REFETCH_MS,
   });
 }
@@ -382,7 +386,7 @@ export function useCloudTrafficSyncConfig() {
 export function useCloudTrafficSyncCursors() {
   return useQuery({
     queryKey: ['cloud-traffic-sync-cursors'],
-    queryFn: () => apiRequest<{ cursors: CloudSyncCursor[] }>('/cloud/traffic-sync/cursors'),
+    queryFn: ({ signal }) => apiRequest<{ cursors: CloudSyncCursor[] }>('/cloud/traffic-sync/cursors', { signal }),
     refetchInterval: MONITOR_REFETCH_MS,
   });
 }
@@ -479,8 +483,8 @@ export interface CloudDiscoveryProgress {
 export function useCloudDiscoveryProgress(id: number) {
   return useQuery({
     queryKey: ['cloud-discovery-progress', id],
-    queryFn: () =>
-      apiRequest<CloudDiscoveryProgress>(`/cloud/accounts/${id}/discover/progress`),
+    queryFn: ({ signal }) =>
+      apiRequest<CloudDiscoveryProgress>(`/cloud/accounts/${id}/discover/progress`, { signal }),
     refetchInterval: 1000,
     gcTime: 0,
     retry: false,
@@ -491,7 +495,7 @@ export function useCloudDiscoveryProgress(id: number) {
 export function useCloudDiscoverySyncConfig(enabled = true) {
   return useQuery({
     queryKey: ['cloud-discovery-sync-config'],
-    queryFn: () => apiRequest<{ config: CloudSyncConfig }>('/cloud/discovery-sync/config'),
+    queryFn: ({ signal }) => apiRequest<{ config: CloudSyncConfig }>('/cloud/discovery-sync/config', { signal }),
     enabled,
   });
 }

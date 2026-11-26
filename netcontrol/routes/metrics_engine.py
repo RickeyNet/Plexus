@@ -18,7 +18,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import math
 import re
 import socket
 import struct
@@ -745,59 +744,17 @@ _DOWNSAMPLE_METRICS = [
 ]
 
 
-def _percentile(values: list[float], pct: float) -> float:
-    """Compute pct-th percentile using linear interpolation."""
-    if not values:
-        return 0.0
-    s = sorted(values)
-    k = (len(s) - 1) * (pct / 100.0)
-    f = math.floor(k)
-    c = math.ceil(k)
-    if f == c:
-        return s[int(k)]
-    return s[f] * (c - k) + s[c] * (k - f)
-
-
 async def _downsample_window(
     time_window: str,
     period_start: str,
     period_end: str,
 ) -> int:
-    """Aggregate raw metric_samples into a rollup row for each host+metric+labels."""
-    rows: list[tuple] = []
+    """Aggregate raw metric_samples into a rollup row for each host+metric+labels.
 
-    for metric in _DOWNSAMPLE_METRICS:
-        raw = await db.get_raw_samples_for_rollup(metric, period_start, period_end)
-        if not raw:
-            continue
-
-        # Group by (host_id, labels_json)
-        groups: dict[tuple, list[float]] = {}
-        for r in raw:
-            key = (r["host_id"], r.get("labels_json", "{}"))
-            groups.setdefault(key, []).append(r["value"])
-
-        for (host_id, labels_json), values in groups.items():
-            rows.append(
-                (
-                    host_id,
-                    metric,
-                    labels_json,
-                    time_window,
-                    period_start,
-                    period_end,
-                    min(values),
-                    sum(values) / len(values),
-                    max(values),
-                    _percentile(values, 95),
-                    len(values),
-                )
-            )
-
-    # One transaction for the whole window instead of one commit per
-    # (host, metric, labels) row - with 500 hosts that was ~10k commits,
-    # each taking the global writer lock.
-    return await db.create_metric_rollups_batch(rows)
+    The database aggregates the window in one statement (min, avg, max and
+    an interpolated 95th percentile), so no raw sample reaches Python.
+    """
+    return await db.rollup_metric_samples(_DOWNSAMPLE_METRICS, time_window, period_start, period_end)
 
 
 async def run_hourly_rollup() -> int:
@@ -1806,7 +1763,7 @@ async def metrics_query(
     range: str = Query(default="6h", description="Time range: 1h, 6h, 24h, 7d, 30d"),
     step: str = Query(default="auto", description="Resolution: raw, hourly, daily, or auto"),
     group: int | None = Query(default=None, description="Filter by inventory group ID"),
-):
+) -> dict:
     """Structured metrics query - no PromQL needed.
     Returns time-series data for the requested metric across hosts."""
 
@@ -2063,6 +2020,17 @@ async def metrics_names():
 
 # ── Interface Time-Series API ────────────────────────────────────────────────
 
+# Range -> (span, bucket width in seconds; 0 = raw samples). Widths keep
+# each interface at about 300-360 points: 24 h / 5 min, 7 d / 30 min,
+# 30 d / 2 h. Short ranges stay raw (capped per interface in the query).
+_INTERFACE_TS_RANGES: dict[str, tuple[timedelta, int]] = {
+    "1h": (timedelta(hours=1), 0),
+    "6h": (timedelta(hours=6), 0),
+    "24h": (timedelta(hours=24), 300),
+    "7d": (timedelta(days=7), 1800),
+    "30d": (timedelta(days=30), 7200),
+}
+
 
 @router.get("/api/metrics/interfaces/{host_id}")
 @scoped("host")
@@ -2072,25 +2040,34 @@ async def interface_timeseries(
     if_index: int | None = Query(default=None),
     range: str = Query(default="6h"),
 ):
-    """Get per-interface utilization time-series for a host."""
+    """Get per-interface utilization time-series for a host.
+
+    ``data`` covers the whole range, ordered by ``if_index`` then time.
+    Ranges up to 6 h are raw samples; longer ones are bucket averages
+    (``bucket_seconds``), a few hundred points per interface. ``latest``
+    holds each interface's newest raw sample in the range.
+    """
     await require_object_host(request, host_id, not_found=HOST_NOT_FOUND)
     now = datetime.now(UTC)
-    range_map = {
-        "1h": timedelta(hours=1),
-        "6h": timedelta(hours=6),
-        "24h": timedelta(hours=24),
-        "7d": timedelta(days=7),
-        "30d": timedelta(days=30),
-    }
-    delta = range_map.get(range, timedelta(hours=6))
+    delta, bucket_seconds = _INTERFACE_TS_RANGES.get(range, _INTERFACE_TS_RANGES["6h"])
     start = (now - delta).strftime("%Y-%m-%d %H:%M:%S")
 
-    data = await db.query_interface_ts(
-        host_id=host_id,
+    series = await db.query_interface_ts_series(
+        host_id,
+        start,
+        bucket_seconds=bucket_seconds,
         if_index=if_index,
-        start=start,
     )
-    return {"host_id": host_id, "if_index": if_index, "range": range, "count": len(data), "data": data}
+    data = series["data"]
+    return {
+        "host_id": host_id,
+        "if_index": if_index,
+        "range": range,
+        "bucket_seconds": bucket_seconds,
+        "count": len(data),
+        "data": data,
+        "latest": series["latest"],
+    }
 
 
 # ── Vendor OID Registry API ─────────────────────────────────────────────────

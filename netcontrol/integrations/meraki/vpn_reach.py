@@ -18,6 +18,7 @@ from collections import deque
 from typing import Any
 
 from netcontrol.integrations.meraki.subnets import _cell, _cidr, _rows, subnet_index
+from netcontrol.prefix_index import longest_prefix_match, longest_prefix_matches
 
 OK, BLOCKED, UNKNOWN = "ok", "blocked", "unknown"
 # Tunnel states the Dashboard reports for a tunnel that is not up.
@@ -79,15 +80,7 @@ class VpnCarrier:
         where = f"{self.name}, VPN"
         if self._subnets is None:
             self._subnets = subnet_index(self._snapshot)
-        owners: list[dict] = []
-        longest = -1
-        for entry in self._subnets:
-            net = ipaddress.ip_network(entry["cidr"])
-            if net.version != outside.version or not net.supernet_of(outside) or net.prefixlen < longest:  # type: ignore[arg-type]
-                continue
-            if net.prefixlen > longest:
-                owners, longest = [], net.prefixlen
-            owners.append(entry)
+        owners = longest_prefix_matches(outside, [(ipaddress.ip_network(e["cidr"]), e) for e in self._subnets])
         if not owners:
             return (
                 UNKNOWN,
@@ -136,15 +129,9 @@ class VpnCarrier:
         """Does the appliance advertise ``inside`` so that other sites route to it."""
         where = f"{self.name}, VPN local subnets"
         rows = _rows(self._site.get("sections") or [], "VPN local subnets")
-        advertised: bool | None = None
-        longest = -1
-        for row in rows:
-            cidr = _cidr(_cell(row, 0))
-            if not cidr:
-                continue
-            net = ipaddress.ip_network(cidr)
-            if net.version == inside.version and net.supernet_of(inside) and net.prefixlen > longest:  # type: ignore[arg-type]
-                advertised, longest = _cell(row, 1) == "Yes", net.prefixlen
+        cidrs = ((_cidr(_cell(row, 0)), row) for row in rows)
+        holder = longest_prefix_match(inside, [(ipaddress.ip_network(cidr), row) for cidr, row in cidrs if cidr])
+        advertised: bool | None = None if holder is None else _cell(holder, 1) == "Yes"
         if not rows:
             return UNKNOWN, where, "The VPN settings of the appliance's network were not collected."
         if advertised is None:

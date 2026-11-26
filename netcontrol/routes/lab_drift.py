@@ -51,8 +51,8 @@ from netcontrol.routes.lab import (
 )
 from netcontrol.routes.shared import (
     _audit,
-    _compute_config_diff,
     _corr_id,
+    compute_config_diff_async,
 )
 from netcontrol.telemetry import configure_logging
 
@@ -154,7 +154,7 @@ async def run_drift_check_for_device(
         # masked production config, so its secrets do not show as drift.
         prod_config = mask_config_text(prod_config, keep_lines=True)
     try:
-        diff_text, diff_added, diff_removed = _compute_config_diff(
+        diff_text, diff_added, diff_removed = await compute_config_diff_async(
             twin_config,
             prod_config,
             baseline_label="twin",

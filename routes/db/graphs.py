@@ -64,6 +64,7 @@ __all__ = [
     "list_snmp_data_sources",
     "get_snmp_data_source",
     "upsert_snmp_data_source",
+    "upsert_snmp_data_sources",
     "update_snmp_data_source",
     "delete_snmp_data_source",
     "delete_snmp_data_sources_for_host",
@@ -584,7 +585,7 @@ async def apply_graph_templates_to_host(host_id: int) -> list[dict]:
         cursor2 = await db.execute("SELECT * FROM host_templates WHERE auto_apply = 1")
         htemplates = rows_to_list(await cursor2.fetchall())
 
-        created: list[dict] = []
+        wanted: list[tuple[int, str, str, str]] = []
         for ht in htemplates:
             try:
                 dt_list = json.loads(ht.get("device_types", "[]"))
@@ -602,22 +603,44 @@ async def apply_graph_templates_to_host(host_id: int) -> list[dict]:
             )
             graph_templates = rows_to_list(await cursor3.fetchall())
             for gt in graph_templates:
-                cursor4 = await db.execute(
-                    """INSERT OR IGNORE INTO host_graphs
-                       (host_id, graph_template_id, title, instance_key, enabled)
-                       VALUES (?, ?, ?, '', 1)""",
-                    (host_id, gt["id"], gt.get("title_format") or gt["name"]),
-                )
-                await db.commit()
-                # rowcount guard: lastrowid is stale on SQLite after an ignored insert.
-                if cursor4.rowcount > 0 and cursor4.lastrowid:
-                    cursor5 = await db.execute("SELECT * FROM host_graphs WHERE id = ?", (cursor4.lastrowid,))
-                    row = await cursor5.fetchone()
-                    if row:
-                        created.append(dict(row))
+                wanted.append((int(gt["id"]), gt.get("title_format") or gt["name"], "", ""))
+        created = await _insert_host_graphs(db, host_id, wanted)
+        await db.commit()
         return created
     finally:
         await db.close()
+
+
+# Inserts every (graph_template_id, title, instance_key, instance_label) in
+# one statement, whatever the count; unnest keeps the SQL text fixed.
+_INSERT_HOST_GRAPHS_SQL = """INSERT INTO host_graphs
+    (host_id, graph_template_id, title, instance_key, instance_label, enabled)
+    SELECT CAST(? AS bigint), t.graph_template_id, t.title, t.instance_key, t.instance_label, 1
+    FROM unnest(CAST(? AS bigint[]), CAST(? AS text[]), CAST(? AS text[]), CAST(? AS text[]))
+         WITH ORDINALITY AS t(graph_template_id, title, instance_key, instance_label, ord)
+    ORDER BY t.ord
+    ON CONFLICT DO NOTHING
+    RETURNING *"""
+
+
+async def _insert_host_graphs(db, host_id: int, wanted: list[tuple[int, str, str, str]]) -> list[dict]:
+    """Insert the host graphs that do not exist yet and return the new rows
+    in the order they were asked for. A graph that already exists, or comes
+    twice in ``wanted``, is skipped, as ``INSERT OR IGNORE`` per row did."""
+    if not wanted:
+        return []
+    cursor = await db.execute(
+        _INSERT_HOST_GRAPHS_SQL,
+        (
+            int(host_id),
+            [w[0] for w in wanted],
+            [w[1] for w in wanted],
+            [w[2] for w in wanted],
+            [w[3] for w in wanted],
+        ),
+    )
+    # Ids are drawn in ORDER BY order, so sorting by id restores it.
+    return sorted((dict(r) for r in await cursor.fetchall()), key=lambda r: int(r["id"]))
 
 
 async def apply_interface_graph_templates_to_host(host_id: int, interfaces: list[dict]) -> list[dict]:
@@ -633,7 +656,7 @@ async def apply_interface_graph_templates_to_host(host_id: int, interfaces: list
         if not iface_templates:
             return []
 
-        created: list[dict] = []
+        wanted: list[tuple[int, str, str, str]] = []
         for iface in interfaces:
             if_index = str(iface.get("if_index", iface.get("ifIndex", "")))
             if_name = iface.get("if_name", iface.get("ifDescr", ""))
@@ -643,19 +666,9 @@ async def apply_interface_graph_templates_to_host(host_id: int, interfaces: list
                 title = (
                     (gt.get("title_format") or gt["name"]).replace("$interface", if_name).replace("$ifIndex", if_index)
                 )
-                cursor2 = await db.execute(
-                    """INSERT OR IGNORE INTO host_graphs
-                       (host_id, graph_template_id, title, instance_key, instance_label, enabled)
-                       VALUES (?, ?, ?, ?, ?, 1)""",
-                    (host_id, gt["id"], title, if_index, if_name),
-                )
-                await db.commit()
-                # rowcount guard: lastrowid is stale on SQLite after an ignored insert.
-                if cursor2.rowcount > 0 and cursor2.lastrowid:
-                    cursor3 = await db.execute("SELECT * FROM host_graphs WHERE id = ?", (cursor2.lastrowid,))
-                    row = await cursor3.fetchone()
-                    if row:
-                        created.append(dict(row))
+                wanted.append((int(gt["id"]), title, if_index, if_name))
+        created = await _insert_host_graphs(db, host_id, wanted)
+        await db.commit()
         return created
     finally:
         await db.close()
@@ -1472,59 +1485,99 @@ async def get_snmp_data_source(ds_id: int) -> dict | None:
         await db.close()
 
 
-async def upsert_snmp_data_source(host_id: int, ds_type: str, instance_key: str, **kwargs) -> int:
-    """Atomic upsert using INSERT ... ON CONFLICT DO UPDATE (SQLite 3.24+)."""
-    allowed = {
-        "name",
-        "table_oid",
-        "index_oid",
-        "instance_label",
-        "oids_json",
-        "poll_interval",
-        "enabled",
-        "last_polled_at",
-    }
-    name = kwargs.get("name", "")
-    table_oid = kwargs.get("table_oid", "")
-    index_oid = kwargs.get("index_oid", "")
-    instance_label = kwargs.get("instance_label", "")
-    oids_json = kwargs.get("oids_json", "[]")
-    poll_interval = kwargs.get("poll_interval", 300)
-    enabled = kwargs.get("enabled", 1)
-    # Build SET clause for ON CONFLICT from provided kwargs
-    update_sets = []
-    for k in kwargs:
-        if k in allowed:
-            update_sets.append(f"{k} = excluded.{k}")
+_SNMP_DS_UPDATABLE = (
+    "name",
+    "table_oid",
+    "index_oid",
+    "instance_label",
+    "oids_json",
+    "poll_interval",
+    "enabled",
+    "last_polled_at",
+)
+
+
+def _snmp_ds_upsert(host_id: int, ds_type: str, instance_key: str, fields: dict) -> tuple[str, tuple]:
+    """The upsert statement and its parameters for one data source. On
+    conflict only the columns named in ``fields`` are overwritten; the SQL
+    text depends only on which allowed names ``fields`` carries."""
+    # Build SET clause for ON CONFLICT from provided fields (allow-listed names only)
+    update_sets = [f"{k} = excluded.{k}" for k in fields if k in _SNMP_DS_UPDATABLE]
     if not update_sets:
         # Nothing to update on conflict - no-op SET
         update_sets = ["name = excluded.name"]
-    db = await _dbcore.get_db()
-    try:
-        cursor = await db.execute(
-            f"""INSERT INTO snmp_data_sources
+    sql = f"""INSERT INTO snmp_data_sources
                 (host_id, ds_type, instance_key, name, table_oid, index_oid,
                  instance_label, oids_json, poll_interval, enabled)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(host_id, ds_type, instance_key) DO UPDATE SET
-                {", ".join(update_sets)}
-                RETURNING id""",
-            (
-                host_id,
-                ds_type,
-                instance_key,
-                name,
-                table_oid,
-                index_oid,
-                instance_label,
-                oids_json,
-                poll_interval,
-                enabled,
-            ),
-        )
+                {", ".join(update_sets)}"""  # nosec B608 - SET names come from _SNMP_DS_UPDATABLE
+    params = (
+        host_id,
+        ds_type,
+        instance_key,
+        fields.get("name", ""),
+        fields.get("table_oid", ""),
+        fields.get("index_oid", ""),
+        fields.get("instance_label", ""),
+        fields.get("oids_json", "[]"),
+        fields.get("poll_interval", 300),
+        fields.get("enabled", 1),
+    )
+    return sql, params
+
+
+async def upsert_snmp_data_source(host_id: int, ds_type: str, instance_key: str, **kwargs) -> int:
+    """Atomic upsert using INSERT ... ON CONFLICT DO UPDATE (SQLite 3.24+)."""
+    sql, params = _snmp_ds_upsert(host_id, ds_type, instance_key, kwargs)
+    db = await _dbcore.get_db()
+    try:
+        cursor = await db.execute(sql + " RETURNING id", params)
         row = await cursor.fetchone()
         await db.commit()
         return int(row[0])
+    except Exception:
+        await db.rollback()
+        raise
+    finally:
+        await db.close()
+
+
+async def upsert_snmp_data_sources(host_id: int, ds_type: str, sources: list[dict]) -> int:
+    """Upsert many data sources of one host and type in one transaction.
+
+    Each item is ``{"instance_key": ..., **fields}`` with the fields
+    :func:`upsert_snmp_data_source` takes. Items with the same field names
+    go in one ``executemany``. When a batch fails, its rows are retried one
+    at a time so a single bad row is skipped (and logged) while the rest are
+    stored, as a call per row did. Returns how many rows were stored."""
+    groups: dict[str, list[tuple]] = {}
+    for src in sources:
+        fields = {k: v for k, v in src.items() if k != "instance_key"}
+        sql, params = _snmp_ds_upsert(host_id, ds_type, str(src["instance_key"]), fields)
+        groups.setdefault(sql, []).append(params)
+    if not groups:
+        return 0
+    stored = 0
+    db = await _dbcore.get_db()
+    try:
+        for sql, rows in groups.items():
+            try:
+                await db.executemany(sql, rows)
+                stored += len(rows)
+                continue
+            except Exception as exc:
+                _LOGGER.debug("snmp data sources: batch for host %s failed, storing row by row: %s", host_id, exc)
+            for params in rows:
+                try:
+                    await db.execute(sql, params)
+                    stored += 1
+                except Exception as exc:
+                    _LOGGER.debug(
+                        "snmp data sources: could not store %s %s for host %s: %s", ds_type, params[2], host_id, exc
+                    )
+        await db.commit()
+        return stored
     except Exception:
         await db.rollback()
         raise

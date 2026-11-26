@@ -9,12 +9,14 @@ and topology route modules.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hmac
 import ipaddress
 import json
 import re
 import socket
-from collections.abc import Awaitable, Callable
+import weakref
+from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any
 
 from netcontrol.device_categories import device_type_category
@@ -509,6 +511,49 @@ async def snmp_transport_target(address: str, port: int, timeout_seconds: float,
     return await UdpTransportTarget.create((text, port), timeout=timeout_seconds, retries=retries)
 
 
+# The transport targets built for a caller's engine (``engine=`` of
+# ``_snmp_walk`` / ``_snmp_get_values``), so the requests of one device's poll
+# resolve its address once. Dropped with the engine.
+_ENGINE_TRANSPORTS: weakref.WeakKeyDictionary[Any, dict[tuple[str, int, float, int], asyncio.Future[Any]]] = (
+    weakref.WeakKeyDictionary()
+)
+
+
+async def _engine_transport_target(engine: Any, address: str, port: int, timeout_seconds: float, retries: int) -> Any:
+    """``snmp_transport_target`` built once per ``engine`` and target: the
+    requests of one poll, sent together, share the first one's build."""
+    targets = _ENGINE_TRANSPORTS.setdefault(engine, {})
+    key = (address, port, timeout_seconds, retries)
+    pending = targets.get(key)
+    if pending is None:
+        pending = targets[key] = asyncio.ensure_future(snmp_transport_target(address, port, timeout_seconds, retries))
+    try:
+        # Shielded: a request cancelled while it waits must not cancel the
+        # build the others wait on.
+        return await asyncio.shield(pending)
+    except Exception:
+        if targets.get(key) is pending:
+            del targets[key]  # the next request tries again
+        raise
+
+
+@contextlib.asynccontextmanager
+async def device_snmp_engine() -> AsyncIterator[Any]:
+    """One pysnmp engine for the requests of one job on one device (a MAC
+    collection, an interface inventory), passed as ``engine=``; closed when
+    the job ends, on error and on cancellation too. Building an engine costs
+    about 90 ms of CPU on the event loop, so one per request was 20 to 30 of
+    those per device. Never share one across devices: an SNMPv3 engine keeps
+    what it learnt of the remote engine (its ID, boots and time). ``None``
+    without pysnmp (each request then reports SNMP unavailable itself)."""
+    engine = SnmpEngine() if PYSMNP_AVAILABLE and SnmpEngine is not None else None
+    try:
+        yield engine
+    finally:
+        if engine is not None:
+            engine.close_dispatcher()
+
+
 # ── SNMP Get ─────────────────────────────────────────────────────────────────
 
 
@@ -816,8 +861,9 @@ async def _snmp_walk(
     invisible.
 
     ``engine``: a pysnmp engine the caller shares between its requests to
-    one device and closes itself, so an SNMPv3 device is discovered (engine
-    ID, then time) once instead of once per request. Without it the walk
+    one device and closes itself (``device_snmp_engine``), so an SNMPv3
+    device is discovered (engine ID, then time) once instead of once per
+    request, and the transport target is built once. Without it the walk
     opens and closes its own.
     """
     # Resolve {{secret.NAME}} references in v3 passwords before building auth
@@ -830,8 +876,10 @@ async def _snmp_walk(
 
     own_engine = engine is None
     if own_engine:
+        transport = await snmp_transport_target(ip_address, port, timeout, retries)
         engine = SnmpEngine()
-    transport = await snmp_transport_target(ip_address, port, timeout, retries)
+    else:
+        transport = await _engine_transport_target(engine, ip_address, port, timeout, retries)
     results: dict[str, str] = {}
     row_count = 0
     error_text: str | None = None
@@ -924,7 +972,10 @@ async def _snmp_get_values(
     if own_engine:
         engine = SnmpEngine()
     try:
-        transport = await snmp_transport_target(ip_address, port, timeout, retries)
+        if own_engine:
+            transport = await snmp_transport_target(ip_address, port, timeout, retries)
+        else:
+            transport = await _engine_transport_target(engine, ip_address, port, timeout, retries)
         error_indication, error_status, _error_index, var_binds = await get_cmd(
             engine, auth_data, transport, ContextData(), *(ObjectType(ObjectIdentity(oid)) for oid in oids)
         )
@@ -1577,6 +1628,7 @@ async def auto_discover_data_sources(
     for table in [if_name_data, if_descr_data, if_type_data]:
         all_indexes.update(table.keys())
 
+    interface_sources: list[dict] = []
     for idx in sorted(all_indexes, key=lambda x: int(x) if x.isdigit() else 0):
         if_name = if_name_data.get(idx, "") or if_descr_data.get(idx, f"ifIndex-{idx}")
         if_type = if_type_data.get(idx, "")
@@ -1615,20 +1667,21 @@ async def auto_discover_data_sources(
             "vlan": port_vlan,
         }
 
-        try:
-            await db.upsert_snmp_data_source(
-                host_id=host_id,
-                ds_type="interface",
-                instance_key=str(idx),
-                name=if_name,
-                instance_label=if_name,
-                table_oid="1.3.6.1.2.1.2.2.1",
-                index_oid="1.3.6.1.2.1.2.2.1.1",
-                oids_json=json.dumps(oids_info),
-            )
-            counts["interfaces"] += 1
-        except Exception as exc:
-            LOGGER.debug("data_source_discovery: failed to store interface %s for host %s: %s", idx, host_id, exc)
+        interface_sources.append(
+            {
+                "instance_key": str(idx),
+                "name": if_name,
+                "instance_label": if_name,
+                "table_oid": "1.3.6.1.2.1.2.2.1",
+                "index_oid": "1.3.6.1.2.1.2.2.1.1",
+                "oids_json": json.dumps(oids_info),
+            }
+        )
+    # One batch per type; the bulk upsert skips (and logs) a row that fails.
+    try:
+        counts["interfaces"] = await db.upsert_snmp_data_sources(host_id, "interface", interface_sources)
+    except Exception as exc:
+        LOGGER.debug("data_source_discovery: failed to store interfaces for host %s: %s", host_id, exc)
 
     # ── Process storage entries ──
     storage_type_data = storage_tables.get("1.3.6.1.2.1.25.2.3.1.2", {})
@@ -1636,6 +1689,7 @@ async def auto_discover_data_sources(
     storage_alloc_data = storage_tables.get("1.3.6.1.2.1.25.2.3.1.4", {})
     storage_size_data = storage_tables.get("1.3.6.1.2.1.25.2.3.1.5", {})
 
+    storage_sources: list[dict] = []
     for idx in storage_descr_data:
         descr = storage_descr_data.get(idx, "")
         if not descr:
@@ -1645,20 +1699,20 @@ async def auto_discover_data_sources(
             "alloc_units": storage_alloc_data.get(idx, ""),
             "size": storage_size_data.get(idx, ""),
         }
-        try:
-            await db.upsert_snmp_data_source(
-                host_id=host_id,
-                ds_type="storage",
-                instance_key=f"hr-{idx}",
-                name=descr,
-                instance_label=descr,
-                table_oid="1.3.6.1.2.1.25.2.3.1",
-                index_oid="1.3.6.1.2.1.25.2.3.1.1",
-                oids_json=json.dumps(storage_info),
-            )
-            counts["storage"] += 1
-        except Exception as exc:
-            LOGGER.debug("data_source_discovery: failed to store storage entry %s for host %s: %s", idx, host_id, exc)
+        storage_sources.append(
+            {
+                "instance_key": f"hr-{idx}",
+                "name": descr,
+                "instance_label": descr,
+                "table_oid": "1.3.6.1.2.1.25.2.3.1",
+                "index_oid": "1.3.6.1.2.1.25.2.3.1.1",
+                "oids_json": json.dumps(storage_info),
+            }
+        )
+    try:
+        counts["storage"] = await db.upsert_snmp_data_sources(host_id, "storage", storage_sources)
+    except Exception as exc:
+        LOGGER.debug("data_source_discovery: failed to store storage entries for host %s: %s", host_id, exc)
 
     counts["total"] = counts["interfaces"] + counts["storage"]
     LOGGER.info(

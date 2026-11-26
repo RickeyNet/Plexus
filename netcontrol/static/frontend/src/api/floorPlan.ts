@@ -98,7 +98,7 @@ export function floorImageUrl(floorId: number, cacheBust?: number | string): str
 export function useGeoOverview() {
   return useQuery({
     queryKey: ['geo', 'overview'],
-    queryFn: () => apiRequest<GeoSiteSummary[]>('/geo/overview'),
+    queryFn: ({ signal }) => apiRequest<GeoSiteSummary[]>('/geo/overview', { signal }),
   });
 }
 
@@ -106,8 +106,8 @@ export function useGeoOverview() {
 export function useGeoSites() {
   return useQuery({
     queryKey: ['geo', 'sites'],
-    queryFn: async () => {
-      const rows = await apiRequest<GeoSiteRow[]>('/geo/sites');
+    queryFn: async ({ signal }) => {
+      const rows = await apiRequest<GeoSiteRow[]>('/geo/sites', { signal });
       return [...(rows ?? [])].sort((a, b) => a.name.localeCompare(b.name));
     },
   });
@@ -116,7 +116,7 @@ export function useGeoSites() {
 export function useGeoSite(siteId: number | null) {
   return useQuery({
     queryKey: ['geo', 'site', siteId],
-    queryFn: () => apiRequest<GeoSite>(`/geo/sites/${siteId}`),
+    queryFn: ({ signal }) => apiRequest<GeoSite>(`/geo/sites/${siteId}`, { signal }),
     enabled: siteId !== null,
   });
 }
@@ -124,7 +124,7 @@ export function useGeoSite(siteId: number | null) {
 export function useGeoFloor(floorId: number | null) {
   return useQuery({
     queryKey: ['geo', 'floor', floorId],
-    queryFn: () => apiRequest<GeoFloor>(`/geo/floors/${floorId}`),
+    queryFn: ({ signal }) => apiRequest<GeoFloor>(`/geo/floors/${floorId}`, { signal }),
     enabled: floorId !== null,
   });
 }
@@ -132,7 +132,7 @@ export function useGeoFloor(floorId: number | null) {
 export function useFloorPlacements(floorId: number | null) {
   return useQuery({
     queryKey: ['geo', 'floor', floorId, 'placements'],
-    queryFn: () => apiRequest<FloorPlacement[]>(`/geo/floors/${floorId}/placements`),
+    queryFn: ({ signal }) => apiRequest<FloorPlacement[]>(`/geo/floors/${floorId}/placements`, { signal }),
     enabled: floorId !== null,
   });
 }
@@ -140,8 +140,8 @@ export function useFloorPlacements(floorId: number | null) {
 export function useInventoryGroupsWithHosts(enabled: boolean) {
   return useQuery({
     queryKey: ['inventory', 'with-hosts'],
-    queryFn: () =>
-      apiRequest<InventoryGroup[]>('/inventory?include_hosts=true'),
+    queryFn: ({ signal }) =>
+      apiRequest<InventoryGroup[]>('/inventory?include_hosts=true', { signal }),
     enabled,
   });
 }

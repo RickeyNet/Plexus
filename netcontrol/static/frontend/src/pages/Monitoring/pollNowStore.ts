@@ -1,6 +1,7 @@
 import type { QueryClient } from '@tanstack/react-query';
 
 import { streamPollNow, type PollNowEvent } from '@/api/monitoring';
+import { createLogBuffer } from '@/lib/logBuffer';
 
 export interface PollProgressLine {
   ok: boolean;
@@ -14,7 +15,9 @@ export interface PollProgress {
   completed: number;
   title: string;
   failed: boolean;
-  log: PollProgressLine[];
+  log: readonly PollProgressLine[];
+  /** Host lines dropped from the front of `log` once it reached its cap. */
+  logDropped?: number;
   startedAt: number | null;
 }
 
@@ -82,6 +85,12 @@ function setState(updater: (prev: PollProgress) => PollProgress) {
   emit();
 }
 
+// One event per host: the host lines, and the counters that arrive with
+// them, reach listeners and storage once per frame rather than per host.
+const logBuffer = createLogBuffer<PollProgressLine>({
+  onFlush: ({ lines, dropped }) => setState((prev) => ({ ...prev, log: lines, logDropped: dropped })),
+});
+
 export function getPollProgress(): PollProgress {
   return state;
 }
@@ -97,6 +106,7 @@ export function isPollRunning(): boolean {
 
 export function dismissPollProgress() {
   if (state.active) return;
+  logBuffer.reset();
   setState(() => ({ ...initial }));
 }
 
@@ -106,6 +116,7 @@ export async function startPollNow(): Promise<void> {
   abort?.abort();
   const controller = new AbortController();
   abort = controller;
+  logBuffer.reset();
   setState(() => ({
     ...initial,
     active: true,
@@ -115,23 +126,26 @@ export async function startPollNow(): Promise<void> {
 
   try {
     await streamPollNow((event: PollNowEvent) => {
+      if (event.type === 'host_done' || event.type === 'host_error') {
+        const ok = event.type === 'host_done' && event.status === 'ok';
+        const details: string[] = [];
+        if (event.cpu != null) details.push(`CPU ${event.cpu}%`);
+        if (event.memory != null) details.push(`Mem ${event.memory}%`);
+        if (event.alerts && event.alerts > 0) details.push(`${event.alerts} alert${event.alerts !== 1 ? 's' : ''}`);
+        const detail = event.type === 'host_error' ? 'error' : details.join(', ');
+        // Published with the line on the buffer's next frame.
+        state = {
+          ...state,
+          completed: event.completed ?? state.completed,
+          total: event.total_hosts ?? state.total,
+        };
+        logBuffer.push({ ok, hostname: event.hostname ?? '', detail });
+        return;
+      }
+      logBuffer.flush();
       setState((prev) => {
         if (event.type === 'start') {
           return { ...prev, total: event.total_hosts ?? 0, title: `Polling ${event.total_hosts} device(s)…` };
-        }
-        if (event.type === 'host_done' || event.type === 'host_error') {
-          const ok = event.type === 'host_done' && event.status === 'ok';
-          const details: string[] = [];
-          if (event.cpu != null) details.push(`CPU ${event.cpu}%`);
-          if (event.memory != null) details.push(`Mem ${event.memory}%`);
-          if (event.alerts && event.alerts > 0) details.push(`${event.alerts} alert${event.alerts !== 1 ? 's' : ''}`);
-          const detail = event.type === 'host_error' ? 'error' : details.join(', ');
-          return {
-            ...prev,
-            completed: event.completed ?? prev.completed,
-            total: event.total_hosts ?? prev.total,
-            log: [...prev.log, { ok, hostname: event.hostname ?? '', detail }],
-          };
         }
         if (event.type === 'error') {
           return {
@@ -152,6 +166,7 @@ export async function startPollNow(): Promise<void> {
         return prev;
       });
     }, controller.signal);
+    logBuffer.flush();
     setState((prev) => prev.active ? { ...prev, active: false } : prev);
     queryClient?.invalidateQueries({ queryKey: ['monitoring-polls'] });
     queryClient?.invalidateQueries({ queryKey: ['monitoring-summary'] });
@@ -160,6 +175,7 @@ export async function startPollNow(): Promise<void> {
     if (controller.signal.aborted) {
       return;
     }
+    logBuffer.flush();
     setState((prev) => ({
       ...prev,
       active: false,

@@ -47,12 +47,13 @@ from netcontrol.routes.opnsense_backup_encryption import (
     KEY_MISMATCH_MESSAGE,
     RawBackupUnavailable,
     raw_backup_text,
+    raw_text_of,
 )
 from netcontrol.routes.shared import (
     _audit,
-    _compute_config_diff,
     _corr_id,
     _get_session,
+    compute_config_diff_async,
     require_credential_access,
 )
 from netcontrol.telemetry import configure_logging, increment_metric, redact_value
@@ -401,7 +402,7 @@ async def get_config_backup_diff(backup_id: int, request: Request = None):
         extra = {"secrets_masked": True}
         previous_text = redact_config_text(previous_text, keep_lines=True)
         current_text = redact_config_text(current_text, keep_lines=True)
-    diff_text, added, removed = _compute_config_diff(
+    diff_text, added, removed = await compute_config_diff_async(
         previous_text,
         current_text,
         baseline_label=f"backup-{previous['id']}",
@@ -456,6 +457,36 @@ def _backup_filename(backup: dict) -> str:
     return "_".join(parts) + ".txt"
 
 
+# Backups read per query by the bulk download: bounded queries, and at most
+# this many configurations in memory beside the zip.
+_ZIP_READ_BATCH = 100
+
+
+def _zip_backups(zf: zipfile.ZipFile, rows: list[dict], used_names: set[str], undecryptable: list[int]) -> None:
+    """Write one ``.txt`` per row of ``get_config_backup_downloads`` into
+    ``zf``: the raw file a single download returns (``raw_text_of``),
+    an OPNsense config.xml decrypted. A row whose encrypted copy cannot be
+    decrypted is added to ``undecryptable`` instead. Decrypting and
+    deflating are CPU work: runs in a worker thread."""
+    for row in rows:
+        if not row.get("config_text"):
+            continue
+        try:
+            content = raw_text_of(row, str(row.get("config_text_enc") or ""))
+        except RawBackupUnavailable:
+            undecryptable.append(int(row["id"]))
+            continue
+        name = _backup_filename(row)
+        # Disambiguate if two backups happen to render the same filename.
+        base, ext = name.rsplit(".", 1)
+        counter = 2
+        while name in used_names:
+            name = f"{base}_{counter}.{ext}"
+            counter += 1
+        used_names.add(name)
+        zf.writestr(name, content)
+
+
 @router.get("/api/config-backups/download")
 @scoped("list")
 async def download_config_backups_bulk(
@@ -477,11 +508,10 @@ async def download_config_backups_bulk(
     """
     if not await _has_raw_feature(request):
         raise HTTPException(status_code=403, detail=_RAW_DOWNLOAD_DENIED)
-    rows = await db.get_config_backups(
-        host_id=host_id, policy_id=policy_id, limit=limit, **await group_filter(request, write=True)
-    )
+    scope_filter = await group_filter(request, write=True)
+    rows = await db.get_config_backups(host_id=host_id, policy_id=policy_id, limit=limit, **scope_filter)
     # Only successful captures have config_text worth exporting.
-    successful = [r for r in rows if r.get("status") == "success"]
+    successful = [int(r["id"]) for r in rows if r.get("status") == "success"]
     if not successful:
         raise HTTPException(status_code=404, detail="No successful backups match the filter")
 
@@ -489,31 +519,18 @@ async def download_config_backups_bulk(
     used_names: set[str] = set()
     undecryptable: list[int] = []
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        # The list endpoint omits config_text for performance - re-fetch each
-        # row's text individually.  500-row cap on the query keeps this bounded.
-        for row in successful:
-            full = await db.get_config_backup(row["id"])
-            if not full or not full.get("config_text"):
-                continue
-            try:
-                content = await raw_backup_text(full)
-            except RawBackupUnavailable:
-                undecryptable.append(int(full["id"]))
-                continue
-            name = _backup_filename(full)
-            # Disambiguate if two backups happen to render the same filename.
-            base, ext = name.rsplit(".", 1)
-            counter = 2
-            while name in used_names:
-                name = f"{base}_{counter}.{ext}"
-                counter += 1
-            used_names.add(name)
-            zf.writestr(name, content)
+        # The list omits config_text: read the texts a batch at a time (the
+        # same group scope applied again) and zip each batch in a thread, so
+        # neither the queries nor the decrypt and deflate run per row on the
+        # event loop. The thread is awaited before the next batch, so only
+        # one thread touches ``zf`` at a time.
+        for start in range(0, len(successful), _ZIP_READ_BATCH):
+            batch = await db.get_config_backup_downloads(successful[start : start + _ZIP_READ_BATCH], **scope_filter)
+            await asyncio.to_thread(_zip_backups, zf, batch, used_names, undecryptable)
         if undecryptable:
             ids = ", ".join(str(i) for i in undecryptable)
             zf.writestr("NOT-INCLUDED.txt", f"Backups not included: {ids}\n\n{KEY_MISMATCH_MESSAGE}\n")
 
-    buf.seek(0)
     stamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
     fname = f"config_backups_{stamp}.zip"
 
@@ -526,7 +543,8 @@ async def download_config_backups_bulk(
         correlation_id=_corr_id(request),
     )
     return Response(
-        content=buf.getvalue(),
+        # The buffer itself, not getvalue()'s copy of the whole zip.
+        content=buf.getbuffer(),
         media_type="application/zip",
         headers={"Content-Disposition": f'attachment; filename="{fname}"'},
     )
@@ -741,7 +759,7 @@ async def restore_config_from_backup(body: ConfigBackupRestoreRequest, request: 
     lines_changed = 0
     try:
         current = await get_device_config(host, cred, capture_method="restore")
-        diff_text, added, removed = _compute_config_diff(
+        diff_text, added, removed = await compute_config_diff_async(
             backup["config_text"],
             current.config_text,
             baseline_label="backup",

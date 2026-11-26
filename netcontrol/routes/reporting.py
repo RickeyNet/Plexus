@@ -360,7 +360,8 @@ async def _persist_report_artifacts(
     artifacts: list[dict] = []
     prefix = _scheduled_filename_prefix(report_type)
 
-    csv_data = _rows_to_csv(rows)
+    # Rendering is pure CPU on plain rows: off the event loop.
+    csv_data = await asyncio.to_thread(_rows_to_csv, rows)
     artifacts.append(
         await db.create_report_artifact(
             run_id=run_id,
@@ -376,7 +377,7 @@ async def _persist_report_artifacts(
         title = (
             "Plexus IPAM Subnet Utilization" if report_type == "ipam_utilization" else "Plexus IPAM Exhaustion Forecast"
         )
-        pdf_bytes = _render_tabular_pdf(title, rows)
+        pdf_bytes = await asyncio.to_thread(_render_tabular_pdf, title, rows)
         artifacts.append(
             await db.create_report_artifact(
                 run_id=run_id,
@@ -391,9 +392,9 @@ async def _persist_report_artifacts(
     if report_type == "network_documentation":
         group_id = params.get("group_id")
         graph = await _build_network_doc_topology(group_id, visible_hosts=visible_hosts)
-        svg = _render_network_doc_svg(graph, group_id)
-        drawio_xml = _render_network_doc_drawio(graph, group_id)
-        pdf_bytes = _render_network_doc_pdf(rows, group_id=group_id)
+        svg = await asyncio.to_thread(_render_network_doc_svg, graph, group_id)
+        drawio_xml = await asyncio.to_thread(_render_network_doc_drawio, graph, group_id)
+        pdf_bytes = await asyncio.to_thread(_render_network_doc_pdf, rows, group_id=group_id)
         artifacts.append(
             await db.create_report_artifact(
                 run_id=run_id,
@@ -1146,7 +1147,7 @@ async def export_availability_csv(
 ):
     await _report_scope(request, "availability", {"group_id": group_id})
     rows = await db.generate_availability_report_data(group_id, days)
-    csv_data = _rows_to_csv(rows)
+    csv_data = await asyncio.to_thread(_rows_to_csv, rows)
     return _csv_download_response(csv_data, "availability_report.csv")
 
 
@@ -1158,7 +1159,7 @@ async def export_compliance_csv(
 ):
     await _report_scope(request, "compliance", {"group_id": group_id})
     rows = await db.generate_compliance_report_data(group_id)
-    csv_data = _rows_to_csv(rows)
+    csv_data = await asyncio.to_thread(_rows_to_csv, rows)
     return _csv_download_response(csv_data, "compliance_report.csv")
 
 
@@ -1172,7 +1173,7 @@ async def export_interface_csv(
 ):
     await _report_scope(request, "interface", {"group_id": group_id, "host_id": host_id})
     rows = await db.generate_interface_report_data(host_id, group_id, days)
-    csv_data = _rows_to_csv(rows)
+    csv_data = await asyncio.to_thread(_rows_to_csv, rows)
     return _csv_download_response(csv_data, "interface_report.csv")
 
 
@@ -1184,7 +1185,7 @@ async def export_network_documentation_csv(
 ):
     await _report_scope(request, "network_documentation", {"group_id": group_id})
     rows = await db.generate_network_documentation_report_data(group_id)
-    csv_data = _rows_to_csv(rows)
+    csv_data = await asyncio.to_thread(_rows_to_csv, rows)
     return _csv_download_response(csv_data, "network_documentation_report.csv")
 
 
@@ -1197,7 +1198,7 @@ async def export_network_documentation_svg(
     visible_hosts = await _report_scope(request, "network_documentation", {"group_id": group_id})
     try:
         graph = await _build_network_doc_topology(group_id, visible_hosts=visible_hosts)
-        svg = _render_network_doc_svg(graph, group_id)
+        svg = await asyncio.to_thread(_render_network_doc_svg, graph, group_id)
         payload = svg.encode("utf-8")
         return Response(
             content=payload,
@@ -1221,7 +1222,7 @@ async def export_network_documentation_drawio(
     visible_hosts = await _report_scope(request, "network_documentation", {"group_id": group_id})
     try:
         graph = await _build_network_doc_topology(group_id, visible_hosts=visible_hosts)
-        drawio_xml = _render_network_doc_drawio(graph, group_id)
+        drawio_xml = await asyncio.to_thread(_render_network_doc_drawio, graph, group_id)
         payload = drawio_xml.encode("utf-8")
         return Response(
             content=payload,
@@ -1245,7 +1246,7 @@ async def export_network_documentation_pdf(
     await _report_scope(request, "network_documentation", {"group_id": group_id})
     try:
         rows = await db.generate_network_documentation_report_data(group_id)
-        pdf_bytes = _render_network_doc_pdf(rows, group_id=group_id)
+        pdf_bytes = await asyncio.to_thread(_render_network_doc_pdf, rows, group_id=group_id)
         return Response(
             content=pdf_bytes,
             media_type="application/pdf",
@@ -1295,7 +1296,7 @@ async def export_ipam_utilization_csv(
 ):
     await _report_scope(request, "ipam_utilization", {})
     rows = await db.generate_ipam_utilization_report_data(vrf_name=vrf_name, threshold_pct=threshold_pct)
-    return _csv_download_response(_rows_to_csv(rows), "ipam_utilization_report.csv")
+    return _csv_download_response(await asyncio.to_thread(_rows_to_csv, rows), "ipam_utilization_report.csv")
 
 
 @router.get("/api/reports/export/ipam_utilization.pdf")
@@ -1307,7 +1308,7 @@ async def export_ipam_utilization_pdf(
 ):
     await _report_scope(request, "ipam_utilization", {})
     rows = await db.generate_ipam_utilization_report_data(vrf_name=vrf_name, threshold_pct=threshold_pct)
-    pdf_bytes = _render_tabular_pdf("Plexus IPAM Subnet Utilization", rows)
+    pdf_bytes = await asyncio.to_thread(_render_tabular_pdf, "Plexus IPAM Subnet Utilization", rows)
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",
@@ -1334,7 +1335,7 @@ async def export_ipam_forecast_csv(
         target_pct=target_pct,
         min_points=min_points,
     )
-    return _csv_download_response(_rows_to_csv(rows), "ipam_forecast_report.csv")
+    return _csv_download_response(await asyncio.to_thread(_rows_to_csv, rows), "ipam_forecast_report.csv")
 
 
 @router.get("/api/reports/export/ipam_forecast.pdf")
@@ -1353,7 +1354,7 @@ async def export_ipam_forecast_pdf(
         target_pct=target_pct,
         min_points=min_points,
     )
-    pdf_bytes = _render_tabular_pdf("Plexus IPAM Exhaustion Forecast", rows)
+    pdf_bytes = await asyncio.to_thread(_render_tabular_pdf, "Plexus IPAM Exhaustion Forecast", rows)
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",
@@ -1382,7 +1383,7 @@ async def export_ipam_history_csv(
         days=days,
         limit=limit,
     )
-    return _csv_download_response(_rows_to_csv(rows), "ipam_history_report.csv")
+    return _csv_download_response(await asyncio.to_thread(_rows_to_csv, rows), "ipam_history_report.csv")
 
 
 @router.get("/api/reports/runs/{run_id}")
@@ -1469,7 +1470,7 @@ async def export_report_run_csv(run_id: int, request: Request):
         rows = []
     if not isinstance(rows, list):
         rows = []
-    csv_data = _rows_to_csv(rows)
+    csv_data = await asyncio.to_thread(_rows_to_csv, rows)
     return _csv_download_response(csv_data, f"report_{run_id}.csv")
 
 

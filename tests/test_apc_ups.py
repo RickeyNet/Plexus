@@ -524,8 +524,9 @@ async def test_other_devices_keep_their_parallel_walks(monkeypatch):
     host = {"id": 1, "hostname": "sw-a", "ip_address": "192.0.2.70", "device_type": "cisco_ios"}
 
     _result, card = await _poll(monkeypatch, host, _values())
-    assert card.engines == [] and card.overlapped
-    assert {(kind, engine) for kind, engine in card.requests} == {("walk", None)}
+    # Sent together, through the poll's one engine, closed when it ends.
+    assert len(card.engines) == 1 and card.engines[0].closed and card.overlapped
+    assert {(kind, engine) for kind, engine in card.requests} == {("walk", card.engines[0])}
 
 
 async def test_the_poll_reads_stores_and_alerts(monkeypatch):

@@ -85,7 +85,7 @@ const KEY = ['git-sources'] as const;
 export function useGitSources() {
   return useQuery<{ sources: GitSource[]; content_types: GitContentType[] }>({
     queryKey: KEY,
-    queryFn: () => apiRequest('/git-sources'),
+    queryFn: ({ signal }) => apiRequest('/git-sources', { signal }),
   });
 }
 

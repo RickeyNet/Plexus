@@ -302,8 +302,8 @@ export interface BulkSerialFetchResult {
 export function useInventoryGroupsFull(includeHosts = true, enabled = true) {
   return useQuery<InventoryGroupFull[]>({
     queryKey: ['inventory-groups-full', includeHosts],
-    queryFn: () =>
-      apiRequest(includeHosts ? '/inventory?include_hosts=true' : '/inventory'),
+    queryFn: ({ signal }) =>
+      apiRequest(includeHosts ? '/inventory?include_hosts=true' : '/inventory', { signal }),
     enabled,
   });
 }
@@ -311,7 +311,7 @@ export function useInventoryGroupsFull(includeHosts = true, enabled = true) {
 export function useSnmpProfiles(enabled = true) {
   return useQuery<SnmpProfile[]>({
     queryKey: ['snmp-profiles'],
-    queryFn: () => apiRequest('/admin/snmp-profiles'),
+    queryFn: ({ signal }) => apiRequest('/admin/snmp-profiles', { signal }),
     enabled,
   });
 }
@@ -319,9 +319,10 @@ export function useSnmpProfiles(enabled = true) {
 export function useGroupSnmpAssignments(groupIds: number[]) {
   return useQuery<Record<number, string>>({
     queryKey: ['snmp-profile-assignments'],
-    queryFn: async () => {
+    queryFn: async ({ signal }) => {
       const data = await apiRequest<{ assignments: SnmpProfileAssignment[] }>(
         '/inventory/snmp-profile-assignments',
+        { signal },
       );
       const map: Record<number, string> = {};
       for (const a of data.assignments ?? []) {
@@ -805,11 +806,12 @@ function discoveryBody(
 export function useDiscoverySshDefaults(groupId?: number | null) {
   return useQuery<DiscoverySshDefaults>({
     queryKey: ['inventory', 'discovery', 'ssh-defaults', groupId ?? null],
-    queryFn: () =>
+    queryFn: ({ signal }) =>
       apiRequest(
         groupId
           ? `/inventory/${groupId}/discovery/ssh-defaults`
           : '/inventory/discovery/ssh-defaults',
+        { signal },
       ),
   });
 }

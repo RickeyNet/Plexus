@@ -62,9 +62,9 @@ from netcontrol.routes.risk_analysis import (
 from netcontrol.routes.shared import (
     _audit,
     _capture_running_config,
-    _compute_config_diff,
     _corr_id,
     _push_config_to_device,
+    compute_config_diff_async,
     require_credential_access,
 )
 from netcontrol.telemetry import configure_logging
@@ -662,7 +662,7 @@ async def simulate_live_endpoint(
 
     push_output, post_config = await push_commands_live(device, commands, credentials)
 
-    diff_text, diff_added, diff_removed = _compute_config_diff(
+    diff_text, diff_added, diff_removed = await compute_config_diff_async(
         pre_config,
         post_config,
         baseline_label="lab-pre",

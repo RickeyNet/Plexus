@@ -61,7 +61,7 @@ describe('startEarlyLoads', () => {
     unsubscribeLater();
 
     expect(mocks.apiRequest).toHaveBeenCalledTimes(1);
-    expect(mocks.apiRequest).toHaveBeenCalledWith('/auth/status');
+    expect(mocks.apiRequest).toHaveBeenCalledWith('/auth/status', { signal: expect.any(AbortSignal) });
     expect(mocks.setCsrfToken).toHaveBeenCalledWith('tok');
   });
 

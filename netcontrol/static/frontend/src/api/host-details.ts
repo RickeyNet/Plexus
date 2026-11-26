@@ -30,7 +30,7 @@ export interface InterfaceInventoryRow {
 export function useHostInterfaceInventory(hostId: number | null, enabled = true) {
   return useQuery<{ host_id: number; interfaces: InterfaceInventoryRow[] }>({
     queryKey: ['host-interfaces', hostId],
-    queryFn: () => apiRequest(`/hosts/${hostId}/interface-inventory`),
+    queryFn: ({ signal }) => apiRequest(`/hosts/${hostId}/interface-inventory`, { signal }),
     enabled: enabled && hostId != null,
   });
 }
@@ -49,7 +49,7 @@ export interface VlanDefinitionRow {
 export function useHostVlans(hostId: number | null, enabled = true) {
   return useQuery<{ host_id: number; vlans: VlanDefinitionRow[] }>({
     queryKey: ['host-vlans', hostId],
-    queryFn: () => apiRequest(`/hosts/${hostId}/vlans`),
+    queryFn: ({ signal }) => apiRequest(`/hosts/${hostId}/vlans`, { signal }),
     enabled: enabled && hostId != null,
   });
 }
@@ -83,7 +83,7 @@ export interface ArpRow {
 export function useHostMacArp(hostId: number | null, enabled = true) {
   return useQuery<{ mac_table: MacAddressRow[]; arp_table: ArpRow[] }>({
     queryKey: ['host-mac-arp', hostId],
-    queryFn: () => apiRequest(`/mac-tracking/host/${hostId}`),
+    queryFn: ({ signal }) => apiRequest(`/mac-tracking/host/${hostId}`, { signal }),
     enabled: enabled && hostId != null,
   });
 }
@@ -117,9 +117,10 @@ export function useHostConfigBackups(
 ) {
   return useQuery<ConfigBackupRow[]>({
     queryKey: ['host-config-backups', hostId, limit, status ?? 'any'],
-    queryFn: () =>
+    queryFn: ({ signal }) =>
       apiRequest(
         `/config-backups?host_id=${hostId}&limit=${limit}${status ? `&status=${status}` : ''}`,
+        { signal },
       ),
     enabled: enabled && hostId != null,
   });
@@ -154,7 +155,7 @@ export function useHostInterfaceErrors(
 ) {
   return useQuery<InterfaceErrorSummary>({
     queryKey: ['host-interface-errors', hostId, days],
-    queryFn: () => apiRequest(`/interfaces/${hostId}/errors?days=${days}`),
+    queryFn: ({ signal }) => apiRequest(`/interfaces/${hostId}/errors?days=${days}`, { signal }),
     enabled: enabled && hostId != null,
   });
 }
@@ -182,8 +183,8 @@ export function useHostAuditFindings(
 ) {
   return useQuery<{ host_id: number; findings: HostAuditFinding[] }>({
     queryKey: ['host-audit-findings', hostId, limit],
-    queryFn: () =>
-      apiRequest(`/hosts/${hostId}/audit-findings?limit=${limit}`),
+    queryFn: ({ signal }) =>
+      apiRequest(`/hosts/${hostId}/audit-findings?limit=${limit}`, { signal }),
     enabled: enabled && hostId != null,
   });
 }
@@ -201,8 +202,8 @@ export interface VlanHostRole {
 export function useHostsByVlan(vlanId: number | null, enabled = true) {
   return useQuery<{ vlan_id: number; hosts: VlanHostRole[] }>({
     queryKey: ['topology-search', 'hosts-by-vlan', vlanId],
-    queryFn: () =>
-      apiRequest(`/topology/search/hosts-by-vlan?vlan_id=${vlanId}`),
+    queryFn: ({ signal }) =>
+      apiRequest(`/topology/search/hosts-by-vlan?vlan_id=${vlanId}`, { signal }),
     enabled: enabled && vlanId != null,
   });
 }

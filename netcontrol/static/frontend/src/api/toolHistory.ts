@@ -23,7 +23,7 @@ const key = (kind: ToolKind) => ['tool-history', kind];
 export function useToolHistory<T>(kind: ToolKind, enabled = true) {
   return useQuery({
     queryKey: key(kind),
-    queryFn: () => apiRequest<ToolHistoryList<T>>(`/topology/history/${kind}`),
+    queryFn: ({ signal }) => apiRequest<ToolHistoryList<T>>(`/topology/history/${kind}`, { signal }),
     enabled,
     staleTime: 30_000,
   });

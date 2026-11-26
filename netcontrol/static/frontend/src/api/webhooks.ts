@@ -91,7 +91,7 @@ const KEY = ['admin', 'webhooks'] as const;
 export function useWebhooks() {
   return useQuery<WebhooksResponse>({
     queryKey: KEY,
-    queryFn: () => apiRequest('/admin/webhooks'),
+    queryFn: ({ signal }) => apiRequest('/admin/webhooks', { signal }),
     refetchInterval: 15_000,
   });
 }
@@ -99,7 +99,7 @@ export function useWebhooks() {
 export function useWebhookDeliveries(id: number | null) {
   return useQuery<{ deliveries: WebhookDelivery[] }>({
     queryKey: ['admin', 'webhook-deliveries', id],
-    queryFn: () => apiRequest(`/admin/webhooks/${id}/deliveries?limit=200`),
+    queryFn: ({ signal }) => apiRequest(`/admin/webhooks/${id}/deliveries?limit=200`, { signal }),
     enabled: id != null,
   });
 }

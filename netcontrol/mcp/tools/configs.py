@@ -20,7 +20,7 @@ from netcontrol.mcp.dispatch import no_data, page_args
 from netcontrol.mcp.registry import Tool, ToolError, register
 from netcontrol.mcp.tools._common import PAGING, TIME_RANGE, host_ref, in_window, schema, time_window
 from netcontrol.mcp.tools._hosts import HOST_ARG, group_paths, resolve_host
-from netcontrol.routes.shared import _compute_config_diff
+from netcontrol.routes.shared import compute_config_diff_async
 
 SOURCE = "config backups"
 MAX_PATTERN_CHARS = 200
@@ -170,7 +170,7 @@ async def diff_device_configs(_ctx: McpContext, args: dict[str, Any]) -> dict[st
         older = await db.get_previous_successful_config_backup(int(newer["id"]))
         if not older:
             raise ToolError(f"Only one backup exists for {host['hostname']}, so there is nothing to compare.")
-    diff, added, removed = _compute_config_diff(
+    diff, added, removed = await compute_config_diff_async(
         str(older.get("config_text") or ""),
         str(newer.get("config_text") or ""),
         f"backup {older['id']} ({older.get('captured_at')})",

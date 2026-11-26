@@ -63,7 +63,7 @@ export function useExportTemplates(objectType?: ExportObjectType, enabled = true
   const qs = objectType ? `?object_type=${encodeURIComponent(objectType)}` : '';
   return useQuery<{ templates: ExportTemplate[] }>({
     queryKey: [...KEY, objectType ?? 'all'],
-    queryFn: () => detailRequest(`/export-templates${qs}`),
+    queryFn: ({ signal }) => detailRequest(`/export-templates${qs}`, { signal }),
     enabled,
   });
 }
@@ -71,7 +71,7 @@ export function useExportTemplates(objectType?: ExportObjectType, enabled = true
 export function useExportObjectTypes() {
   return useQuery<{ object_types: ExportObjectTypeInfo[] }>({
     queryKey: [...KEY, 'object-types'],
-    queryFn: () => detailRequest('/export-templates/object-types'),
+    queryFn: ({ signal }) => detailRequest('/export-templates/object-types', { signal }),
   });
 }
 

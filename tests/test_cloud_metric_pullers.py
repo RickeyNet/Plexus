@@ -358,3 +358,72 @@ async def test_azure_monitor_fetch_queries_each_resource_with_its_defaults():
     # The disk has no default traffic metrics and is not queried.
     assert calls == [(_NIC_ID, _NIC_METRICS), (_VM_ID, ["Network In Total", "Network Out Total"])]
     assert [r["direction"] for r in records] == ["in", "in"]
+
+
+@pytest.mark.asyncio
+async def test_aws_metric_puller_reuses_its_client_and_rebuilds_after_expired_credentials(monkeypatch):
+    import threading
+
+    from netcontrol import cloud_sdk
+
+    await _init()
+    account = await db_module.create_cloud_account(
+        provider="aws",
+        name="AWS Metric Reuse",
+        auth_config_json={"resource_ids": ["i-0example"], "role_arn": "arn:aws:iam::000000000000:role/example"},
+        region_scope="us-east-1",
+    )
+
+    class _Expired(Exception):
+        response = {"Error": {"Code": "ExpiredToken"}}
+
+    loop_thread = threading.current_thread().name
+    sessions: list[MagicMock] = []
+    client_threads: list[str] = []
+    fetched: list[object] = []
+    fail_next = {"on": False}
+
+    def build_session(auth):
+        session = MagicMock()
+        session.region_name = None
+        n = len(sessions) + 1
+
+        def client(service, region_name=None, config=None):
+            client_threads.append(threading.current_thread().name)
+            return f"{service}@{region_name}#{n}"
+
+        session.client.side_effect = client
+        sessions.append(session)
+        return session
+
+    async def _mock_fetch(client, **kwargs):
+        fetched.append(client)
+        if fail_next["on"]:
+            fail_next["on"] = False
+            raise _Expired()
+        return []
+
+    monkeypatch.setattr(pullers_mod, "_aws_cloudwatch_fetch", _mock_fetch)
+    monkeypatch.setitem(sys.modules, "boto3", MagicMock())
+    monkeypatch.setitem(sys.modules, "botocore", MagicMock())
+    monkeypatch.setitem(
+        sys.modules, "botocore.exceptions", type("module", (), {"BotoCoreError": _Expired, "ClientError": _Expired})()
+    )
+    monkeypatch.setitem(sys.modules, "botocore.config", type("module", (), {"Config": MagicMock()})())
+    monkeypatch.setattr(pullers_mod, "_build_boto3_session", build_session)
+    cloud_sdk._SDK_CLIENTS.discard()
+    try:
+        assert (await pullers_mod.pull_aws_traffic_metrics(account, lookback_minutes=5))["ok"] is True
+        await db_module.upsert_cloud_traffic_metric_sync_cursor(int(account["id"]), last_pull_end="", extra_json={})
+        fail_next["on"] = True
+        assert (await pullers_mod.pull_aws_traffic_metrics(account, lookback_minutes=5))["ok"] is False
+        await db_module.upsert_cloud_traffic_metric_sync_cursor(int(account["id"]), last_pull_end="", extra_json={})
+        assert (await pullers_mod.pull_aws_traffic_metrics(account, lookback_minutes=5))["ok"] is True
+
+        # One session and client for the first two cycles; the expired token
+        # dropped them, so the third built new ones.
+        assert fetched == ["cloudwatch@us-east-1#1", "cloudwatch@us-east-1#1", "cloudwatch@us-east-1#2"]
+        assert len(sessions) == 2
+        assert client_threads and loop_thread not in client_threads
+    finally:
+        cloud_sdk._SDK_CLIENTS.discard()

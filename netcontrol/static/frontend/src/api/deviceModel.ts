@@ -107,7 +107,7 @@ const byName = <T extends { name: string }>(rows: T[]) => [...rows].sort((a, b) 
 export function useManufacturers() {
   return useQuery<Manufacturer[]>({
     queryKey: KEYS.manufacturers,
-    queryFn: async () => byName(listOf<Manufacturer>(await detailRequest('/dcim/manufacturers'), 'manufacturers')),
+    queryFn: async ({ signal }) => byName(listOf<Manufacturer>(await detailRequest('/dcim/manufacturers', { signal }), 'manufacturers')),
   });
 }
 
@@ -115,9 +115,9 @@ export function useManufacturers() {
 export function useDeviceTypes(manufacturerId?: number) {
   return useQuery<DeviceType[]>({
     queryKey: KEYS.deviceTypes(manufacturerId),
-    queryFn: async () => {
+    queryFn: async ({ signal }) => {
       const qs = manufacturerId !== undefined ? `?manufacturer_id=${manufacturerId}` : '';
-      const rows = listOf<DeviceType>(await detailRequest(`/dcim/device-types${qs}`), 'device_types');
+      const rows = listOf<DeviceType>(await detailRequest(`/dcim/device-types${qs}`, { signal }), 'device_types');
       return rows.sort((a, b) => a.manufacturer.localeCompare(b.manufacturer) || a.model.localeCompare(b.model));
     },
   });
@@ -126,14 +126,14 @@ export function useDeviceTypes(manufacturerId?: number) {
 export function useDeviceRoles() {
   return useQuery<DeviceRole[]>({
     queryKey: KEYS.roles,
-    queryFn: async () => byName(listOf<DeviceRole>(await detailRequest('/dcim/roles'), 'roles')),
+    queryFn: async ({ signal }) => byName(listOf<DeviceRole>(await detailRequest('/dcim/roles', { signal }), 'roles')),
   });
 }
 
 export function useHostStatuses() {
   return useQuery<HostStatus[]>({
     queryKey: KEYS.statuses,
-    queryFn: async () => byName(listOf<HostStatus>(await detailRequest('/dcim/statuses'), 'statuses')),
+    queryFn: async ({ signal }) => byName(listOf<HostStatus>(await detailRequest('/dcim/statuses', { signal }), 'statuses')),
   });
 }
 

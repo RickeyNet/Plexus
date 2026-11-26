@@ -110,7 +110,7 @@ const ROOT = ['admin', 'chatops'] as const;
 export function useChatOps() {
   return useQuery<ChatOpsOverview>({
     queryKey: [...ROOT, 'overview'],
-    queryFn: () => apiRequest('/admin/chatops'),
+    queryFn: ({ signal }) => apiRequest('/admin/chatops', { signal }),
   });
 }
 
@@ -134,7 +134,7 @@ export function useDeleteChatBot() {
 export function useChatUserMappings() {
   return useQuery<ChatUserMapping[]>({
     queryKey: [...ROOT, 'mappings'],
-    queryFn: () => apiRequest('/admin/chatops/mappings'),
+    queryFn: ({ signal }) => apiRequest('/admin/chatops/mappings', { signal }),
   });
 }
 
@@ -158,7 +158,7 @@ export function useDeleteChatUserMapping() {
 export function useChatJobPresets() {
   return useQuery<ChatJobPreset[]>({
     queryKey: [...ROOT, 'presets'],
-    queryFn: () => apiRequest('/admin/chatops/presets'),
+    queryFn: ({ signal }) => apiRequest('/admin/chatops/presets', { signal }),
   });
 }
 
@@ -194,6 +194,6 @@ export function useChatCommandLog(platform: string, outcome: string) {
   if (outcome) params.set('outcome', outcome);
   return useQuery<ChatCommandLogRow[]>({
     queryKey: [...ROOT, 'log', platform, outcome],
-    queryFn: () => apiRequest(`/admin/chatops/log?${params.toString()}`),
+    queryFn: ({ signal }) => apiRequest(`/admin/chatops/log?${params.toString()}`, { signal }),
   });
 }

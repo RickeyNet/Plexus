@@ -321,13 +321,13 @@ export function useIpamOverview(
 ) {
   return useQuery<IpamOverview>({
     queryKey: KEYS.overview(groupId, includeCloud, includeTopology),
-    queryFn: () => {
+    queryFn: ({ signal }) => {
       const params: Record<string, string> = {};
       if (groupId) params.group_id = String(groupId);
       if (!includeCloud) params.include_cloud = 'false';
       if (!includeTopology) params.include_topology = 'false';
       const qs = new URLSearchParams(params).toString();
-      return apiRequest(`/ipam/overview${qs ? `?${qs}` : ''}`);
+      return apiRequest(`/ipam/overview${qs ? `?${qs}` : ''}`, { signal });
     },
   });
 }
@@ -339,13 +339,14 @@ export function useIpamSubnetDetail(
 ) {
   return useQuery<IpamSubnetDetail>({
     queryKey: KEYS.subnetDetail(subnet ?? '', groupId, includeCloud),
-    queryFn: () => {
+    queryFn: ({ signal }) => {
       const params: Record<string, string> = {};
       if (groupId) params.group_id = String(groupId);
       if (!includeCloud) params.include_cloud = 'false';
       const qs = new URLSearchParams(params).toString();
       return apiRequest(
         `/ipam/subnets/${encodeURIComponent(subnet!)}${qs ? `?${qs}` : ''}`,
+        { signal },
       );
     },
     enabled: !!subnet,
@@ -355,64 +356,64 @@ export function useIpamSubnetDetail(
 export function useIpamProviders() {
   return useQuery<{ providers: IpamProvider[] }>({
     queryKey: KEYS.providers,
-    queryFn: () => apiRequest('/ipam/providers'),
+    queryFn: ({ signal }) => apiRequest('/ipam/providers', { signal }),
   });
 }
 
 export function useIpamSources() {
   return useQuery<{ sources: IpamSource[] }>({
     queryKey: KEYS.sources,
-    queryFn: () => apiRequest('/ipam/sources'),
+    queryFn: ({ signal }) => apiRequest('/ipam/sources', { signal }),
   });
 }
 
 export function useIpamSyncConfig() {
   return useQuery<{ config: IpamSyncConfig }>({
     queryKey: KEYS.syncConfig,
-    queryFn: () => apiRequest('/ipam/sync-config'),
+    queryFn: ({ signal }) => apiRequest('/ipam/sync-config', { signal }),
   });
 }
 
 export function useReconcileRuns() {
   return useQuery<{ runs: ReconcileRun[] }>({
     queryKey: KEYS.reconcileRuns,
-    queryFn: () => apiRequest('/ipam/reconciliation/runs?limit=25'),
+    queryFn: ({ signal }) => apiRequest('/ipam/reconciliation/runs?limit=25', { signal }),
   });
 }
 
 export function useReconcileDiffs() {
   return useQuery<{ diffs: ReconcileDiff[] }>({
     queryKey: KEYS.reconcileDiffs,
-    queryFn: () =>
-      apiRequest('/ipam/reconciliation/diffs?open_only=true&limit=200'),
+    queryFn: ({ signal }) =>
+      apiRequest('/ipam/reconciliation/diffs?open_only=true&limit=200', { signal }),
   });
 }
 
 export function useDhcpProviders() {
   return useQuery<{ providers: DhcpProvider[] }>({
     queryKey: KEYS.dhcpProviders,
-    queryFn: () => apiRequest('/dhcp/providers'),
+    queryFn: ({ signal }) => apiRequest('/dhcp/providers', { signal }),
   });
 }
 
 export function useDhcpServers() {
   return useQuery<{ servers: DhcpServer[] }>({
     queryKey: KEYS.dhcpServers,
-    queryFn: () => apiRequest('/dhcp/servers'),
+    queryFn: ({ signal }) => apiRequest('/dhcp/servers', { signal }),
   });
 }
 
 export function useDhcpExhaustion() {
   return useQuery<DhcpExhaustion>({
     queryKey: KEYS.dhcpExhaustion,
-    queryFn: () => apiRequest('/dhcp/exhaustion'),
+    queryFn: ({ signal }) => apiRequest('/dhcp/exhaustion', { signal }),
   });
 }
 
 export function useDhcpCorrelation() {
   return useQuery<DhcpCorrelation>({
     queryKey: KEYS.dhcpCorrelation,
-    queryFn: () => apiRequest('/dhcp/correlation?limit=1000'),
+    queryFn: ({ signal }) => apiRequest('/dhcp/correlation?limit=1000', { signal }),
   });
 }
 

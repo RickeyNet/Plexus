@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 
 import { CopyButton } from '@/components/CopyButton';
 import { Modal } from '@/components/Modal';
+import { LOG_BUFFER_CAP, useBufferedLog } from '@/lib/logBuffer';
 
 export interface JobStreamMessage {
   type?: string;
@@ -47,7 +48,9 @@ export function JobStreamModal({
   parseLine = defaultParseLine,
   onComplete,
 }: JobStreamModalProps) {
-  const [output, setOutput] = useState('');
+  // One entry per `line` message, capped and published once per frame.
+  const { lines, dropped, buffer: log } = useBufferedLog<string>();
+  const output = useMemo(() => lines.join(''), [lines]);
   const [status, setStatus] = useState<JobStatus>({ kind: 'connecting' });
   const outputRef = useRef<HTMLPreElement | null>(null);
 
@@ -66,7 +69,7 @@ export function JobStreamModal({
   if (streamKey !== prevStreamKey) {
     setPrevStreamKey(streamKey);
     if (isOpen && wsPath) {
-      setOutput('');
+      log.reset();
       setStatus({ kind: 'connecting' });
     }
   }
@@ -88,8 +91,9 @@ export function JobStreamModal({
       }
       if (msg.type === 'line') {
         const text = parseLineRef.current(msg);
-        if (text) setOutput((prev) => prev + text);
+        if (text) log.push(text);
       } else if (msg.type === 'job_complete') {
+        log.flush();
         const final = msg.status || 'completed';
         setStatus({ kind: 'complete', status: final });
         ws.close();
@@ -99,9 +103,14 @@ export function JobStreamModal({
 
     ws.onerror = () => setStatus({ kind: 'error' });
 
-    ws.onclose = () => setStatus((prev) => (prev.kind === 'streaming' ? { kind: 'closed' } : prev));
+    ws.onclose = () => {
+      log.flush();
+      setStatus((prev) => (prev.kind === 'streaming' ? { kind: 'closed' } : prev));
+    };
 
     return () => {
+      // Keep the tail that arrived in the last frame before the socket went.
+      log.flush();
       // Detach handlers before close so buffered messages or the synthetic
       // onclose cannot bleed the previous job's output into the next one.
       ws.onopen = null;
@@ -114,7 +123,7 @@ export function JobStreamModal({
         /* ignore */
       }
     };
-  }, [isOpen, wsPath]);
+  }, [isOpen, wsPath, log]);
 
   useEffect(() => {
     const el = outputRef.current;
@@ -138,6 +147,11 @@ export function JobStreamModal({
           <span style={{ fontSize: '0.85em', color: 'var(--text-muted)' }}>{subtitle}</span>
           <CopyButton text={output} disabled={!output} title="Copy output to clipboard" />
         </div>
+        {dropped > 0 && (
+          <span style={{ fontSize: '0.85em', color: 'var(--text-muted)' }}>
+            Showing the last {LOG_BUFFER_CAP.toLocaleString()} lines; {dropped.toLocaleString()} earlier lines are not shown.
+          </span>
+        )}
         <pre
           ref={outputRef}
           tabIndex={0}

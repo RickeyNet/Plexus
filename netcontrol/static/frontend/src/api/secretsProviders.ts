@@ -60,7 +60,7 @@ const ROOT = ['secrets-providers'] as const;
 export function useSecretsProviders(enabled = true) {
   return useQuery<SecretsProviderList>({
     queryKey: ROOT,
-    queryFn: () => apiRequest<SecretsProviderList>('/secrets-providers'),
+    queryFn: ({ signal }) => apiRequest<SecretsProviderList>('/secrets-providers', { signal }),
     enabled,
   });
 }
@@ -69,7 +69,7 @@ export function useSecretsProviders(enabled = true) {
 export function useReferenceProviders(enabled = true) {
   return useQuery<ReferenceProvider[]>({
     queryKey: [...ROOT, 'references'],
-    queryFn: () => apiRequest<ReferenceProvider[]>('/credentials/secrets-providers'),
+    queryFn: ({ signal }) => apiRequest<ReferenceProvider[]>('/credentials/secrets-providers', { signal }),
     enabled,
   });
 }

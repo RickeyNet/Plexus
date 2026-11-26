@@ -585,26 +585,28 @@ async def acknowledge_open_mac_move_events(actor: str = "", group_ids: Iterable[
     try:
         clauses, params = _move_scope(group_ids)
         where = " AND ".join(["status = 'open'", *clauses])
-        cursor = await db.execute(f"SELECT id, mac_address FROM mac_move_events WHERE {where}", params)
-        open_rows = rows_to_list(await cursor.fetchall())
-        for ev in open_rows:
-            await db.execute(
-                """UPDATE mac_move_events
-                   SET status = 'acknowledged',
-                       acknowledged_at = datetime('now'),
-                       acknowledged_by = ?
-                   WHERE id = ?""",
-                (actor, ev["id"]),
-            )
-            await db.execute(
+        # One UPDATE for every open event and one executemany for their
+        # history rows, rather than two statements per event.
+        cursor = await db.execute(
+            f"""UPDATE mac_move_events
+                SET status = 'acknowledged',
+                    acknowledged_at = datetime('now'),
+                    acknowledged_by = ?
+                WHERE {where}
+                RETURNING id, mac_address""",  # nosec B608 - fixed clauses, placeholders only
+            (actor, *params),
+        )
+        acked = sorted(rows_to_list(await cursor.fetchall()), key=lambda ev: int(ev["id"]))
+        if acked:
+            await db.executemany(
                 """INSERT INTO mac_move_event_history
                    (event_id, mac_address, action, from_status, to_status,
                     actor, details)
                    VALUES (?, ?, 'acknowledged', 'open', 'acknowledged', ?, 'bulk')""",
-                (ev["id"], ev["mac_address"], actor or "operator"),
+                [(ev["id"], ev["mac_address"], actor or "operator") for ev in acked],
             )
         await db.commit()
-        return len(open_rows)
+        return len(acked)
     except Exception:
         await db.rollback()
         raise

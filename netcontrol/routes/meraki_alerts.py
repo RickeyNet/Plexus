@@ -54,8 +54,10 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 import netcontrol.routes.state as state
+from netcontrol.client_cache import ClientCache, fingerprint
+from netcontrol.integrations.http_common import guard_api_host
 from netcontrol.integrations.meraki import alerts as meraki_alerts
-from netcontrol.integrations.meraki.client import DEFAULT_BASE_URL, MerakiApiError, MerakiClient
+from netcontrol.integrations.meraki.client import DEFAULT_BASE_URL, MerakiApiError, MerakiClient, validate_base_url
 from netcontrol.integrations.meraki.enrich import load_inventory_index
 from netcontrol.integrations.meraki.normalize import InventoryIndex
 from netcontrol.object_scope import readable_host_ids, scoped
@@ -336,25 +338,58 @@ async def expire_webhook_alerts() -> int:
 # ── Poll ─────────────────────────────────────────────────────────────────────
 
 
+# The poll's Dashboard API clients, one per source, reused across polls so
+# each poll does not load a new TLS context. Keyed by event loop and source;
+# a changed base URL, API key or test transport builds a new client and
+# closes the old one.
+_POLL_CLIENTS: ClientCache[MerakiClient] = ClientCache(
+    "meraki_alerts",
+    max_entries=256,
+    max_idle_s=2 * 3600.0,
+    close=lambda client: client.close(),
+)
+
+
 async def _poll_client(org: dict) -> tuple[MerakiClient, str]:
     """A Dashboard API client for one source with the poll's settings (short
     timeout, one request at a time, one retry, the client's own rate
     limiting), and its organization ID. Raises ``MerakiApiError`` when the
-    source has no valid organization ID or no API key."""
+    source has no valid organization ID or no API key, or when the outbound
+    address guard refuses the API host.
+
+    The client is cached (``_POLL_CLIENTS``); it is not to be closed by
+    the caller."""
     org_id = str(org.get("org_id") or "").strip()
     if not _ORG_ID_RE.match(org_id):
         raise MerakiApiError("invalid organization ID")
     api_key = await db.get_meraki_org_api_key(int(org["id"]))
     if not api_key:
         raise MerakiApiError("no API key")
-    client = MerakiClient(
-        api_key,
-        base_url=str(org.get("base_url") or "") or DEFAULT_BASE_URL,
-        timeout=_POLL_TIMEOUT_SECONDS,
-        max_concurrency=1,
-        max_retries=1,
-        transport=_TRANSPORT,
+    base_url = str(org.get("base_url") or "") or DEFAULT_BASE_URL
+    transport = _TRANSPORT
+    built: list[MerakiClient] = []
+
+    def build() -> MerakiClient:
+        client = MerakiClient(
+            api_key,
+            base_url=base_url,
+            timeout=_POLL_TIMEOUT_SECONDS,
+            max_concurrency=1,
+            max_retries=1,
+            transport=transport,
+        )
+        built.append(client)
+        return client
+
+    client = _POLL_CLIENTS.get(
+        (asyncio.get_running_loop(), int(org["id"])),
+        (base_url, fingerprint(api_key), transport),
+        build,
     )
+    if not built:
+        # A new client runs the address guard before it connects; a reused
+        # one runs it again here, so every poll is checked as before.
+        await guard_api_host(validate_base_url(base_url), "Meraki Dashboard API", MerakiApiError)
     return client, org_id
 
 
@@ -362,12 +397,11 @@ async def poll_source(org: dict) -> list[dict]:
     """The active assurance alerts of one source, normalised. Raises
     ``MerakiApiError`` when the organization cannot be read."""
     client, org_id = await _poll_client(org)
-    async with client:
-        rows = await client.get_all(
-            f"organizations/{org_id}/assurance/alerts",
-            params={"active": "true", "dismissed": "false", "resolved": "false"},
-            per_page=_PER_PAGE,
-        )
+    rows = await client.get_all(
+        f"organizations/{org_id}/assurance/alerts",
+        params={"active": "true", "dismissed": "false", "resolved": "false"},
+        per_page=_PER_PAGE,
+    )
     events = [meraki_alerts.from_assurance_alert(r, org_ref=int(org["id"]), org=org) for r in rows]
     return [e for e in events if e]
 
@@ -394,13 +428,12 @@ async def remove_vanished_devices(org: dict, serials: list[str]) -> int:
             return 0
         found: set[str] = set()
         client, org_id = await _poll_client(org)
-        async with client:
-            for start in range(0, len(wanted), _CONFIRM_CHUNK):
-                rows = await client.get_all(
-                    f"organizations/{org_id}/devices",
-                    params={"serials[]": wanted[start : start + _CONFIRM_CHUNK]},
-                )
-                found.update(str(r.get("serial") or "").upper() for r in rows if isinstance(r, dict))
+        for start in range(0, len(wanted), _CONFIRM_CHUNK):
+            rows = await client.get_all(
+                f"organizations/{org_id}/devices",
+                params={"serials[]": wanted[start : start + _CONFIRM_CHUNK]},
+            )
+            found.update(str(r.get("serial") or "").upper() for r in rows if isinstance(r, dict))
         gone = [s for s in wanted if s.upper() not in found]
         if not gone:
             return 0

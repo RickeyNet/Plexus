@@ -195,14 +195,14 @@ function invalidateAll(qc: QC) {
 export function useCircuitProviders() {
   return useQuery<CircuitProvider[]>({
     queryKey: CIRCUIT_KEYS.providers,
-    queryFn: async () => listOf<CircuitProvider>(await detailRequest('/circuits/providers'), 'providers'),
+    queryFn: async ({ signal }) => listOf<CircuitProvider>(await detailRequest('/circuits/providers', { signal }), 'providers'),
   });
 }
 
 export function useCircuitProvider(id: number | null) {
   return useQuery<ProviderDetail>({
     queryKey: CIRCUIT_KEYS.provider(id ?? 0),
-    queryFn: () => detailRequest<ProviderDetail>(`/circuits/providers/${id}`),
+    queryFn: ({ signal }) => detailRequest<ProviderDetail>(`/circuits/providers/${id}`, { signal }),
     enabled: id !== null,
   });
 }
@@ -210,29 +210,29 @@ export function useCircuitProvider(id: number | null) {
 export function useProviderNetworks() {
   return useQuery<ProviderNetwork[]>({
     queryKey: CIRCUIT_KEYS.networks,
-    queryFn: async () =>
-      listOf<ProviderNetwork>(await detailRequest('/circuits/provider-networks'), 'provider_networks'),
+    queryFn: async ({ signal }) =>
+      listOf<ProviderNetwork>(await detailRequest('/circuits/provider-networks', { signal }), 'provider_networks'),
   });
 }
 
 export function useCircuitTypes() {
   return useQuery<CircuitType[]>({
     queryKey: CIRCUIT_KEYS.types,
-    queryFn: async () => listOf<CircuitType>(await detailRequest('/circuits/circuit-types'), 'circuit_types'),
+    queryFn: async ({ signal }) => listOf<CircuitType>(await detailRequest('/circuits/circuit-types', { signal }), 'circuit_types'),
   });
 }
 
 export function useCircuits(filter: CircuitFilter) {
   return useQuery<Circuit[]>({
     queryKey: CIRCUIT_KEYS.circuits(filter),
-    queryFn: async () => listOf<Circuit>(await detailRequest(`/circuits/circuits${queryString(filter)}`), 'circuits'),
+    queryFn: async ({ signal }) => listOf<Circuit>(await detailRequest(`/circuits/circuits${queryString(filter)}`, { signal }), 'circuits'),
   });
 }
 
 export function useCircuit(id: number | null) {
   return useQuery<Circuit>({
     queryKey: CIRCUIT_KEYS.circuit(id ?? 0),
-    queryFn: () => detailRequest<Circuit>(`/circuits/circuits/${id}`),
+    queryFn: ({ signal }) => detailRequest<Circuit>(`/circuits/circuits/${id}`, { signal }),
     enabled: id !== null,
   });
 }
@@ -241,7 +241,7 @@ export function useCircuit(id: number | null) {
 export function useHostCircuits(hostId: number | null, enabled = true) {
   return useQuery<Circuit[]>({
     queryKey: CIRCUIT_KEYS.hostCircuits(hostId ?? 0),
-    queryFn: async () => listOf<Circuit>(await detailRequest(`/circuits/hosts/${hostId}/circuits`), 'circuits'),
+    queryFn: async ({ signal }) => listOf<Circuit>(await detailRequest(`/circuits/hosts/${hostId}/circuits`, { signal }), 'circuits'),
     enabled: enabled && hostId !== null,
   });
 }
@@ -250,7 +250,7 @@ export function useHostCircuits(hostId: number | null, enabled = true) {
 export function useHostInterfaceNames(hostId: number | null) {
   return useQuery<string[]>({
     queryKey: CIRCUIT_KEYS.hostInterfaces(hostId ?? 0),
-    queryFn: async () => listOf<string>(await detailRequest(`/circuits/hosts/${hostId}/interfaces`), 'interfaces'),
+    queryFn: async ({ signal }) => listOf<string>(await detailRequest(`/circuits/hosts/${hostId}/interfaces`, { signal }), 'interfaces'),
     enabled: hostId !== null,
   });
 }
@@ -258,7 +258,7 @@ export function useHostInterfaceNames(hostId: number | null) {
 export function useCircuitChoices() {
   return useQuery<CircuitChoices>({
     queryKey: CIRCUIT_KEYS.choices,
-    queryFn: () => detailRequest<CircuitChoices>('/circuits/choices'),
+    queryFn: ({ signal }) => detailRequest<CircuitChoices>('/circuits/choices', { signal }),
   });
 }
 

@@ -78,6 +78,7 @@ from netcontrol.routes import background_jobs, notification_channels, software_c
 from netcontrol.routes.meraki_topology import latest_snapshots
 from netcontrol.routes.shared import _audit, _corr_id, _session_user, admin_session, supervise_task
 from netcontrol.routes.software_eol import device_statuses, router as eol_router, sync_lifecycle_advisories
+from netcontrol.secrets_providers.base import TTLCache
 from netcontrol.telemetry import configure_logging
 
 router = APIRouter()
@@ -113,6 +114,23 @@ _ADVISORY_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:\-]{0,119}$")
 # Alert severities the notification channels know.
 _NOTIFY_SEVERITY = {"critical": "critical", "high": "critical", "medium": "warning", "low": "info", "info": "info"}
 _MAX_IMPORT = 1000
+
+# The /api/software/overview payload per (platform, search, source) query, for
+# unrestricted callers only: a scoped caller's payload is filtered by its
+# groups, so it is always built and never stored. Writes made here clear it
+# (_overview_changed); the TTL bounds writes made elsewhere (lifecycle data,
+# alerts acknowledged from another page, another process).
+_OVERVIEW_CACHE_TTL_SECONDS = 20.0
+_overview_cache = TTLCache(max_entries=64)
+# Bumped by every clear: a build that started before a write does not store
+# what it read after the write cleared the cache.
+_overview_generation = 0
+
+
+def _overview_changed() -> None:
+    global _overview_generation
+    _overview_generation += 1
+    _overview_cache.clear()
 
 
 def _true(value: Any) -> bool:
@@ -400,6 +418,7 @@ async def evaluate_software_alerts(
     advisories = await db.list_software_advisories(enabled_only=True)
     matches = find_advisory_matches(devices, advisories)
     result = await db.sync_software_alerts(matches)
+    _overview_changed()
     notified = 0
     to_notify = [*result["new"], *result["reopened"]]
     if notify and renotify_advisories:
@@ -436,6 +455,7 @@ async def refresh_software(*, notify: bool = True) -> dict[str, Any]:
                 ),
             }
         )
+        _overview_changed()
         return result
 
 
@@ -588,6 +608,7 @@ async def run_psirt_sync(job_id: str, user: str) -> dict[str, Any]:
     await db.set_software_settings(
         {"psirt_last_sync_at": started, "psirt_last_sync_status": status, "psirt_last_sync_message": message}
     )
+    _overview_changed()
     await _audit("software", "psirt_sync", user=user, detail=f"status={status} {message}")
     return result
 
@@ -660,24 +681,47 @@ async def software_overview_api(
     search: str = Query(default="", max_length=200),
     source: str = Query(default="", max_length=20),
 ):
+    # Only an unrestricted caller's payload is cached: a scoped one is
+    # filtered by the caller's groups and is never stored or served from here.
+    unscoped = (await request_scope(request)).unrestricted
+    cache_key = (platform, search, source)
+    if unscoped:
+        cached = _overview_cache.get(cache_key)
+        if cached is not None:
+            return cached
     raw = await _settings()
     if not raw.get("last_refresh_at"):
         # First visit: build the tracked set from what is already stored.
         await refresh_software(notify=False)
         raw = await _settings()
+    # Taken after the first-visit refresh, whose own clear would otherwise
+    # keep this build from ever being stored.
+    generation = _overview_generation
     scope_kwargs: dict[str, Any] = await group_filter(request)
-    tracked = await db.list_software_versions()
-    every = await _readable_devices(request, tracked)
-    filtered = (
-        every
-        if not (platform or search or source)
-        else await _readable_devices(
-            request, await db.list_software_versions(platform=platform, source=source, search=search)
+    filters = bool(platform or search or source)
+
+    async def _versions() -> tuple[list[dict], list[dict] | None]:
+        if not filters:
+            return await db.list_software_versions(), None
+        every_row, matching = await asyncio.gather(
+            db.list_software_versions(),
+            db.list_software_versions(platform=platform, source=source, search=search),
         )
+        return every_row, matching
+
+    # The independent reads run at once, each on its own pooled connection.
+    (tracked, filtered_rows), alerts_by_device, alert_summary, advisories, open_alerts, changes = await asyncio.gather(
+        _versions(),
+        db.count_open_alerts_by_device(),
+        db.software_alert_summary(**scope_kwargs),
+        db.list_software_advisories(),
+        db.list_software_alerts(include_resolved=False, **scope_kwargs),
+        db.list_recent_version_changes(50, **scope_kwargs),
     )
+    every = await _readable_devices(request, tracked)
+    filtered = every if filtered_rows is None else await _readable_devices(request, filtered_rows)
     spread = version_spread(every)
     newest = {entry["platform"]: entry["newest_version"] for entry in spread}
-    alerts_by_device = await db.count_open_alerts_by_device()
     lifecycle = await device_statuses(every, all_devices=tracked)
     for device in filtered:
         device["lifecycle"] = lifecycle.get(device["device_key"])
@@ -687,13 +731,11 @@ async def software_overview_api(
         device["alert_count"] = counts.get("count", 0)
         device["unacknowledged_alerts"] = counts.get("unacknowledged", 0)
         device["worst_severity"] = counts.get("worst", "")
-    alert_summary = await db.software_alert_summary(**scope_kwargs)
-    advisories = await db.list_software_advisories()
     sources: dict[str, int] = {}
     for device in every:
         sources[device["source"]] = sources.get(device["source"], 0) + 1
     by_severity = alert_summary["by_severity"]
-    return {
+    payload = {
         "summary": {
             "devices": len(every),
             "platforms": len(spread),
@@ -716,11 +758,15 @@ async def software_overview_api(
         ],
         "severities": list(SEVERITIES),
         "devices": filtered,
-        "alerts": await db.list_software_alerts(include_resolved=False, **scope_kwargs),
+        "alerts": open_alerts,
         "advisories": advisories,
-        "changes": await db.list_recent_version_changes(50, **scope_kwargs),
+        "changes": changes,
         "settings": _public_settings(raw),
     }
+    # A write that cleared the cache while this build ran may not be in it.
+    if unscoped and generation == _overview_generation:
+        _overview_cache.set(cache_key, payload, _OVERVIEW_CACHE_TTL_SECONDS)
+    return payload
 
 
 @router.post("/api/software/refresh")
@@ -820,6 +866,7 @@ async def delete_advisory_api(advisory_id: str, request: Request):
     await require_model_write(request)
     if not await db.delete_software_advisory(advisory_id):
         raise HTTPException(status_code=404, detail="Advisory not found")
+    _overview_changed()
     await _audit(
         "software",
         "advisory_delete",
@@ -876,6 +923,7 @@ async def acknowledge_alert_api(alert_id: int, request: Request):
     user = _session_user(request)
     if not await db.acknowledge_software_alert(alert_id, user):
         raise HTTPException(status_code=404, detail=_ALERT_NOT_FOUND)
+    _overview_changed()
     await _audit(
         "software", "alert_acknowledge", user=user, detail=f"alert_id={alert_id}", correlation_id=_corr_id(request)
     )
@@ -941,6 +989,7 @@ async def update_settings_api(body: SettingsBody, request: Request):
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     await db.set_software_settings(values)
+    _overview_changed()
     if WARN_DAYS_SETTING in values:
         # A wider or narrower window changes which series are ending now.
         await sync_lifecycle_advisories()

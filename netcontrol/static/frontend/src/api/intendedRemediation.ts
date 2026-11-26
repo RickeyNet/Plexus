@@ -7,6 +7,7 @@
  */
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
+import type { ReadOptions } from './client';
 import { detailRequest, listOf } from './customData';
 import { INTENDED_CONFIG_QUERY_ROOT } from './intendedConfig';
 
@@ -82,8 +83,8 @@ const BASE = '/intended-config';
 
 /** One call per route; exported so tests can check the method, URL and body. */
 export const remediationApi = {
-  host: (hostId: number) => detailRequest<HostRemediation>(`${BASE}/hosts/${hostId}/remediation`),
-  ignores: async () => listOf<IgnoreRule>(await detailRequest(`${BASE}/remediation-ignores`), 'rules'),
+  host: (hostId: number, opts?: ReadOptions) => detailRequest<HostRemediation>(`${BASE}/hosts/${hostId}/remediation`, opts),
+  ignores: async (opts?: ReadOptions) => listOf<IgnoreRule>(await detailRequest(`${BASE}/remediation-ignores`, opts), 'rules'),
   createIgnore: (data: IgnoreRuleInput) => detailRequest<IgnoreRule>(`${BASE}/remediation-ignores`, { method: 'POST', body: data }),
   updateIgnore: (id: number, data: IgnoreRuleInput) =>
     detailRequest<IgnoreRule>(`${BASE}/remediation-ignores/${id}`, { method: 'PUT', body: data }),
@@ -102,14 +103,14 @@ export const REMEDIATION_KEYS = {
 export function useHostRemediation(hostId: number | null) {
   return useQuery<HostRemediation>({
     queryKey: REMEDIATION_KEYS.host(hostId ?? 0),
-    queryFn: () => remediationApi.host(hostId!),
+    queryFn: ({ signal }) => remediationApi.host(hostId!, { signal }),
     enabled: hostId !== null,
   });
 }
 
 /** Admin only. */
 export function useRemediationIgnores(enabled = true) {
-  return useQuery<IgnoreRule[]>({ queryKey: REMEDIATION_KEYS.ignores, queryFn: remediationApi.ignores, enabled });
+  return useQuery<IgnoreRule[]>({ queryKey: REMEDIATION_KEYS.ignores, queryFn: ({ signal }) => remediationApi.ignores({ signal }), enabled });
 }
 
 type QC = ReturnType<typeof useQueryClient>;

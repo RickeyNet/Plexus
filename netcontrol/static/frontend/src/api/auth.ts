@@ -117,8 +117,8 @@ export interface LoginResponse {
 // instead of sending a second /auth/status request.
 export const authStatusQueryOptions = queryOptions({
   queryKey: ['auth', 'status'],
-  queryFn: async () => {
-    const status = await apiRequest<AuthStatus>('/auth/status');
+  queryFn: async ({ signal }) => {
+    const status = await apiRequest<AuthStatus>('/auth/status', { signal });
     // The backend returns a fresh CSRF token alongside the auth status -
     // mirror what the legacy SPA does and cache it for mutations. When
     // logged out the field is absent, so we clear the cache.

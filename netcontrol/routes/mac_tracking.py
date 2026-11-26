@@ -47,7 +47,14 @@ from netcontrol.routes.shared import (
     require_any_feature,
     supervise_task,
 )
-from netcontrol.routes.snmp import _build_snmp_auth, _snmp_str, _snmp_walk
+from netcontrol.routes.snmp import (
+    _build_snmp_auth,
+    _resolve_snmp_secrets,
+    _snmp_str,
+    _snmp_walk,
+    by_last_index,
+    device_snmp_engine,
+)
 from netcontrol.telemetry import configure_logging
 
 router = APIRouter()
@@ -216,6 +223,25 @@ async def collect_mac_arp_tables(
     device_type: str = "",
     host: dict | None = None,
 ) -> dict:
+    """Collect MAC and ARP tables from a device (``_collect_mac_arp_tables``),
+    every SNMP walk of it, per-VLAN contexts included, through one engine
+    closed when the collection ends."""
+    async with device_snmp_engine() as engine:
+        return await _collect_mac_arp_tables(
+            host_id, ip_address, snmp_config, timeout_seconds, device_type, host, engine=engine
+        )
+
+
+async def _collect_mac_arp_tables(
+    host_id: int,
+    ip_address: str,
+    snmp_config: dict,
+    timeout_seconds: float = 5.0,
+    device_type: str = "",
+    host: dict | None = None,
+    *,
+    engine: Any = None,
+) -> dict:
     """Collect MAC and ARP tables from a device.
 
     MACs are pulled via SSH + ``show mac address-table`` parsed by
@@ -275,6 +301,8 @@ async def collect_mac_arp_tables(
         result["skipped"] = True
         result["skipped_reason"] = ADDRESS_AWAITING_CONFIRMATION
         return result
+    # Once for every walk below (each would otherwise resolve them again).
+    snmp_config = await _resolve_snmp_secrets(snmp_config)
 
     # ── Preferred path: collect MACs via CLI (SSH + ntc-templates) ──
     # SNMP MAC collection is a quagmire on Cisco (per-VLAN SNMPv3 context
@@ -327,7 +355,7 @@ async def collect_mac_arp_tables(
             errors.append(f"CLI MAC setup failed: {exc}")
 
     def _walk(oid: str, max_rows: int = 2000):
-        return _snmp_walk(ip_address, timeout_seconds, snmp_config, oid, max_rows=max_rows)
+        return _snmp_walk(ip_address, timeout_seconds, snmp_config, oid, max_rows=max_rows, engine=engine)
 
     def _walk_with_errors(oid: str, max_rows: int = 2000):
         return _snmp_walk(
@@ -337,6 +365,7 @@ async def collect_mac_arp_tables(
             oid,
             max_rows=max_rows,
             return_errors=True,
+            engine=engine,
         )
 
     # ── Single global pass: everything lives in the default context ──
@@ -402,17 +431,8 @@ async def collect_mac_arp_tables(
     # below. The advisory now runs after the per-VLAN merge so it only fires
     # when the merged result is genuinely empty.
 
-    if_index_to_name: dict[str, str] = {}
-    for oid, val in if_names.items():
-        idx = oid.rsplit(".", 1)[-1] if "." in oid else ""
-        if idx:
-            if_index_to_name[idx] = _snmp_str(val)
-
-    bp_to_if_index: dict[str, str] = {}
-    for oid, val in bridge_port_map.items():
-        bp = oid.rsplit(".", 1)[-1] if "." in oid else ""
-        if bp:
-            bp_to_if_index[bp] = str(val).strip()
+    if_index_to_name = {idx: _snmp_str(val) for idx, val in by_last_index(if_names, first_wins=False).items()}
+    bp_to_if_index = {bp: str(val).strip() for bp, val in by_last_index(bridge_port_map, first_wins=False).items()}
 
     # ── Build if_index → vlan map ──
     # vmVlan (Cisco) is indexed directly by ifIndex; dot1qPvid is indexed by
@@ -549,6 +569,7 @@ async def collect_mac_arp_tables(
                         DOT1Q_TP_FDB_PORT,
                         max_rows=2000,
                         return_errors=True,
+                        engine=engine,
                     )
                 except Exception as exc:
                     return {"vid": vid, "error": f"vlan-{vid}: {type(exc).__name__}: {exc}"}
@@ -568,9 +589,14 @@ async def collect_mac_arp_tables(
                             DOT1D_TP_FDB_ADDRESS,
                             max_rows=2000,
                             return_errors=True,
+                            engine=engine,
                         ),
-                        _snmp_walk(ip_address, timeout_seconds, ctx_cfg, DOT1D_TP_FDB_PORT, max_rows=2000),
-                        _snmp_walk(ip_address, timeout_seconds, ctx_cfg, DOT1D_TP_FDB_STATUS, max_rows=2000),
+                        _snmp_walk(
+                            ip_address, timeout_seconds, ctx_cfg, DOT1D_TP_FDB_PORT, max_rows=2000, engine=engine
+                        ),
+                        _snmp_walk(
+                            ip_address, timeout_seconds, ctx_cfg, DOT1D_TP_FDB_STATUS, max_rows=2000, engine=engine
+                        ),
                     )
                 except Exception as exc:
                     return {"vid": vid, "error": f"vlan-{vid}: {type(exc).__name__}: {exc}"}
@@ -885,6 +911,15 @@ def _format_ticks_to_iso_offset(ticks_raw) -> str:
 async def collect_interface_inventory(
     host_id: int, ip_address: str, snmp_config: dict, timeout_seconds: float = 5.0
 ) -> dict:
+    """``_collect_interface_inventory`` with every walk through one engine,
+    closed when the collection ends."""
+    async with device_snmp_engine() as engine:
+        return await _collect_interface_inventory(host_id, ip_address, snmp_config, timeout_seconds, engine=engine)
+
+
+async def _collect_interface_inventory(
+    host_id: int, ip_address: str, snmp_config: dict, timeout_seconds: float = 5.0, *, engine: Any = None
+) -> dict:
     """Walk per-port + VLAN-definition data for a single host.
 
     Writes to ``interface_inventory`` (one row per ifIndex) and
@@ -895,8 +930,9 @@ async def collect_interface_inventory(
     errors: list[str] = []
 
     def _walk(oid: str, max_rows: int = 2500):
-        return _snmp_walk(ip_address, timeout_seconds, snmp_config, oid, max_rows=max_rows)
+        return _snmp_walk(ip_address, timeout_seconds, snmp_config, oid, max_rows=max_rows, engine=engine)
 
+    snmp_config = await _resolve_snmp_secrets(snmp_config)
     try:
         (
             if_names,
@@ -943,12 +979,7 @@ async def collect_interface_inventory(
 
     # ── Build ifIndex-keyed lookups ────────────────────────────────────
     def _idx_map(walk: dict[str, str]) -> dict[str, str]:
-        out: dict[str, str] = {}
-        for oid, val in walk.items():
-            idx = oid.rsplit(".", 1)[-1] if "." in oid else ""
-            if idx:
-                out[idx] = _snmp_str(val)
-        return out
+        return {idx: _snmp_str(val) for idx, val in by_last_index(walk, first_wins=False).items()}
 
     name_by_idx = _idx_map(if_names) or _idx_map(if_descr)
     descr_by_idx = _idx_map(if_descr)
@@ -962,11 +993,7 @@ async def collect_interface_inventory(
     vm_vlan_by_idx = _idx_map(vm_vlan)
 
     # dot1qPvid is indexed by dot1dBasePort -> translate to ifIndex
-    bp_to_if_index: dict[str, str] = {}
-    for oid, val in bridge_port_map.items():
-        bp = oid.rsplit(".", 1)[-1] if "." in oid else ""
-        if bp:
-            bp_to_if_index[bp] = str(val).strip()
+    bp_to_if_index = {bp: str(val).strip() for bp, val in by_last_index(bridge_port_map, first_wins=False).items()}
 
     pvid_by_if_index: dict[str, str] = {}
     for oid, val in dot1q_pvid.items():
@@ -976,20 +1003,22 @@ async def collect_interface_inventory(
             pvid_by_if_index[if_idx] = str(val).strip()
 
     # Trunk allowed-VLAN bitmaps: indexed by ifIndex. Stored as a comma-
-    # delimited string for the audit rule -- compact and easy to diff.
-    def _trunk_vlans_for_idx(if_idx: str) -> str:
-        vlans: list[int] = []
+    # delimited string for the audit rule -- compact and easy to diff. Each
+    # slice keyed by ifIndex once (a scan per port was quadratic).
+    trunk_slices = [
+        (by_last_index(walk), base)
         for walk, base in (
             (trunk_vlans_1k, 0),
             (trunk_vlans_2k, 1024),
             (trunk_vlans_3k, 2048),
             (trunk_vlans_4k, 3072),
-        ):
-            raw = None
-            for oid, val in walk.items():
-                if oid.rsplit(".", 1)[-1] == if_idx:
-                    raw = val
-                    break
+        )
+    ]
+
+    def _trunk_vlans_for_idx(if_idx: str) -> str:
+        vlans: list[int] = []
+        for by_idx, base in trunk_slices:
+            raw = by_idx.get(if_idx)
             if raw is not None:
                 vlans.extend(_bitmap_to_vlan_list(raw, base))
         # Deduplicate + sort. Trunk bitmaps frequently span all four
@@ -1110,7 +1139,7 @@ async def search_mac(
     query: str = Query(""),
     limit: int = Query(5000, ge=1, le=50000),
     request: Request = None,  # type: ignore[assignment]
-):
+) -> list[dict]:
     """Search across MAC/ARP tables by MAC address, IP, or port name.
 
     Covers the forwarding tables of inventory hosts and the clients of Meraki

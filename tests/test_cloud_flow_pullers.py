@@ -808,3 +808,98 @@ async def test_aws_puller_all_regions_skips_regions_without_the_log_group(monkey
     result = await pullers_mod.pull_aws_flow_logs(account)
     assert result["ok"] is False
     assert result["errors"] == ["AWS flow log group was not found in any region"]
+
+
+@pytest.mark.asyncio
+async def test_aws_puller_builds_its_session_and_clients_off_the_loop_and_reuses_them(monkeypatch):
+    """The session and region clients are built in worker threads, once per
+    account and region; changed credentials build a new session."""
+    import threading
+
+    from netcontrol import cloud_sdk
+
+    await _init()
+    account = await db_module.create_cloud_account(
+        provider="aws",
+        name="AWS Reuse",
+        auth_config_json={
+            "log_group_name": "/aws/vpc/flow-logs",
+            "access_key_id": "AKIAEXAMPLE",
+            "secret_access_key": "example-secret-0001",
+        },
+        region_scope="eu-west-1",
+    )
+    loop_thread = threading.current_thread().name
+    sessions: list[MagicMock] = []
+    build_threads: list[str] = []
+    client_threads: list[str] = []
+    seen_clients: list[object] = []
+
+    def build_session(auth):
+        build_threads.append(threading.current_thread().name)
+        session = MagicMock()
+        session.region_name = None
+
+        def client(service, region_name=None, config=None):
+            client_threads.append(threading.current_thread().name)
+            return f"{service}@{region_name}#{len(sessions)}"
+
+        session.client.side_effect = client
+        sessions.append(session)
+        return session
+
+    async def _mock_cw_query(client, log_group, start, end):
+        seen_clients.append(client)
+        return [], False
+
+    monkeypatch.setattr(pullers_mod, "_cw_insights_query", _mock_cw_query)
+    monkeypatch.setitem(sys.modules, "boto3", MagicMock())
+    monkeypatch.setitem(sys.modules, "botocore", MagicMock())
+    monkeypatch.setitem(
+        sys.modules, "botocore.exceptions", type("module", (), {"BotoCoreError": OSError, "ClientError": OSError})()
+    )
+    monkeypatch.setitem(sys.modules, "botocore.config", type("module", (), {"Config": MagicMock()})())
+    monkeypatch.setattr(pullers_mod, "_build_boto3_session", build_session)
+    cloud_sdk._SDK_CLIENTS.discard()
+    try:
+        assert (await pullers_mod.pull_aws_flow_logs(account, lookback_minutes=5))["ok"] is True
+        await db_module.upsert_cloud_flow_sync_cursor(int(account["id"]), last_pull_end="", extra_json={})
+        assert (await pullers_mod.pull_aws_flow_logs(account, lookback_minutes=5))["ok"] is True
+
+        assert len(sessions) == 1
+        assert seen_clients == ["logs@eu-west-1#1", "logs@eu-west-1#1"]
+        assert sessions[0].client.call_count == 1
+        assert loop_thread not in build_threads + client_threads
+
+        rotated = dict(account)
+        rotated["auth_config_json"] = {
+            "log_group_name": "/aws/vpc/flow-logs",
+            "access_key_id": "AKIAEXAMPLE",
+            "secret_access_key": "example-secret-0002",
+        }
+        await db_module.upsert_cloud_flow_sync_cursor(int(account["id"]), last_pull_end="", extra_json={})
+        assert (await pullers_mod.pull_aws_flow_logs(rotated, lookback_minutes=5))["ok"] is True
+        assert len(sessions) == 2 and seen_clients[-1] == "logs@eu-west-1#2"
+    finally:
+        cloud_sdk._SDK_CLIENTS.discard()
+
+
+@pytest.mark.asyncio
+async def test_insights_wait_runs_on_the_cloud_pool():
+    import threading
+
+    threads: list[str] = []
+
+    class _Logs:
+        def start_query(self, **kwargs):
+            threads.append(threading.current_thread().name)
+            return {"queryId": "q-1"}
+
+        def get_query_results(self, queryId):
+            return {"status": "Complete", "results": []}
+
+    records, truncated = await pullers_mod._cw_insights_query(
+        _Logs(), "/aws/vpc/flow-logs", datetime.now(UTC) - timedelta(minutes=5), datetime.now(UTC)
+    )
+    assert (records, truncated) == ([], False)
+    assert threads and threads[0].startswith("plexus-cloud")

@@ -229,28 +229,28 @@ function invalidateAll(qc: QC) {
 export function useClusterTypes() {
   return useQuery<ClusterCatalogItem[]>({
     queryKey: VIRTUALIZATION_KEYS.types,
-    queryFn: async () => listOf<ClusterCatalogItem>(await detailRequest(`${BASE}/cluster-types`), 'cluster_types'),
+    queryFn: async ({ signal }) => listOf<ClusterCatalogItem>(await detailRequest(`${BASE}/cluster-types`, { signal }), 'cluster_types'),
   });
 }
 
 export function useClusterGroups() {
   return useQuery<ClusterCatalogItem[]>({
     queryKey: VIRTUALIZATION_KEYS.groups,
-    queryFn: async () => listOf<ClusterCatalogItem>(await detailRequest(`${BASE}/cluster-groups`), 'cluster_groups'),
+    queryFn: async ({ signal }) => listOf<ClusterCatalogItem>(await detailRequest(`${BASE}/cluster-groups`, { signal }), 'cluster_groups'),
   });
 }
 
 export function useClusters() {
   return useQuery<Cluster[]>({
     queryKey: VIRTUALIZATION_KEYS.clusters,
-    queryFn: async () => listOf<Cluster>(await detailRequest(`${BASE}/clusters`), 'clusters'),
+    queryFn: async ({ signal }) => listOf<Cluster>(await detailRequest(`${BASE}/clusters`, { signal }), 'clusters'),
   });
 }
 
 export function useCluster(id: number | null) {
   return useQuery<ClusterDetail>({
     queryKey: VIRTUALIZATION_KEYS.cluster(id ?? 0),
-    queryFn: () => detailRequest<ClusterDetail>(`${BASE}/clusters/${id}`),
+    queryFn: ({ signal }) => detailRequest<ClusterDetail>(`${BASE}/clusters/${id}`, { signal }),
     enabled: id !== null,
   });
 }
@@ -258,15 +258,15 @@ export function useCluster(id: number | null) {
 export function useVirtualMachines(filter: VmFilter = {}) {
   return useQuery<VirtualMachine[]>({
     queryKey: VIRTUALIZATION_KEYS.vms(filter),
-    queryFn: async () =>
-      listOf<VirtualMachine>(await detailRequest(`${BASE}/virtual-machines${queryString(filter)}`), 'virtual_machines'),
+    queryFn: async ({ signal }) =>
+      listOf<VirtualMachine>(await detailRequest(`${BASE}/virtual-machines${queryString(filter)}`, { signal }), 'virtual_machines'),
   });
 }
 
 export function useVirtualMachine(id: number | null) {
   return useQuery<VirtualMachineDetail>({
     queryKey: VIRTUALIZATION_KEYS.vm(id ?? 0),
-    queryFn: () => detailRequest<VirtualMachineDetail>(`${BASE}/virtual-machines/${id}`),
+    queryFn: ({ signal }) => detailRequest<VirtualMachineDetail>(`${BASE}/virtual-machines/${id}`, { signal }),
     enabled: id !== null,
   });
 }
@@ -275,7 +275,7 @@ export function useVirtualMachine(id: number | null) {
 export function useHostClusters(hostId: number | null, enabled = true) {
   return useQuery<Cluster[]>({
     queryKey: VIRTUALIZATION_KEYS.hostClusters(hostId ?? 0),
-    queryFn: async () => listOf<Cluster>(await detailRequest(`${BASE}/hosts/${hostId}/clusters`), 'clusters'),
+    queryFn: async ({ signal }) => listOf<Cluster>(await detailRequest(`${BASE}/hosts/${hostId}/clusters`, { signal }), 'clusters'),
     enabled: enabled && hostId !== null,
   });
 }
@@ -283,7 +283,7 @@ export function useHostClusters(hostId: number | null, enabled = true) {
 export function useTenantChoices() {
   return useQuery<TenantChoice[]>({
     queryKey: VIRTUALIZATION_KEYS.tenants,
-    queryFn: async () => listOf<TenantChoice>(await detailRequest(`${BASE}/tenants`), 'tenants'),
+    queryFn: async ({ signal }) => listOf<TenantChoice>(await detailRequest(`${BASE}/tenants`, { signal }), 'tenants'),
   });
 }
 

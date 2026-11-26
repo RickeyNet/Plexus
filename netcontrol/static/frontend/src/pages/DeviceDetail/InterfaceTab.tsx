@@ -51,47 +51,47 @@ const SUMMARY_BAR_HEIGHT = 24;
 const formatPercent = (v: number) => `${v}%`;
 
 export function InterfaceTab({ ifData, latestPoll, loading = false }: Props) {
-  const merged = useMemo(() => mergeInterfaces(ifData, latestPoll), [ifData, latestPoll]);
   const tsInterfaces = useMemo(
     () => ifData?.data || ifData?.interfaces || [],
     [ifData],
   );
+  const latest = useMemo(
+    () => ifData?.latest ?? lastPerInterface(tsInterfaces),
+    [ifData, tsInterfaces],
+  );
+  const merged = useMemo(() => mergeInterfaces(latest, latestPoll), [latest, latestPoll]);
 
   // Summary bar chart of top 20 interfaces by utilization
   const summaryData = useMemo(() => {
     const ifMap = new Map<string, InterfaceTimeSeriesEntry>();
-    tsInterfaces.forEach((d) => {
+    latest.forEach((d) => {
       const key = d.if_name || `idx-${d.if_index}`;
       const existing = ifMap.get(key);
-      if (!existing || new Date(d.sampled_at) > new Date(existing.sampled_at)) {
-        ifMap.set(key, d);
-      }
+      // Same-format UTC timestamps, so string order is time order.
+      if (!existing || d.sampled_at > existing.sampled_at) ifMap.set(key, d);
     });
     return [...ifMap.values()]
       .sort((a, b) => (b.utilization_pct || 0) - (a.utilization_pct || 0))
       .slice(0, 20);
-  }, [tsInterfaces]);
+  }, [latest]);
 
-  // Per-interface time-series data, top 12 by activity
+  // Per-interface time-series data, top 12 by activity. The server returns
+  // rows ordered by interface then time, so each series is already sorted.
   const trafficCharts = useMemo(() => {
-    const grouped: Record<string, InterfaceTimeSeriesEntry[]> = {};
+    const series = new Map<
+      number,
+      { ifIndex: number; name: string; peak: number; data: InterfaceTimeSeriesEntry[] }
+    >();
     tsInterfaces.forEach((d) => {
-      const key = d.if_name || `idx-${d.if_index}`;
-      (grouped[key] ||= []).push(d);
+      let entry = series.get(d.if_index);
+      if (!entry) {
+        entry = { ifIndex: d.if_index, name: d.if_name || `idx-${d.if_index}`, peak: 0, data: [] };
+        series.set(d.if_index, entry);
+      }
+      entry.peak = Math.max(entry.peak, (d.in_rate_bps || 0) + (d.out_rate_bps || 0));
+      entry.data.push(d);
     });
-    const names = Object.keys(grouped)
-      .sort((a, b) => {
-        const aMax = Math.max(...grouped[a].map((d) => (d.in_rate_bps || 0) + (d.out_rate_bps || 0)));
-        const bMax = Math.max(...grouped[b].map((d) => (d.in_rate_bps || 0) + (d.out_rate_bps || 0)));
-        return bMax - aMax;
-      })
-      .slice(0, 12);
-    return names.map((name) => {
-      const sorted = [...grouped[name]].sort(
-        (a, b) => new Date(a.sampled_at).getTime() - new Date(b.sampled_at).getTime(),
-      );
-      return { name, data: sorted };
-    });
+    return [...series.values()].sort((a, b) => b.peak - a.peak).slice(0, 12);
   }, [tsInterfaces]);
 
   if (!merged.length && !tsInterfaces.length) {
@@ -221,8 +221,8 @@ export function InterfaceTab({ ifData, latestPoll, loading = false }: Props) {
               gap: 'var(--space-3)',
             }}
           >
-            {trafficCharts.map(({ name, data }) => (
-              <div key={name} className="card-inset">
+            {trafficCharts.map(({ ifIndex, name, data }) => (
+              <div key={ifIndex} className="card-inset">
                 <div
                   className="card-title"
                   style={{ fontSize: 'var(--text-base)', marginBottom: 'var(--space-2)' }}
@@ -438,8 +438,15 @@ function CompactInterfaceTable({ interfaces }: { interfaces: MergedInterface[] }
   );
 }
 
+/** The last row of each interface in time-ordered rows (a response without `latest`). */
+function lastPerInterface(rows: InterfaceTimeSeriesEntry[]): InterfaceTimeSeriesEntry[] {
+  const byIndex = new Map<number, InterfaceTimeSeriesEntry>();
+  rows.forEach((d) => byIndex.set(d.if_index, d));
+  return [...byIndex.values()];
+}
+
 function mergeInterfaces(
-  ifData: InterfaceTimeSeriesResult | undefined,
+  latest: InterfaceTimeSeriesEntry[],
   latestPoll: MonitoringPoll | null,
 ): MergedInterface[] {
   let pollInterfaces: PollIfDetail[] = [];
@@ -454,8 +461,6 @@ function mergeInterfaces(
       pollInterfaces = [];
     }
   }
-
-  const tsInterfaces = ifData?.data || ifData?.interfaces || [];
 
   const ifMap = new Map<string, MergedInterface>();
   pollInterfaces.forEach((iface) => {
@@ -473,17 +478,8 @@ function mergeInterfaces(
     });
   });
 
-  const latestByIf: Record<string, InterfaceTimeSeriesEntry> = {};
-  tsInterfaces.forEach((d) => {
+  latest.forEach((d) => {
     const idx = String(d.if_index);
-    if (
-      !latestByIf[idx] ||
-      new Date(d.sampled_at) > new Date(latestByIf[idx].sampled_at)
-    ) {
-      latestByIf[idx] = d;
-    }
-  });
-  Object.entries(latestByIf).forEach(([idx, d]) => {
     const existing =
       ifMap.get(idx) ||
       ({

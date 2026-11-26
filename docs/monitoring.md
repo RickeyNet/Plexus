@@ -43,8 +43,21 @@ poll has three independent parts:
 | Part | When it runs | What it reads |
 |---|---|---|
 | SNMP | The host's effective SNMP settings are enabled: its own SNMP profile, else its group's profile, else the group's legacy profile, else the global SNMP settings | CPU, memory, uptime, interface status, speed, traffic and error counters, and the state of the hardware modules, power supplies, fans, temperature sensors, BGP peers, OSPF neighbors, HA / redundancy units and links and VRRP / HSRP groups (see [Hardware module health](#hardware-module-health), [Power supplies, fans and temperature](#power-supplies-fans-and-temperature), [BGP peers and OSPF neighbors](#bgp-peers-and-ospf-neighbors) and [HA and redundancy state](#ha-and-redundancy-state)); a restart told from the uptime (see [Device restarts](#device-restarts)) |
-| SSH | A service credential is set | VPN tunnels (`show crypto isakmp sa`, or `show vpn-sessiondb summary` on an ASA) and the route table |
+| SSH | A service credential is set; every 15 minutes by default (see below) | VPN tunnels (`show crypto isakmp sa`, or `show vpn-sessiondb summary` on an ASA) and the route table |
 | ICMP | When the server can ping and ICMP is not switched off | Response time and packet loss (3 pings, 2 second timeout) |
+
+The SSH part opens a session to the device, so it runs every
+`cli_poll_interval_seconds` (default 900, kept between the poll interval and
+86400; a key of `PUT /api/admin/monitoring`, not on the settings form), not
+at every poll. A poll in between shows the VPN tunnels and route count of the
+last SSH read, so a tunnel or route does not disappear and an alert on it
+neither fires nor clears because the read was skipped; the route table text
+is stored only when it is read. The SSH part still runs at every poll of a
+host whose SNMP returned no CPU and no up interface (the SSH session is then
+what tells whether the host is up), after an SSH read that failed, on
+**Poll Now**, and at the first poll after Plexus starts. A VPN tunnel or route
+count change can therefore take up to the SSH interval to show; lower
+`cli_poll_interval_seconds` to the poll interval to read it at every poll.
 
 A host that is the firewall of an OPNsense topology source also has its
 health read over the source's API at every poll (CPU, memory, uptime,

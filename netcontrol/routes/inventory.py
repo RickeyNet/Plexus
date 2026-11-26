@@ -1664,7 +1664,7 @@ def _visible_tree(scope: ObjectScope, groups: list[dict]) -> list[dict]:
 
 @router.get("/api/inventory")
 @scoped("list")
-async def list_groups(request: Request, include_hosts: bool = Query(default=False)):
+async def list_groups(request: Request, include_hosts: bool = Query(default=False)) -> list[dict]:
     """Every group (with its hosts when ``include_hosts``), each carrying its
     ``tags`` and ``custom_fields``; hosts also carry their device model
     display objects. ``tag=`` (repeatable) and ``cf.<key>=`` filter: with
@@ -1725,6 +1725,16 @@ async def reorder_groups(payload: GroupReorderRequest, request: Request):
     return {"ok": True}
 
 
+def _hosts_csv_text(fields: list[dict], records: list[dict]) -> str:
+    """The inventory CSV export of ``host_export_records``' output."""
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(host_csv_header(fields))
+    for record in records:
+        writer.writerow(host_csv_row(record, fields))
+    return output.getvalue()
+
+
 @router.get("/api/inventory/export/csv")
 @scoped("list")
 async def export_inventory_csv(request: Request):
@@ -1736,13 +1746,10 @@ async def export_inventory_csv(request: Request):
     fields, records = await host_export_records(
         (await request_scope(request)).filter_hosts(await db.get_all_hosts_for_export())
     )
-    output = io.StringIO()
-    writer = csv.writer(output)
-    writer.writerow(host_csv_header(fields))
-    for record in records:
-        writer.writerow(host_csv_row(record, fields))
+    # Serializing every host is pure CPU on plain records: off the event loop.
+    csv_text = await asyncio.to_thread(_hosts_csv_text, fields, records)
     return StreamingResponse(
-        io.StringIO(output.getvalue()),
+        io.StringIO(csv_text),
         media_type="text/csv",
         headers={"Content-Disposition": "attachment; filename=inventory_export.csv"},
     )
@@ -1758,7 +1765,7 @@ async def export_inventory_yaml(request: Request):
         (await request_scope(request)).filter_hosts(await db.get_all_hosts_for_export())
     )
     return Response(
-        content=yaml.safe_dump(records, sort_keys=False, allow_unicode=True),
+        content=await asyncio.to_thread(yaml.safe_dump, records, sort_keys=False, allow_unicode=True),
         media_type="application/yaml",
         headers={"Content-Disposition": "attachment; filename=inventory_export.yaml"},
     )

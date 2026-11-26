@@ -441,9 +441,10 @@ export function useMerakiNodeDetails(
 ) {
   return useQuery({
     queryKey: ["meraki", "node", orgRef, nodeId],
-    queryFn: () =>
+    queryFn: ({ signal }) =>
       apiRequest<MerakiNodeDetails>(
         `/sources/nodes?org_ref=${orgRef}&node_id=${encodeURIComponent(nodeId ?? "")}`,
+        { signal },
       ),
     enabled: orgRef != null && nodeId != null,
   });
@@ -452,7 +453,7 @@ export function useMerakiNodeDetails(
 export function useMerakiSubnets(enabled: boolean) {
   return useQuery({
     queryKey: ["meraki", "subnets"],
-    queryFn: () => apiRequest<{ subnets: MerakiSubnet[] }>("/sources/subnets"),
+    queryFn: ({ signal }) => apiRequest<{ subnets: MerakiSubnet[] }>("/sources/subnets", { signal }),
     enabled,
   });
 }
@@ -609,7 +610,7 @@ export function usePathTrace(query: PathTraceQuery | null) {
   const search = query ? pathTraceSearch(query) : "";
   return useQuery({
     queryKey: ["topology", "path", search],
-    queryFn: () => apiRequest<PathTrace>(`/topology/path?${search}`),
+    queryFn: ({ signal }) => apiRequest<PathTrace>(`/topology/path?${search}`, { signal }),
     enabled: query != null,
     staleTime: 60_000,
   });
@@ -823,8 +824,8 @@ export function useReachability(query: ReachabilityQuery | null) {
   const search = query ? reachabilitySearch(query) : "";
   return useQuery({
     queryKey: ["topology", "reachability", search],
-    queryFn: () =>
-      apiRequest<ReachabilityReport>(`/topology/reachability?${search}`),
+    queryFn: ({ signal }) =>
+      apiRequest<ReachabilityReport>(`/topology/reachability?${search}`, { signal }),
     enabled: query != null,
     staleTime: 60_000,
     // A refused sweep (too many networks, a bad filter) will not pass on a retry.
@@ -907,9 +908,10 @@ export function useTopologyDeepSearch(query: string) {
   const q = query.trim();
   return useQuery({
     queryKey: ["topology", "deep-search", q],
-    queryFn: () =>
+    queryFn: ({ signal }) =>
       apiRequest<{ results: TopologyDeepSearchHit[]; truncated: boolean }>(
         `/topology/search/deep?q=${encodeURIComponent(q)}`,
+        { signal },
       ),
     enabled: q.length >= 2,
   });
@@ -918,7 +920,7 @@ export function useTopologyDeepSearch(query: string) {
 export function useMerakiOrgs() {
   return useQuery({
     queryKey: ["meraki", "orgs"],
-    queryFn: () =>
+    queryFn: ({ signal }) =>
       apiRequest<{
         orgs: MerakiOrg[];
         default_options: MerakiBuildOptions;
@@ -927,7 +929,7 @@ export function useMerakiOrgs() {
         panorama_default_options: PanoramaBuildOptions;
         appgate_default_options: AppgateBuildOptions;
         opnsense_default_options: OpnsenseBuildOptions;
-      }>("/sources"),
+      }>("/sources", { signal }),
     // Keeps the "Building" badge honest for builds this tab isn't tracking
     // (started in another tab, or before a page reload).
     refetchInterval: (query) =>
@@ -985,8 +987,8 @@ export interface TopologySource {
 export function useTopologySources(enabled = true) {
   return useQuery({
     queryKey: ["meraki", "sources"],
-    queryFn: () =>
-      apiRequest<{ sources: TopologySource[] }>("/topology/sources"),
+    queryFn: ({ signal }) =>
+      apiRequest<{ sources: TopologySource[] }>("/topology/sources", { signal }),
     enabled,
     // Collections are background jobs with no push channel; poll at the build
     // job's cadence while one runs so the progress bars move.
@@ -999,7 +1001,7 @@ export function useTopologySources(enabled = true) {
 export function useSourceSchedule(enabled: boolean) {
   return useQuery({
     queryKey: ["meraki", "schedule"],
-    queryFn: () => apiRequest<SourceSchedule>("/sources/schedule"),
+    queryFn: ({ signal }) => apiRequest<SourceSchedule>("/sources/schedule", { signal }),
     enabled,
   });
 }
@@ -1017,8 +1019,8 @@ export function useUpdateSourceSchedule() {
 export function useMerakiSnapshots() {
   return useQuery({
     queryKey: ["meraki", "snapshots"],
-    queryFn: () =>
-      apiRequest<{ snapshots: MerakiSnapshot[] }>("/sources/snapshots"),
+    queryFn: ({ signal }) =>
+      apiRequest<{ snapshots: MerakiSnapshot[] }>("/sources/snapshots", { signal }),
   });
 }
 
@@ -1034,9 +1036,10 @@ export interface CollectionWarning {
 export function useSnapshotWarnings(snapshotId: number | null) {
   return useQuery({
     queryKey: ["meraki", "snapshot-warnings", snapshotId],
-    queryFn: () =>
+    queryFn: ({ signal }) =>
       apiRequest<{ snapshot_id: number; warnings: CollectionWarning[] }>(
         `/sources/snapshots/${snapshotId}/warnings`,
+        { signal },
       ),
     enabled: snapshotId != null,
   });
@@ -1045,7 +1048,7 @@ export function useSnapshotWarnings(snapshotId: number | null) {
 export function useMerakiBuildJob(jobId: string | null) {
   return useQuery({
     queryKey: ["meraki", "build", jobId],
-    queryFn: () => apiRequest<MerakiBuildJob>(`/sources/builds/${jobId}`),
+    queryFn: ({ signal }) => apiRequest<MerakiBuildJob>(`/sources/builds/${jobId}`, { signal }),
     enabled: jobId != null,
     // A build is a background job with no push channel; poll until it settles
     // (or the job record is gone, which surfaces as an error).

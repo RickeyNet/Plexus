@@ -267,6 +267,10 @@ def _pg_fresh_database(_pg_session_template):
     from netcontrol.routes import cloud_visibility as _cloud_visibility
 
     _cloud_visibility._snapshot_cache.clear()
+    # /api/software/overview likewise caches the unscoped payload.
+    from netcontrol.routes import software as _software
+
+    _software._overview_cache.clear()
     yield
 
 

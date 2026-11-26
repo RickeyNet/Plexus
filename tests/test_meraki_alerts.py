@@ -687,3 +687,36 @@ async def test_webhooks_reach_sources_that_are_not_polled(notifications):
     assert result["new"] == 1
     (row,) = await db_module.list_meraki_alerts()
     assert row["org_ref"] == org["id"] and row["seen_via"] == ["webhook"]
+
+
+async def test_the_poll_reuses_its_client_per_source_and_rebuilds_it_for_a_new_key(monkeypatch):
+    org = await _source()
+    built: list[routes.MerakiClient] = []
+
+    class _Counting(routes.MerakiClient):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            built.append(self)
+
+    guarded: list[str] = []
+
+    async def guard(url, label, error):
+        guarded.append(url)
+
+    monkeypatch.setattr(routes, "MerakiClient", _Counting)
+    monkeypatch.setattr(routes, "guard_api_host", guard)
+    monkeypatch.setattr(routes, "_TRANSPORT", _transport({sample.ORG_ID: httpx.Response(200, json=[])}, []))
+    routes._POLL_CLIENTS.discard()
+    try:
+        await routes.poll_source(org)
+        await routes.poll_source(org)
+        assert len(built) == 1
+        # The reused client's address is checked again on the second poll.
+        assert guarded == ["https://api.meraki.com/api/v1"]
+
+        await db_module.update_meraki_org(org["id"], api_key="k2")
+        await routes.poll_source(org)
+        assert len(built) == 2
+        assert built[1]._api_key == "k2"
+    finally:
+        routes._POLL_CLIENTS.discard()

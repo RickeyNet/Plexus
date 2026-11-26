@@ -29,6 +29,8 @@ from routes.db.latest_rows import latest_row_lateral
 # Each host's newest poll as ``p``, joined after ``FROM hosts h`` (probes
 # idx_monitoring_polls_host_id, migration 0046).
 _LATEST_POLL_JOIN = latest_row_lateral("monitoring_polls", "host_id = h.id", "p")
+# Each host's newest route snapshot as ``r`` (probes idx_route_snapshots_host_id).
+_LATEST_ROUTE_SNAPSHOT_JOIN = latest_row_lateral("route_snapshots", "host_id = h.id", "r")
 
 __all__ = [
     "set_alert_created_hook",
@@ -49,6 +51,7 @@ __all__ = [
     "get_route_snapshots",
     "get_latest_route_snapshot",
     "get_latest_route_snapshots_for_hosts",
+    "get_latest_route_snapshot_ids_for_hosts",
     "delete_old_route_snapshots",
     "create_alert_rule",
     "get_alert_rules",
@@ -684,6 +687,27 @@ async def get_latest_route_snapshots_for_hosts(host_ids: list[int]) -> dict[int,
             tuple(wanted),
         )
         return {int(row["host_id"]): row for row in rows_to_list(await cursor.fetchall())}
+    finally:
+        await db.close()
+
+
+async def get_latest_route_snapshot_ids_for_hosts(host_ids: list[int]) -> dict[int, int]:
+    """``host_id -> id of its newest route snapshot``, without the route
+    text: what a cache keyed by capture checks before reading the text of
+    the hosts that changed. A host with no capture is left out."""
+    wanted = sorted({int(h) for h in host_ids})
+    if not wanted:
+        return {}
+    db = await _dbcore.get_db(read_only=True)
+    try:
+        placeholders = ",".join("?" * len(wanted))
+        cursor = await db.execute(
+            f"""SELECT h.id AS host_id, r.id AS id FROM hosts h
+                {_LATEST_ROUTE_SNAPSHOT_JOIN}
+                WHERE h.id IN ({placeholders})""",  # nosec B608 - placeholders only
+            tuple(wanted),
+        )
+        return {int(row["host_id"]): int(row["id"]) for row in rows_to_list(await cursor.fetchall())}
     finally:
         await db.close()
 

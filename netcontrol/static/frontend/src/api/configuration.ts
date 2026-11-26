@@ -159,7 +159,7 @@ export interface RestoreBackupResult {
 export function useConfigDriftSummary() {
   return useQuery<ConfigDriftSummary>({
     queryKey: ['config-drift-summary'],
-    queryFn: () => apiRequest('/config-drift/summary'),
+    queryFn: ({ signal }) => apiRequest('/config-drift/summary', { signal }),
   });
 }
 
@@ -169,14 +169,14 @@ export function useConfigDriftEvents(status: string, limit = 200) {
   params.set('limit', String(limit));
   return useQuery<ConfigDriftEvent[]>({
     queryKey: ['config-drift-events', status, limit],
-    queryFn: () => apiRequest(`/config-drift/events?${params}`),
+    queryFn: ({ signal }) => apiRequest(`/config-drift/events?${params}`, { signal }),
   });
 }
 
 export function useConfigDriftEvent(eventId: number | null) {
   return useQuery<ConfigDriftEvent>({
     queryKey: ['config-drift-event', eventId],
-    queryFn: () => apiRequest(`/config-drift/events/${eventId}`),
+    queryFn: ({ signal }) => apiRequest(`/config-drift/events/${eventId}`, { signal }),
     enabled: eventId != null,
   });
 }
@@ -184,8 +184,8 @@ export function useConfigDriftEvent(eventId: number | null) {
 export function useConfigDriftEventHistory(eventId: number | null, limit = 200) {
   return useQuery<ConfigDriftEventHistoryEntry[]>({
     queryKey: ['config-drift-event-history', eventId, limit],
-    queryFn: () =>
-      apiRequest(`/config-drift/events/${eventId}/history?limit=${limit}`),
+    queryFn: ({ signal }) =>
+      apiRequest(`/config-drift/events/${eventId}/history?limit=${limit}`, { signal }),
     enabled: eventId != null,
   });
 }
@@ -193,8 +193,8 @@ export function useConfigDriftEventHistory(eventId: number | null, limit = 200) 
 export function useConfigSnapshots(hostId: number | null, limit = 20) {
   return useQuery<ConfigSnapshot[]>({
     queryKey: ['config-snapshots', hostId, limit],
-    queryFn: () =>
-      apiRequest(`/config-drift/snapshots?host_id=${hostId}&limit=${limit}`),
+    queryFn: ({ signal }) =>
+      apiRequest(`/config-drift/snapshots?host_id=${hostId}&limit=${limit}`, { signal }),
     enabled: hostId != null,
   });
 }
@@ -202,7 +202,7 @@ export function useConfigSnapshots(hostId: number | null, limit = 20) {
 export function useConfigSnapshot(snapshotId: number | null) {
   return useQuery<ConfigSnapshot>({
     queryKey: ['config-snapshot', snapshotId],
-    queryFn: () => apiRequest(`/config-drift/snapshots/${snapshotId}`),
+    queryFn: ({ signal }) => apiRequest(`/config-drift/snapshots/${snapshotId}`, { signal }),
     enabled: snapshotId != null,
   });
 }
@@ -210,7 +210,7 @@ export function useConfigSnapshot(snapshotId: number | null) {
 export function useConfigBackupSummary(enabled = true) {
   return useQuery<ConfigBackupSummary>({
     queryKey: ['config-backup-summary'],
-    queryFn: () => apiRequest('/config-backups/summary'),
+    queryFn: ({ signal }) => apiRequest('/config-backups/summary', { signal }),
     enabled,
   });
 }
@@ -218,7 +218,7 @@ export function useConfigBackupSummary(enabled = true) {
 export function useConfigBackupPolicies() {
   return useQuery<ConfigBackupPolicy[]>({
     queryKey: ['config-backup-policies'],
-    queryFn: () => apiRequest('/config-backups/policies?'),
+    queryFn: ({ signal }) => apiRequest('/config-backups/policies?', { signal }),
   });
 }
 
@@ -227,21 +227,21 @@ export function useConfigBackups(limit = 100) {
   params.set('limit', String(limit));
   return useQuery<ConfigBackup[]>({
     queryKey: ['config-backups', limit],
-    queryFn: () => apiRequest(`/config-backups?${params}`),
+    queryFn: ({ signal }) => apiRequest(`/config-backups?${params}`, { signal }),
   });
 }
 
 export function useLatestConfigBackupsPerHost() {
   return useQuery<ConfigBackup[]>({
     queryKey: ['config-backups', 'latest-per-host'],
-    queryFn: () => apiRequest('/config-backups/latest-per-host'),
+    queryFn: ({ signal }) => apiRequest('/config-backups/latest-per-host', { signal }),
   });
 }
 
 export function useConfigBackupDetail(id: number | null) {
   return useQuery<ConfigBackupDetail>({
     queryKey: ['config-backup', id],
-    queryFn: () => apiRequest(`/config-backups/${id}`),
+    queryFn: ({ signal }) => apiRequest(`/config-backups/${id}`, { signal }),
     enabled: id != null,
   });
 }
@@ -249,7 +249,7 @@ export function useConfigBackupDetail(id: number | null) {
 export function useConfigBackupDiff(id: number | null) {
   return useQuery<ConfigBackupDiff>({
     queryKey: ['config-backup-diff', id],
-    queryFn: () => apiRequest(`/config-backups/${id}/diff`),
+    queryFn: ({ signal }) => apiRequest(`/config-backups/${id}/diff`, { signal }),
     enabled: id != null,
   });
 }

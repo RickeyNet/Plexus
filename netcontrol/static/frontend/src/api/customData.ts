@@ -283,7 +283,7 @@ function invalidateLists(qc: QC) {
 export function useTags() {
   return useQuery<TagWithUsage[]>({
     queryKey: KEYS.tags,
-    queryFn: async () => listOf<TagWithUsage>(await detailRequest('/tags'), 'tags'),
+    queryFn: async ({ signal }) => listOf<TagWithUsage>(await detailRequest('/tags', { signal }), 'tags'),
   });
 }
 
@@ -291,9 +291,9 @@ export function useTags() {
 export function useCustomFields(objectType?: ObjectType) {
   return useQuery<CustomField[]>({
     queryKey: KEYS.fields(objectType),
-    queryFn: async () => {
+    queryFn: async ({ signal }) => {
       const qs = objectType ? `?object_type=${objectType}` : '';
-      return listOf<CustomField>(await detailRequest(`/custom-fields${qs}`), 'fields');
+      return listOf<CustomField>(await detailRequest(`/custom-fields${qs}`, { signal }), 'fields');
     },
   });
 }
@@ -301,7 +301,7 @@ export function useCustomFields(objectType?: ObjectType) {
 export function useObjectData(ref: ObjectRef | null, enabled = true) {
   return useQuery<ObjectData>({
     queryKey: ref ? KEYS.object(ref) : [...KEYS.allObjects, 'none'],
-    queryFn: () => detailRequest<ObjectData>(objectDataPath(ref!)),
+    queryFn: ({ signal }) => detailRequest<ObjectData>(objectDataPath(ref!), { signal }),
     enabled: enabled && ref != null,
   });
 }
@@ -430,7 +430,7 @@ export function useDeleteCustomField() {
 export function useObjectTypes() {
   return useQuery<ObjectTypeInfo[]>({
     queryKey: KEYS.types,
-    queryFn: () => detailRequest<ObjectTypeInfo[]>('/custom-object-types'),
+    queryFn: ({ signal }) => detailRequest<ObjectTypeInfo[]>('/custom-object-types', { signal }),
     staleTime: 5 * 60_000,
   });
 }
@@ -439,7 +439,7 @@ export function useObjectTypes() {
 export function useFullObjectData(type: IdObjectType, id: number | null) {
   return useQuery<FullObjectData>({
     queryKey: id === null ? [...KEYS.allObjects, 'full', 'none'] : KEYS.full(type, id),
-    queryFn: () => detailRequest<FullObjectData>(`${objectPath(type, id!)}/custom-data`),
+    queryFn: ({ signal }) => detailRequest<FullObjectData>(`${objectPath(type, id!)}/custom-data`, { signal }),
     enabled: id !== null,
   });
 }
@@ -448,7 +448,7 @@ export function useFullObjectData(type: IdObjectType, id: number | null) {
 export function useObjectLookup(type: IdObjectType | null, q: string) {
   return useQuery<{ id: number; label: string }[]>({
     queryKey: KEYS.lookup(type ?? 'host', q),
-    queryFn: () => detailRequest(`/objects/${type}/lookup?q=${encodeURIComponent(q)}`),
+    queryFn: ({ signal }) => detailRequest(`/objects/${type}/lookup?q=${encodeURIComponent(q)}`, { signal }),
     enabled: type !== null,
     staleTime: 30_000,
   });
@@ -485,7 +485,7 @@ export function useDeleteObjectLink(type: IdObjectType, id: number) {
 export function useComputedFields(objectType?: IdObjectType) {
   return useQuery<ComputedField[]>({
     queryKey: KEYS.computed(objectType),
-    queryFn: () => detailRequest<ComputedField[]>(`/computed-fields${objectType ? `?object_type=${objectType}` : ''}`),
+    queryFn: ({ signal }) => detailRequest<ComputedField[]>(`/computed-fields${objectType ? `?object_type=${objectType}` : ''}`, { signal }),
   });
 }
 
@@ -527,7 +527,7 @@ export function usePreviewComputedField() {
 export function useRelationships(objectType?: IdObjectType) {
   return useQuery<Relationship[]>({
     queryKey: KEYS.relationships(objectType),
-    queryFn: () => detailRequest<Relationship[]>(`/relationships${objectType ? `?object_type=${objectType}` : ''}`),
+    queryFn: ({ signal }) => detailRequest<Relationship[]>(`/relationships${objectType ? `?object_type=${objectType}` : ''}`, { signal }),
   });
 }
 

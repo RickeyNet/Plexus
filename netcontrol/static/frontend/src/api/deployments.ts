@@ -176,21 +176,21 @@ export interface AlertCorrelation {
 export function useDeploymentSummary() {
   return useQuery<DeploymentSummary>({
     queryKey: ['deployment-summary'],
-    queryFn: () => apiRequest('/deployments/summary'),
+    queryFn: ({ signal }) => apiRequest('/deployments/summary', { signal }),
   });
 }
 
 export function useDeployments(limit = 200) {
   return useQuery<Deployment[]>({
     queryKey: ['deployments', limit],
-    queryFn: () => apiRequest(`/deployments?limit=${limit}`),
+    queryFn: ({ signal }) => apiRequest(`/deployments?limit=${limit}`, { signal }),
   });
 }
 
 export function useDeployment(id: number | null) {
   return useQuery<DeploymentDetail>({
     queryKey: ['deployment', id],
-    queryFn: () => apiRequest(`/deployments/${id}`),
+    queryFn: ({ signal }) => apiRequest(`/deployments/${id}`, { signal }),
     enabled: id != null,
   });
 }
@@ -198,7 +198,7 @@ export function useDeployment(id: number | null) {
 export function useDeploymentCorrelation(id: number | null) {
   return useQuery<DeploymentCorrelation>({
     queryKey: ['deployment-correlation', id],
-    queryFn: () => apiRequest(`/deployments/${id}/correlation`),
+    queryFn: ({ signal }) => apiRequest(`/deployments/${id}/correlation`, { signal }),
     enabled: id != null,
   });
 }
@@ -206,7 +206,7 @@ export function useDeploymentCorrelation(id: number | null) {
 export function useAlertCorrelation(alertId: number | null) {
   return useQuery<AlertCorrelation>({
     queryKey: ['alert-correlation', alertId],
-    queryFn: () => apiRequest(`/monitoring/alerts/${alertId}/correlation`),
+    queryFn: ({ signal }) => apiRequest(`/monitoring/alerts/${alertId}/correlation`, { signal }),
     enabled: alertId != null,
   });
 }

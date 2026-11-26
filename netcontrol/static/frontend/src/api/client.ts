@@ -129,6 +129,13 @@ export interface ApiRequestOptions extends Omit<RequestInit, 'body' | 'headers'>
   headers?: Record<string, string>;
 }
 
+/**
+ * Options a read helper passes through to `apiRequest`: a query hands over
+ * TanStack Query's `signal` (`queryFn: ({ signal }) => get(x, { signal })`)
+ * so leaving the page aborts the fetch. Mutations never take one.
+ */
+export type ReadOptions = Pick<ApiRequestOptions, 'signal'>;
+
 export async function apiRequest<T = unknown>(
   endpoint: string,
   options: ApiRequestOptions = {},
