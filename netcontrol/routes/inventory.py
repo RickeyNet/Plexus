@@ -1452,6 +1452,15 @@ async def admin_confirm_host_addresses(body: HostAddressConfirm, request: Reques
     return await _confirm_addresses(request, ids)
 
 
+def _sanitized_snmp(sanitize, *args) -> dict:
+    """``sanitize(*args)`` for a request body; ``400`` when ``port``,
+    ``timeout_seconds`` or ``retries`` is not a number."""
+    try:
+        return sanitize(*args)
+    except TypeError, ValueError, OverflowError:
+        raise HTTPException(400, "port, timeout_seconds and retries must be numbers") from None
+
+
 @admin_router.get("/api/admin/snmp-discovery")
 async def admin_get_snmp_discovery_config():
     # Secrets are write-only, as in the per-group profile below.
@@ -1462,7 +1471,7 @@ async def admin_get_snmp_discovery_config():
 async def admin_update_snmp_discovery_config(body: dict):
     # A secret sent as the mask, or left out, keeps the stored one.
     body = merge_secret_fields(body, state.SNMP_DISCOVERY_CONFIG, SNMP_SECRET_FIELDS)
-    state.SNMP_DISCOVERY_CONFIG = state._sanitize_snmp_discovery_config(body)
+    state.SNMP_DISCOVERY_CONFIG = _sanitized_snmp(state._sanitize_snmp_discovery_config, body)
     await db.set_auth_setting("snmp_discovery", state.SNMP_DISCOVERY_CONFIG)
     return mask_secret_fields(state.SNMP_DISCOVERY_CONFIG, SNMP_SECRET_FIELDS)
 
@@ -1531,7 +1540,7 @@ async def _validate_snmp_profile_secrets(profile: dict):
 @admin_router.post("/api/admin/snmp-profiles")
 async def admin_create_snmp_profile(body: dict):
     profile_id = str(uuid.uuid4())
-    profile = state._sanitize_snmp_profile(profile_id, body)
+    profile = _sanitized_snmp(state._sanitize_snmp_profile, profile_id, body)
     if not profile["name"]:
         raise HTTPException(400, "Profile name is required")
     await _validate_snmp_profile_secrets(profile)
@@ -1544,7 +1553,7 @@ async def admin_create_snmp_profile(body: dict):
 async def admin_update_snmp_profile(profile_id: str, body: dict):
     if profile_id not in state.SNMP_PROFILES:
         raise HTTPException(404, "Profile not found")
-    profile = state._sanitize_snmp_profile(profile_id, body)
+    profile = _sanitized_snmp(state._sanitize_snmp_profile, profile_id, body)
     if not profile["name"]:
         raise HTTPException(400, "Profile name is required")
     await _validate_snmp_profile_secrets(profile)
@@ -2654,7 +2663,7 @@ async def update_group_snmp_discovery_profile(group_id: int, body: dict, request
     await require_group(request, group_id, write=True)
     # A secret sent as the mask, or left out, keeps the stored one.
     body = merge_secret_fields(body, state.SNMP_DISCOVERY_PROFILES.get(group_id), SNMP_SECRET_FIELDS)
-    profile = state._sanitize_snmp_discovery_profile(group_id, body)
+    profile = _sanitized_snmp(state._sanitize_snmp_discovery_profile, group_id, body)
     await _require_usable_snmp_secrets(request, state.SNMP_DISCOVERY_PROFILES.get(group_id), profile)
     state.SNMP_DISCOVERY_PROFILES[group_id] = profile
     await db.set_auth_setting("snmp_discovery_profiles", state.SNMP_DISCOVERY_PROFILES)

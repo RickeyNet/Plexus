@@ -1651,7 +1651,7 @@ def _sanitize_snmp_discovery_config(data: dict | None) -> dict:
     }
     if isinstance(data, dict):
         cfg["enabled"] = bool(data.get("enabled", cfg["enabled"]))
-        version = str(data.get("version", cfg["version"]).strip().lower())
+        version = str(data.get("version", cfg["version"])).strip().lower()
         if version in {"2c", "3"}:
             cfg["version"] = version
         cfg["community"] = str(data.get("community", cfg["community"]))
@@ -1690,7 +1690,7 @@ def _sanitize_snmp_discovery_profile(group_id: int, data: dict | None) -> dict:
     }
     if isinstance(data, dict):
         cfg["enabled"] = bool(data.get("enabled", cfg["enabled"]))
-        version = str(data.get("version", cfg["version"]).strip().lower())
+        version = str(data.get("version", cfg["version"])).strip().lower()
         if version in {"2c", "3"}:
             cfg["version"] = version
         cfg["community"] = str(data.get("community", cfg["community"]))

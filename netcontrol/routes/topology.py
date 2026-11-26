@@ -2938,3 +2938,147 @@ async def delete_topology_positions(request: Request = None):  # type: ignore[as
     except Exception as exc:
         LOGGER.error("topology: delete positions error: %s", exc, exc_info=True)
         raise HTTPException(status_code=500, detail="An internal error occurred.")
+
+
+# ── Map search and status overlay ───────────────────────────────────────────
+#
+# Read by the topology page only, so they sit on this router and need the
+# topology feature, as every other /api/topology route does.
+
+
+@router.get("/api/topology/search/hosts-by-vlan")
+@scoped("list")
+async def search_hosts_by_vlan(request: Request, vlan_id: int = Query(..., ge=1, le=4094)):
+    """Return every host that carries a given VLAN, with how it carries it.
+
+    Powers the topology search panel's VLAN-highlight mode. A host is
+    considered to "carry" a VLAN if any of:
+      * `vlan_definitions` has a row for that vlan_id on the host
+      * any `interface_inventory` row has `access_vlan = vlan_id`
+      * any `interface_inventory.trunk_vlans` CSV contains the vlan_id
+
+    The same host can appear in multiple buckets; the response collapses
+    them into one row per host with a `roles` list (definition/access/trunk).
+    """
+    conn = await db.get_db()
+    try:
+        roles: dict[int, dict] = {}
+
+        cursor = await conn.execute(
+            "SELECT v.host_id, v.name, h.hostname "
+            "FROM vlan_definitions v LEFT JOIN hosts h ON h.id = v.host_id "
+            "WHERE v.vlan_id = ?",
+            (vlan_id,),
+        )
+        for row in await cursor.fetchall():
+            hid = row[0]
+            entry = roles.setdefault(hid, {"host_id": hid, "hostname": row[2], "roles": [], "ports": []})
+            if "definition" not in entry["roles"]:
+                entry["roles"].append("definition")
+            if row[1]:
+                entry["vlan_name"] = row[1]
+
+        # Access ports, then trunk ports: the matching the VLAN records use too.
+        for port in await db.list_vlan_ports(vlan_id):
+            hid, mode = port["host_id"], port["mode"]
+            entry = roles.setdefault(hid, {"host_id": hid, "hostname": port["hostname"], "roles": [], "ports": []})
+            if mode not in entry["roles"]:
+                entry["roles"].append(mode)
+            entry["ports"].append({"name": port["interface"], "kind": mode})
+
+    finally:
+        await conn.close()
+    scope_hosts = await readable_host_ids(request)
+    hosts = [h for h in roles.values() if scope_hosts is None or h["host_id"] in scope_hosts]
+    return {"vlan_id": vlan_id, "hosts": hosts}
+
+
+# ── Topology status overlay (Phase D) ───────────────────────────────────────
+#
+# One aggregate call powers the topology "Status Overlay" toggle: it returns
+# per-host counts for the three status sources we already track separately
+# (drift events, audit findings, interface error events). Bundling avoids
+# N+1 round-trips when the graph has 50+ nodes.
+
+
+@router.get("/api/topology/overlay/status")
+@scoped("list")
+async def topology_overlay_status(request: Request):
+    """Return per-host status badges for the topology status overlay.
+
+    For every host with at least one open finding/event/drift, returns:
+      * `drift_open`:  count of open config_drift_events
+      * `audit_worst`: worst severity in audit_findings (from the latest run only)
+      * `audit_counts`: dict of severity -> count for that latest run
+      * `errors_open`: count of unresolved interface_error_events
+      * `errors_worst`: worst severity among unresolved interface_error_events
+    """
+    conn = await db.get_db()
+    try:
+        # Latest audit run -- findings from earlier runs are stale for badge
+        # purposes (a fix in a later run should clear the badge).
+        cursor = await conn.execute("SELECT id FROM audit_runs WHERE status = 'completed' ORDER BY id DESC LIMIT 1")
+        row = await cursor.fetchone()
+        latest_run_id = row[0] if row else None
+
+        out: dict[int, dict] = {}
+
+        def slot(hid: int) -> dict:
+            return out.setdefault(
+                hid,
+                {
+                    "host_id": hid,
+                    "drift_open": 0,
+                    "audit_worst": None,
+                    "audit_counts": {},
+                    "errors_open": 0,
+                    "errors_worst": None,
+                },
+            )
+
+        cursor = await conn.execute(
+            "SELECT host_id, COUNT(*) FROM config_drift_events WHERE status = 'open' GROUP BY host_id"
+        )
+        for hid, n in await cursor.fetchall():
+            slot(hid)["drift_open"] = n
+
+        if latest_run_id is not None:
+            cursor = await conn.execute(
+                "SELECT host_id, severity, COUNT(*) FROM audit_findings "
+                "WHERE run_id = ? AND host_id IS NOT NULL "
+                "GROUP BY host_id, severity",
+                (latest_run_id,),
+            )
+            severity_rank = {
+                "critical": 0,
+                "high": 1,
+                "medium": 2,
+                "low": 3,
+                "info": 4,
+            }
+            for hid, sev, n in await cursor.fetchall():
+                entry = slot(hid)
+                entry["audit_counts"][sev] = n
+                cur = entry["audit_worst"]
+                if cur is None or severity_rank.get(sev, 99) < severity_rank.get(cur, 99):
+                    entry["audit_worst"] = sev
+
+        cursor = await conn.execute(
+            "SELECT host_id, severity, COUNT(*) FROM interface_error_events "
+            "WHERE resolved_at IS NULL GROUP BY host_id, severity"
+        )
+        err_rank = {"critical": 0, "high": 1, "warning": 2, "info": 3}
+        for hid, sev, n in await cursor.fetchall():
+            entry = slot(hid)
+            entry["errors_open"] += n
+            cur = entry["errors_worst"]
+            if cur is None or err_rank.get(sev, 99) < err_rank.get(cur, 99):
+                entry["errors_worst"] = sev
+
+    finally:
+        await conn.close()
+    scope_hosts = await readable_host_ids(request)
+    return {
+        "latest_audit_run_id": latest_run_id,
+        "hosts": [h for h in out.values() if scope_hosts is None or h["host_id"] in scope_hosts],
+    }
