@@ -119,6 +119,26 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-plexus}
       POSTGRES_USER: ${POSTGRES_USER:-plexus}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env (run deploy/setup.sh to generate one)}
+    # Memory settings sized for the 2g limit below (the stock 128MB
+    # shared_buffers leaves most of it unused). Each one can be overridden in
+    # .env; keep shared_buffers near a quarter of the limit and
+    # effective_cache_size near half if you change the limit.
+    # max_connections stays at the default 100: the app's connection pool
+    # must stay below it.
+    command:
+      - postgres
+      - -c
+      - shared_buffers=${POSTGRES_SHARED_BUFFERS:-512MB}
+      - -c
+      - effective_cache_size=${POSTGRES_EFFECTIVE_CACHE_SIZE:-1GB}
+      - -c
+      - work_mem=${POSTGRES_WORK_MEM:-8MB}
+      - -c
+      - maintenance_work_mem=${POSTGRES_MAINTENANCE_WORK_MEM:-128MB}
+      - -c
+      - max_wal_size=${POSTGRES_MAX_WAL_SIZE:-2GB}
+      - -c
+      - random_page_cost=${POSTGRES_RANDOM_PAGE_COST:-1.1}
     networks:
       - plexus
     volumes:

@@ -793,3 +793,42 @@ async def test_on_host_changed_updates_cache_and_exporter_rows():
     await flow_collector.on_host_changed(old_ip="10.99.0.1", new_ip=None, host_id=None)
     rows = await db_module.list_flow_exporters()
     assert rows[0]["host_id"] is None
+
+
+async def test_one_flush_at_a_time_and_nothing_is_left_behind(proto, flushed, monkeypatch):
+    monkeypatch.setitem(flow_collector.FLOW_COLLECTOR_CONFIG, "batch_size", 1)
+    release = asyncio.Event()
+    running = 0
+    most = 0
+
+    async def slow_batch(batch):
+        nonlocal running, most
+        running += 1
+        most = max(most, running)
+        await release.wait()
+        flushed.extend(batch)
+        running -= 1
+        return len(batch)
+
+    monkeypatch.setattr(flow_collector.db, "create_flow_records_batch", slow_batch)
+    # Each datagram's records reach the buffer while the first flush waits.
+    for _ in range(4):
+        await receive(proto, NF5_PACKET, (EXPORTER_IP, 2055))
+    await proto._flush_buffer()  # the periodic flush: returns while one runs
+    assert most == 1 and proto._flushing
+    release.set()
+    await asyncio.gather(*list(proto._bg_tasks))
+    assert most == 1 and not proto._flushing
+    assert len(flushed) == 4 * 2 and proto._buffer == []
+
+
+async def test_a_full_buffer_drops_the_newest_records_and_counts_them(proto, flushed, monkeypatch):
+    monkeypatch.setattr(flow_collector, "FLOW_BUFFER_MAX", 3)
+    monkeypatch.setitem(flow_collector.FLOW_COLLECTOR_CONFIG, "batch_size", 1000)
+    before = flow_collector._drop_counters()["dropped_buffer"]
+    await receive(proto, NF5_PACKET, *[(EXPORTER_IP, 2055)] * 3)
+    assert len(proto._buffer) == 3
+    assert flow_collector._drop_counters()["dropped_buffer"] == before + 3
+    kept = list(proto._buffer)
+    await proto._flush_buffer()
+    assert flushed == kept

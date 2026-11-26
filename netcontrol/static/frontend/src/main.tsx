@@ -7,6 +7,7 @@ import { App } from '@/App';
 import { AddSourceProvider } from '@/components/AddSourceProvider';
 import { DialogProvider } from '@/components/DialogProvider';
 import { initAppearance } from '@/lib/appearance';
+import { startEarlyLoads } from '@/lib/startupPreload';
 import { bindQueryClient as bindPollNowQueryClient } from '@/pages/Monitoring/pollNowStore';
 import { TimeRangeProvider } from '@/lib/timeRange';
 
@@ -23,6 +24,7 @@ const queryClient = new QueryClient({
 });
 
 bindPollNowQueryClient(queryClient);
+startEarlyLoads(queryClient, window.location.pathname);
 
 const rootEl = document.getElementById('root');
 if (!rootEl) throw new Error('#root missing in index.html');

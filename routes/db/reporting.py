@@ -231,52 +231,42 @@ async def get_report_artifact(artifact_id: int) -> dict | None:
 
 async def delete_old_report_runs(days: int = 90) -> int:
     """Delete report runs older than N days (artifacts cascade)."""
-    db = await _dbcore.get_db()
-    try:
-        cursor = await db.execute(
-            "DELETE FROM report_runs WHERE started_at < datetime('now', '-' || ? || ' days')",
-            (max(1, int(days)),),
-        )
-        await db.commit()
-        return cursor.rowcount
-    finally:
-        await db.close()
+    return await _dbcore.chunked_delete(
+        "report_runs",
+        "started_at < datetime('now', '-' || ? || ' days')",
+        (max(1, int(days)),),
+    )
+
+
+# Every report_runs column but result_json, for the run list.
+_RUN_LIST_COLUMNS = "id, report_id, report_type, parameters_json, status, row_count, started_at, completed_at"
 
 
 async def get_report_runs(
     report_id: int | None = None, limit: int = 50, *, run_ids: list[int] | frozenset[int] | set[int] | None = None
 ) -> list[dict]:
-    """The newest report runs. ``run_ids`` (object scope): keep only these
-    runs; ``None`` keeps every run."""
+    """The newest report runs, without their ``result_json`` (a list of
+    up to 1000 runs would otherwise carry every run's full result; read
+    one run's result with ``get_report_run``). ``run_ids`` (object scope):
+    keep only these runs; ``None`` keeps every run."""
+    clauses: list[str] = []
+    params: list = []
+    if report_id is not None:
+        clauses.append("report_id = ?")
+        params.append(report_id)
+    if run_ids is not None:
+        ids = sorted(int(i) for i in run_ids)
+        if not ids:
+            return []
+        clauses.append(f"id IN ({','.join('?' * len(ids))})")
+        params.extend(ids)
+    where = f"WHERE {' AND '.join(clauses)} " if clauses else ""
     db = await _dbcore.get_db(read_only=True)
     try:
-        if run_ids is not None:
-            ids = sorted(int(i) for i in run_ids)
-            if not ids:
-                return []
-            marks = ",".join("?" * len(ids))
-            if report_id is not None:
-                cursor = await db.execute(
-                    f"SELECT * FROM report_runs WHERE report_id = ? AND id IN ({marks}) "  # nosec B608 - placeholders only
-                    "ORDER BY started_at DESC LIMIT ?",
-                    (report_id, *ids, limit),
-                )
-            else:
-                cursor = await db.execute(
-                    f"SELECT * FROM report_runs WHERE id IN ({marks}) ORDER BY started_at DESC LIMIT ?",  # nosec B608
-                    (*ids, limit),
-                )
-            return rows_to_list(await cursor.fetchall())
-        if report_id is not None:
-            cursor = await db.execute(
-                "SELECT * FROM report_runs WHERE report_id = ? ORDER BY started_at DESC LIMIT ?",
-                (report_id, limit),
-            )
-        else:
-            cursor = await db.execute(
-                "SELECT * FROM report_runs ORDER BY started_at DESC LIMIT ?",
-                (limit,),
-            )
+        cursor = await db.execute(
+            f"SELECT {_RUN_LIST_COLUMNS} FROM report_runs {where}ORDER BY started_at DESC LIMIT ?",  # nosec B608 - fixed clauses, values bound
+            (*params, limit),
+        )
         return rows_to_list(await cursor.fetchall())
     finally:
         await db.close()

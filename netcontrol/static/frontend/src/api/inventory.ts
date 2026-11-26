@@ -299,11 +299,12 @@ export interface BulkSerialFetchResult {
 
 // ── Queries ────────────────────────────────────────────────────────────────
 
-export function useInventoryGroupsFull(includeHosts = true) {
+export function useInventoryGroupsFull(includeHosts = true, enabled = true) {
   return useQuery<InventoryGroupFull[]>({
     queryKey: ['inventory-groups-full', includeHosts],
     queryFn: () =>
       apiRequest(includeHosts ? '/inventory?include_hosts=true' : '/inventory'),
+    enabled,
   });
 }
 

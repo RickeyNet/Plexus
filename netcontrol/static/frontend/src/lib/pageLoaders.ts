@@ -80,9 +80,48 @@ const ROUTE_TO_PAGE: Record<string, PageKey> = {
   '/organization': 'organization',
 };
 
+// First path segment to page chunk, for deep links the static table above
+// does not list (/monitoring/alerts, /devices/12, /settings/users). Used when
+// the app boots on such a URL so its chunk loads alongside the auth check.
+const SECTION_TO_PAGE: Record<string, PageKey> = {
+  dashboards: 'dashboardViewer',
+  devices: 'deviceDetail',
+  hardware: 'hardware',
+  ipam: 'ipam',
+  virtualization: 'virtualization',
+  organization: 'organization',
+  routing: 'routing',
+  circuits: 'circuits',
+  dcim: 'dcim',
+  sync: 'sync',
+  software: 'software',
+  compliance: 'compliance',
+  configuration: 'configuration',
+  'change-management': 'changeManagement',
+  reports: 'reports',
+  approvals: 'jobs',
+  jobs: 'jobs',
+  playbooks: 'jobs',
+  templates: 'jobs',
+  monitoring: 'monitoring',
+  'network-tools': 'networkTools',
+  'cloud-visibility': 'cloudVisibility',
+  settings: 'settings',
+  help: 'help',
+  plugins: 'pluginPage',
+};
+
+function pageForPath(path: string): PageKey | undefined {
+  const exact = ROUTE_TO_PAGE[path];
+  if (exact) return exact;
+  const section = path.split('/')[1];
+  return section ? SECTION_TO_PAGE[section] : undefined;
+}
+
 // Fire-and-forget warm of a route's chunk. Safe to call repeatedly: the
-// underlying import() promise is cached, so extra calls are no-ops.
+// underlying import() promise is cached, so extra calls are no-ops. A failed
+// warm is ignored; React.lazy runs its own import when the route renders.
 export function prefetchRoute(path: string): void {
-  const key = ROUTE_TO_PAGE[path];
-  if (key) void pageLoaders[key]();
+  const key = pageForPath(path);
+  if (key) pageLoaders[key]().catch(() => {});
 }

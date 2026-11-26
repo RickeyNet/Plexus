@@ -4,8 +4,10 @@ import { type CloudConnection, type CloudResource, useCloudTopology } from '@/ap
 import { EmptyState } from '@/components/EmptyState';
 import { LoadingState } from '@/components/LoadingState';
 import { QueryError } from '@/components/QueryError';
+import { ShowMoreButton } from '@/components/ShowMoreButton';
 import { StatGrid, StatTile } from '@/components/StatTile';
 import { capitalize, cloudTerms } from '@/lib/cloudProviderTerms';
+import { useShowMore } from '@/lib/useShowMore';
 import {
   attachmentBucketLabel,
   attachmentBucketTone,
@@ -33,6 +35,7 @@ interface RouteHighlight {
 }
 
 interface LinkItem {
+  key: string;
   label: string;
   tone: string;
   target: string;
@@ -42,11 +45,11 @@ interface LinkItem {
 interface LinkGroup {
   label: string;
   tone: string;
-  items: { target: string; detail: string }[];
+  items: { key: string; target: string; detail: string }[];
 }
 
 interface RouteRow {
-  uid: string;
+  id: number;
   name: string;
   provider: string;
   type: string;
@@ -89,7 +92,7 @@ function groupLinkItems(items: LinkItem[]): LinkGroup[] {
       g = { label, tone, items: [] };
       groups.set(key, g);
     }
-    g.items.push({ target: item.target || '-', detail: item.detail || '' });
+    g.items.push({ key: item.key, target: item.target || '-', detail: item.detail || '' });
   }
   return [...groups.values()];
 }
@@ -128,6 +131,7 @@ function buildRouteRowsForGroup(group: ProviderGroup, lookup: Map<string, CloudR
         const sourceResource = lookup.get(sourceUid);
         const detail = compactDetail(connectionMetadataSummary(c), [c.source_name, sourceResource?.name, destination]);
         return {
+          key: String(c.id),
           label: topologyConnectionLabel(c.connection_type, group.provider, c.metadata as Record<string, unknown>),
           tone: attachmentBucketTone(attachmentBucketLabel(c.connection_type)),
           target: c.source_name || sourceResource?.name || sourceUid || '-',
@@ -141,6 +145,7 @@ function buildRouteRowsForGroup(group: ProviderGroup, lookup: Map<string, CloudR
         const targetLabel = c.target_name || targetResource?.name || targetUid || '-';
         const detail = compactDetail(connectionMetadataSummary(c), [targetLabel, destination]);
         return {
+          key: String(c.id),
           label: topologyConnectionLabel(c.connection_type, group.provider, c.metadata as Record<string, unknown>),
           tone: attachmentBucketTone(attachmentBucketLabel(c.connection_type)),
           target: targetLabel,
@@ -154,6 +159,7 @@ function buildRouteRowsForGroup(group: ProviderGroup, lookup: Map<string, CloudR
           : {}) as Record<string, unknown>;
         if (md.next_hop) {
           pathParts.push({
+            key: 'next-hop',
             label: 'Next Hop',
             tone: 'secondary',
             target: String(md.next_hop),
@@ -196,7 +202,7 @@ function buildRouteRowsForGroup(group: ProviderGroup, lookup: Map<string, CloudR
       if (hybridPath) highlights.push({ tone: 'success', text: 'Hybrid path' });
 
       return {
-        uid: routeUid,
+        id: routeResource.id,
         name: routeResource.name || routeUid || '-',
         provider: group.provider,
         type: String(routeResource.resource_type ?? ''),
@@ -266,6 +272,10 @@ export function TopologyTab({ filter }: Props) {
 
   const totalRouteRows = routeGroups.reduce((s, g) => s + (g.routeRows?.length ?? 0), 0);
   const filteredRouteRows = filteredRouteGroups.reduce((s, g) => s + (g.routeRows?.length ?? 0), 0);
+
+  const shownResources = useShowMore(resources);
+  const shownConnections = useShowMore(connections);
+  const shownHybridLinks = useShowMore(hybridLinks);
 
   const routeResourceCount = resources.filter((r) => isRouteResourceType(r.resource_type)).length;
   const gatewayResourceCount = resources.filter((r) => isGatewayResourceType(r.resource_type)).length;
@@ -352,49 +362,8 @@ export function TopologyTab({ filter }: Props) {
       {filteredRouteGroups.length > 0 ? (
         <div className="stack stack-sm">
           {filteredRouteGroups.map((g) => (
-            <div key={g.provider} className="card card-sm">
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 'var(--space-2)', flexWrap: 'wrap', marginBottom: 'var(--space-2)' }}>
-                <strong>{providerLabel(g.provider)} Route Paths</strong>
-                <span className="text-muted" style={{ fontSize: 'var(--text-sm)' }}>{formatCount(g.routeRows?.length ?? 0)} route objects</span>
-              </div>
-              <div style={{ overflowX: 'auto' }}>
-                <table className="data-table">
-                  <thead>
-                    <tr>
-                      <th>Route object</th>
-                      <th>Attached to</th>
-                      <th>Path</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {(g.routeRows ?? []).map((row) => (
-                      <tr key={row.uid}>
-                        <td>
-                          {row.name}
-                          <div className="text-muted" style={{ fontSize: 'var(--text-xs)' }}>
-                            {topologyResourceTypeLabel(row.type, row.provider)} | {row.destination}
-                          </div>
-                          <div className="text-muted" style={{ fontSize: 'var(--text-xs)', marginTop: 'var(--space-1)' }}>{row.details}</div>
-                        </td>
-                        <td>
-                          <LinkGroups groups={row.attachmentGroups} emptyLabel="No route associations" />
-                        </td>
-                        <td>
-                          {row.highlights.length > 0 && (
-                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--space-1)', marginBottom: 'var(--space-1)' }}>
-                              {row.highlights.map((h) => (
-                                <span key={h.text} className={`badge badge-${h.tone}`}>{h.text}</span>
-                              ))}
-                            </div>
-                          )}
-                          <LinkGroups groups={row.pathGroups} emptyLabel="No route path details available" />
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
+            // Keyed by the route focus too, so a new focus starts from the first page.
+            <RouteGroupCard key={`${g.provider}:${routeFilter}`} group={g} />
           ))}
         </div>
       ) : routeGroups.length > 0 ? (
@@ -416,8 +385,8 @@ export function TopologyTab({ filter }: Props) {
                 </tr>
               </thead>
               <tbody>
-                {resources.map((r) => (
-                  <tr key={`${r.provider}-${r.resource_uid}`}>
+                {shownResources.visible.map((r) => (
+                  <tr key={r.id}>
                     <td>{providerLabel(r.provider)}</td>
                     <td>{topologyResourceTypeLabel(r.resource_type, r.provider)}</td>
                     <td>{r.name || r.resource_uid}</td>
@@ -429,6 +398,7 @@ export function TopologyTab({ filter }: Props) {
                 ))}
               </tbody>
             </table>
+            <ShowMoreButton hiddenCount={shownResources.hiddenCount} onClick={shownResources.showMore} style={{ marginTop: 'var(--space-2)' }} />
           </div>
         )}
       </div>
@@ -448,8 +418,8 @@ export function TopologyTab({ filter }: Props) {
                 </tr>
               </thead>
               <tbody>
-                {connections.map((c, i) => (
-                  <tr key={i}>
+                {shownConnections.visible.map((c) => (
+                  <tr key={c.id}>
                     <td>{providerLabel(c.provider)}</td>
                     <td>{c.source_name || c.source_resource_uid || ''}</td>
                     <td>{c.target_name || c.target_resource_uid || ''}</td>
@@ -460,6 +430,7 @@ export function TopologyTab({ filter }: Props) {
                 ))}
               </tbody>
             </table>
+            <ShowMoreButton hiddenCount={shownConnections.hiddenCount} onClick={shownConnections.showMore} style={{ marginTop: 'var(--space-2)' }} />
           </div>
         )}
       </div>
@@ -479,8 +450,8 @@ export function TopologyTab({ filter }: Props) {
                 </tr>
               </thead>
               <tbody>
-                {hybridLinks.map((l, i) => (
-                  <tr key={i}>
+                {shownHybridLinks.visible.map((l) => (
+                  <tr key={l.id}>
                     <td>{l.host_hostname || l.host_label || '-'}</td>
                     <td>{l.cloud_resource_name || l.cloud_resource_uid || '-'}</td>
                     <td>{topologyConnectionLabel(l.connection_type, l.provider)}</td>
@@ -489,8 +460,60 @@ export function TopologyTab({ filter }: Props) {
                 ))}
               </tbody>
             </table>
+            <ShowMoreButton hiddenCount={shownHybridLinks.hiddenCount} onClick={shownHybridLinks.showMore} style={{ marginTop: 'var(--space-2)' }} />
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+function RouteGroupCard({ group }: { group: ProviderGroup }) {
+  const rows = group.routeRows ?? [];
+  const { visible, hiddenCount, showMore } = useShowMore(rows);
+  return (
+    <div className="card card-sm">
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 'var(--space-2)', flexWrap: 'wrap', marginBottom: 'var(--space-2)' }}>
+        <strong>{providerLabel(group.provider)} Route Paths</strong>
+        <span className="text-muted" style={{ fontSize: 'var(--text-sm)' }}>{formatCount(rows.length)} route objects</span>
+      </div>
+      <div style={{ overflowX: 'auto' }}>
+        <table className="data-table">
+          <thead>
+            <tr>
+              <th>Route object</th>
+              <th>Attached to</th>
+              <th>Path</th>
+            </tr>
+          </thead>
+          <tbody>
+            {visible.map((row) => (
+              <tr key={row.id}>
+                <td>
+                  {row.name}
+                  <div className="text-muted" style={{ fontSize: 'var(--text-xs)' }}>
+                    {topologyResourceTypeLabel(row.type, row.provider)} | {row.destination}
+                  </div>
+                  <div className="text-muted" style={{ fontSize: 'var(--text-xs)', marginTop: 'var(--space-1)' }}>{row.details}</div>
+                </td>
+                <td>
+                  <LinkGroups groups={row.attachmentGroups} emptyLabel="No route associations" />
+                </td>
+                <td>
+                  {row.highlights.length > 0 && (
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--space-1)', marginBottom: 'var(--space-1)' }}>
+                      {row.highlights.map((h) => (
+                        <span key={h.text} className={`badge badge-${h.tone}`}>{h.text}</span>
+                      ))}
+                    </div>
+                  )}
+                  <LinkGroups groups={row.pathGroups} emptyLabel="No route path details available" />
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <ShowMoreButton hiddenCount={hiddenCount} onClick={showMore} style={{ marginTop: 'var(--space-2)' }} />
       </div>
     </div>
   );
@@ -500,13 +523,13 @@ function LinkGroups({ groups, emptyLabel }: { groups: LinkGroup[]; emptyLabel: s
   if (!groups.length) return <span className="text-muted">{emptyLabel}</span>;
   return (
     <>
-      {groups.map((g, i) => (
-        <div key={i} style={{ marginBottom: '0.45rem' }}>
+      {groups.map((g) => (
+        <div key={`${g.tone}:${g.label}`} style={{ marginBottom: '0.45rem' }}>
           <div>
             <span className={`badge badge-${g.tone}`} style={{ marginRight: '0.35rem', marginBottom: '0.35rem' }}>{g.label}</span>
           </div>
-          {g.items.map((item, j) => (
-            <div key={j} style={{ paddingLeft: '0.15rem', marginTop: '0.1rem' }}>
+          {g.items.map((item) => (
+            <div key={item.key} style={{ paddingLeft: '0.15rem', marginTop: '0.1rem' }}>
               <div>{item.target}</div>
               {item.detail && <div className="text-muted" style={{ fontSize: '0.75rem' }}>{item.detail}</div>}
             </div>

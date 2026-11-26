@@ -43,6 +43,7 @@ export interface CloudAccount {
 }
 
 export interface CloudResource {
+  id: number;
   resource_uid: string;
   provider?: string;
   resource_type?: string;
@@ -54,6 +55,7 @@ export interface CloudResource {
 }
 
 export interface CloudConnection {
+  id: number;
   provider?: string;
   source_resource_uid?: string;
   source_name?: string;
@@ -65,6 +67,7 @@ export interface CloudConnection {
 }
 
 export interface CloudHybridLink {
+  id: number;
   host_hostname?: string;
   host_label?: string;
   cloud_resource_uid?: string;
@@ -245,11 +248,16 @@ export function useCloudAccounts(provider?: string) {
   });
 }
 
+// The full topology payload is large and changes only when a discovery runs
+// (which invalidates this key), so poll it slowly and catch up on focus.
+const TOPOLOGY_REFETCH_MS = 5 * 60_000;
+
 export function useCloudTopology(filter: CloudFilter) {
   return useQuery({
     queryKey: ['cloud-topology', filter.provider ?? '', filter.account_id ?? ''],
     queryFn: () => apiRequest<CloudTopology>(`/cloud/topology${qs(filter)}`),
-    refetchInterval: MONITOR_REFETCH_MS,
+    refetchInterval: TOPOLOGY_REFETCH_MS,
+    refetchOnWindowFocus: true,
   });
 }
 

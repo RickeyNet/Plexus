@@ -23,6 +23,7 @@ import re
 import socket
 import struct
 import time
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta, timezone
 from typing import Any
 
@@ -1148,6 +1149,10 @@ _TRAP_EVENT_BUFFER_MAX = 10000
 _HOST_IP_CACHE_TTL_SECONDS = 300.0
 
 _HOST_IP_CACHE_MAX = 4096
+# A batch holds up to _TRAP_EVENT_BUFFER_MAX events: the writer yields to
+# the event loop every this many (syslog_rules._RESTORE_YIELD_EVERY, the
+# restore replay's step), and hands the rule engines this many at a time.
+_TRAP_EVENT_YIELD_EVERY = 1000
 
 # (source_ip, event_type, facility, severity, oid, message, raw_data, trap,
 # transport): ``trap`` is the decoded v1 / v2c trap (``decode_snmp_trap``),
@@ -1204,6 +1209,15 @@ def _queue_trap_syslog_event(
 
 
 async def _resolve_host_id_cached(source_ip: str) -> int | None:
+    # The listener allowlist's inventory map (primary IPs win over interface
+    # IPs, lowest host id between interface IPs, as find_host_by_ip) is
+    # reloaded on every host change and at most a minute apart, fresher than
+    # this cache's entries: a source in it needs no database query. It is
+    # keyed in canonical form, so it also matches an IPv6 host address
+    # stored in another spelling than the socket's.
+    host_id = listener_sources.inventory_host_id(source_ip)
+    if host_id is not None:
+        return host_id
     now = time.monotonic()
     cached = _host_ip_cache.get(source_ip)
     if cached is not None and cached[1] > now:
@@ -1217,10 +1231,6 @@ async def _resolve_host_id_cached(source_ip: str) -> int | None:
             host_id = host["id"]
     except Exception as exc:
         LOGGER.debug("metrics: host lookup failed for %s: %s", source_ip, exc)
-    if host_id is None and ":" in source_ip:
-        # An IPv6 host address stored in another spelling than the
-        # socket's: the listener's address set is keyed in canonical form.
-        host_id = listener_sources.inventory_host_id(source_ip)
     # Bounded (BoundedDict): a scanner spraying forged sources cannot grow it.
     _host_ip_cache[source_ip] = (host_id, now + _HOST_IP_CACHE_TTL_SECONDS)
     return host_id
@@ -1354,7 +1364,9 @@ async def _screen_traps(
     kept: list[tuple] = []
     apc: list[tuple] = []
     believed: list[tuple] = []
-    for row in batch:
+    for n, row in enumerate(batch, 1):
+        if n % _TRAP_EVENT_YIELD_EVERY == 0:
+            await asyncio.sleep(0)
         trap = row[7]
         if row[1] == "trap" and isinstance(trap, PendingV3Trap):
             host_id = host_ids.get(row[0])
@@ -1412,7 +1424,9 @@ async def _flush_trap_syslog_batch(batch: list[tuple]) -> None:
     except Exception as exc:
         LOGGER.warning("metrics: trap/syslog batch write failed, dropping %d events: %s", len(batch), exc)
     await _evaluate_syslog_rules(rows)
-    for source_ip, apc_trap, authenticated_host_id in apc:
+    for n, (source_ip, apc_trap, authenticated_host_id) in enumerate(apc, 1):
+        if n % _TRAP_EVENT_YIELD_EVERY == 0:
+            await asyncio.sleep(0)
         try:
             if authenticated_host_id is None:
                 await handle_apc_trap(source_ip, apc_trap)
@@ -1429,12 +1443,23 @@ async def _evaluate_trap_rules(believed: list[tuple]) -> None:
     trap a dict of ``decode_snmp_trap``'s shape) to the trap rule engine
     (``netcontrol.trap_rules``: alerts, re-poll and config-change triggers).
     A rule error is logged: it never touches the stored events."""
-    if not believed:
-        return
-    try:
-        await trap_rules.process_trap_batch([(host_id, name_trap(trap)) for host_id, trap in believed])
-    except Exception as exc:  # noqa: BLE001 - a rule failure must not stop the writer
-        LOGGER.warning("metrics: trap rule evaluation failed for %d traps: %s", len(believed), exc)
+    async for chunk in _chunks(believed):
+        try:
+            await trap_rules.process_trap_batch([(host_id, name_trap(trap)) for host_id, trap in chunk])
+        except Exception as exc:  # noqa: BLE001 - a rule failure must not stop the writer
+            LOGGER.warning("metrics: trap rule evaluation failed for %d traps: %s", len(chunk), exc)
+
+
+async def _chunks(rows: list) -> AsyncIterator[list]:
+    """``rows`` in slices of ``_TRAP_EVENT_YIELD_EVERY``, yielding to the
+    event loop between slices: the rule engines run each slice in one
+    synchronous pass, and a full batch of them would stall every request
+    and poller sharing the loop. The engines keep their counters between
+    calls, so slices evaluate as the whole batch would, in order."""
+    for start in range(0, len(rows), _TRAP_EVENT_YIELD_EVERY):
+        if start:
+            await asyncio.sleep(0)
+        yield rows[start : start + _TRAP_EVENT_YIELD_EVERY]
 
 
 async def _evaluate_syslog_rules(rows: list[tuple]) -> None:
@@ -1452,17 +1477,17 @@ async def _evaluate_syslog_rules(rows: list[tuple]) -> None:
     if not syslog_rules.receiver_flag("syslog_udp_actions"):
         rows = [row for row in rows if len(row) > 8 and row[8] != "udp"]
     syslog_rows = [(row[1], row[6]) for row in rows if row[2] == "syslog" and row[1] is not None]
-    if syslog_rows:
+    async for chunk in _chunks(syslog_rows):
         try:
-            await syslog_rules.process_syslog_batch(syslog_rows)
+            await syslog_rules.process_syslog_batch(chunk)
         except Exception as exc:
-            LOGGER.warning("metrics: syslog rule evaluation failed for %d events: %s", len(syslog_rows), exc)
+            LOGGER.warning("metrics: syslog rule evaluation failed for %d events: %s", len(chunk), exc)
     recollect_rows = [(row[0], row[1], row[6]) for row in rows if row[2] == "syslog"]
-    if recollect_rows:
+    async for chunk in _chunks(recollect_rows):
         try:
-            await syslog_rules.process_recollect_batch(recollect_rows)
+            await syslog_rules.process_recollect_batch(chunk)
         except Exception as exc:
-            LOGGER.warning("metrics: syslog re-collect trigger failed for %d events: %s", len(recollect_rows), exc)
+            LOGGER.warning("metrics: syslog re-collect trigger failed for %d events: %s", len(chunk), exc)
 
 
 # ── Receiver lifecycle ──────────────────────────────────────────────────────

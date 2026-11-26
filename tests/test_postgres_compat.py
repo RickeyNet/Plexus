@@ -313,3 +313,136 @@ def test_real_mapping_leaves_identifiers_alone():
 
 def test_postgres_schema_has_no_float4_columns():
     assert db_module._REAL_TYPE_RE.search(db_module.POSTGRES_SCHEMA) is None
+
+
+# -- Statement translation cache -------------------------------------------------
+
+
+def _legacy_translate(query: str, params: tuple) -> tuple[str, str, tuple]:
+    """The per-call translation ``execute()`` did before it was cached:
+    (asyncpg method, SQL, bound params)."""
+    params = db_module._strip_nuls_from_params(tuple(params))
+    stripped = query.strip()
+    upper = stripped.upper()
+    if upper.startswith("CREATE") or upper.startswith("ALTER"):
+        query = db_module._convert_sqlite_ddl_to_postgres(query)
+    converted = db_module._convert_qmark_to_dollar_params(query)
+    params = db_module._coerce_text_cast_params(converted, params)
+    if upper.startswith("SELECT") or upper.startswith("WITH"):
+        return "fetch", converted, params
+    has_returning = "RETURNING" in upper
+    if upper.startswith("INSERT") and not has_returning:
+        m = db_module._INSERT_TABLE_RE.match(stripped)
+        if (m.group(1).lower() if m else "") in db_module._INSERT_ID_TABLES:
+            converted = f"{converted.rstrip()} RETURNING id"
+            has_returning = True
+    return ("fetch" if has_returning else "execute"), converted, params
+
+
+_TRANSLATION_CASES = [
+    ("SELECT * FROM hosts WHERE id = ?", (1,)),
+    ("SELECT name FROM t WHERE note = 'why?' AND id = ? AND tag = 'a''?b'", (7,)),
+    ("  with x AS (SELECT ? AS v) SELECT v FROM x", ("192.0.2.1",)),
+    ("SELECT id FROM t WHERE created_at::timestamptz > NOW() - INTERVAL '1 day' AND id = ?", (3,)),
+    ("DELETE FROM t WHERE created_at < datetime('now', '-' || ? || ' days')", (30,)),
+    ("DELETE FROM t WHERE ts < datetime('now', ? || ' hours') AND kind = ?", (-4, "a")),
+    ("SELECT * FROM t WHERE ts > datetime('now', '-7 days')", ()),
+    ("SELECT * FROM t WHERE ts > datetime('now', ?)", ("-1 hours",)),
+    ("UPDATE t SET due = datetime(started_at, '+' || ttl || ' seconds') WHERE id = ?", (2,)),
+    ("UPDATE t SET seen = datetime('now'), note = ? WHERE id = ?", ("x\x00y", 9)),
+    ("INSERT INTO hosts (hostname, ip_address) VALUES (?, ?)", ("sw1.example.com", "192.0.2.10")),
+    ("INSERT OR IGNORE INTO ipam_allocations (address) VALUES (?)", ("198.51.100.4",)),
+    ("INSERT INTO some_junction_tbl (a, b) VALUES (?, ?)", (1, None)),
+    ("INSERT INTO metric_baselines (host_id) VALUES (?) RETURNING id", (1,)),
+    (
+        "CREATE TABLE IF NOT EXISTS t (id INTEGER PRIMARY KEY AUTOINCREMENT, v REAL, at TEXT DEFAULT (datetime('now')))",
+        (),
+    ),
+    ("ALTER TABLE t ADD COLUMN blob_col BLOB", ()),
+    ("CREATE INDEX IF NOT EXISTS idx_t_open ON t(k) WHERE acknowledged = 0", ()),
+    ("DROP INDEX IF EXISTS idx_t_old", ()),
+]
+
+
+@pytest.mark.parametrize(("query", "params"), _TRANSLATION_CASES)
+@pytest.mark.asyncio
+async def test_cached_translation_matches_uncached_path(query, params):
+    expected = _legacy_translate(query, params)
+    db_module._plan_statement.cache_clear()
+    for _ in range(2):  # a miss, then a cache hit
+        fake = _FakeConn()
+        conn = _PostgresConnectionCompat(fake)
+        await conn.execute(query, params)
+        sent = next(c for c in fake.calls if c[0] in ("fetch", "execute"))
+        assert sent == expected
+    assert db_module._plan_statement.cache_info().hits >= 1
+
+
+@pytest.mark.asyncio
+async def test_cached_plan_rebinds_params_per_call():
+    """The plan holds only text-derived positions; each call's own values
+    are coerced, so a None or str on one call never leaks into the next."""
+    sql = "DELETE FROM t WHERE ts < datetime('now', '-' || ? || ' days') AND id = ?"
+    sent = []
+    for params in ((5, 1), (None, 2), ("7", 3)):
+        fake = _FakeConn()
+        await _PostgresConnectionCompat(fake).execute(sql, params)
+        sent.append(next(c[2] for c in fake.calls if c[0] == "execute"))
+    assert sent == [("5", 1), (None, 2), ("7", 3)]
+
+
+def test_executemany_plan_matches_uncached_path():
+    sql = "INSERT INTO t (a, b, seen) VALUES (?, ?, datetime('now', ? || ' hours'))"
+    converted, casts = db_module._plan_executemany(sql)
+    assert converted == db_module._convert_qmark_to_dollar_params(sql)
+    assert db_module._apply_text_casts(casts, (1, 2, 3)) == db_module._coerce_text_cast_params(converted, (1, 2, 3))
+
+
+def test_statement_cache_is_bounded():
+    assert db_module._plan_statement.cache_parameters()["maxsize"] == db_module._STATEMENT_CACHE_SIZE
+    assert db_module._plan_executemany.cache_parameters()["maxsize"] == db_module._STATEMENT_CACHE_SIZE
+
+
+# -- Pool settings ---------------------------------------------------------------
+
+
+_POOL_ENV = ("APP_DB_POOL_MAX", "APP_DB_POOL_MIN", "APP_DB_POOL_ACQUIRE_TIMEOUT", "APP_DB_STATEMENT_CACHE_SIZE")
+
+
+def test_pool_settings_defaults(monkeypatch):
+    for name in _POOL_ENV:
+        monkeypatch.delenv(name, raising=False)
+    assert db_module._db_pool_settings() == {
+        "min_size": 2,
+        "max_size": 30,
+        "acquire_timeout": 30.0,
+        "statement_cache_size": 500,
+    }
+
+
+def test_pool_settings_read_env(monkeypatch):
+    monkeypatch.setenv("APP_DB_POOL_MAX", "40")
+    monkeypatch.setenv("APP_DB_POOL_MIN", "5")
+    monkeypatch.setenv("APP_DB_POOL_ACQUIRE_TIMEOUT", "12")
+    monkeypatch.setenv("APP_DB_STATEMENT_CACHE_SIZE", "0")
+    assert db_module._db_pool_settings() == {
+        "min_size": 5,
+        "max_size": 40,
+        "acquire_timeout": 12.0,
+        "statement_cache_size": 0,
+    }
+
+
+def test_pool_settings_clamp_and_ignore_garbage(monkeypatch):
+    monkeypatch.setenv("APP_DB_POOL_MAX", "5000")
+    monkeypatch.setenv("APP_DB_POOL_MIN", "999")
+    monkeypatch.setenv("APP_DB_POOL_ACQUIRE_TIMEOUT", "0")
+    monkeypatch.setenv("APP_DB_STATEMENT_CACHE_SIZE", "lots")
+    settings = db_module._db_pool_settings()
+    assert settings["max_size"] == db_module._DB_POOL_MAX_LIMIT < 100
+    assert settings["min_size"] == settings["max_size"]  # min never exceeds max
+    assert settings["acquire_timeout"] == 1.0
+    assert settings["statement_cache_size"] == 500
+
+    monkeypatch.setenv("APP_DB_POOL_MAX", "-3")
+    assert db_module._db_pool_settings()["max_size"] == 1

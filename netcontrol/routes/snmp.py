@@ -990,6 +990,28 @@ def oid_sort_key(oid: str) -> tuple[int, ...]:
     return tuple(int(part) for part in oid.split(".") if part.isdigit())
 
 
+def by_last_index(walk: dict[str, Any], *, first_wins: bool = True) -> dict[str, Any]:
+    """``{last OID component: value}`` of one walked column such as an
+    ifTable column, built in one pass.
+
+    Joining columns per interface with ``oid.endswith("." + idx)`` scanned
+    every column once per interface, quadratic in the interface count and run
+    on the event loop each poll. This is the same match (``"1"`` never takes
+    ``.11``) as a dict lookup. ``first_wins`` keeps the first OID for a
+    repeated index, which is what the ``endswith`` scan with ``break`` took;
+    ``False`` keeps the last, like a plain dict assignment loop.
+    """
+    out: dict[str, Any] = {}
+    for oid, value in walk.items():
+        if "." not in oid:
+            continue
+        idx = oid.rsplit(".", 1)[-1]
+        if not idx or (first_wins and idx in out):
+            continue
+        out[idx] = value
+    return out
+
+
 # ── SNMP trap decoding ───────────────────────────────────────────────────────
 
 SNMP_TRAP_OID = "1.3.6.1.6.3.1.1.4.1.0"  # snmpTrapOID.0
@@ -1239,32 +1261,29 @@ async def _discover_neighbors(
         if idx:
             all_if_indexes.add(idx)
 
+    in_by_idx = by_last_index(in_octets_raw)
+    out_by_idx = by_last_index(out_octets_raw)
+    speed_by_idx = by_last_index(effective_speed)
     for idx in all_if_indexes:
         in_val = 0
         out_val = 0
         speed_mbps = 0
-        for oid, val in in_octets_raw.items():
-            if oid.endswith("." + idx):
-                try:
-                    in_val = int(val)
-                except (ValueError, TypeError) as exc:
-                    LOGGER.debug("topology: bad in-octets value from %s for ifIndex %s: %s", ip_address, idx, exc)
-                break
-        for oid, val in out_octets_raw.items():
-            if oid.endswith("." + idx):
-                try:
-                    out_val = int(val)
-                except (ValueError, TypeError) as exc:
-                    LOGGER.debug("topology: bad out-octets value from %s for ifIndex %s: %s", ip_address, idx, exc)
-                break
-        for oid, val in effective_speed.items():
-            if oid.endswith("." + idx):
-                try:
-                    raw_speed = int(val)
-                    speed_mbps = raw_speed if high_speed_raw else raw_speed // 1_000_000
-                except (ValueError, TypeError) as exc:
-                    LOGGER.debug("topology: bad interface speed value from %s for ifIndex %s: %s", ip_address, idx, exc)
-                break
+        if idx in in_by_idx:
+            try:
+                in_val = int(in_by_idx[idx])
+            except (ValueError, TypeError) as exc:
+                LOGGER.debug("topology: bad in-octets value from %s for ifIndex %s: %s", ip_address, idx, exc)
+        if idx in out_by_idx:
+            try:
+                out_val = int(out_by_idx[idx])
+            except (ValueError, TypeError) as exc:
+                LOGGER.debug("topology: bad out-octets value from %s for ifIndex %s: %s", ip_address, idx, exc)
+        if idx in speed_by_idx:
+            try:
+                raw_speed = int(speed_by_idx[idx])
+                speed_mbps = raw_speed if high_speed_raw else raw_speed // 1_000_000
+            except (ValueError, TypeError) as exc:
+                LOGGER.debug("topology: bad interface speed value from %s for ifIndex %s: %s", ip_address, idx, exc)
 
         if_stats.append(
             {

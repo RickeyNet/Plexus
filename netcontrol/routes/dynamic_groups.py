@@ -105,7 +105,9 @@ async def list_dynamic_groups(request: Request) -> list[dict]:
     among those the caller may read."""
     scope = await request_scope(request)
     groups = await db.list_dynamic_groups()
-    return [_view(g, len(await resolve_hosts(g["filter"], scope))) for g in groups]
+    # One read of the host table for every group, not one per group.
+    hosts = await db.get_all_hosts() if groups else []
+    return [_view(g, len(await resolve_hosts(g["filter"], scope, hosts=hosts))) for g in groups]
 
 
 @router.post(f"{PREFIX}/preview")

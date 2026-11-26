@@ -262,6 +262,11 @@ def _pg_fresh_database(_pg_session_template):
     from netcontrol import hardware_components as _hardware_components
 
     _hardware_components.forget_all()
+    # /api/cloud/topology serves a cached payload for a short time; a test
+    # must not get the payload of the test before it.
+    from netcontrol.routes import cloud_visibility as _cloud_visibility
+
+    _cloud_visibility._snapshot_cache.clear()
     yield
 
 

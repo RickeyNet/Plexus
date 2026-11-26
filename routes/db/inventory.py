@@ -323,20 +323,39 @@ async def _group_chain(db, group_id: int) -> list[dict]:
     return rows_to_list(await cursor.fetchall())
 
 
-# SQL subquery: the ids of a group and of all of its sub-groups, bound to one
-# ``?`` (the group id). Walks ``inventory_groups.parent_id`` down from the
-# group (``_group_chain`` walks up), depth-guarded the same way. Shared by
-# every module that scopes something to "a group and everything under it"
-# (SLA targets, ...); embed it as ``... IN {GROUP_SUBTREE_SQL}``.
-GROUP_SUBTREE_SQL = f"""(
-    WITH RECURSIVE sub (id, lvl) AS (
-        SELECT id, 0 FROM inventory_groups WHERE id = ?
+def _group_subtree_cte(anchor: str) -> str:
+    # Walks ``inventory_groups.parent_id`` down from the groups ``anchor``
+    # selects (``_group_chain`` walks up), depth-guarded the same way.
+    # ``root_id`` carries the anchor group down each walk, so one query over
+    # several roots still tells which root reached each sub-group; ``lvl``
+    # restarts at every root, so each walk keeps the full depth guard.
+    return f"""WITH RECURSIVE sub (root_id, id, lvl) AS (
+        SELECT id, id, 0 FROM inventory_groups WHERE {anchor}
         UNION ALL
-        SELECT g.id, s.lvl + 1 FROM inventory_groups g JOIN sub s ON g.parent_id = s.id
+        SELECT s.root_id, g.id, s.lvl + 1 FROM inventory_groups g JOIN sub s ON g.parent_id = s.id
         WHERE s.lvl < {_MAX_GROUP_DEPTH}
-    )
+    )"""
+
+
+# SQL subquery: the ids of a group and of all of its sub-groups, bound to one
+# ``?`` (the group id). Shared by every module that scopes something to "a
+# group and everything under it" (SLA targets, ...); embed it as
+# ``... IN {GROUP_SUBTREE_SQL}``. Several roots at once: ``group_subtrees_sql``.
+GROUP_SUBTREE_SQL = f"""(
+    {_group_subtree_cte("id = ?")}
     SELECT id FROM sub
 )"""
+
+
+def group_subtrees_sql(count: int) -> str:
+    """A query of ``(root_id, id)`` rows: each of ``count`` root groups (one
+    ``?`` each) paired with itself and every one of its sub-groups. Unknown
+    roots yield no row; a group under two roots appears once per root. One
+    round trip for what ``GROUP_SUBTREE_SQL`` does per root."""
+    if count < 1:
+        raise ValueError("group_subtrees_sql needs at least one root")
+    anchor = f"id IN ({','.join('?' * count)})"
+    return f"{_group_subtree_cte(anchor)}\nSELECT root_id, id FROM sub"
 
 
 def group_ids_condition(column: str, group_ids: Iterable[int] | None) -> tuple[str, tuple[int, ...]]:

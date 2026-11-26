@@ -19,6 +19,7 @@ import asyncio
 import json
 import socket
 import struct
+import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 
@@ -80,6 +81,17 @@ FLOW_DECODE_QUEUE_MAX_BYTES = 16 * 1024 * 1024
 FLOW_DECODE_BATCH_MAX = 64
 # Datagrams dropped because a decode queue was full, since Plexus started.
 _decode_queue_dropped = 0
+# Most decoded flow records one listener buffers for the database. One flush
+# runs at a time, so while the database is slow records pile up here; past
+# the cap the newest are dropped and counted (as the trap/syslog buffer does,
+# metrics_engine._TRAP_EVENT_BUFFER_MAX).
+FLOW_BUFFER_MAX = 50000
+# Records dropped because a buffer was full: since the last warning (logged
+# at most once per listener_sources.DROP_LOG_INTERVAL_SECONDS) and since
+# Plexus started.
+_flow_records_dropped = 0
+_flow_records_dropped_total = 0
+_flow_drop_logged_at = float("-inf")
 # One thread decodes for both listeners, one batch at a time: the parsers'
 # state (_nf9_templates, _sflow_sampling_rates) is only ever written from
 # this thread, and a flood cannot occupy the shared asyncio.to_thread pool
@@ -726,6 +738,9 @@ class _FlowCollectorProtocol(asyncio.DatagramProtocol):
     def __init__(self, mode: str = "netflow"):
         self.mode = mode
         self._buffer: list[tuple] = []
+        # True while a flush runs: it loops until the buffer is empty, so a
+        # batch stored meanwhile waits for it instead of a second writer.
+        self._flushing = False
         self._flush_task: asyncio.Task | None = None
         # (datagram, source address) waiting to be decoded; bounded in count
         # (FLOW_DECODE_QUEUE_MAX) and in bytes (FLOW_DECODE_QUEUE_MAX_BYTES).
@@ -798,7 +813,9 @@ class _FlowCollectorProtocol(asyncio.DatagramProtocol):
     def _store(self, decoded: list[tuple[tuple, list[dict], int]]) -> None:
         """Buffer the decoded records and count each packet for its exporter
         (on the event loop: the exporter cache and the pending stats are
-        only touched here)."""
+        only touched here). A record that does not fit (``FLOW_BUFFER_MAX``)
+        is dropped and counted."""
+        global _flow_records_dropped, _flow_records_dropped_total
         for addr, records, sampling_rate in decoded:
             exporter_ip = addr[0]
             host_id = _exporter_cache.get(exporter_ip)
@@ -806,6 +823,10 @@ class _FlowCollectorProtocol(asyncio.DatagramProtocol):
             last_record_at = records[-1].get("end_time")
 
             for rec in records:
+                if len(self._buffer) >= FLOW_BUFFER_MAX:
+                    _flow_records_dropped += 1
+                    _flow_records_dropped_total += 1
+                    continue
                 self._buffer.append(
                     (
                         rec["exporter_ip"],
@@ -835,8 +856,8 @@ class _FlowCollectorProtocol(asyncio.DatagramProtocol):
             # the hot UDP path never touches the writer lock.
             _note_exporter_packet(exporter_ip, flow_type, host_id, last_record_at, sampling_rate)
 
-        # One flush task per batch: it takes the whole buffer when it runs.
-        if len(self._buffer) >= FLOW_COLLECTOR_CONFIG.get("batch_size", 100):
+        # A flush already running picks these records up before it ends.
+        if not self._flushing and len(self._buffer) >= FLOW_COLLECTOR_CONFIG.get("batch_size", 100):
             self._spawn(self._flush_buffer())
 
     def _spawn(self, coro) -> None:
@@ -847,16 +868,26 @@ class _FlowCollectorProtocol(asyncio.DatagramProtocol):
         task.add_done_callback(self._bg_tasks.discard)
 
     async def _flush_buffer(self):
-        if not self._buffer:
+        """Write the buffer to the database. One flush at a time per
+        listener: a call while one runs returns at once, and the running one
+        keeps taking the buffer until it is empty, so no record is left
+        behind and a slow database never has a pile of writers queued on it."""
+        if self._flushing:
             return
-        batch = self._buffer[:]
-        self._buffer.clear()
+        self._flushing = True
         try:
-            count = await db.create_flow_records_batch(batch)
-            if count > 0:
-                LOGGER.debug("flow_collector: flushed %d flow records", count)
-        except Exception as exc:
-            LOGGER.warning("flow_collector: flush error: %s", str(exc))
+            while self._buffer:
+                batch = self._buffer[:]
+                self._buffer.clear()
+                try:
+                    count = await db.create_flow_records_batch(batch)
+                    if count > 0:
+                        LOGGER.debug("flow_collector: flushed %d flow records", count)
+                except Exception as exc:
+                    LOGGER.warning("flow_collector: flush error: %s", str(exc))
+        finally:
+            self._flushing = False
+        _log_flow_records_dropped()
 
     async def _periodic_flush(self):
         """Flush buffer and pending exporter stats periodically (every 10 seconds)."""
@@ -1154,6 +1185,10 @@ async def flow_aggregation_cycle():
     cleaned = await db.cleanup_old_flow_records(retention_hours)
     if cleaned > 0:
         LOGGER.info("flow_collector: cleaned up %d old flow records", cleaned)
+    summary_days = int(FLOW_COLLECTOR_CONFIG.get("summary_retention_days", 30))
+    cleaned = await db.cleanup_old_flow_summaries(summary_days)
+    if cleaned > 0:
+        LOGGER.info("flow_collector: cleaned up %d old flow summaries", cleaned)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -1260,13 +1295,30 @@ async def api_flow_status():
 
 def _drop_counters() -> dict[str, int]:
     """Datagrams the listener allowlist and rate limit dropped, and those
-    dropped because a decode queue was full, since start."""
+    dropped because a decode queue was full, and the flow records dropped
+    because a buffer was full, since start."""
     stats = _flow_guard.stats()
     return {
         "dropped_source": stats["dropped_source"],
         "dropped_rate": stats["dropped_rate"],
         "dropped_queue": _decode_queue_dropped,
+        "dropped_buffer": _flow_records_dropped_total,
     }
+
+
+def _log_flow_records_dropped() -> None:
+    """Warn about records dropped at a full buffer, at most once per
+    ``listener_sources.DROP_LOG_INTERVAL_SECONDS`` (a flood would otherwise
+    log on every flush)."""
+    global _flow_records_dropped, _flow_drop_logged_at
+    if not _flow_records_dropped:
+        return
+    now = time.monotonic()
+    if now - _flow_drop_logged_at < listener_sources.DROP_LOG_INTERVAL_SECONDS:
+        return
+    LOGGER.warning("flow_collector: flow record buffer full - dropped %d records", _flow_records_dropped)
+    _flow_records_dropped = 0
+    _flow_drop_logged_at = now
 
 
 @router.get("/api/flows/exporters")

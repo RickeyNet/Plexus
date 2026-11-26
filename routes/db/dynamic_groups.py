@@ -13,7 +13,7 @@ from datetime import UTC, datetime
 
 import routes.database as _dbcore
 from routes.database import _is_unique_violation, _safe_dynamic_update, row_to_dict, rows_to_list
-from routes.db.inventory import GROUP_SUBTREE_SQL
+from routes.db.inventory import group_subtrees_sql
 
 __all__ = [
     "list_dynamic_groups",
@@ -155,11 +155,8 @@ async def get_group_subtree_ids(group_ids: Iterable[int]) -> set[int]:
         return result
     db = await _dbcore.get_db(read_only=True)
     try:
-        for group_id in ids:
-            if group_id in result:
-                continue
-            cursor = await db.execute(f"SELECT id FROM inventory_groups WHERE id IN {GROUP_SUBTREE_SQL}", (group_id,))  # nosec B608 - fixed subquery
-            result.update(int(r["id"]) for r in rows_to_list(await cursor.fetchall()))
+        cursor = await db.execute(group_subtrees_sql(len(ids)), tuple(ids))
+        result.update(int(r["id"]) for r in rows_to_list(await cursor.fetchall()))
     finally:
         await db.close()
     return result

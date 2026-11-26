@@ -33,7 +33,7 @@ from routes.database import (
     row_to_dict,
     rows_to_list,
 )
-from routes.db.inventory import GROUP_SUBTREE_SQL
+from routes.db.inventory import group_subtrees_sql
 
 __all__ = [
     "get_user_by_username",
@@ -598,15 +598,18 @@ async def get_user_object_scope(user_id: int) -> dict:
         grants = [(int(r[0]), bool(r[1])) for r in await cursor.fetchall()]
         read: set[int] = set()
         write: set[int] = set()
-        for group_id, can_write in grants:
+        if grants:
+            # Every grant's subtree in one query; ``root_id`` names the grant
+            # that reached each group, so write follows the covering grants.
+            writable_roots = {group_id for group_id, can_write in grants if can_write}
             sub = await db.execute(
-                f"SELECT id FROM inventory_groups WHERE id IN {GROUP_SUBTREE_SQL}",  # noqa: S608  # nosec B608 - fixed SQL
-                (group_id,),
+                group_subtrees_sql(len(grants)),
+                tuple(group_id for group_id, _ in grants),
             )
-            ids = {int(r[0]) for r in await sub.fetchall()}
-            read |= ids
-            if can_write:
-                write |= ids
+            for root_id, group_id in ((int(r[0]), int(r[1])) for r in await sub.fetchall()):
+                read.add(group_id)
+                if root_id in writable_roots:
+                    write.add(group_id)
     finally:
         await db.close()
     return {"unrestricted": False, "read_group_ids": sorted(read), "write_group_ids": sorted(write)}

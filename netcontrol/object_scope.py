@@ -434,6 +434,27 @@ async def request_scope(request: Any) -> ObjectScope:
     return scope
 
 
+async def scope_for_request_user(user: dict | None, request: Any = None) -> ObjectScope:
+    """``scope_for_user(user)``, computed once per request when ``request``
+    is the HTTP request ``user`` is making: its ``require_auth`` session
+    names this user and ``user`` is the very row cached on
+    ``request.state.auth_user``. ``request_scope`` would then build the same
+    scope from that row, so it builds it here and caches it for the request.
+    Any other caller (no request, an API token, another user or a reloaded
+    row) gets a fresh ``scope_for_user``."""
+    if user and isinstance(request, HTTPConnection):
+        session = getattr(request.state, "auth_session", None)
+        if (
+            isinstance(session, dict)
+            and session.get("auth_mode") != "token"
+            and session.get("user_id") is not None
+            and int(session["user_id"]) == int(user["id"])
+            and getattr(request.state, "auth_user", None) is user
+        ):
+            return await request_scope(request)
+    return await scope_for_user(user)
+
+
 async def ws_scope(session: dict) -> ObjectScope:
     """The scope of a WebSocket caller (``session`` from ``verify_ws_session``)."""
     if not session:

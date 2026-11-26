@@ -86,3 +86,32 @@ def test_new_run_dir_is_private_swept_first_and_released(backend, tmp_path, monk
         backend.remove_run_dir(path)
     assert not os.path.exists(path)
     assert path not in backend._ACTIVE_RUN_DIRS
+
+
+async def test_a_run_reads_its_events_and_files_off_the_event_loop(backend, tmp_path, monkeypatch):
+    import threading
+
+    monkeypatch.setattr(backend.tempfile, "tempdir", str(tmp_path))
+    loop_thread = threading.get_ident()
+    event_threads: list[int] = []
+
+    class _Runner:
+        status = "successful"
+
+        @property
+        def events(self):
+            event_threads.append(threading.get_ident())
+            yield {"event": "runner_on_ok", "event_data": {"host": "sw-a", "task": "t", "res": {}}}
+
+    def fake_run(**kwargs):
+        assert os.path.exists(os.path.join(kwargs["private_data_dir"], "project", "playbook.yml"))
+        return _Runner()
+
+    monkeypatch.setattr(backend.ansible_runner, "run", fake_run, raising=False)
+    result = await backend.execute_ansible_playbook(
+        "- hosts: all\n", [{"ip_address": "192.0.2.5", "hostname": "sw-a"}], {"username": "u", "password": "p"}
+    )
+    assert result.status == "success" and result.hosts_ok == 1
+    assert event_threads and event_threads[0] != loop_thread
+    assert not backend._ACTIVE_RUN_DIRS
+    assert not [p for p in tmp_path.iterdir() if p.name.startswith(backend.RUN_DIR_PREFIX)]

@@ -2265,16 +2265,7 @@ async def prune_ip_history(retention_days: int = 365) -> int:
     if retention_days <= 0:
         return 0
     cutoff = (datetime.now(UTC).replace(tzinfo=None) - timedelta(days=int(retention_days))).isoformat()
-    db = await _dbcore.get_db()
-    try:
-        cur = await db.execute(
-            "DELETE FROM ipam_ip_history WHERE ended_at IS NOT NULL AND ended_at < ?",
-            (cutoff,),
-        )
-        await db.commit()
-        return int(cur.rowcount or 0)
-    finally:
-        await db.close()
+    return await _dbcore.chunked_delete("ipam_ip_history", "ended_at IS NOT NULL AND ended_at < ?", (cutoff,))
 
 
 async def prune_subnet_utilization(retention_days: int = 365) -> int:
@@ -2282,16 +2273,7 @@ async def prune_subnet_utilization(retention_days: int = 365) -> int:
     if retention_days <= 0:
         return 0
     cutoff = (datetime.now(UTC).replace(tzinfo=None) - timedelta(days=int(retention_days))).isoformat()
-    db = await _dbcore.get_db()
-    try:
-        cur = await db.execute(
-            "DELETE FROM ipam_subnet_utilization WHERE captured_at < ?",
-            (cutoff,),
-        )
-        await db.commit()
-        return int(cur.rowcount or 0)
-    finally:
-        await db.close()
+    return await _dbcore.chunked_delete("ipam_subnet_utilization", "captured_at < ?", (cutoff,))
 
 
 # ─────────────────────────────────────────────────────────────────────────────

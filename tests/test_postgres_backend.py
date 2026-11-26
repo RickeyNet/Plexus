@@ -8,10 +8,13 @@ disposes them all after each test.
 from __future__ import annotations
 
 import asyncio
+import importlib
 from datetime import UTC, datetime
 
 import pytest
 import routes.database as db_module
+
+import pg_raw
 
 
 @pytest.mark.asyncio
@@ -245,3 +248,63 @@ async def test_postgres_meraki_compliance_assignment_and_results():
             await db_module.delete_meraki_compliance_assignment(assignment_id)
         await db_module.delete_meraki_org(org_ref)
         await db_module.delete_compliance_profile(profile_id)
+
+
+_PERF_INDEXES = {
+    "idx_avail_transitions_poll": ("availability_transitions", "(poll_id)", None),
+    "idx_monitoring_alerts_open_dedup": ("monitoring_alerts", "(dedup_key)", "acknowledged = 0"),
+    "idx_monitoring_alerts_open_host_metric": ("monitoring_alerts", "(host_id, metric)", "acknowledged = 0"),
+    "idx_mac_history_host_mac": ("mac_tracking_history", "(host_id, mac_address, id)", None),
+    "idx_mac_history_seen_at": ("mac_tracking_history", "(seen_at)", None),
+    "idx_route_snapshots_host_id": ("route_snapshots", "(host_id, id)", None),
+    "idx_config_backups_host_id": ("config_backups", "(host_id, id)", None),
+}
+_DROPPED_FLOW_INDEXES = {"idx_flow_src", "idx_flow_dst"}
+
+
+async def _index_defs() -> dict[str, tuple[str, str]]:
+    rows = await pg_raw.fetch(
+        "SELECT indexname, tablename, indexdef FROM pg_indexes WHERE schemaname = current_schema()"
+    )
+    return {r["indexname"]: (r["tablename"], r["indexdef"]) for r in rows}
+
+
+def _assert_perf_indexes(defs: dict[str, tuple[str, str]]) -> None:
+    for name, (table, cols, predicate) in _PERF_INDEXES.items():
+        assert name in defs, name
+        defined_on, indexdef = defs[name]
+        assert defined_on == table
+        assert cols in indexdef, indexdef
+        if predicate:
+            assert f"WHERE ({predicate})" in indexdef, indexdef
+        else:
+            assert "WHERE" not in indexdef, indexdef
+    assert not _DROPPED_FLOW_INDEXES & defs.keys()
+
+
+@pytest.mark.asyncio
+async def test_init_db_creates_hot_path_indexes_and_drops_unused_flow_ones():
+    await db_module.init_db()
+    _assert_perf_indexes(await _index_defs())
+
+
+@pytest.mark.asyncio
+async def test_migration_0142_upgrades_an_existing_database():
+    migration = importlib.import_module("routes.migrations.0142_add_perf_indexes_drop_unused_flow_indexes")
+    await db_module.init_db()
+    # Put the indexes back the way a database from before 0142 had them.
+    for name in _PERF_INDEXES:
+        await pg_raw.execute(f"DROP INDEX {name}")
+    await pg_raw.execute("CREATE INDEX idx_flow_src ON flow_records(src_ip, received_at)")
+    await pg_raw.execute("CREATE INDEX idx_flow_dst ON flow_records(dst_ip, received_at)")
+    db = await db_module.get_db()
+    try:
+        await migration.up(db)
+        await migration.up(db)  # re-running is a no-op
+    finally:
+        await db.close()
+    _assert_perf_indexes(await _index_defs())
+    # Startup re-applies SCHEMA on every boot; it must not bring the flow indexes back.
+    await db_module.init_db()
+    _assert_perf_indexes(await _index_defs())
+    assert migration.VERSION == 142

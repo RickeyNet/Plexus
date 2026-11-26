@@ -121,18 +121,21 @@ export function SlaTargetsTab() {
         </div>
       )}
 
-      <SlaTargetFormModal
-        target={editing}
-        isCreate={creating}
-        onClose={() => { setEditing(null); setCreating(false); }}
-      />
+      {/* Mounted only while open so its inventory query does not run behind a closed modal. */}
+      {(creating || editing) && (
+        <SlaTargetFormModal
+          key={editing?.id ?? 'new'}
+          target={editing}
+          onClose={() => { setEditing(null); setCreating(false); }}
+        />
+      )}
     </div>
   );
 }
 
-function SlaTargetFormModal({ target, isCreate, onClose }: { target: SlaTarget | null; isCreate: boolean; onClose: () => void }) {
+// The parent mounts this per open, keyed by target, so the form starts from the target each time.
+function SlaTargetFormModal({ target, onClose }: { target: SlaTarget | null; onClose: () => void }) {
   const formId = useId();
-  const isOpen = isCreate || target != null;
   const createMut = useCreateSlaTarget();
   const updateMut = useUpdateSlaTarget();
   const groups = useInventoryGroupsFull(true);
@@ -141,44 +144,29 @@ function SlaTargetFormModal({ target, isCreate, onClose }: { target: SlaTarget |
     [groups.data],
   );
 
-  const [name, setName] = useState('');
-  const [metric, setMetric] = useState('uptime');
-  const [targetValue, setTargetValue] = useState('99.9');
-  const [warningValue, setWarningValue] = useState('99.0');
-  const [windowDays, setWindowDays] = useState(String(DEFAULT_WINDOW_DAYS));
-  const [scope, setScope] = useState<TargetScope>('global');
-  const [groupId, setGroupId] = useState('');
-  const [hostId, setHostId] = useState('');
-  const [provider, setProvider] = useState('');
-  const [entityType, setEntityType] = useState('');
+  const [name, setName] = useState(target?.name ?? '');
+  const [metric, setMetric] = useState(target?.metric ?? 'uptime');
+  const [targetValue, setTargetValue] = useState(target ? String(target.target_value) : '99.9');
+  const [warningValue, setWarningValue] = useState(target ? String(target.warning_value) : '99.0');
+  const [windowDays, setWindowDays] = useState(String(target?.window_days ?? DEFAULT_WINDOW_DAYS));
+  const [scope, setScope] = useState<TargetScope>(() => {
+    if (target?.provider) return 'integration';
+    if (target?.host_id != null) return 'host';
+    if (target?.group_id != null) return 'group';
+    return 'global';
+  });
+  const [groupId, setGroupId] = useState(
+    target && !target.provider && target.host_id == null && target.group_id != null ? String(target.group_id) : '',
+  );
+  const [hostId, setHostId] = useState(
+    target && !target.provider && target.host_id != null ? String(target.host_id) : '',
+  );
+  const [provider, setProvider] = useState(target?.provider ?? '');
+  const [entityType, setEntityType] = useState(target?.entity_type ?? '');
   const [providerError, setProviderError] = useState('');
   const [nameError, setNameError] = useState('');
   const [windowError, setWindowError] = useState('');
   const [saveError, setSaveError] = useState('');
-
-  const [prevTarget, setPrevTarget] = useState(target);
-  const [prevIsCreate, setPrevIsCreate] = useState(isCreate);
-  if (target !== prevTarget || isCreate !== prevIsCreate) {
-    setPrevTarget(target);
-    setPrevIsCreate(isCreate);
-    setNameError(''); setWindowError(''); setProviderError(''); setSaveError('');
-    setProvider(target?.provider ?? ''); setEntityType(target?.entity_type ?? '');
-    if (target) {
-      setName(target.name);
-      setMetric(target.metric);
-      setTargetValue(String(target.target_value));
-      setWarningValue(String(target.warning_value));
-      setWindowDays(String(target.window_days ?? DEFAULT_WINDOW_DAYS));
-      if (target.provider) { setScope('integration'); setHostId(''); setGroupId(''); }
-      else if (target.host_id != null) { setScope('host'); setHostId(String(target.host_id)); setGroupId(''); }
-      else if (target.group_id != null) { setScope('group'); setGroupId(String(target.group_id)); setHostId(''); }
-      else { setScope('global'); setHostId(''); setGroupId(''); }
-    } else if (isCreate) {
-      setName(''); setMetric('uptime'); setTargetValue('99.9'); setWarningValue('99.0');
-      setWindowDays(String(DEFAULT_WINDOW_DAYS));
-      setScope('global'); setGroupId(''); setHostId('');
-    }
-  }
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
@@ -219,7 +207,7 @@ function SlaTargetFormModal({ target, isCreate, onClose }: { target: SlaTarget |
 
   return (
     <Modal
-      isOpen={isOpen}
+      isOpen
       onClose={onClose}
       title={target ? 'Edit SLA Target' : 'New SLA Target'}
       footer={

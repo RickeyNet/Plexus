@@ -42,6 +42,7 @@ from netcontrol.routes.cloud_collectors import (
     with_skipped_note,
 )
 from netcontrol.routes.shared import _audit, _corr_id, _get_session, admin_session
+from netcontrol.secrets_providers.base import TTLCache
 from netcontrol.telemetry import configure_logging
 
 router = APIRouter()
@@ -119,10 +120,27 @@ _PROVIDER_INFO = {
 
 
 def _topology_changed() -> None:
-    """AWS and Azure discovery feed the Topology map; drop its cached graph."""
+    """AWS and Azure discovery feed the Topology map; drop its cached graph
+    and the cached cloud topology payloads."""
     from netcontrol.routes.topology import invalidate_topology_cache
 
+    global _snapshot_generation
     invalidate_topology_cache()
+    _snapshot_generation += 1
+    _snapshot_cache.clear()
+
+
+# The /api/cloud/topology payload per (account_id, provider) query. The UI
+# re-reads it on every view and refresh, and each read is four table scans
+# that decode every row's metadata. Entries hold unscoped data only: the
+# endpoint decides a scoped caller sees nothing (_hidden) before the cache is
+# asked, so no caller can be served a view meant for another. Writes here
+# clear it (_topology_changed); the TTL bounds what another process wrote.
+_SNAPSHOT_CACHE_TTL_SECONDS = 20.0
+_snapshot_cache = TTLCache(max_entries=64)
+# Bumped by every clear: a read that started before a write does not store
+# what it read after the write cleared the cache.
+_snapshot_generation = 0
 
 
 async def _availability_changed(provider: str | None) -> None:
@@ -297,27 +315,12 @@ def _serialize_account(account: dict) -> dict:
     return item
 
 
-def _serialize_resource(resource: dict) -> dict:
-    item = dict(resource)
-    item["metadata"] = _json_loads_safe(item.get("metadata_json"), {})
-    return item
-
-
-def _serialize_connection(connection: dict) -> dict:
-    item = dict(connection)
-    item["metadata"] = _json_loads_safe(item.get("metadata_json"), {})
-    return item
-
-
-def _serialize_hybrid_link(link: dict) -> dict:
-    item = dict(link)
-    item["metadata"] = _json_loads_safe(item.get("metadata_json"), {})
-    return item
-
-
-def _serialize_policy_rule(rule: dict) -> dict:
-    item = dict(rule)
-    item["metadata"] = _json_loads_safe(item.get("metadata_json"), {})
+def _with_metadata(row: dict) -> dict:
+    """A cloud resource, connection, hybrid link or policy rule row with its
+    ``metadata_json`` decoded into ``metadata``. The raw string is dropped:
+    no client reads it, and it doubled every row's metadata on the wire."""
+    item = dict(row)
+    item["metadata"] = _json_loads_safe(item.pop("metadata_json", None), {})
     return item
 
 
@@ -1354,6 +1357,7 @@ async def create_cloud_account_api(body: CloudAccountCreate, request: Request):
     )
     if not account:
         raise HTTPException(status_code=500, detail="Failed to create cloud account")
+    _topology_changed()
 
     await _audit(
         "cloud_visibility",
@@ -2005,7 +2009,7 @@ async def cloud_resources_api(
         provider=normalized_provider,
         resource_type=(resource_type.strip() if resource_type else None),
     )
-    return {"resources": [_serialize_resource(r) for r in resources], "count": len(resources)}
+    return {"resources": [_with_metadata(r) for r in resources], "count": len(resources)}
 
 
 @router.get("/api/cloud/connections")
@@ -2023,7 +2027,7 @@ async def cloud_connections_api(
     if await _hidden(request):
         return {"connections": [], "count": 0}
     connections = await db.get_cloud_connections(account_id=account_id, provider=normalized_provider)
-    return {"connections": [_serialize_connection(c) for c in connections], "count": len(connections)}
+    return {"connections": [_with_metadata(c) for c in connections], "count": len(connections)}
 
 
 @router.get("/api/cloud/hybrid-links")
@@ -2041,7 +2045,7 @@ async def cloud_hybrid_links_api(
     if await _hidden(request):
         return {"links": [], "count": 0}
     links = await db.get_cloud_hybrid_links(account_id=account_id, provider=normalized_provider)
-    return {"links": [_serialize_hybrid_link(link) for link in links], "count": len(links)}
+    return {"links": [_with_metadata(link) for link in links], "count": len(links)}
 
 
 @router.get("/api/cloud/policies/rules")
@@ -2089,7 +2093,7 @@ async def cloud_policy_rules_api(
         action=normalized_action,
         limit=limit_value,
     )
-    return {"rules": [_serialize_policy_rule(rule) for rule in rules], "count": len(rules)}
+    return {"rules": [_with_metadata(rule) for rule in rules], "count": len(rules)}
 
 
 @router.get("/api/cloud/policies/effective")
@@ -2126,14 +2130,25 @@ async def cloud_topology_api(
     if await _hidden(request):
         # The snapshot of an account that does not exist: empty, same shape.
         account_id = _NO_ACCOUNT
+    # Keyed by the query alone: the scope decision is made above, and a
+    # scoped caller only ever reaches the _NO_ACCOUNT entry, which is empty.
+    key = (account_id, normalized_provider)
+    payload = _snapshot_cache.get(key)
+    if payload is not None:
+        return payload
+    generation = _snapshot_generation
     snapshot = await db.get_cloud_topology_snapshot(account_id=account_id, provider=normalized_provider)
-    return {
+    payload = {
         "accounts": [_serialize_account(a) for a in snapshot.get("accounts", []) if a],
-        "resources": [_serialize_resource(r) for r in snapshot.get("resources", [])],
-        "connections": [_serialize_connection(c) for c in snapshot.get("connections", [])],
-        "hybrid_links": [_serialize_hybrid_link(link) for link in snapshot.get("hybrid_links", [])],
+        "resources": [_with_metadata(r) for r in snapshot.get("resources", [])],
+        "connections": [_with_metadata(c) for c in snapshot.get("connections", [])],
+        "hybrid_links": [_with_metadata(link) for link in snapshot.get("hybrid_links", [])],
         "summary": snapshot.get("summary", {}),
     }
+    # A write that cleared the cache while this read ran may not be in it.
+    if generation == _snapshot_generation:
+        _snapshot_cache.set(key, payload, _SNAPSHOT_CACHE_TTL_SECONDS)
+    return payload
 
 
 # ═══════════════════════════════════════════════════════════════════════════

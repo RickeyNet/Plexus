@@ -363,3 +363,24 @@ def test_graphql_dynamic_groups_members_are_scope_filtered(admin):
     assert limited.status_code == 200, limited.text
     members = limited.json()["data"]["dynamicGroups"][0]["members"]
     assert {int(m["id"]) for m in members} == {t["ha"]}
+
+
+def test_list_reads_the_host_table_once(admin, monkeypatch):
+    _tree(admin)
+    for name in ("once-a", "once-b", "once-c"):
+        resp = admin.post(API, json={"name": name, "filter": {"search": {"value": "sw-"}}})
+        assert resp.status_code == 201, resp.text
+    real = db_module.get_all_hosts
+    calls = 0
+
+    async def counting(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return await real(*args, **kwargs)
+
+    monkeypatch.setattr(db_module, "get_all_hosts", counting)
+    listed = admin.get(API)
+    assert listed.status_code == 200, listed.text
+    assert calls == 1
+    counts = {g["name"]: g["member_count"] for g in listed.json()}
+    assert [counts[name] for name in ("once-a", "once-b", "once-c")] == [2, 2, 2]

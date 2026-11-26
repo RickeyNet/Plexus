@@ -54,12 +54,14 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import functools
 import hashlib
 import ipaddress
 import json
 import os
 import re
 from datetime import UTC, datetime, timedelta
+from typing import NamedTuple
 
 try:
     import asyncpg
@@ -663,6 +665,9 @@ CREATE TABLE IF NOT EXISTS config_backups (
     config_text_enc TEXT    NOT NULL DEFAULT '',
     config_text_digest TEXT NOT NULL DEFAULT ''
 );
+-- Newest backup per host (ORDER BY id DESC LIMIT 1) and the retention
+-- delete's "a newer success exists" probe.
+CREATE INDEX IF NOT EXISTS idx_config_backups_host_id ON config_backups(host_id, id);
 
 CREATE TABLE IF NOT EXISTS compliance_profiles (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -839,6 +844,12 @@ CREATE TABLE IF NOT EXISTS monitoring_alerts (
     escalated_at    TEXT,
     created_at      TEXT    NOT NULL DEFAULT (datetime('now'))
 );
+-- Open alerts only: dedup and resolve look up unacknowledged rows, which
+-- stay few while acknowledged ones accumulate until retention.
+CREATE INDEX IF NOT EXISTS idx_monitoring_alerts_open_dedup
+    ON monitoring_alerts (dedup_key) WHERE acknowledged = 0;
+CREATE INDEX IF NOT EXISTS idx_monitoring_alerts_open_host_metric
+    ON monitoring_alerts (host_id, metric) WHERE acknowledged = 0;
 
 CREATE TABLE IF NOT EXISTS route_snapshots (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -848,6 +859,7 @@ CREATE TABLE IF NOT EXISTS route_snapshots (
     routes_hash     TEXT    NOT NULL DEFAULT '',
     captured_at     TEXT    NOT NULL DEFAULT (datetime('now'))
 );
+CREATE INDEX IF NOT EXISTS idx_route_snapshots_host_id ON route_snapshots(host_id, id);
 
 CREATE TABLE IF NOT EXISTS alert_rules (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1058,6 +1070,9 @@ CREATE TABLE IF NOT EXISTS availability_transitions (
 
 CREATE INDEX IF NOT EXISTS idx_avail_transitions_host
     ON availability_transitions (host_id, entity_type, transition_at);
+-- poll_id is ON DELETE SET NULL: poll retention deletes look rows up by it.
+CREATE INDEX IF NOT EXISTS idx_avail_transitions_poll
+    ON availability_transitions (poll_id);
 
 CREATE TABLE IF NOT EXISTS custom_oid_profiles (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1311,6 +1326,8 @@ CREATE TABLE IF NOT EXISTS mac_tracking_history (
     seen_at         TEXT    NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_mac_history_mac ON mac_tracking_history(mac_address, seen_at);
+CREATE INDEX IF NOT EXISTS idx_mac_history_host_mac ON mac_tracking_history(host_id, mac_address, id);
+CREATE INDEX IF NOT EXISTS idx_mac_history_seen_at ON mac_tracking_history(seen_at);
 
 -- ── MAC move events (drift-style change tracking) ────────────────────────
 -- One row per detected MAC relocation -- the switch, port, VLAN or IP
@@ -1378,8 +1395,6 @@ CREATE TABLE IF NOT EXISTS flow_records (
 );
 CREATE INDEX IF NOT EXISTS idx_flow_received ON flow_records(received_at);
 CREATE INDEX IF NOT EXISTS idx_flow_exporter ON flow_records(exporter_ip, received_at);
-CREATE INDEX IF NOT EXISTS idx_flow_src ON flow_records(src_ip, received_at);
-CREATE INDEX IF NOT EXISTS idx_flow_dst ON flow_records(dst_ip, received_at);
 CREATE INDEX IF NOT EXISTS idx_flow_records_flow_type_received ON flow_records(flow_type, received_at);
 CREATE INDEX IF NOT EXISTS idx_flow_host_received ON flow_records(host_id, received_at);
 
@@ -2517,12 +2532,7 @@ def _convert_sqlite_ddl_to_postgres(query: str) -> str:
     ``_convert_sqlite_schema_to_postgres`` but is applied per-query inside
     ``_PostgresConnectionCompat.execute`` for DDL statements.
     """
-    converted = query
-    converted = converted.replace("INTEGER PRIMARY KEY AUTOINCREMENT", "SERIAL PRIMARY KEY")
-    converted = converted.replace("DEFAULT (datetime('now'))", "DEFAULT NOW()")
-    converted = converted.replace(" BLOB", " BYTEA")
-    converted = _REAL_TYPE_RE.sub("DOUBLE PRECISION", converted)
-    return converted
+    return _convert_sqlite_schema_to_postgres(query)
 
 
 # Table name of a single-row INSERT, including SQLite's conflict-clause forms
@@ -2595,13 +2605,74 @@ class _PostgresCursorCompat:
 _TEXT_CAST_PARAM_RE = re.compile(r"\$(\d+)::text\b")
 
 
-def _coerce_text_cast_params(converted: str, params: tuple) -> tuple:
-    indexes = {int(m.group(1)) - 1 for m in _TEXT_CAST_PARAM_RE.finditer(converted)}
+def _text_cast_param_indexes(converted: str) -> frozenset[int]:
+    """0-based positions of the parameters ``converted`` casts to text."""
+    return frozenset(int(m.group(1)) - 1 for m in _TEXT_CAST_PARAM_RE.finditer(converted))
+
+
+def _apply_text_casts(indexes: frozenset[int], params: tuple) -> tuple:
     if not indexes:
         return params
     return tuple(
         str(v) if i in indexes and v is not None and not isinstance(v, str) else v for i, v in enumerate(params)
     )
+
+
+def _coerce_text_cast_params(converted: str, params: tuple) -> tuple:
+    return _apply_text_casts(_text_cast_param_indexes(converted), params)
+
+
+class _StatementPlan(NamedTuple):
+    """A statement's Postgres translation, a function of its SQL text only.
+
+    ``kind`` picks the asyncpg call: ``"read"`` (SELECT/WITH, fetched
+    outside the implicit transaction), ``"returning"`` (fetched inside it)
+    or ``"write"`` (executed inside it). ``text_casts`` are the parameter
+    positions bound as their string form on every call."""
+
+    sql: str
+    kind: str
+    text_casts: frozenset[int]
+
+
+# Translation is a few dozen regex passes per statement, and the app runs a
+# small set of distinct statements over and over. Bounded because callers
+# that build SQL with an IN (?, ?, ...) list of varying length produce a new
+# text per length.
+_STATEMENT_CACHE_SIZE = 4096
+
+
+@functools.lru_cache(maxsize=_STATEMENT_CACHE_SIZE)
+def _plan_statement(query: str) -> _StatementPlan:
+    query_stripped = query.strip()
+    query_upper = query_stripped.upper()
+
+    # Migrations are written in the SQLite-style DDL dialect. Transparently convert
+    # CREATE/ALTER statements so each migration runs on postgres without
+    # needing a hand-written postgres branch.
+    if query_upper.startswith("CREATE") or query_upper.startswith("ALTER"):
+        query = _convert_sqlite_ddl_to_postgres(query)
+
+    converted = _convert_qmark_to_dollar_params(query)
+    text_casts = _text_cast_param_indexes(converted)
+
+    if query_upper.startswith("SELECT") or query_upper.startswith("WITH"):
+        return _StatementPlan(converted, "read", text_casts)
+
+    has_returning = "RETURNING" in query_upper
+    if query_upper.startswith("INSERT") and not has_returning:
+        m = _INSERT_TABLE_RE.match(query_stripped)
+        table = m.group(1).lower() if m else ""
+        if table in _INSERT_ID_TABLES:
+            converted = f"{converted.rstrip()} RETURNING id"
+            has_returning = True
+    return _StatementPlan(converted, "returning" if has_returning else "write", text_casts)
+
+
+@functools.lru_cache(maxsize=_STATEMENT_CACHE_SIZE)
+def _plan_executemany(query: str) -> tuple[str, frozenset[int]]:
+    converted = _convert_qmark_to_dollar_params(query)
+    return converted, _text_cast_param_indexes(converted)
 
 
 def _strip_nuls_from_params(params: tuple) -> tuple:
@@ -2658,34 +2729,17 @@ class _PostgresConnectionCompat:
         return result
 
     async def execute(self, query: str, params=()):
-        params = _strip_nuls_from_params(tuple(params or ()))
-        query_stripped = query.strip()
-        query_upper = query_stripped.upper()
+        plan = _plan_statement(query)
+        converted = plan.sql
+        params = _apply_text_casts(plan.text_casts, _strip_nuls_from_params(tuple(params or ())))
 
-        # Migrations are written in the SQLite-style DDL dialect. Transparently convert
-        # CREATE/ALTER statements so each migration runs on postgres without
-        # needing a hand-written postgres branch.
-        if query_upper.startswith("CREATE") or query_upper.startswith("ALTER"):
-            query = _convert_sqlite_ddl_to_postgres(query)
-
-        converted = _convert_qmark_to_dollar_params(query)
-        params = _coerce_text_cast_params(converted, params)
-
-        if query_upper.startswith("SELECT") or query_upper.startswith("WITH"):
+        if plan.kind == "read":
             rows = await self._run_statement(lambda: self._conn.fetch(converted, *params))
             return _PostgresCursorCompat(rows=rows, rowcount=len(rows))
 
         await self._ensure_tx()
 
-        has_returning = "RETURNING" in query_upper
-        if query_upper.startswith("INSERT") and not has_returning:
-            m = _INSERT_TABLE_RE.match(query_stripped)
-            table = m.group(1).lower() if m else ""
-            if table in _INSERT_ID_TABLES:
-                converted = f"{converted.rstrip()} RETURNING id"
-                has_returning = True
-
-        if has_returning:
+        if plan.kind == "returning":
             # Any statement with a RETURNING clause — explicit (hand-written
             # INSERT/UPDATE ... RETURNING) or the ``id`` we just appended for
             # lastrowid emulation — must run through fetch(), otherwise asyncpg's
@@ -2706,8 +2760,8 @@ class _PostgresConnectionCompat:
             await self._run_statement(lambda s=stmt: self._conn.execute(s))
 
     async def executemany(self, query: str, params):
-        converted = _convert_qmark_to_dollar_params(query)
-        cleaned = [_coerce_text_cast_params(converted, _strip_nuls_from_params(tuple(row))) for row in params]
+        converted, text_casts = _plan_executemany(query)
+        cleaned = [_apply_text_casts(text_casts, _strip_nuls_from_params(tuple(row))) for row in params]
         await self._ensure_tx()
         await self._run_statement(lambda: self._conn.executemany(converted, cleaned))
         return _PostgresCursorCompat(rowcount=len(cleaned))
@@ -2753,6 +2807,7 @@ class _PostgresConnectionCompat:
 
 _pg_pool = None
 _pg_pool_lock = asyncio.Lock()
+_pg_acquire_timeout = 30.0  # replaced from APP_DB_POOL_ACQUIRE_TIMEOUT when the pool is built
 
 
 # Per-task held connection + depth, so nested get_db() is re-entrant.
@@ -2788,20 +2843,58 @@ class _ConnProxy:
         await _release_db()
 
 
+def _bounded_int_env(name: str, default: int, low: int, high: int) -> int:
+    try:
+        value = int(os.getenv(name, "").strip() or default)
+    except ValueError:
+        _LOGGER.warning("%s is not an integer; using %d", name, default)
+        value = default
+    return max(low, min(high, value))
+
+
+# The pool is shared by up to poll_concurrency (16) host polls, every
+# collector and every HTTP request, so 10 connections starved it under load.
+# The ceiling stays well under Postgres' default max_connections (100), which
+# also has to cover other app processes and admin sessions.
+_DB_POOL_MAX_LIMIT = 80
+
+
+def _db_pool_settings() -> dict:
+    """Pool size and acquire timeout (``APP_DB_POOL_*``) and the per-connection
+    prepared statement cache (``APP_DB_STATEMENT_CACHE_SIZE``).
+
+    Read at call time so tests can set the variables."""
+    max_size = _bounded_int_env("APP_DB_POOL_MAX", 30, 1, _DB_POOL_MAX_LIMIT)
+    return {
+        "min_size": _bounded_int_env("APP_DB_POOL_MIN", 2, 0, max_size),
+        "max_size": max_size,
+        # Bounds only the wait for a free connection, not how long it is
+        # held: a starved pool raises instead of hanging the caller forever.
+        "acquire_timeout": float(_bounded_int_env("APP_DB_POOL_ACQUIRE_TIMEOUT", 30, 1, 600)),
+        "statement_cache_size": _bounded_int_env("APP_DB_STATEMENT_CACHE_SIZE", 500, 0, 10000),
+    }
+
+
 async def _get_pg_pool():
-    global _pg_pool
+    global _pg_pool, _pg_acquire_timeout
     if _pg_pool is not None:
         return _pg_pool
     async with _pg_pool_lock:
         if _pg_pool is not None:
             return _pg_pool
+        settings = _db_pool_settings()
+        _pg_acquire_timeout = settings["acquire_timeout"]
         # Session time zone pinned to UTC: the app writes naive UTC text
         # stamps ("YYYY-MM-DD HH:MM:SS"), and the datetime() rewrite casts
         # them with ``::timestamptz`` and compares against ``NOW()::text``;
         # both read the session zone, so a server whose default zone is not
         # UTC would shift every such comparison by its offset.
         _pg_pool = await asyncpg.create_pool(
-            APP_DATABASE_URL, min_size=1, max_size=10, server_settings={"timezone": "UTC"}
+            APP_DATABASE_URL,
+            min_size=settings["min_size"],
+            max_size=settings["max_size"],
+            statement_cache_size=settings["statement_cache_size"],
+            server_settings={"timezone": "UTC"},
         )
         return _pg_pool
 
@@ -2858,7 +2951,7 @@ async def get_db(*, read_only: bool = False):
     if not APP_DATABASE_URL:
         raise RuntimeError("Plexus requires APP_DATABASE_URL (a postgresql:// URL)")
     pool = await _get_pg_pool()
-    raw = await pool.acquire()
+    raw = await pool.acquire(timeout=_pg_acquire_timeout)
     conn = _PostgresConnectionCompat(raw)
     _held.set({"conn": conn, "depth": 1, "readonly": read_only, "pool": pool, "raw": raw})
     return _ConnProxy(conn)

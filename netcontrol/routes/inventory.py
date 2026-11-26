@@ -1363,6 +1363,8 @@ async def _run_discovery_sync_once() -> dict:
 
 
 async def _discovery_sync_loop() -> None:
+    # The first scan runs here, before the first sleep, in the background:
+    # startup (``lifespan``) does not wait for it.
     while True:
         try:
             await _run_discovery_sync_once()
@@ -1944,6 +1946,8 @@ async def after_host_write(host_id: int, hostname: str, ip_address: str, *, crea
 async def add_host(group_id: int, body: HostCreate, request: Request):
     if (await request_scope(request)).restricted:
         await require_group(request, group_id, write=True)
+    elif not await db.get_group(group_id):
+        raise HTTPException(404, "Group not found")
     try:
         hid = await _insert_host(
             group_id,

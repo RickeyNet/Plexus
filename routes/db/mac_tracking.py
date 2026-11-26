@@ -614,16 +614,11 @@ async def acknowledge_open_mac_move_events(actor: str = "", group_ids: Iterable[
 
 async def delete_old_mac_move_events(retention_days: int) -> int:
     """Prune move events older than retention_days. Cascades to history."""
-    db = await _dbcore.get_db()
-    try:
-        cursor = await db.execute(
-            "DELETE FROM mac_move_events WHERE detected_at < datetime('now', ? || ' days')",
-            (f"-{int(retention_days)}",),
-        )
-        await db.commit()
-        return cursor.rowcount if cursor.rowcount is not None else 0
-    finally:
-        await db.close()
+    return await _dbcore.chunked_delete(
+        "mac_move_events",
+        "detected_at < datetime('now', ? || ' days')",
+        (f"-{int(retention_days)}",),
+    )
 
 
 async def delete_old_mac_history(retention_days: int) -> int:
@@ -633,16 +628,11 @@ async def delete_old_mac_history(retention_days: int) -> int:
     grows every time a MAC relocates, so it needs the same retention treatment
     as the move events themselves (which were the only thing pruned before).
     """
-    db = await _dbcore.get_db()
-    try:
-        cursor = await db.execute(
-            "DELETE FROM mac_tracking_history WHERE seen_at < datetime('now', ? || ' days')",
-            (f"-{int(retention_days)}",),
-        )
-        await db.commit()
-        return cursor.rowcount if cursor.rowcount is not None else 0
-    finally:
-        await db.close()
+    return await _dbcore.chunked_delete(
+        "mac_tracking_history",
+        "seen_at < datetime('now', ? || ' days')",
+        (f"-{int(retention_days)}",),
+    )
 
 
 async def search_mac_tracking(query: str, limit: int = 100, group_ids: Iterable[int] | None = None) -> list[dict]:
@@ -882,13 +872,8 @@ async def get_macs_on_port(host_id: int, port_name: str) -> list[dict]:
 
 
 async def cleanup_stale_mac_entries(days: int = 30) -> int:
-    db = await _dbcore.get_db()
-    try:
-        cursor = await db.execute(
-            "DELETE FROM mac_address_table WHERE last_seen < datetime('now', ? || ' days')",
-            (f"-{int(days)}",),
-        )
-        await db.commit()
-        return cursor.rowcount if cursor.rowcount is not None else 0
-    finally:
-        await db.close()
+    return await _dbcore.chunked_delete(
+        "mac_address_table",
+        "last_seen < datetime('now', ? || ' days')",
+        (f"-{int(days)}",),
+    )

@@ -24,6 +24,11 @@ from routes.database import (
     rows_to_list,
 )
 from routes.db.inventory import GROUP_SUBTREE_SQL as _GROUP_SUBTREE_SQL, group_ids_condition
+from routes.db.latest_rows import latest_row_lateral
+
+# Each host's newest poll as ``p``, joined after ``FROM hosts h`` (probes
+# idx_monitoring_polls_host_id, migration 0046).
+_LATEST_POLL_JOIN = latest_row_lateral("monitoring_polls", "host_id = h.id", "p")
 
 __all__ = [
     "set_alert_created_hook",
@@ -67,6 +72,7 @@ __all__ = [
     "get_sla_summary",
     "get_sla_host_detail",
     "delete_old_sla_metrics",
+    "delete_old_availability_transitions",
     "SLA_METRIC_NAMES",
     "get_sla_host_metrics",
     "rollup_sla_metrics",
@@ -193,13 +199,8 @@ async def get_latest_monitoring_polls(
                        h.hostname, h.ip_address, h.device_type, h.group_id,
                        h.model, h.software_version, h.status AS host_status,
                        h.last_seen, g.name AS group_name
-                FROM monitoring_polls p
-                INNER JOIN (
-                    SELECT host_id, MAX(id) AS max_id
-                    FROM monitoring_polls
-                    GROUP BY host_id
-                ) latest ON p.id = latest.max_id
-                JOIN hosts h ON h.id = p.host_id
+                FROM hosts h
+                {_LATEST_POLL_JOIN}
                 LEFT JOIN inventory_groups g ON g.id = h.group_id
                 WHERE 1=1 {group_filter}
                 ORDER BY h.hostname
@@ -244,16 +245,11 @@ async def get_monitoring_poll_history(
 
 
 async def delete_old_monitoring_polls(retention_days: int) -> int:
-    db = await _dbcore.get_db()
-    try:
-        cursor = await db.execute(
-            "DELETE FROM monitoring_polls WHERE polled_at < datetime('now', '-' || ? || ' days')",
-            (retention_days,),
-        )
-        await db.commit()
-        return cursor.rowcount
-    finally:
-        await db.close()
+    return await _dbcore.chunked_delete(
+        "monitoring_polls",
+        "polled_at < datetime('now', '-' || ? || ' days')",
+        (retention_days,),
+    )
 
 
 async def get_monitoring_summary(group_id: int | None = None, *, group_ids: Iterable[int] | None = None) -> dict:
@@ -271,31 +267,26 @@ async def get_monitoring_summary(group_id: int | None = None, *, group_ids: Iter
             group_filter += f" AND {scope_sql}"
             params.extend(scope_params)
 
-        cursor = await db.execute(
-            f"""SELECT COUNT(DISTINCT p.host_id) FROM monitoring_polls p
-                JOIN hosts h ON h.id = p.host_id WHERE 1=1 {group_filter}""",
-            tuple(params),
-        )
-        monitored_hosts = (await cursor.fetchone())[0]
-
+        # One pass gives every figure but the alert count: one latest poll
+        # per polled host (so the row count is the monitored hosts), and the
+        # newest polled_at of those hosts' polls on every row.
         cursor = await db.execute(
             f"""SELECT p.id, p.host_id, p.cpu_percent, p.memory_percent,
                        p.memory_used_mb, p.memory_total_mb, p.uptime_seconds,
                        p.if_up_count, p.if_down_count, p.if_admin_down,
                        p.vpn_tunnels_up, p.vpn_tunnels_down, p.route_count,
                        p.poll_status, p.poll_error, p.response_time_ms,
-                       p.packet_loss_pct, p.icmp_alive, p.icmp_rtt_ms, p.polled_at
-                FROM monitoring_polls p
-                INNER JOIN (
-                    SELECT host_id, MAX(id) AS max_id
-                    FROM monitoring_polls
-                    GROUP BY host_id
-                ) latest ON p.id = latest.max_id
-                JOIN hosts h ON h.id = p.host_id
+                       p.packet_loss_pct, p.icmp_alive, p.icmp_rtt_ms, p.polled_at,
+                       MAX((SELECT MAX(m.polled_at) FROM monitoring_polls m WHERE m.host_id = h.id))
+                           OVER () AS last_poll_at
+                FROM hosts h
+                {_LATEST_POLL_JOIN}
                 WHERE 1=1 {group_filter}""",
             tuple(params),
         )
         latest_polls = rows_to_list(await cursor.fetchall())
+        monitored_hosts = len(latest_polls)
+        last_poll_at = latest_polls[0]["last_poll_at"] if latest_polls else None
 
         total_cpu = 0.0
         cpu_count = 0
@@ -337,14 +328,6 @@ async def get_monitoring_summary(group_id: int | None = None, *, group_ids: Iter
             tuple(a_params),
         )
         open_alerts = (await cursor.fetchone())[0]
-
-        cursor = await db.execute(
-            f"""SELECT MAX(p.polled_at) FROM monitoring_polls p
-                JOIN hosts h ON h.id = p.host_id WHERE 1=1 {group_filter}""",
-            tuple(params),
-        )
-        row = await cursor.fetchone()
-        last_poll_at = row[0] if row else None
 
         return {
             "monitored_hosts": monitored_hosts,
@@ -621,16 +604,11 @@ async def resolve_stale_monitoring_alerts(
 
 
 async def delete_old_monitoring_alerts(retention_days: int) -> int:
-    db = await _dbcore.get_db()
-    try:
-        cursor = await db.execute(
-            "DELETE FROM monitoring_alerts WHERE created_at < datetime('now', '-' || ? || ' days')",
-            (retention_days,),
-        )
-        await db.commit()
-        return cursor.rowcount
-    finally:
-        await db.close()
+    return await _dbcore.chunked_delete(
+        "monitoring_alerts",
+        "created_at < datetime('now', '-' || ? || ' days')",
+        (retention_days,),
+    )
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -714,18 +692,16 @@ async def delete_old_route_snapshots(retention_days: int) -> int:
     """Delete the route snapshots older than ``retention_days``, except each
     host's newest: an unchanged table is never written again, so that row
     is what the path trace reads until the table changes."""
-    db = await _dbcore.get_db()
-    try:
-        cursor = await db.execute(
-            """DELETE FROM route_snapshots
-               WHERE captured_at < datetime('now', '-' || ? || ' days')
-                 AND id NOT IN (SELECT MAX(id) FROM route_snapshots GROUP BY host_id)""",
-            (retention_days,),
-        )
-        await db.commit()
-        return cursor.rowcount
-    finally:
-        await db.close()
+    # "A newer row of the same host exists" rather than NOT IN (MAX(id)
+    # GROUP BY host_id): each chunk probes idx_route_snapshots_host_id
+    # instead of aggregating the whole table again.
+    return await _dbcore.chunked_delete(
+        "route_snapshots",
+        "captured_at < datetime('now', '-' || ? || ' days')"
+        " AND EXISTS (SELECT 1 FROM route_snapshots n"
+        " WHERE n.host_id = route_snapshots.host_id AND n.id > route_snapshots.id)",
+        (retention_days,),
+    )
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -1717,21 +1693,37 @@ async def rollup_sla_metrics(now: datetime | None = None) -> dict:
 async def delete_old_sla_metrics(retention_days: int) -> int:
     """Drop SLA rollups (and SLA status history) older than ``retention_days``.
     Returns the number of rollup rows deleted."""
-    db = await _dbcore.get_db()
-    try:
-        cursor = await db.execute(
-            "DELETE FROM sla_metrics WHERE period_start < datetime('now', '-' || ? || ' days')",
-            (retention_days,),
-        )
-        deleted = cursor.rowcount
-        await db.execute(
-            "DELETE FROM sla_target_status_history WHERE evaluated_at < datetime('now', '-' || ? || ' days')",
-            (retention_days,),
-        )
-        await db.commit()
-        return deleted
-    finally:
-        await db.close()
+    deleted = await _dbcore.chunked_delete(
+        "sla_metrics",
+        "period_start < datetime('now', '-' || ? || ' days')",
+        (retention_days,),
+    )
+    await _dbcore.chunked_delete(
+        "sla_target_status_history",
+        "evaluated_at < datetime('now', '-' || ? || ' days')",
+        (retention_days,),
+    )
+    return deleted
+
+
+async def delete_old_availability_transitions(retention_days: int) -> int:
+    """Drop availability transitions older than ``retention_days``, except
+    the newest of those per (host, entity type, entity). That row carries
+    the entity's current state (``get_last_availability_states``) and the
+    state an availability window opens with (the reports read the newest
+    transition before the window), so it is kept however old. Returns the
+    number of rows deleted."""
+    return await _dbcore.chunked_delete(
+        "availability_transitions",
+        "transition_at < datetime('now', '-' || ? || ' days')"
+        " AND EXISTS (SELECT 1 FROM availability_transitions n"
+        " WHERE n.host_id = availability_transitions.host_id"
+        " AND n.entity_type = availability_transitions.entity_type"
+        " AND n.entity_id = availability_transitions.entity_id"
+        " AND n.id > availability_transitions.id"
+        " AND n.transition_at < datetime('now', '-' || ? || ' days'))",
+        (retention_days, retention_days),
+    )
 
 
 # ── SLA Target Evaluation ────────────────────────────────────────────────────

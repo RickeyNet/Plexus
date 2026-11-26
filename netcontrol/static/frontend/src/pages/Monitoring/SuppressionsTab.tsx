@@ -96,7 +96,8 @@ export function SuppressionsTab() {
 function CreateSuppressionModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) {
   const formId = useId();
   const createMut = useCreateSuppression();
-  const groups = useInventoryGroupsFull(true);
+  // Kept mounted so a cancelled draft survives a reopen; only the query waits for the open.
+  const groups = useInventoryGroupsFull(true, isOpen);
   const allHosts = (groups.data ?? []).flatMap((g) => (g.hosts ?? []).map((h) => ({ ...h, group_name: groupLabel(g) })));
 
   const now = new Date();

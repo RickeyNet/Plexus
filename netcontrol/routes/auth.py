@@ -1364,7 +1364,10 @@ async def authenticate_login_identity(username: str, password: str) -> tuple[dic
 FEATURE_FLAGS = state.FEATURE_FLAGS
 
 
-async def _get_user_features(user: dict) -> list[str]:
+async def _get_user_features(user: dict, *, request: Request | None = None) -> list[str]:
+    """The feature keys ``user`` may use. ``request``: the HTTP request the
+    user is making, so the object scope resolved here is the one the
+    request's scoped routes reuse (``object_scope.scope_for_request_user``)."""
     if not user:
         return []
     if user.get("role") == "admin":
@@ -1378,7 +1381,7 @@ async def _get_user_features(user: dict) -> list[str]:
     # Fail closed: a user limited to selected inventory groups keeps only
     # the features whose modules enforce that limit, so every other
     # feature gate (HTTP, WebSocket, MCP, the sidebar) refuses them.
-    if features and (await object_scope.scope_for_user(user)).restricted:
+    if features and (await object_scope.scope_for_request_user(user, request)).restricted:
         features = object_scope.enforced_features(features)
     return features
 

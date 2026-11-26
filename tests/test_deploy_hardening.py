@@ -333,3 +333,54 @@ def test_upgrade_script_refuses_a_ref_that_reads_as_an_option_or_shell():
     # The recorded rollback ref is a commit id, checked and quoted.
     assert '[[ "${PREV_REF:-}" =~ ^[0-9a-f]{7,64}$ ]] || die' in script
     assert "git checkout ${PREV_REF}" not in script
+
+
+# ── Proxy performance and the database server ────────────────────────────────
+
+
+def test_nginx_serves_http2_and_gzip_without_touching_streams():
+    conf = _nginx(NGINX_CONF)
+    assert re.search(r"listen\s+443\s+ssl;", conf)
+    assert re.search(r"^\s*http2\s+on;", conf, re.M)
+    assert re.search(r"^\s*gzip\s+on;", conf, re.M)
+    assert re.search(r"^\s*gzip_proxied\s+any;", conf, re.M)
+    types = re.search(r"gzip_types\s+([^;]+);", conf)
+    assert types
+    listed = set(types.group(1).split())
+    assert {"application/json", "application/javascript", "text/css", "image/svg+xml"} <= listed
+    # A compressed stream would be held back until a block fills.
+    assert "text/event-stream" not in listed
+    # Buffering is off for WebSockets and, through X-Accel-Buffering, for
+    # each event stream; the rest is buffered.
+    locations = _locations(conf)
+    assert re.search(r"proxy_buffering\s+off;", locations["/ws/"])
+    assert "proxy_buffering" not in locations["/"]
+    # TLS and security headers are unchanged.
+    assert re.search(r"ssl_protocols\s+TLSv1\.2 TLSv1\.3;", conf)
+    for header in ("X-Frame-Options", "X-Content-Type-Options", "Strict-Transport-Security"):
+        assert re.search(rf"add_header\s+{header}\s", conf), header
+
+
+def test_postgres_settings_are_sized_and_overridable():
+    postgres = yaml.safe_load(_read(ROOT / "docker-compose.yml"))["services"]["postgres"]
+    command = postgres["command"]
+    assert command[0] == "postgres"
+    settings = dict(arg.split("=", 1) for arg in command[2::2])
+    assert all(flag == "-c" for flag in command[1::2])
+    expected = {
+        "shared_buffers": ("POSTGRES_SHARED_BUFFERS", "512MB"),
+        "effective_cache_size": ("POSTGRES_EFFECTIVE_CACHE_SIZE", "1GB"),
+        "work_mem": ("POSTGRES_WORK_MEM", "8MB"),
+        "maintenance_work_mem": ("POSTGRES_MAINTENANCE_WORK_MEM", "128MB"),
+        "max_wal_size": ("POSTGRES_MAX_WAL_SIZE", "2GB"),
+        "random_page_cost": ("POSTGRES_RANDOM_PAGE_COST", "1.1"),
+    }
+    assert set(settings) == set(expected)
+    env_example = _read(ROOT / ".env.example")
+    for name, (var, default) in expected.items():
+        assert settings[name] == f"${{{var}:-{default}}}", name
+        assert _default(settings[name]) == default
+        assert var in env_example, var
+    # max_connections stays at the Postgres default the app pool is sized for.
+    assert "max_connections" not in " ".join(command)
+    assert postgres["image"].startswith("postgres:16-alpine@sha256:")

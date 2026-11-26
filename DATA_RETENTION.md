@@ -24,7 +24,8 @@ or the corresponding API endpoint without a restart.
 | Route snapshots                  | 30 days           | `Settings > Monitoring`                                       |
 | Meraki alerts (resolved)         | 30 days           | `Settings > Monitoring` (`retention_days`); open alerts are kept |
 | SNMP trap / syslog events        | 30 days           | `Settings > Monitoring`                                       |
-| IP history (IPAM)                | 365 days          | API-only - `routes.database.prune_ip_history(retention_days)` |
+| Availability transitions (`availability_transitions`) | 400 days | `Settings > Monitoring` (`sla_retention_days`, the SLA rollup retention, 30 to 3650); pruned by the monitoring retention pass. The newest transition of each host/entity is kept however old: it holds the current state |
+| IP history (IPAM, closed rows)   | 365 days          | Fixed; pruned by the monitoring retention pass (`routes.database.prune_ip_history`). Open rows (current assignments) are kept |
 | **Cloud flow records**           | **48 hours**      | Shares `flow_records` + NetFlow `retention_hours`; pruned by the cloud flow sync loop even when the NetFlow collector is disabled |
 | **Cloud traffic metrics**        | **7 days (168h)** | `PUT /api/cloud/traffic-sync/config` `retention_hours`; pruned by the cloud traffic sync loop |
 | Webhook delivery log (`webhook_deliveries`) | 30 days | `APP_WEBHOOK_DELIVERY_RETENTION_DAYS` (env, minimum 1); pruned hourly by the webhook dispatcher. Deleting a webhook deletes its log. See `docs/webhooks.md` |
@@ -55,6 +56,8 @@ cycle it:
    top-conversations from `flow_records` and inserts them into
    `flow_summaries`.
 2. Deletes `flow_records` older than `retention_hours`.
+3. Deletes `flow_summaries` written more than `summary_retention_days`
+   ago.
 
 The split is intentional: detailed per-flow data is expensive to keep and
 loses utility after a couple of days, but the aggregated views are small

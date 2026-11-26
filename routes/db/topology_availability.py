@@ -632,16 +632,9 @@ async def purge_topology_availability(retention_days: int) -> int:
     organization or account, a decommissioned device). Returns the number
     of rows deleted."""
     cutoff = _fmt(datetime.now(UTC).replace(tzinfo=None) - timedelta(days=max(1, int(retention_days))))
-    db = await _dbcore.get_db()
-    try:
-        cursor = await db.execute("DELETE FROM topology_availability_transitions WHERE transition_at < ?", (cutoff,))
-        deleted = cursor.rowcount or 0
-        cursor = await db.execute("DELETE FROM topology_entity_state WHERE last_seen < ?", (cutoff,))
-        deleted += cursor.rowcount or 0
-        await db.commit()
-        return deleted
-    finally:
-        await db.close()
+    deleted = await _dbcore.chunked_delete("topology_availability_transitions", "transition_at < ?", (cutoff,))
+    deleted += await _dbcore.chunked_delete("topology_entity_state", "last_seen < ?", (cutoff,))
+    return deleted
 
 
 # ── Uptime ───────────────────────────────────────────────────────────────────
@@ -1198,20 +1191,13 @@ async def purge_topology_entity_metrics(raw_retention_days: int, rollup_retentio
     now = datetime.now(UTC).replace(tzinfo=None)
     raw_cutoff = _fmt(now - timedelta(days=max(1, int(raw_retention_days))))
     rollup_cutoff = _fmt(now - timedelta(days=max(1, int(rollup_retention_days))))
-    db = await _dbcore.get_db()
-    try:
-        cursor = await db.execute("DELETE FROM topology_entity_metrics WHERE sampled_at < ?", (raw_cutoff,))
-        deleted = cursor.rowcount or 0
-        cursor = await db.execute("DELETE FROM topology_entity_metric_daily WHERE day < ?", (rollup_cutoff[:10],))
-        deleted += cursor.rowcount or 0
-        # Counter readings of keys no longer read (migration 0125): far past
-        # ``MAX_RATE_GAP_SECONDS``, so they could not give a rate anyway.
-        await db.execute("DELETE FROM topology_traffic_counters WHERE read_at < ?", (raw_cutoff,))
-        await db.execute("DELETE FROM topology_sla_target_status_history WHERE evaluated_at < ?", (rollup_cutoff,))
-        await db.commit()
-        return deleted
-    finally:
-        await db.close()
+    deleted = await _dbcore.chunked_delete("topology_entity_metrics", "sampled_at < ?", (raw_cutoff,))
+    deleted += await _dbcore.chunked_delete("topology_entity_metric_daily", "day < ?", (rollup_cutoff[:10],))
+    # Counter readings of keys no longer read (migration 0125): far past
+    # ``MAX_RATE_GAP_SECONDS``, so they could not give a rate anyway.
+    await _dbcore.chunked_delete("topology_traffic_counters", "read_at < ?", (raw_cutoff,))
+    await _dbcore.chunked_delete("topology_sla_target_status_history", "evaluated_at < ?", (rollup_cutoff,))
+    return deleted
 
 
 # ── SLA targets of topology entities ─────────────────────────────────────────

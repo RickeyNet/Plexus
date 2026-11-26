@@ -249,10 +249,10 @@ def _translate_event(event: dict) -> LogEvent | None:
     return None
 
 
-def _extract_stats(events: list[dict]) -> tuple[int, int, int, int]:
+def _extract_stats(events: list[dict]) -> tuple[int, int, int]:
     """
     Extract host counts from ansible-runner events.
-    Returns (ok, failed, unreachable, skipped).
+    Returns (ok, failed, skipped); unreachable hosts count as failed.
     """
     hosts_ok = set()
     hosts_failed = set()
@@ -282,6 +282,33 @@ def _extract_stats(events: list[dict]) -> tuple[int, int, int, int]:
 # ── Main executor ────────────────────────────────────────────────────────────
 
 
+def _write_run_files(tmpdir: str, playbook_content: str, inventory: dict) -> str:
+    """Lay out the ansible-runner project under ``tmpdir``: the playbook,
+    the inventory and ansible.cfg. Returns the inventory path."""
+    project_dir = os.path.join(tmpdir, "project")
+    inventory_dir = os.path.join(tmpdir, "inventory")
+    os.makedirs(project_dir, exist_ok=True)
+    os.makedirs(inventory_dir, exist_ok=True)
+
+    with open(os.path.join(project_dir, "playbook.yml"), "w", encoding="utf-8") as f:
+        f.write(playbook_content)
+
+    inventory_path = os.path.join(inventory_dir, "hosts.json")
+    with open(inventory_path, "w", encoding="utf-8") as f:
+        json.dump(inventory, f, indent=2)
+
+    # Host key checking off for lab/automation use
+    with open(os.path.join(project_dir, "ansible.cfg"), "w", encoding="utf-8") as f:
+        f.write("[defaults]\n")
+        f.write("host_key_checking = False\n")
+        f.write("timeout = 30\n")
+        f.write("gathering = explicit\n")
+        f.write("\n[persistent_connection]\n")
+        f.write("connect_timeout = 30\n")
+        f.write("command_timeout = 30\n")
+    return inventory_path
+
+
 async def execute_ansible_playbook(
     playbook_content: str,
     hosts: list[dict],
@@ -306,35 +333,13 @@ async def execute_ansible_playbook(
     Returns:
         PlaybookResult with host counts
     """
-    tmpdir = new_run_dir()
+    # Directory sweep, file writes, the event read and the removal all touch
+    # disk, so they run in a thread: the event loop is shared with every
+    # poller and request.
+    tmpdir = await asyncio.to_thread(new_run_dir)
     try:
-        # Set up ansible-runner project structure
-        project_dir = os.path.join(tmpdir, "project")
-        inventory_dir = os.path.join(tmpdir, "inventory")
-        os.makedirs(project_dir, exist_ok=True)
-        os.makedirs(inventory_dir, exist_ok=True)
-
-        # Write the playbook YAML
-        playbook_path = os.path.join(project_dir, "playbook.yml")
-        with open(playbook_path, "w", encoding="utf-8") as f:
-            f.write(playbook_content)
-
-        # Write inventory JSON
         inventory = build_inventory(hosts, credentials, group_name)
-        inventory_path = os.path.join(inventory_dir, "hosts.json")
-        with open(inventory_path, "w", encoding="utf-8") as f:
-            json.dump(inventory, f, indent=2)
-
-        # Write ansible.cfg to disable host key checking for lab/automation use
-        cfg_path = os.path.join(project_dir, "ansible.cfg")
-        with open(cfg_path, "w", encoding="utf-8") as f:
-            f.write("[defaults]\n")
-            f.write("host_key_checking = False\n")
-            f.write("timeout = 30\n")
-            f.write("gathering = explicit\n")
-            f.write("\n[persistent_connection]\n")
-            f.write("connect_timeout = 30\n")
-            f.write("command_timeout = 30\n")
+        inventory_path = await asyncio.to_thread(_write_run_files, tmpdir, playbook_content, inventory)
 
         # Build cmdline args
         cmdline = ""
@@ -362,8 +367,9 @@ async def execute_ansible_playbook(
             quiet=True,
         )
 
-        # Process events and stream them
-        all_events = list(runner.events)
+        # runner.events reads one JSON file per event from the artifacts
+        # directory; a large run has thousands.
+        all_events = await asyncio.to_thread(lambda: list(runner.events))
 
         for ev in all_events:
             log_event = _translate_event(ev)
@@ -411,6 +417,6 @@ async def execute_ansible_playbook(
     finally:
         # Clean up temp directory
         try:
-            remove_run_dir(tmpdir)
+            await asyncio.to_thread(remove_run_dir, tmpdir)
         except Exception as exc:
             _LOGGER.debug("Failed to clean up temp directory %s: %s", tmpdir, exc)

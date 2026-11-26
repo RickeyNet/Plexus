@@ -929,7 +929,7 @@ async def _load_request_features(request: Request, user: dict) -> list[str]:
     cached = getattr(request.state, "auth_features", _AUTH_STATE_UNSET)
     if cached is not _AUTH_STATE_UNSET:
         return cached
-    features = await _get_user_features(user)
+    features = await _get_user_features(user, request=request)
     request.state.auth_features = features
     return features
 
@@ -1741,7 +1741,8 @@ async def lifespan(app: FastAPI):
             )
     except Exception as exc:
         LOGGER.warning("lab runtime reconcile failed: %s", exc)
-    await _run_discovery_sync_once()
+    # No discovery scan here: _discovery_sync_loop runs the first one in the
+    # background, so the app serves without waiting out a full network sweep.
     state.API_RATE_LIMIT_LOCK = asyncio.Lock()
 
     # Size the default thread-pool executor to the monitoring poll fan-out.
@@ -2099,8 +2100,10 @@ app.add_middleware(
 
 # Added last so it sits outermost in the stack and compresses every response,
 # including static assets. Starlette skips text/event-stream by default, so
-# the SSE endpoints (monitoring, topology, inventory) are unaffected.
-app.add_middleware(GZipMiddleware, minimum_size=500)
+# the SSE endpoints (monitoring, topology, inventory) are unaffected. Level 5
+# keeps nearly all of level 9's ratio on JSON at a fraction of the CPU, which
+# matters on the single event loop that also runs every poller.
+app.add_middleware(GZipMiddleware, minimum_size=500, compresslevel=5)
 
 
 @app.middleware("http")
@@ -2261,6 +2264,11 @@ async def metrics_and_logging_middleware(request: Request, call_next):
     return response
 
 
+# Response types that are streams read event by event (SSE; NDJSON is
+# accepted by the SPA's stream readers too): sent with X-Accel-Buffering: no.
+_UNBUFFERED_STREAM_TYPES = frozenset({"text/event-stream", "application/x-ndjson"})
+
+
 @app.middleware("http")
 async def security_headers_middleware(request: Request, call_next):
     """Add security headers to every response.
@@ -2303,6 +2311,12 @@ async def security_headers_middleware(request: Request, call_next):
             "form-action 'self'"
         ),
     )
+    # Not a security header, but this hook already sees every response
+    # (mounted apps such as /mcp included). nginx buffers proxied responses
+    # (deploy/nginx.conf); a stream tells it to pass each event straight on.
+    content_type = response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+    if content_type in _UNBUFFERED_STREAM_TYPES:
+        response.headers.setdefault("X-Accel-Buffering", "no")
     return response
 
 
@@ -3077,9 +3091,37 @@ FRONTEND_INDEX = os.path.join(FRONTEND_DIST, "index.html")
 app.router.routes.append(Route("/mcp", endpoint=_mcp_app, methods=None))
 app.mount("/mcp", _mcp_app)
 
-# Mount static files directory
+
+class _CachedStaticFiles(StaticFiles):
+    """StaticFiles that sends one ``Cache-Control`` on every file response
+    (304 revalidations included)."""
+
+    def __init__(self, *args, cache_control: str, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.cache_control = cache_control
+
+    def file_response(self, *args, **kwargs):
+        response = super().file_response(*args, **kwargs)
+        response.headers["Cache-Control"] = self.cache_control
+        return response
+
+
+# Vite content-hashes every filename under dist/assets, so any change
+# produces a new URL and the old one can be cached forever.
+_IMMUTABLE_CACHE_CONTROL = "public, max-age=31536000, immutable"
+# Files that keep their name across releases: the browser revalidates them
+# on every use (a cheap 304 against the ETag/Last-Modified StaticFiles sends),
+# so an upgrade is never hidden behind a stale copy.
+_REVALIDATE_CACHE_CONTROL = "no-cache"
+
+# Mount static files directory. /static is not content-hashed (and holds a
+# copy of dist/index.html under frontend/dist), so it revalidates.
 if os.path.isdir(STATIC_DIR):
-    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+    app.mount(
+        "/static",
+        _CachedStaticFiles(directory=STATIC_DIR, cache_control=_REVALIDATE_CACHE_CONTROL),
+        name="static",
+    )
 
 
 # React frontend - the only UI (migration history: docs/FRONTEND_MIGRATION.md).
@@ -3088,14 +3130,6 @@ if os.path.isdir(STATIC_DIR):
 # index.html. The catch-all is registered last so every API router, the
 # /static mount and the docs routes always win; it only sees paths nothing
 # else claimed.
-class _ImmutableStaticFiles(StaticFiles):
-    """Vite content-hashes every filename under dist/assets, so any change
-    produces a new URL — the old one can be cached forever."""
-
-    def file_response(self, *args, **kwargs):
-        response = super().file_response(*args, **kwargs)
-        response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
-        return response
 
 
 # Prefixes owned by the backend. A miss under one of these is a real 404,
@@ -3142,7 +3176,7 @@ if os.path.isdir(FRONTEND_DIST):
     if os.path.isdir(_frontend_assets):
         app.mount(
             "/assets",
-            _ImmutableStaticFiles(directory=_frontend_assets),
+            _CachedStaticFiles(directory=_frontend_assets, cache_control=_IMMUTABLE_CACHE_CONTROL),
             name="frontend_assets",
         )
 
@@ -3153,7 +3187,7 @@ async def favicon():
     return {"detail": "No favicon"}
 
 
-_REVALIDATE_HEADERS = {"Cache-Control": "no-cache"}
+_REVALIDATE_HEADERS = {"Cache-Control": _REVALIDATE_CACHE_CONTROL}
 
 
 async def serve_react_frontend(path: str = ""):

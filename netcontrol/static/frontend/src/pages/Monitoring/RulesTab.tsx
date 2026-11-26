@@ -166,64 +166,45 @@ export function RulesTab() {
         </div>
       ))}
 
-      <RuleFormModal
-        rule={editing}
-        isCreate={creating}
-        onClose={() => { setEditing(null); setCreating(false); }}
-      />
+      {/* Mounted only while open: the form's inventory and channel queries
+          should not run behind a closed modal. */}
+      {(creating || editing) && (
+        <RuleFormModal
+          key={editing?.id ?? 'new'}
+          rule={editing}
+          onClose={() => { setEditing(null); setCreating(false); }}
+        />
+      )}
     </div>
   );
 }
 
-// Create (rule == null, isCreate) or edit (rule set) an alert rule.
-function RuleFormModal({ rule, isCreate, onClose }: { rule: AlertRule | null; isCreate: boolean; onClose: () => void }) {
+// Create (rule == null) or edit (rule set) an alert rule. The parent mounts it
+// per open, keyed by rule, so the form starts from the rule each time.
+function RuleFormModal({ rule, onClose }: { rule: AlertRule | null; onClose: () => void }) {
   const formId = useId();
-  const isOpen = isCreate || rule != null;
   const [saveError, setSaveError] = useState('');
   const createMut = useCreateAlertRule();
   const updateMut = useUpdateAlertRule();
   const groups = useInventoryGroupsFull(true);
-  const channelsQuery = useNotificationChannels();
+  // Not live: RulesTab already polls this key, so a second poller only doubles requests.
+  const channelsQuery = useNotificationChannels(true, false);
   const channels = channelsQuery.data?.channels ?? [];
-  const [name, setName] = useState('');
-  const [metric, setMetric] = useState('cpu');
-  const [operator, setOperator] = useState('>=');
-  const [value, setValue] = useState('90');
-  const [severity, setSeverity] = useState('warning');
-  const [cooldown, setCooldown] = useState('15');
-  const [escalateAfter, setEscalateAfter] = useState('0');
-  const [groupId, setGroupId] = useState('');
-  const [hostId, setHostId] = useState('');
-  const [description, setDescription] = useState('');
-  const [channelIds, setChannelIds] = useState<string[]>([]);
+  const [name, setName] = useState(rule?.name ?? '');
+  const [metric, setMetric] = useState(rule?.metric ?? 'cpu');
+  const [operator, setOperator] = useState(rule?.operator ?? '>=');
+  const [value, setValue] = useState(rule ? String(rule.value) : '90');
+  const [severity, setSeverity] = useState(rule?.severity ?? 'warning');
+  const [cooldown, setCooldown] = useState(rule ? String(rule.cooldown_minutes) : '15');
+  const [escalateAfter, setEscalateAfter] = useState(rule ? String(rule.escalate_after_minutes) : '0');
+  const [groupId, setGroupId] = useState(
+    rule && rule.host_id == null && rule.group_id != null ? String(rule.group_id) : '',
+  );
+  const [hostId, setHostId] = useState(rule?.host_id != null ? String(rule.host_id) : '');
+  const [description, setDescription] = useState(rule?.description ?? '');
+  const [channelIds, setChannelIds] = useState<string[]>(() => parseChannelIds(rule?.channel_ids));
 
   const allHosts = (groups.data ?? []).flatMap((g) => (g.hosts ?? []).map((h) => ({ ...h, group_name: groupLabel(g) })));
-
-  // Load the form when the modal opens for another rule (or for a new one).
-  const [prevRule, setPrevRule] = useState(rule);
-  const [prevIsCreate, setPrevIsCreate] = useState(isCreate);
-  if (rule !== prevRule || isCreate !== prevIsCreate) {
-    setPrevRule(rule);
-    setPrevIsCreate(isCreate);
-    setSaveError('');
-    if (rule) {
-      setName(rule.name);
-      setMetric(rule.metric);
-      setOperator(rule.operator);
-      setValue(String(rule.value));
-      setSeverity(rule.severity);
-      setCooldown(String(rule.cooldown_minutes));
-      setEscalateAfter(String(rule.escalate_after_minutes));
-      setHostId(rule.host_id != null ? String(rule.host_id) : '');
-      setGroupId(rule.host_id == null && rule.group_id != null ? String(rule.group_id) : '');
-      setDescription(rule.description ?? '');
-      setChannelIds(parseChannelIds(rule.channel_ids));
-    } else if (isCreate) {
-      setName(''); setMetric('cpu'); setOperator('>='); setValue('90'); setSeverity('warning');
-      setCooldown('15'); setEscalateAfter('0'); setHostId(''); setGroupId(''); setDescription('');
-      setChannelIds([]);
-    }
-  }
 
   // A rule made through the API can carry a value the lists below do not offer; keep it selectable.
   const metricOptions = METRIC_OPTIONS.some((o) => o.value === metric)
@@ -267,7 +248,7 @@ function RuleFormModal({ rule, isCreate, onClose }: { rule: AlertRule | null; is
 
   return (
     <Modal
-      isOpen={isOpen}
+      isOpen
       onClose={onClose}
       title={rule ? 'Edit Alert Rule' : 'Create Alert Rule'}
       footer={

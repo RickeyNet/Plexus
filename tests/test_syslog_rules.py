@@ -866,6 +866,48 @@ async def test_the_source_matches_an_interface_address():
     assert await metrics_engine._resolve_host_id_cached("203.0.113.20") is None
 
 
+async def test_a_source_in_the_listener_inventory_map_needs_no_query(monkeypatch):
+    from netcontrol import listener_sources
+
+    async def no_query(*_args, **_kwargs):
+        raise AssertionError("database queried")
+
+    monkeypatch.setitem(listener_sources.INVENTORY_ADDRESSES, "192.0.2.77", 77)
+    monkeypatch.setattr(metrics_engine.db, "find_host_by_ip", no_query)
+    metrics_engine._host_ip_cache.clear()
+    assert await metrics_engine._resolve_host_id_cached("192.0.2.77") == 77
+
+
+async def test_the_writer_hands_a_large_batch_over_in_slices_and_yields(monkeypatch):
+    monkeypatch.setitem(state.EVENT_RECEIVER_CONFIG, "syslog_udp_actions", True)
+    slices: list[int] = []
+    ticks = 0
+
+    async def fake(rows):
+        slices.append(len(list(rows)))
+
+    async def ticker():
+        nonlocal ticks
+        while True:
+            ticks += 1
+            await asyncio.sleep(0)
+
+    monkeypatch.setattr(sr, "process_syslog_batch", fake)
+    monkeypatch.setattr(sr, "process_recollect_batch", fake)
+    n = metrics_engine._TRAP_EVENT_YIELD_EVERY * 2 + 5
+    rows = [("192.0.2.10", 7, "syslog", "23", "info", "", DOWN, "", "tcp")] * n
+    task = asyncio.ensure_future(ticker())
+    await asyncio.sleep(0)
+    start = ticks
+    await metrics_engine._evaluate_syslog_rules(rows)
+    task.cancel()
+    size = metrics_engine._TRAP_EVENT_YIELD_EVERY
+    # Rules, then the re-collect trigger, each over the same three slices.
+    assert slices == [size, size, 5] * 2
+    # The loop ran other work between the slices.
+    assert ticks - start >= 4
+
+
 # ── Re-poll scheduling ───────────────────────────────────────────────────────
 
 

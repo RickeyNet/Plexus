@@ -33,6 +33,7 @@ __all__ = [
     "get_flow_timeline",
     "create_flow_summary",
     "cleanup_old_flow_records",
+    "cleanup_old_flow_summaries",
     "get_flow_top_interfaces",
     "get_exporter_host_map",
     "upsert_flow_exporter",
@@ -256,6 +257,16 @@ async def cleanup_old_flow_records(hours: int = 48) -> int:
         "flow_records",
         "received_at < datetime('now', ? || ' hours')",
         (f"-{hours}",),
+    )
+
+
+async def cleanup_old_flow_summaries(days: int = 30) -> int:
+    """Delete hourly flow summaries written more than ``days`` ago
+    (``summary_retention_days``)."""
+    return await _dbcore.chunked_delete(
+        "flow_summaries",
+        "created_at < datetime('now', '-' || ? || ' days')",
+        (int(days),),
     )
 
 

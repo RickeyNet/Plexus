@@ -14,6 +14,10 @@ Environment variables:
   itself; when running from source against the dev container the host is
   `127.0.0.1` (`scripts/dev-env.ps1` and `scripts/dev-env.sh` build the URL
   from `.env`).
+- `APP_DB_POOL_MAX` (default `30`, clamped to 1-80), `APP_DB_POOL_MIN`
+  (default `2`), `APP_DB_POOL_ACQUIRE_TIMEOUT` (seconds, default `30`) and
+  `APP_DB_STATEMENT_CACHE_SIZE` (default `500`) size the connection pool. Keep
+  the maximum below Postgres's `max_connections` (default 100).
 
 The `asyncpg` driver is part of `requirements.txt` and the hashed
 `requirements-lock.txt`, and installs from prebuilt wheels on Linux and

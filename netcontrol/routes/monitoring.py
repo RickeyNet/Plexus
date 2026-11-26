@@ -74,6 +74,7 @@ from netcontrol.routes.snmp import (
     SnmpEngine,
     _snmp_get_values,
     _snmp_walk,
+    by_last_index,
 )
 from netcontrol.telemetry import configure_logging, increment_metric, redact_value
 
@@ -464,11 +465,34 @@ async def _poll_host_monitoring(host: dict, cred: dict, snmp_cfg: dict) -> dict:
 
             # Interface details
             effective_names = if_names or if_descrs
-            name_map: dict[str, str] = {}
-            for oid, val in effective_names.items():
-                idx = oid.rsplit(".", 1)[-1] if "." in oid else ""
-                if idx:
-                    name_map[idx] = str(val)
+            name_map = {idx: str(val) for idx, val in by_last_index(effective_names, first_wins=False).items()}
+
+            # Each column keyed by ifIndex once: a per-interface scan of every
+            # column was quadratic and ran on the event loop each poll.
+            columns = {
+                "ifHighSpeed": by_last_index(if_speeds),
+                "ifHCInOctets": by_last_index(hc_in),
+                "ifHCOutOctets": by_last_index(hc_out),
+                "ifInErrors": by_last_index(if_in_errs),
+                "ifOutErrors": by_last_index(if_out_errs),
+                "ifInDiscards": by_last_index(if_in_disc),
+                "ifOutDiscards": by_last_index(if_out_disc),
+            }
+
+            def _column_int(column: str, idx: str) -> int:
+                if idx not in columns[column]:
+                    return 0
+                try:
+                    return int(columns[column][idx])
+                except (ValueError, TypeError) as exc:
+                    LOGGER.debug(
+                        "monitoring: bad %s value from %s for ifIndex %s: %s",
+                        column,
+                        host["ip_address"],
+                        idx,
+                        str(exc),
+                    )
+                    return 0
 
             if_details = []
             for oid, val in if_oper.items():
@@ -481,46 +505,9 @@ async def _poll_host_monitoring(host: dict, cred: dict, snmp_cfg: dict) -> dict:
                 admin = int(admin_val) if admin_val else 0
 
                 iface_name = name_map.get(idx, f"ifIndex-{idx}")
-                speed_mbps = 0
-                for s_oid, s_val in if_speeds.items():
-                    if s_oid.endswith("." + idx):
-                        try:
-                            speed_mbps = int(s_val)
-                        except (ValueError, TypeError) as exc:
-                            LOGGER.debug(
-                                "monitoring: bad ifHighSpeed value from %s for ifIndex %s: %s",
-                                host["ip_address"],
-                                idx,
-                                str(exc),
-                            )
-                        break
-
-                in_octets = 0
-                out_octets = 0
-                for i_oid, i_val in hc_in.items():
-                    if i_oid.endswith("." + idx):
-                        try:
-                            in_octets = int(i_val)
-                        except (ValueError, TypeError) as exc:
-                            LOGGER.debug(
-                                "monitoring: bad ifHCInOctets value from %s for ifIndex %s: %s",
-                                host["ip_address"],
-                                idx,
-                                str(exc),
-                            )
-                        break
-                for o_oid, o_val in hc_out.items():
-                    if o_oid.endswith("." + idx):
-                        try:
-                            out_octets = int(o_val)
-                        except (ValueError, TypeError) as exc:
-                            LOGGER.debug(
-                                "monitoring: bad ifHCOutOctets value from %s for ifIndex %s: %s",
-                                host["ip_address"],
-                                idx,
-                                str(exc),
-                            )
-                        break
+                speed_mbps = _column_int("ifHighSpeed", idx)
+                in_octets = _column_int("ifHCInOctets", idx)
+                out_octets = _column_int("ifHCOutOctets", idx)
 
                 status_str = "up" if oper == 1 else ("admin_down" if admin == 2 else "down")
                 if status_str == "up":
@@ -530,60 +517,6 @@ async def _poll_host_monitoring(host: dict, cred: dict, snmp_cfg: dict) -> dict:
                 else:
                     result["if_down_count"] += 1
 
-                # Extract error/discard counters
-                in_errors = 0
-                out_errors = 0
-                in_discards = 0
-                out_discards = 0
-                for e_oid, e_val in if_in_errs.items():
-                    if e_oid.endswith("." + idx):
-                        try:
-                            in_errors = int(e_val)
-                        except (ValueError, TypeError) as exc:
-                            LOGGER.debug(
-                                "monitoring: bad ifInErrors value from %s for ifIndex %s: %s",
-                                host["ip_address"],
-                                idx,
-                                str(exc),
-                            )
-                        break
-                for e_oid, e_val in if_out_errs.items():
-                    if e_oid.endswith("." + idx):
-                        try:
-                            out_errors = int(e_val)
-                        except (ValueError, TypeError) as exc:
-                            LOGGER.debug(
-                                "monitoring: bad ifOutErrors value from %s for ifIndex %s: %s",
-                                host["ip_address"],
-                                idx,
-                                str(exc),
-                            )
-                        break
-                for e_oid, e_val in if_in_disc.items():
-                    if e_oid.endswith("." + idx):
-                        try:
-                            in_discards = int(e_val)
-                        except (ValueError, TypeError) as exc:
-                            LOGGER.debug(
-                                "monitoring: bad ifInDiscards value from %s for ifIndex %s: %s",
-                                host["ip_address"],
-                                idx,
-                                str(exc),
-                            )
-                        break
-                for e_oid, e_val in if_out_disc.items():
-                    if e_oid.endswith("." + idx):
-                        try:
-                            out_discards = int(e_val)
-                        except (ValueError, TypeError) as exc:
-                            LOGGER.debug(
-                                "monitoring: bad ifOutDiscards value from %s for ifIndex %s: %s",
-                                host["ip_address"],
-                                idx,
-                                str(exc),
-                            )
-                        break
-
                 if_details.append(
                     {
                         "if_index": int(idx),
@@ -592,10 +525,10 @@ async def _poll_host_monitoring(host: dict, cred: dict, snmp_cfg: dict) -> dict:
                         "speed_mbps": speed_mbps,
                         "in_octets": in_octets,
                         "out_octets": out_octets,
-                        "in_errors": in_errors,
-                        "out_errors": out_errors,
-                        "in_discards": in_discards,
-                        "out_discards": out_discards,
+                        "in_errors": _column_int("ifInErrors", idx),
+                        "out_errors": _column_int("ifOutErrors", idx),
+                        "in_discards": _column_int("ifInDiscards", idx),
+                        "out_discards": _column_int("ifOutDiscards", idx),
                     }
                 )
 
@@ -1152,15 +1085,19 @@ async def _run_retention_cleanup_throttled() -> None:
         await db.delete_old_monitoring_alerts(retention_days)
         await db.delete_old_route_snapshots(retention_days)
         await db.delete_expired_suppressions()
-        await db.delete_old_sla_metrics(
-            int(state.MONITORING_CONFIG.get("sla_retention_days", state.MONITORING_DEFAULTS["sla_retention_days"]))
+        sla_retention_days = int(
+            state.MONITORING_CONFIG.get("sla_retention_days", state.MONITORING_DEFAULTS["sla_retention_days"])
         )
+        await db.delete_old_sla_metrics(sla_retention_days)
+        # Transitions are the availability record the SLA reports compute
+        # from, so they live as long as the SLA rollups, not the raw polls.
+        await db.delete_old_availability_transitions(sla_retention_days)
+        # IPAM has no retention pass of its own; its history is pruned here
+        # at the function's default (closed rows older than 365 days).
+        await db.prune_ip_history()
         await metrics_retention_cleanup()
         await db.purge_topology_availability(retention_days)
-        await db.purge_topology_entity_metrics(
-            retention_days,
-            int(state.MONITORING_CONFIG.get("sla_retention_days", state.MONITORING_DEFAULTS["sla_retention_days"])),
-        )
+        await db.purge_topology_entity_metrics(retention_days, sla_retention_days)
         await db.purge_meraki_alerts(retention_days)
         await db.purge_vendor_alerts(retention_days)
         await db.purge_security_events(retention_days)
@@ -2631,7 +2568,7 @@ async def sla_target_delete(target_id: int, request: Request):
 async def availability_summary_api(
     request: Request,
     group_id: int | None = Query(default=None),
-    days: int = Query(default=30),
+    days: int = Query(default=30, ge=1, le=365),
 ):
     return await db.get_availability_summary(group_id, days, **await group_filter(request))
 

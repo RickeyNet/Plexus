@@ -26,7 +26,15 @@ from routes.database import (
 from routes.db.change_events import tracks_changes
 from routes.db.device_model import _select
 from routes.db.inventory import group_ids_condition
+from routes.db.latest_rows import latest_row_lateral
 from routes.user_regex import UserRegex, compile_user_regex
+
+# Each host's newest backup as ``b``, joined after ``FROM hosts h``.
+_LATEST_BACKUP_JOIN = latest_row_lateral("config_backups", "host_id = h.id", "b")
+# Each (host, profile) pair's newest scan result as ``r``, joined after
+# ``FROM hosts h CROSS JOIN compliance_profiles cp`` (probes the
+# (host_id, profile_id, id) index of migration 0058).
+_LATEST_SCAN_JOIN = latest_row_lateral("compliance_scan_results", "host_id = h.id AND profile_id = cp.id", "r")
 
 __all__ = [
     "upsert_topology_link",
@@ -794,16 +802,11 @@ async def acknowledge_topology_changes(group_ids: Iterable[int] | None = None) -
 
 async def delete_old_topology_changes(days: int = 30) -> int:
     """Delete topology changes older than N days."""
-    db = await _dbcore.get_db()
-    try:
-        cursor = await db.execute(
-            "DELETE FROM topology_changes WHERE detected_at < datetime('now', ?)",
-            (f"-{days} days",),
-        )
-        await db.commit()
-        return cursor.rowcount
-    finally:
-        await db.close()
+    return await _dbcore.chunked_delete(
+        "topology_changes",
+        "detected_at < datetime('now', ?)",
+        (f"-{days} days",),
+    )
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -1512,16 +1515,11 @@ async def delete_config_snapshot(snapshot_id: int) -> None:
 
 async def delete_old_config_snapshots(days: int = 90) -> int:
     """Delete config snapshots older than N days."""
-    db = await _dbcore.get_db()
-    try:
-        cursor = await db.execute(
-            "DELETE FROM config_snapshots WHERE captured_at < datetime('now', ?)",
-            (f"-{days} days",),
-        )
-        await db.commit()
-        return cursor.rowcount
-    finally:
-        await db.close()
+    return await _dbcore.chunked_delete(
+        "config_snapshots",
+        "captured_at < datetime('now', ?)",
+        (f"-{days} days",),
+    )
 
 
 # ── Config Drift Events ──────────────────────────────────────────────────────
@@ -1762,16 +1760,11 @@ async def update_config_drift_event_status(event_id: int, status: str, resolved_
 
 async def delete_old_config_drift_events(days: int = 90) -> int:
     """Delete drift events older than N days."""
-    db = await _dbcore.get_db()
-    try:
-        cursor = await db.execute(
-            "DELETE FROM config_drift_events WHERE detected_at < datetime('now', ?)",
-            (f"-{days} days",),
-        )
-        await db.commit()
-        return cursor.rowcount
-    finally:
-        await db.close()
+    return await _dbcore.chunked_delete(
+        "config_drift_events",
+        "detected_at < datetime('now', ?)",
+        (f"-{days} days",),
+    )
 
 
 # ── Config Backup Policies ──────────────────────────────────────────────────
@@ -2286,14 +2279,8 @@ async def get_latest_config_backups_per_host(group_ids: Iterable[int] | None = N
             f"""SELECT b.id, b.policy_id, b.host_id, b.capture_method, b.status,
                       b.error_message, b.captured_at, LENGTH(b.config_text) as config_length,
                       h.hostname, h.ip_address, h.device_type
-               FROM config_backups b
-               INNER JOIN (
-                   SELECT host_id, MAX(id) AS max_id
-                   FROM config_backups
-                   WHERE host_id IS NOT NULL
-                   GROUP BY host_id
-               ) latest ON b.id = latest.max_id
-               LEFT JOIN hosts h ON h.id = b.host_id
+               FROM hosts h
+               {_LATEST_BACKUP_JOIN}
                {where}
                ORDER BY h.hostname""",  # nosec B608 - placeholders only
             scope_params,
@@ -2615,20 +2602,17 @@ async def delete_config_backup(backup_id: int) -> None:
 
 async def delete_old_config_backups(days: int = 30) -> int:
     """Delete backups older than N days (retention cleanup)."""
-    db = await _dbcore.get_db()
-    try:
-        # A host's newest successful backup is kept however old: it is the
-        # configuration the device still has (later captures matched it).
-        cursor = await db.execute(
-            """DELETE FROM config_backups
-               WHERE captured_at < datetime('now', ?)
-                 AND id NOT IN (SELECT MAX(id) FROM config_backups WHERE status = 'success' GROUP BY host_id)""",
-            (f"-{days} days",),
-        )
-        await db.commit()
-        return cursor.rowcount
-    finally:
-        await db.close()
+    # A host's newest successful backup is kept however old: it is the
+    # configuration the device still has (later captures matched it).
+    # Asked as "not a success, or a newer success of the host exists" so
+    # each chunk probes per host instead of aggregating the whole table.
+    return await _dbcore.chunked_delete(
+        "config_backups",
+        "captured_at < datetime('now', ?)"
+        " AND (status <> 'success' OR EXISTS (SELECT 1 FROM config_backups n"
+        " WHERE n.host_id = config_backups.host_id AND n.status = 'success' AND n.id > config_backups.id))",
+        (f"-{days} days",),
+    )
 
 
 async def get_config_backup_summary(group_ids: Iterable[int] | None = None) -> dict:
@@ -3027,16 +3011,11 @@ async def delete_compliance_scan_result(result_id: int) -> None:
 
 async def delete_old_compliance_scan_results(days: int = 90) -> int:
     """Delete compliance scan results older than N days."""
-    db = await _dbcore.get_db()
-    try:
-        cursor = await db.execute(
-            "DELETE FROM compliance_scan_results WHERE scanned_at < datetime('now', '-' || ? || ' days')",
-            (days,),
-        )
-        await db.commit()
-        return cursor.rowcount
-    finally:
-        await db.close()
+    return await _dbcore.chunked_delete(
+        "compliance_scan_results",
+        "scanned_at < datetime('now', '-' || ? || ' days')",
+        (days,),
+    )
 
 
 async def get_compliance_summary(*, group_ids: Iterable[int] | None = None) -> dict:
@@ -3045,14 +3024,15 @@ async def get_compliance_summary(*, group_ids: Iterable[int] | None = None) -> d
     only (profiles are a shared catalogue and always counted)."""
     group_sql, group_params = group_ids_condition("group_id", group_ids)
     host_sql, host_params = group_ids_condition("scope_h.group_id", group_ids)
+    latest_sql, latest_params = group_ids_condition("h.group_id", group_ids)
     if group_sql:
         # Fixed clauses, values bound.
         assign_and = f" AND {group_sql}"
         host_cond = f"host_id IN (SELECT scope_h.id FROM hosts scope_h WHERE {host_sql})"
         result_where = f" WHERE {host_cond}"
-        result_and = f" AND {host_cond}"
+        latest_and = f" AND {latest_sql}"
     else:
-        assign_and = result_where = result_and = ""
+        assign_and = result_where = latest_and = ""
     db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute("SELECT COUNT(*) FROM compliance_profiles")
@@ -3074,10 +3054,11 @@ async def get_compliance_summary(*, group_ids: Iterable[int] | None = None) -> d
         hosts_scanned = row[0] if row else 0
 
         cursor = await db.execute(
-            f"""SELECT COUNT(DISTINCT host_id) FROM compliance_scan_results
-               WHERE status = 'non-compliant'
-                 AND id IN (SELECT MAX(id) FROM compliance_scan_results GROUP BY host_id, profile_id){result_and}""",  # nosec B608
-            host_params,
+            f"""SELECT COUNT(DISTINCT h.id) FROM hosts h
+               CROSS JOIN compliance_profiles cp
+               {_LATEST_SCAN_JOIN}
+               WHERE r.status = 'non-compliant'{latest_and}""",  # nosec B608
+            latest_params,
         )
         row = await cursor.fetchone()
         hosts_non_compliant = row[0] if row else 0
@@ -3107,7 +3088,7 @@ async def get_compliance_host_status(
     profile). ``group_ids`` (object scope): only hosts in those groups."""
     db = await _dbcore.get_db(read_only=True)
     try:
-        clauses = ["r.profile_id = ?"] if profile_id is not None else []
+        clauses = ["cp.id = ?"] if profile_id is not None else []
         params: tuple = (profile_id,) if profile_id is not None else ()
         scope_sql, scope_params = group_ids_condition("h.group_id", group_ids)
         if scope_sql:
@@ -3116,16 +3097,11 @@ async def get_compliance_host_status(
         where_clause = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         cursor = await db.execute(
             f"""SELECT r.host_id, h.hostname, h.ip_address, r.profile_id,
-                       p.name as profile_name, r.status, r.total_rules,
+                       cp.name as profile_name, r.status, r.total_rules,
                        r.passed_rules, r.failed_rules, r.scanned_at
-                FROM compliance_scan_results r
-                INNER JOIN (
-                    SELECT host_id, profile_id, MAX(id) as max_id
-                    FROM compliance_scan_results
-                    GROUP BY host_id, profile_id
-                ) latest ON r.id = latest.max_id
-                LEFT JOIN hosts h ON h.id = r.host_id
-                LEFT JOIN compliance_profiles p ON p.id = r.profile_id
+                FROM hosts h
+                CROSS JOIN compliance_profiles cp
+                {_LATEST_SCAN_JOIN}
                 {where_clause}
                 ORDER BY r.status DESC, h.hostname""",
             params,

@@ -827,3 +827,55 @@ async def test_cloud_policy_rules_api_supports_action_direction_and_resource_fil
     )
     assert resource_rules["count"] == 1
     assert resource_rules["rules"][0]["rule_uid"] == deny_rule["rule_uid"]
+
+
+async def _topology(monkeypatch, hidden: bool, **query) -> dict:
+    async def _is_hidden(_request):
+        return hidden
+
+    monkeypatch.setattr(cloud_visibility_module, "_hidden", _is_hidden)
+    return await cloud_visibility_module.cloud_topology_api(
+        account_id=query.get("account_id"), provider=query.get("provider"), request=_DummyRequest()
+    )
+
+
+@pytest.mark.asyncio
+async def test_topology_payload_sends_metadata_once_and_cache_never_crosses_scopes(monkeypatch):
+    await _init()
+    cloud_visibility_module._topology_changed()
+    account = await db_module.create_cloud_account(provider="aws", name="Cache Test")
+    account_id = int(account["id"])
+    await db_module.replace_cloud_discovery_snapshot(
+        account_id,
+        resources=[
+            {
+                "provider": "aws",
+                "resource_uid": "aws:vpc:cache-a",
+                "resource_type": "vpc",
+                "name": "vpc-a",
+                "region": "us-east-1",
+                "cidr": "192.0.2.0/24",
+                "status": "available",
+                "metadata": {"owner": "team-a"},
+            }
+        ],
+        connections=[],
+        hybrid_links=[],
+    )
+
+    # A scoped caller first: its empty view must not be served to anyone else.
+    hidden = await _topology(monkeypatch, True)
+    assert hidden["resources"] == [] and hidden["accounts"] == []
+    full = await _topology(monkeypatch, False)
+    assert [r["resource_uid"] for r in full["resources"]] == ["aws:vpc:cache-a"]
+    resource = full["resources"][0]
+    assert "metadata_json" not in resource and isinstance(resource["metadata"], dict)
+    # And the unrestricted payload, now cached, is never served to a scoped caller.
+    assert (await _topology(monkeypatch, True))["resources"] == []
+    assert await _topology(monkeypatch, False) is full
+
+    # A write the UI re-reads at once clears the cache.
+    cloud_visibility_module._topology_changed()
+    await db_module.delete_cloud_account(account_id)
+    assert (await _topology(monkeypatch, False))["resources"] == []
+    cloud_visibility_module._topology_changed()
