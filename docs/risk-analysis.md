@@ -151,6 +151,15 @@ deployment require approval. See [Deployments](deployments.md).
 - **Instruction sets.** The selected instruction set's own text is used.
   Vendor variants are not chosen per host and `{{secret.NAME}}` references
   are not filled in.
+- **Secrets are masked.** An analysis run against a device follows the rule
+  for device configuration
+  ([Config backups and drift](config-backups-and-drift.md)): without
+  `config-backups.write` and write access to the device, the captured
+  configuration, the **Predicted Config Diff**, the **Proposed Commands**
+  and the commands listed under an affected area show secret values as
+  `********`. That includes commands you typed yourself. The stored analysis
+  keeps the commands as entered. An offline analysis is shown as it was
+  entered to every user who can see it, so do not paste secrets into one.
 - **Approval is final.** There is no way to withdraw an approval. Any user
   with the feature can approve any analysis, including their own.
 - **Deleting** an analysis removes it after you confirm. Any user with the

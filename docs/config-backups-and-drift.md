@@ -125,7 +125,8 @@ The same rule covers every other page that shows a device's configuration
 or lines taken from it: config drift snapshots, baselines and drift diffs,
 the revert job's command list, intended-config extra lines and remediation
 commands, lab twins cloned from a host (and their runs and drift diffs),
-risk analyses, and the drift events listed beside an alert or a deployment.
+risk analyses (the captured configuration, the predicted diff and the
+proposed commands), and the drift events listed beside an alert or a deployment.
 Without `config-backups.write` and write access to the device you read them
 masked. A lab twin cloned by such a user is built from the masked text. A
 baseline saved from a masked snapshot stores the captured lines, not the

@@ -168,7 +168,11 @@ this filter:
 | Everything else | `info` |
 
 The sink table shows **State**, **Queue**, **Delivered**, **Dropped**,
-**Last error** and **Last test** for each sink. Forwarding is best effort:
+**Last error** and **Last test** for each sink. The error text (also
+written to the audit log by a test) can quote the receiver's reply: the
+sink's token and client key are removed from it, other passwords and tokens
+are masked as in the application log, and it is cut to 500 characters.
+Forwarding is best effort:
 each sink has a queue (default 1,000 events) and retries with back-off
 (default 5 retries). When the queue is full, the oldest queued event is
 dropped and counted. The database copy is always kept, so a SIEM outage

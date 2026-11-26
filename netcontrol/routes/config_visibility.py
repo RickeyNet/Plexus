@@ -23,7 +23,7 @@ the server goes through this module.
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from typing import Any
 
 from fastapi import HTTPException
@@ -188,11 +188,19 @@ async def mask_config_rows(
     *fields: str,
     keep_lines: bool = False,
     host_field: str = "host_id",
+    also: Callable[[dict[str, Any]], None] | None = None,
 ) -> list[dict[str, Any]]:
-    """``mask_config_record`` over a list, the right read once per host."""
+    """``mask_config_record`` over a list, the right read once per host.
+    ``also`` is called with each row of a host this caller does not read
+    raw, to mask what the row holds beside ``fields`` (commands, text
+    inside a JSON column)."""
     allowed = await raw_hosts(request, (row.get(host_field) for row in rows))
     for row in rows:
         opnsense_masking.mask_record(row, *fields)
-        if not row.get("secrets_masked") and not allowed.get(row.get(host_field), False):
+        if allowed.get(row.get(host_field), False):
+            continue
+        if not row.get("secrets_masked"):
             mask_fields(row, *fields, keep_lines=keep_lines)
+        if also is not None:
+            also(row)
     return rows

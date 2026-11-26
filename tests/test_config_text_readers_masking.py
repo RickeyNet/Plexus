@@ -16,6 +16,7 @@ Every secret and address below is invented.
 from __future__ import annotations
 
 import functools
+import json
 
 import pytest
 import routes.database as db_module
@@ -384,6 +385,63 @@ def test_risk_analysis_masks_the_captured_config_for_read_only_users(env):
         assert resp.status_code == 200, resp.text
         assert _leaked(resp.text) == [], path
     assert env["admin"].get(f"/api/risk-analysis/{analysis_id}").json()["current_config"] == CONFIG
+
+
+def test_risk_analysis_masks_the_proposed_commands_for_read_only_users(env):
+    """The commands an analysis was run for are configuration for the host.
+    A reader without the raw right gets them masked, as text and where the
+    analysis quotes them under an affected area."""
+    call, host_id = env["call"], env["host_id"]
+    commands = [
+        f"enable secret 0 {ENABLE_SECRET}",
+        f"no snmp-server community {COMMUNITY} RO",
+        "interface GigabitEthernet0/1",
+    ]
+    detail = {
+        "affected_areas": [
+            {
+                "area": "security",
+                "label": "Security / AAA",
+                "weight": 0.2,
+                "matched_count": 2,
+                "matched_commands": commands[:2],
+            }
+        ],
+        "risk_factors": ["Touches critical areas: Security / AAA"],
+    }
+    analysis_id = call(
+        functools.partial(
+            db_module.create_risk_analysis,
+            host_id=host_id,
+            group_id=env["gid"],
+            proposed_commands="\n".join(commands),
+            analysis=json.dumps(detail),
+        )
+    )
+    path = f"/api/risk-analysis/{analysis_id}"
+    reader = user_client(env["admin"], "risk-command-reader", features=["risk-analysis"])
+
+    for url in (path, "/api/risk-analysis"):
+        resp = reader.get(url)
+        assert resp.status_code == 200, resp.text
+        assert _leaked(resp.text) == [], f"{url} returned proposed commands with their secrets to a read-only user"
+    row = reader.get(path).json()
+    assert row["secrets_masked"] is True
+    # One line per command, each still readable as the command it is.
+    lines = row["proposed_commands"].split("\n")
+    assert len(lines) == len(commands)
+    assert lines[0].startswith("enable secret ")
+    assert lines[1].startswith("no snmp-server community ")
+    assert lines[2] == commands[2]
+    area = json.loads(row["analysis"])["affected_areas"][0]
+    assert area["matched_count"] == 2 and len(area["matched_commands"]) == 2
+
+    writer = user_client(env["admin"], "risk-command-raw", features=["risk-analysis", *RAW_FEATURES])
+    for client in (env["admin"], writer):
+        row = client.get(path).json()
+        assert row["proposed_commands"] == "\n".join(commands)
+        assert json.loads(row["analysis"]) == detail
+        assert not row.get("secrets_masked")
 
 
 def test_alert_correlation_masks_drift_diffs_for_read_only_users(env, monkeypatch):

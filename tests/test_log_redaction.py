@@ -12,7 +12,7 @@ import pytest
 from netcontrol import secret_keys
 from netcontrol.integrations.meraki import collector as meraki_collector
 from netcontrol.mcp import redact as mcp_redact
-from netcontrol.telemetry import RedactingFilter, redact_value
+from netcontrol.telemetry import RedactingFilter, redact_text, redact_value
 
 from mcp_helpers import admin_client
 
@@ -76,6 +76,17 @@ def test_words_that_only_name_a_secret_stay_readable(line):
 
 def test_url_userinfo_keeps_the_user_name():
     assert redact_value("https://netops:urlPass42@vault.example.com/x") == "https://netops:***@vault.example.com/x"
+
+
+def test_kept_text_loses_known_values_and_what_the_patterns_find():
+    """``redact_text`` is for text that is stored or returned, not logged: a
+    value known to be secret goes wherever it stands, even with no key name
+    beside it, and the rest gets the redaction of a log line."""
+    text = "HTTP 401: value exampleValue0001 refused, password=examplePass0002, see exampleValue0001x"
+    out = redact_text(text, ["exampleValue0001", "", "exampleValue0001x"])
+    assert out == "HTTP 401: value *** refused, password=***, see ***"
+    assert redact_text("HTTP 500: upstream timed out") == "HTTP 500: upstream timed out"
+    assert redact_text("") == ""
 
 
 def test_quotes_are_kept_around_a_masked_value():

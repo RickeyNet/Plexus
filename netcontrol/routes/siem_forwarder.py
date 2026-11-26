@@ -51,10 +51,11 @@ from netcontrol.routes.net_guard import (
 from netcontrol.routes.outbound_http import (
     DELIVERY_RESPONSE_MAX_BYTES,
     MAX_PINNED_ADDRESSES,
+    delivery_error_text,
     send_request,
     tls_verify,
 )
-from netcontrol.secret_fields import SECRET_MASK
+from netcontrol.secret_fields import SECRET_MASK, SIEM_SINK_SECRET_FIELDS
 from netcontrol.telemetry import configure_logging
 from netcontrol.tls_pem import load_cert_chain_pem
 
@@ -595,6 +596,13 @@ _sinks: dict[str, SinkRuntime] = {}
 _started = False
 
 
+def _error_text(sink: SinkConfig, exc: Exception) -> str:
+    """What is kept of a failed delivery to ``sink``
+    (``outbound_http.delivery_error_text``), without the sink's stored
+    secrets."""
+    return delivery_error_text(exc, (getattr(sink, name) for name in SIEM_SINK_SECRET_FIELDS))
+
+
 def _utc_now_iso() -> str:
     return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -625,7 +633,7 @@ async def _sink_loop(rt: SinkRuntime) -> None:
                     except Exception as exc:
                         attempt += 1
                         rt.delivery_failures += 1
-                        rt.last_error = f"{type(exc).__name__}: {exc}"
+                        rt.last_error = _error_text(sink, exc)
                         rt.last_failure_at = _utc_now_iso()
                         if attempt > sink.max_retries:
                             LOGGER.warning(
@@ -808,4 +816,4 @@ async def send_test_event(sink_id: str) -> dict:
         await deliver(rt.config, probe)
         return {"ok": True, "error": ""}
     except Exception as exc:
-        return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+        return {"ok": False, "error": _error_text(rt.config, exc)}

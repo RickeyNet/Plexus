@@ -17,21 +17,24 @@ from __future__ import annotations
 import asyncio
 import ssl
 import urllib.request
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from typing import Any
 from urllib.parse import urlsplit
 
 import httpx
 
 from netcontrol.routes.net_guard import IPAddress, OutboundRequestError, validate_outbound_host, validate_outbound_url
+from netcontrol.telemetry import redact_text
 
 __all__ = [
     "DEFAULT_MAX_RESPONSE_BYTES",
+    "DELIVERY_ERROR_MAX_CHARS",
     "DELIVERY_RESPONSE_MAX_BYTES",
     "ExchangeTimeoutError",
     "OutboundRequestError",
     "PinnedTransport",
     "ResponseTooLargeError",
+    "delivery_error_text",
     "guard_host",
     "guard_url",
     "send_request",
@@ -45,6 +48,8 @@ DEFAULT_MAX_RESPONSE_BYTES = 4 * 1024 * 1024
 # For a sender that only delivers (a notification, a log event, a webhook)
 # and keeps the status and a short excerpt of the answer.
 DELIVERY_RESPONSE_MAX_BYTES = 64 * 1024
+# The most characters of a failed delivery such a sender keeps.
+DELIVERY_ERROR_MAX_CHARS = 500
 # Without a ``total_timeout_s`` the whole exchange gets this many times
 # ``timeout_s``, and at least the floor.
 TOTAL_TIMEOUT_FACTOR = 6
@@ -59,6 +64,17 @@ class ExchangeTimeoutError(httpx.TimeoutException, TimeoutError):
     """The whole exchange took longer than its deadline. Both an ``httpx``
     timeout, so a caller's transport-failure handling covers it, and a
     ``TimeoutError``."""
+
+
+def delivery_error_text(exc: BaseException, secrets: Iterable[str] = ()) -> str:
+    """What a sender keeps of a failed delivery for its status page, its
+    test result and the audit trail: the exception's type and message. The
+    message may quote the receiver's reply, and a receiver can echo what it
+    was sent, so each of ``secrets`` (the secret values stored for the
+    target) is removed by value, the rest gets the redaction of a log line
+    (``telemetry.redact_text``), and the text is cut to
+    ``DELIVERY_ERROR_MAX_CHARS``."""
+    return redact_text(f"{type(exc).__name__}: {exc}", secrets)[:DELIVERY_ERROR_MAX_CHARS]
 
 
 async def guard_url(url: str) -> list[IPAddress]:

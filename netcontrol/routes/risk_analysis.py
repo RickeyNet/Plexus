@@ -30,7 +30,7 @@ from netcontrol.object_scope import (
     scoped,
     sql_condition,
 )
-from netcontrol.routes.config_visibility import mask_config_rows
+from netcontrol.routes.config_visibility import mask_commands, mask_config_rows, mask_config_text
 from netcontrol.routes.device_config import ON_DEMAND_MAX_AGE_SECONDS, get_device_config
 from netcontrol.routes.shared import (
     _audit,
@@ -59,11 +59,48 @@ register_model(
 _CONFIG_FIELDS = ("current_config", "simulated_config", "proposed_diff")
 
 
+def _masked_detail(detail: object) -> object:
+    """The ``analysis`` of a row (a dict, or the JSON text stored for it)
+    with the commands quoted under its affected areas masked. Text that is
+    not JSON is masked as configuration text."""
+    if isinstance(detail, str):
+        if not detail:
+            return detail
+        try:
+            return json.dumps(_masked_detail(json.loads(detail)))
+        except ValueError:
+            return mask_config_text(detail)
+    if isinstance(detail, dict):
+        for area in detail.get("affected_areas") or []:
+            if isinstance(area, dict) and isinstance(area.get("matched_commands"), list):
+                area["matched_commands"] = mask_commands(area["matched_commands"])
+    return detail
+
+
+def _mask_proposed_commands(row: dict) -> None:
+    """Mask the commands an analysis was run for, in place: the
+    ``proposed_commands`` text and the copies quoted in ``analysis``. They
+    are configuration for the host (``enable secret``, a community, a
+    key), read under the same rule as the configuration it returned."""
+    commands = row.get("proposed_commands")
+    if isinstance(commands, str) and commands:
+        row["proposed_commands"] = "\n".join(mask_commands(commands.split("\n")))
+    if row.get("analysis"):
+        row["analysis"] = _masked_detail(row["analysis"])
+
+
 async def _masked_analyses(request: Request, rows: list[dict]) -> list[dict]:
-    """Analyses with the configuration their host returned masked under the
-    rule of ``netcontrol.routes.config_visibility``. An offline analysis
-    (no host) holds text its author supplied and is returned as it is."""
-    await mask_config_rows(request, [r for r in rows if r.get("host_id") is not None], *_CONFIG_FIELDS, keep_lines=True)
+    """Analyses with the configuration their host returned, and the commands
+    proposed for it, masked under the rule of
+    ``netcontrol.routes.config_visibility``. An offline analysis (no host)
+    holds text its author supplied and is returned as it is."""
+    await mask_config_rows(
+        request,
+        [r for r in rows if r.get("host_id") is not None],
+        *_CONFIG_FIELDS,
+        keep_lines=True,
+        also=_mask_proposed_commands,
+    )
     return rows
 
 

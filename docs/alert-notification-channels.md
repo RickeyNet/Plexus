@@ -41,6 +41,13 @@ changes the SMTP server or port, turns SMTP encryption off, changes the
 webhook URL's scheme, host or port, or turns certificate checks off is
 refused with `400` until the secret is typed again. The secrets are stored
 encrypted in the database.
+A failed delivery is kept as the channel's last error (`last_error` in the
+live stats), and a failed test returns its error and writes it to the audit
+log. That text is the error type and message, which can quote the first 200
+characters of the receiver's reply. Before it is kept, the channel's stored
+secrets are removed from it wherever they appear, passwords, tokens and
+`Authorization` values are masked as in the application log, and it is cut
+to 500 characters.
 The webhook and Teams URLs and an email channel's SMTP server pass the
 outbound address guard ([webhooks.md](webhooks.md#outbound-address-check)):
 the SMTP server when a new or changed one is saved (`400` naming the guard)

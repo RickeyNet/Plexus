@@ -543,3 +543,75 @@ async def test_a_refused_sink_target_opens_no_connection(monkeypatch):
     with pytest.raises(RuntimeError, match="target rejected"):
         await sf.deliver(sink, _EVENT)
     assert attempts == []
+
+
+# ── Stored error text ────────────────────────────────────────────────────────
+
+# Invented values: the token the sink is configured to send, and a
+# credential the receiver names in its reply.
+_SINK_TOKEN = "example-sink-token-0001"
+_REPLY_TOKEN = "exampleReplyToken0002"
+
+
+def _token_sink():
+    return sf.sanitize_sink(
+        {
+            "id": "h",
+            "protocol": "https",
+            "url": "https://siem.example.com/ingest",
+            "bearer_token": _SINK_TOKEN,
+            "max_retries": 0,
+        }
+    )
+
+
+async def _echoing_failure(*_a, **_kw):
+    """A receiver that answers an error and quotes what it was sent."""
+    raise RuntimeError(
+        f"https sink h: HTTP 403 token {_SINK_TOKEN} is not allowed; api_key={_REPLY_TOKEN} " + "x" * 2000
+    )
+
+
+def _assert_error_is_clean(text: str) -> None:
+    assert "HTTP 403" in text, "the error no longer says what failed"
+    for secret in (_SINK_TOKEN, _REPLY_TOKEN):
+        assert secret not in text, "a failed delivery kept a secret in its error text"
+    assert len(text) <= 500
+
+
+async def test_last_error_keeps_no_secret_the_receiver_echoed(monkeypatch):
+    monkeypatch.setattr(sf, "deliver", _echoing_failure)
+    rt = sf.SinkRuntime(config=_token_sink(), queue=asyncio.Queue(maxsize=10))
+    async with sf._runtime_lock:
+        sf._sinks[rt.config.id] = rt
+    rt.task = asyncio.create_task(sf._sink_loop(rt))
+    try:
+        await rt.queue.put({**_EVENT, "id": 1})
+        for _ in range(200):
+            if rt.delivery_failures >= 1:
+                break
+            await asyncio.sleep(0.01)
+        assert rt.delivery_failures >= 1
+        _assert_error_is_clean(next(s for s in sf.get_stats() if s["id"] == "h")["last_error"])
+    finally:
+        rt.task.cancel()
+        try:
+            await rt.task
+        except asyncio.CancelledError:
+            pass
+        async with sf._runtime_lock:
+            sf._sinks.pop(rt.config.id, None)
+
+
+async def test_send_test_event_error_keeps_no_secret_the_receiver_echoed(monkeypatch):
+    monkeypatch.setattr(sf, "deliver", _echoing_failure)
+    rt = sf.SinkRuntime(config=_token_sink(), queue=asyncio.Queue(maxsize=10))
+    async with sf._runtime_lock:
+        sf._sinks[rt.config.id] = rt
+    try:
+        res = await sf.send_test_event("h")
+        assert res["ok"] is False
+        _assert_error_is_clean(res["error"])
+    finally:
+        async with sf._runtime_lock:
+            sf._sinks.pop(rt.config.id, None)

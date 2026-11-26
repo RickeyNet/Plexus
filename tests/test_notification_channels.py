@@ -474,3 +474,63 @@ async def test_send_test_event_delivers_probe():
 async def test_send_test_event_unknown_channel():
     res = await nc.send_test_event("nope")
     assert res["ok"] is False
+
+
+# ── Stored error text ────────────────────────────────────────────────────────
+
+# Invented values: what the channel is configured to send, and a credential
+# the receiver names in its reply.
+_AUTH_VALUE = "example-header-value-0001"
+_ROUTING_KEY = "example-routing-key-0002"
+_REPLY_TOKEN = "exampleReplyToken0003"
+
+
+def _echoing_failure(cfg, alert):
+    """A receiver that answers an error and quotes what it was sent."""
+    raise RuntimeError(
+        f"webhook HTTP 401: denied header {_AUTH_VALUE} routing {_ROUTING_KEY} "
+        f"Authorization: Bearer {_REPLY_TOKEN} " + "x" * 2000
+    )
+
+
+def _secret_channel():
+    return nc.sanitize_channel(
+        {
+            "id": "w",
+            "type": "webhook",
+            "webhook_url": "http://127.0.0.1:1/x",
+            "webhook_auth_header": "X-Api-Key",
+            "webhook_auth_value": _AUTH_VALUE,
+            "routing_key": _ROUTING_KEY,
+            "max_retries": 0,
+        }
+    )
+
+
+def _assert_error_is_clean(text: str) -> None:
+    assert "webhook HTTP 401" in text, "the error no longer says what failed"
+    for secret in (_AUTH_VALUE, _ROUTING_KEY, _REPLY_TOKEN):
+        assert secret not in text, "a failed delivery kept a secret in its error text"
+    assert len(text) <= 500
+
+
+async def test_last_error_keeps_no_secret_the_receiver_echoed(monkeypatch):
+    async def fail(cfg, alert):
+        _echoing_failure(cfg, alert)
+
+    monkeypatch.setattr(nc, "deliver", fail)
+    await nc.start_dispatcher([_secret_channel()], default_channel_ids=["w"])
+    await nc.on_alert_created({**_ALERT, "channel_ids": ""})
+    assert await _wait(lambda: nc.get_stats()[0]["delivery_failures"] >= 1)
+    _assert_error_is_clean(nc.get_stats()[0]["last_error"])
+
+
+async def test_send_test_event_error_keeps_no_secret_the_receiver_echoed(monkeypatch):
+    async def fail(cfg, alert):
+        _echoing_failure(cfg, alert)
+
+    monkeypatch.setattr(nc, "deliver", fail)
+    await nc.start_dispatcher([_secret_channel()])
+    res = await nc.send_test_event("w")
+    assert res["ok"] is False
+    _assert_error_is_clean(res["error"])

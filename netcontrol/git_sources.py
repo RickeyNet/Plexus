@@ -52,6 +52,7 @@ from netcontrol.intended_config import (
     clean_name_value,
     clean_weight,
 )
+from netcontrol.telemetry import mask_values
 from netcontrol.yaml_safe import safe_load_no_alias
 
 # The content types a source can provide, each read from the directory of
@@ -245,10 +246,7 @@ def _basic_token(username: str, password: str) -> str:
 
 def scrub(text: str, secrets: Iterable[str] = ()) -> str:
     """``text`` with every secret and any URL user info replaced by ``***``."""
-    out = text or ""
-    for secret in sorted({s for s in secrets if s}, key=len, reverse=True):
-        out = out.replace(secret, "***")
-    return _URL_USERINFO_RE.sub(lambda m: f"{m.group(1)}://***@", out)
+    return _URL_USERINFO_RE.sub(lambda m: f"{m.group(1)}://***@", mask_values(text, secrets))
 
 
 def git_binary() -> str:

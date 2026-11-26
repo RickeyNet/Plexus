@@ -8,6 +8,7 @@ import re
 import socket
 import threading
 from collections import defaultdict, deque
+from collections.abc import Iterable
 from typing import Any
 
 from netcontrol.secret_keys import SECRET_KEY_REGEX, SECRET_KEY_WORDS, should_mask
@@ -184,6 +185,23 @@ def redact_value(value: Any) -> Any:
     if isinstance(value, str):
         return _redact_string(value)
     return value
+
+
+def mask_values(text: str, secrets: Iterable[str] = ()) -> str:
+    """``text`` with each of ``secrets`` replaced by the mask wherever it
+    occurs, the longest first so a secret that contains another goes whole."""
+    out = text or ""
+    for secret in sorted({s for s in secrets if s}, key=len, reverse=True):
+        out = out.replace(secret, _MASK)
+    return out
+
+
+def redact_text(text: str, secrets: Iterable[str] = ()) -> str:
+    """Text that is kept or returned instead of logged (an exception
+    message, a receiver's reply) with the redaction a log line gets, and
+    with each of ``secrets``, the values known to be secret here, removed
+    by value first (``mask_values``)."""
+    return _redact_string(mask_values(text, secrets))
 
 
 def configure_logging(logger_name: str = "plexus") -> logging.Logger:

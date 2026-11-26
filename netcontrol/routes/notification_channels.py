@@ -60,6 +60,7 @@ import httpx
 from netcontrol.routes.outbound_http import (
     DELIVERY_RESPONSE_MAX_BYTES,
     OutboundRequestError,
+    delivery_error_text,
     guard_host,
     guard_url,
     send_request,
@@ -667,6 +668,13 @@ _default_channel_ids: list[str] = []
 _started = False
 
 
+def _error_text(cfg: ChannelConfig, exc: Exception) -> str:
+    """What is kept of a failed delivery to ``cfg``
+    (``outbound_http.delivery_error_text``), without the channel's stored
+    secrets."""
+    return delivery_error_text(exc, (getattr(cfg, name) for name in _SECRET_FIELDS))
+
+
 def _utc_now_iso() -> str:
     return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -690,7 +698,7 @@ async def _channel_loop(rt: ChannelRuntime) -> None:
                     except Exception as exc:
                         attempt += 1
                         rt.delivery_failures += 1
-                        rt.last_error = f"{type(exc).__name__}: {exc}"
+                        rt.last_error = _error_text(cfg, exc)
                         rt.last_failure_at = _utc_now_iso()
                         if attempt > cfg.max_retries:
                             LOGGER.warning(
@@ -906,4 +914,4 @@ async def send_test_event(channel_id: str) -> dict:
         await deliver(rt.config, _probe_alert())
         return {"ok": True, "error": ""}
     except Exception as exc:
-        return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+        return {"ok": False, "error": _error_text(rt.config, exc)}
