@@ -1792,9 +1792,9 @@ scp==0.16.2 \
     --hash=sha256:98d2e9ecdbe09e6bd41c22d6b69a93f203589a6590624685373e81f8bfdc60fd \
     --hash=sha256:d049f9aa77db4042c44b922cecabe97ef0716fb334a95701d68d1c7991684fc2
     # via netmiko
-signxml==5.3.0 \
-    --hash=sha256:1a7f19fad67941ad2aae9b0daf5a53b29248308fc4911c40f7242770221a707d \
-    --hash=sha256:4fc31f162569e40411a23cb971449e579a0510bbdb0a9842db4c87e5bc737287
+signxml==5.3.1 \
+    --hash=sha256:01ca1d5b7d5829d1622ae3a7ce3d312d3fb28a67297d79c0cfa662fb80a722c8 \
+    --hash=sha256:c45457cd97b3ce52f7342c6f8f049cebe0b8bba69d8fa84da0e7ef5701c9d14f
     # via -r requirements.txt
 six==1.17.0 \
     --hash=sha256:4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274 \

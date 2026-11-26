@@ -638,9 +638,9 @@ google-api-python-client==2.202.0 \
     --hash=sha256:aaa90064c9bb642ff1d065b22ca8958a2cb6e345909cefe70d0e5452fc50e08b \
     --hash=sha256:ae126c8e91f43c331e23dbd83bc4a8075699dd48089cebc7295f6ab2f5850fc5
     # via -r requirements-cloud.txt
-google-auth==2.63.0 \
-    --hash=sha256:cbc065325f67511946d1a66672e4f47e71ed162ef1abd2bb8404ceec407c86ba \
-    --hash=sha256:f198b99dd49e81f96f54abce2c03d4dd28fb7e3c77702eb6ae1c5bf25435054c
+google-auth==2.63.1 \
+    --hash=sha256:3c977ca57114a302c2589f3a24be7ca1b6862d30da7619f4230a78809f58a0e9 \
+    --hash=sha256:f69f387dba9abe536fec87483a749485f2ef0c81bfa79f609d9873e57054a1a5
     # via
     #   -r requirements-cloud.txt
     #   google-api-core
@@ -666,9 +666,9 @@ google-cloud-core==2.8.0 \
     --hash=sha256:365f8e4518ae81c8101b8dea5fc1c32a960badedb8b511f19db2843cbbd285d2 \
     --hash=sha256:e235b0952f7ffe7b9c71a4cf96b506d9cfb557e22557c412f0df9b7068b5d007
     # via google-cloud-logging
-google-cloud-logging==3.17.0 \
-    --hash=sha256:d7343f2b82b4f9e9244bfc8aba7ad034c415f9bbb405ed28d1125aa37d270b72 \
-    --hash=sha256:da2819da683a5135e21c2853ff2c86040786cd5521c3f71424755c110cf36fe2
+google-cloud-logging==3.17.1 \
+    --hash=sha256:24af44573642b4c3f0154d34511ddac89589824ee802ee743464022845322327 \
+    --hash=sha256:c347426cc8aea05ad5f6fc12ebd013329c3387c378f4669a8e53e1b44f998981
     # via -r requirements-cloud.txt
 google-cloud-monitoring==2.32.0 \
     --hash=sha256:507501ce1c39161c071754f7ed14cd527788b4ea44a1d052bd815c115a70ea48 \
@@ -2166,9 +2166,9 @@ scp==0.16.2 \
     # via
     #   -c lock-constraints.txt
     #   netmiko
-signxml==5.3.0 \
-    --hash=sha256:1a7f19fad67941ad2aae9b0daf5a53b29248308fc4911c40f7242770221a707d \
-    --hash=sha256:4fc31f162569e40411a23cb971449e579a0510bbdb0a9842db4c87e5bc737287
+signxml==5.3.1 \
+    --hash=sha256:01ca1d5b7d5829d1622ae3a7ce3d312d3fb28a67297d79c0cfa662fb80a722c8 \
+    --hash=sha256:c45457cd97b3ce52f7342c6f8f049cebe0b8bba69d8fa84da0e7ef5701c9d14f
     # via
     #   -c lock-constraints.txt
     #   -r requirements.txt
