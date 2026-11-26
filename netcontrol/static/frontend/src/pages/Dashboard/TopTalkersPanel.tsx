@@ -4,12 +4,13 @@ import { echarts } from '@/lib/echart-core';
 import { observeChartResize } from '@/lib/useEChart';
 import { resolveThemeVars, useThemeName } from '@/lib/themeColors';
 
-import { FLOW_RANGES, useFlowStatus, useFlowTopTalkers } from '@/api/networkTools';
+import { FLOW_RANGES, type FlowTalker, useFlowStatus, useFlowTopTalkers } from '@/api/networkTools';
 import { SegmentedControl } from '@/components/SegmentedControl';
 import { ClampedRangeHint } from '@/components/TimeRangeBar';
 import { useTimeRange } from '@/lib/timeRange-context';
 import { clampPreset, toHours } from '@/lib/timeRangeMap';
-import { formatBytes } from '@/pages/NetworkTools/formatting';
+import { FlowAsnAttribution } from '@/pages/NetworkTools/FlowAsnDetails';
+import { flowAsnLabel, formatBytes } from '@/pages/NetworkTools/formatting';
 
 import { PANEL_BODY_HEIGHT, PANEL_BODY_STYLE } from './helpers';
 import { PanelEmpty, PanelError, PanelRangeEmpty } from './PanelStates';
@@ -78,7 +79,14 @@ export function TopTalkersPanel() {
   );
 }
 
-function TalkersBars({ rows }: { rows: { ip: string; total_bytes: number; flow_count: number }[] }) {
+// ECharts uses innerHTML for its HTML tooltip. IPs and organization names
+// come from external data and must not become markup.
+function escapeTooltip(text: string): string {
+  const entities: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+  return text.replace(/[&<>"']/g, (c) => entities[c]);
+}
+
+function TalkersBars({ rows }: { rows: FlowTalker[] }) {
   const ref = useRef<HTMLDivElement>(null);
   const theme = useThemeName();
 
@@ -88,9 +96,11 @@ function TalkersBars({ rows }: { rows: { ip: string; total_bytes: number; flow_c
     () => [...rows].sort((a, b) => a.total_bytes - b.total_bytes),
     [rows],
   );
+  const hasAsns = sorted.some((r) => r.asn != null);
 
   useEffect(() => {
     if (!ref.current) return;
+    const shortLabels = new Map(sorted.map((r) => [r.ip, r.asn_organization || (r.asn != null ? `AS${r.asn}` : '')]));
     const chart = echarts.init(ref.current, undefined, { renderer: 'canvas' });
 
     chart.setOption(resolveThemeVars({
@@ -98,15 +108,10 @@ function TalkersBars({ rows }: { rows: { ip: string; total_bytes: number; flow_c
       tooltip: {
         trigger: 'axis',
         axisPointer: { type: 'shadow' },
-        formatter: (params: { name: string; value: number; data: { flows: number } }[]) => {
+        formatter: (params: { name: string; value: number; data: { flows: number; network?: string } }[]) => {
           const p = params[0];
-          // ECharts renders tooltip HTML via innerHTML, and p.name is the
-          // flow "talker" IP sourced from ingested NetFlow/sFlow data (not
-          // trusted). Escape it to prevent DOM-XSS. The numeric fields are safe.
-          const name = String(p.name).replace(/[&<>"']/g, (c) =>
-            ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c] as string,
-          );
-          return `<strong>${name}</strong><br/>${formatBytes(p.value)}<br/>${p.data.flows} flows`;
+          const network = p.data.network ? `<br/>${escapeTooltip(p.data.network)}` : '';
+          return `<strong>${escapeTooltip(p.name)}</strong>${network}<br/>${formatBytes(p.value)}<br/>${p.data.flows} flows`;
         },
       },
       grid: { left: 8, right: 60, top: 8, bottom: 24, containLabel: true },
@@ -121,7 +126,16 @@ function TalkersBars({ rows }: { rows: { ip: string; total_bytes: number; flow_c
       yAxis: {
         type: 'category',
         data: sorted.map((r) => r.ip),
-        axisLabel: { color: 'var(--text-muted)', fontSize: 11 },
+        axisLabel: {
+          color: 'var(--text-muted)',
+          fontSize: 11,
+          width: 190,
+          overflow: 'truncate',
+          formatter: (ip: string) => {
+            const label = shortLabels.get(ip);
+            return label ? `${ip} · ${label}` : ip;
+          },
+        },
         axisLine: { lineStyle: { color: 'var(--border)' } },
       },
       series: [
@@ -130,6 +144,7 @@ function TalkersBars({ rows }: { rows: { ip: string; total_bytes: number; flow_c
           data: sorted.map((r) => ({
             value: r.total_bytes,
             flows: r.flow_count,
+            network: flowAsnLabel(r),
           })),
           itemStyle: { color: 'var(--info)', borderRadius: [0, 3, 3, 0] },
           label: {
@@ -151,5 +166,10 @@ function TalkersBars({ rows }: { rows: { ip: string; total_bytes: number; flow_c
     };
   }, [sorted, theme]);
 
-  return <div ref={ref} style={{ width: '100%', height: PANEL_BODY_HEIGHT }} />;
+  return (
+    <>
+      <div ref={ref} style={{ width: '100%', height: hasAsns ? PANEL_BODY_HEIGHT - 20 : PANEL_BODY_HEIGHT }} />
+      {hasAsns && <FlowAsnAttribution />}
+    </>
+  );
 }

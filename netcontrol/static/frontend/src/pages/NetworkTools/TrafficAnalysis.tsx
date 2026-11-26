@@ -27,6 +27,7 @@ import { useTimeRange } from '@/lib/timeRange-context';
 import { clampPreset, toHours } from '@/lib/timeRangeMap';
 import { usePathTab } from '@/lib/usePathTab';
 
+import { FlowAsnAttribution, FlowTalkerAddress } from './FlowAsnDetails';
 import { formatBytes } from './formatting';
 
 type Tab = 'talkers' | 'applications' | 'conversations' | 'timeline' | 'exporters';
@@ -43,7 +44,7 @@ const TAB_KEYS = TABS.map((t) => t.key);
 const TAB_HELP: Record<Tab, { title: string; text: string }> = {
   talkers: {
     title: 'Top Talkers',
-    text: 'Devices generating or receiving the most traffic in the selected window. Use the direction toggle to view sources vs destinations.',
+    text: 'IP addresses generating or receiving the most traffic. When GeoLite2 ASN data is configured, public IPs can show their network operator, not the website or app.',
   },
   applications: {
     title: 'Top Applications',
@@ -210,7 +211,7 @@ function TalkerSection({ query, what }: { query: QueryShape<FlowTalker>; what: s
           {rows.map((r) => (
             <tr key={r.ip}>
               <td>
-                <code>{r.ip}</code>
+                <FlowTalkerAddress row={r} />
               </td>
               <td style={{ textAlign: 'right' }}>{formatBytes(r.total_bytes)}</td>
               <td style={{ textAlign: 'right' }}>{r.flow_count}</td>
@@ -218,6 +219,7 @@ function TalkerSection({ query, what }: { query: QueryShape<FlowTalker>; what: s
           ))}
         </tbody>
       </table>
+      {rows.some((r) => r.asn != null) && <FlowAsnAttribution />}
     </>
   );
 }

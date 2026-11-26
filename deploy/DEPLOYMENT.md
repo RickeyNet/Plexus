@@ -917,6 +917,50 @@ ss -ulnp | grep 2055
 # On the switch: show flow exporter PLEXUS-EXPORT statistics
 ```
 
+## NetFlow network labels (optional)
+
+Top Talkers can label public IPv4 and IPv6 addresses with their network
+operator and autonomous system number (ASN). Plexus uses MaxMind's free
+GeoLite2 ASN database locally; traffic IPs are never sent to MaxMind. This
+identifies the network, not the website or app. No exporter changes are needed.
+
+1. Create a free [MaxMind GeoLite account](https://www.maxmind.com/en/geolite2/signup)
+   and create a license key for GeoIP Update.
+2. From the repository root, create the private config file (do not put the
+   key in `.env`, which is shared with the app):
+
+   ```bash
+   mkdir -p state/geoip
+   touch state/geoip/GeoIP.conf
+   chmod 600 state/geoip/GeoIP.conf
+   nano state/geoip/GeoIP.conf
+   ```
+
+   Add these two lines with your own values:
+
+   ```text
+   AccountID YOUR_ACCOUNT_ID
+   LicenseKey YOUR_LICENSE_KEY
+   ```
+
+3. Add `COMPOSE_PROFILES=geoip` to `.env` and run `docker compose up -d`.
+   Check the first download with `docker compose logs geoipupdate`. The updater
+   needs outbound HTTPS access to MaxMind and its download endpoints.
+
+The updater checks immediately and then every 24 hours. It replaces the database
+only after a download passes its integrity check. Plexus has read-only access to
+the shared `plexus-geoip` volume and picks up a new copy within a minute on the
+next Top Talkers query, without an app restart. A failed update leaves the last
+good copy in use. Until the first successful download, IPs still show without
+network labels.
+
+**Non-Docker:** schedule [GeoIP Update](https://dev.maxmind.com/geoip/updating-databases/)
+to maintain `GeoLite2-ASN.mmdb` and set `APP_FLOW_ASN_DB` to its absolute path.
+Make sure the Plexus process can read it.
+
+This product includes GeoLite Data created by MaxMind, available from
+[www.maxmind.com](https://www.maxmind.com/).
+
 ## Persistent state (Docker)
 
 The compose file mounts:
@@ -935,6 +979,8 @@ The compose file mounts:
 - `./certs` (bind mount, read-only) at `/app/certs` - TLS certificates.
 - `plexus-postgres` volume - the PostgreSQL data directory (the database
   itself).
+- `plexus-geoip` volume at `/app/geoip` (read-only for Plexus) - the
+  optional GeoLite2 ASN database, which can be downloaded again.
 
 ## Cloud Visibility (AWS / Azure / GCP)
 

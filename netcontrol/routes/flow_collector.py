@@ -29,6 +29,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 import netcontrol.routes.state as state
 from netcontrol import listener_sources
 from netcontrol.bounded_map import BoundedDict
+from netcontrol.flow_asn import lookup_flow_asns
 from netcontrol.object_scope import group_filter, readable_host_ids, require_host, scope_exempt, scoped
 from netcontrol.telemetry import configure_logging
 
@@ -1216,8 +1217,11 @@ async def api_top_talkers(
 ):
     scope_kwargs = await _flow_scope(request, host_id)
     results = await db.get_flow_top_talkers(host_id, hours, direction, limit, **scope_kwargs)
+    asns = await lookup_flow_asns([r["ip"] for r in results])
     for r in results:
         r["protocol_name"] = ""  # flows are aggregated, no single protocol
+        if (network := asns.get(r["ip"])) is not None:
+            r.update(network)
     return results
 
 

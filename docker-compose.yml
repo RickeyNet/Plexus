@@ -42,6 +42,7 @@ services:
       PLEXUS_SOFTWARE_IMAGES_DIR: /app/state/software_images
       PLEXUS_UPDATES_DIR: /app/state/updates
       PLEXUS_UPDATE_STATUS_DIR: /app/state/update-status
+      APP_FLOW_ASN_DB: ${APP_FLOW_ASN_DB:-/app/geoip/GeoLite2-ASN.mmdb}
       # Keep uploaded floor-plan images on the persistent state volume;
       # the code default (<app>/floor_plans) is on the ephemeral layer and
       # is lost on every container recreate.
@@ -87,6 +88,7 @@ services:
       # The updater (root) writes result.json, upgrade.log and rollback.json
       # into this root-owned directory; the app can only read it.
       - ./state/update-status:/app/state/update-status:ro
+      - plexus-geoip:/app/geoip:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -105,6 +107,21 @@ services:
       timeout: 5s
       retries: 3
       start_period: 60s
+
+  geoipupdate:
+    # Optional: downloads only the ASN database, not individual IP lookups.
+    image: ghcr.io/maxmind/geoipupdate:v8.0.0@sha256:51e70dd6f16cd3e4d845ac02d09940b10772a75b9d741427d235a78570923c1d
+    profiles: [geoip]
+    restart: unless-stopped
+    logging: *default-logging
+    environment:
+      GEOIPUPDATE_CONF_FILE: /run/secrets/maxmind_geoip_config
+      GEOIPUPDATE_EDITION_IDS: GeoLite2-ASN
+      GEOIPUPDATE_FREQUENCY: "24"
+    secrets:
+      - maxmind_geoip_config
+    volumes:
+      - plexus-geoip:/usr/share/GeoIP
 
   postgres:
     # Pinned to the multi-arch index digest; Dependabot (docker-compose
@@ -194,3 +211,8 @@ networks:
 volumes:
   plexus-db:
   plexus-postgres:
+  plexus-geoip:
+
+secrets:
+  maxmind_geoip_config:
+    file: ./state/geoip/GeoIP.conf

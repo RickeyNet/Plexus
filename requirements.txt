@@ -88,6 +88,8 @@ pyjwt[crypto]==2.15.1
 # the query limits.
 strawberry-graphql==0.341.2
 graphql-core>=3.2,<3.4
+# Reads the optional local GeoLite2 ASN database for NetFlow Top Talkers.
+maxminddb==3.3.0
 # IANA time zone database for zoneinfo: site time zones are validated
 # against it (netcontrol/organization.py); Windows and slim images ship none.
 tzdata>=2024.1

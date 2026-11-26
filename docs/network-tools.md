@@ -155,6 +155,11 @@ turned off for a host whose group has SNMP off.
 | **Timeline** | Traffic in bits per second over the window. |
 | **Exporters** | Every device that has sent flows to Plexus. |
 
+With the [optional GeoLite2 ASN database](../deploy/DEPLOYMENT.md#netflow-network-labels-optional),
+Top Talkers labels matched public IPs with their network operator and ASN. The
+address stays visible. The label identifies a network, not a website or app;
+private or unmatched addresses show only the IP.
+
 The timeline groups records into buckets: 1 minute for a window of 1 hour,
 5 minutes up to 6 hours, and 15 minutes for longer windows. The last bucket
 may show too little if it has not closed yet.

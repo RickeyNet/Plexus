@@ -1,5 +1,12 @@
 /** Shared display helpers for the Network Tools pages. */
 
+import type { FlowTalker } from '@/api/networkTools';
+
+export function flowAsnLabel(row: FlowTalker): string | undefined {
+  if (row.asn == null) return undefined;
+  return row.asn_organization ? `${row.asn_organization} (AS${row.asn})` : `AS${row.asn}`;
+}
+
 export function formatBytes(bytes: number | null | undefined): string {
   if (!bytes || bytes <= 0) return '0 B';
   const units = ['B', 'KB', 'MB', 'GB', 'TB'];

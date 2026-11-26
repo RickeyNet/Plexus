@@ -160,6 +160,14 @@ jobs:
         if: needs.changes.outputs.backend == 'true'
         run: python tools/check_requirements_lock.py
 
+      - name: Validate Docker Compose with and without GeoIP updates
+        if: needs.changes.outputs.backend == 'true'
+        env:
+          POSTGRES_PASSWORD: compose-validation-only
+        run: |
+          docker compose config --no-env-resolution --quiet
+          docker compose --profile geoip config --no-env-resolution --quiet
+
       - name: Lint (ruff)
         if: needs.changes.outputs.backend == 'true'
         run: ruff check .

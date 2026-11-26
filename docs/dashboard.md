@@ -31,7 +31,7 @@ device detail page and Network Tools, Traffic Analysis.
 | **Group Health** | One tile per inventory group with polled devices | Latest poll of each device |
 | **Average Response Time** | The mean response time of all polled devices, with **Avg** and **Peak** | Metric `response_time_ms` |
 | **Busiest Interfaces** | The 5 interfaces with the highest peak bandwidth, one line each (in + out) | Interface counters from SNMP polls |
-| **Top Talkers** | The 10 IP addresses with the most bytes, by **Source** or **Destination** | NetFlow / sFlow collector |
+| **Top Talkers** | The 10 IP addresses with the most bytes, by **Source** or **Destination**. With the [optional ASN database](../deploy/DEPLOYMENT.md#netflow-network-labels-optional), public IPs can show their network operator; hover for the full label and ASN. | NetFlow / sFlow collector |
 | **Devices** | One tile per polled device, worst first, coloured by health. A tile opens the device detail page | Latest poll of each device |
 | **Backup Status** | Hosts per backup state and a list of problem hosts | Configuration backups |
 | **Recent Events** | Up to 50 deployments, configuration changes and alerts, filtered by **Deploy**, **Config** or **Alert** | Event annotations |

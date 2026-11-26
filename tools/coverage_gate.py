@@ -20,6 +20,9 @@ DEFAULT_RULES = {
     # and tests/test_opnsense_topology.py (95%); do not lower it to land a
     # change.
     "netcontrol/routes/opnsense_backup.py": 90.0,
+    # Optional local ASN label reader: public addresses only, with a safe
+    # fallback across database updates (tests/test_flow_asn.py).
+    "netcontrol/flow_asn.py": 90.0,
     # Floor from tests/test_monitoring.py (alert eval, suppression,
     # availability, escalation). Raise as endpoint/poller tests land.
     "netcontrol/routes/monitoring.py": 20.0,

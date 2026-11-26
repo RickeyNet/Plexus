@@ -9,6 +9,7 @@ import { formatBackendDateTime } from '@/lib/datetime';
 import { BarChart, TimeSeriesChart } from '@/lib/echart';
 import type { TimeRangePreset } from '@/lib/timeRange-context';
 import { clampPreset, toHours } from '@/lib/timeRangeMap';
+import { FlowAsnAttribution, FlowTalkerAddress } from '@/pages/NetworkTools/FlowAsnDetails';
 import { flowInterfaceLabel, formatBytes } from '@/pages/NetworkTools/formatting';
 import {
   FLOW_RANGES,
@@ -203,7 +204,7 @@ function TalkersBody({ query }: { query: QueryShape<FlowTalker> }) {
           {rows.map((r) => (
             <tr key={r.ip}>
               <td>
-                <code>{r.ip}</code>
+                <FlowTalkerAddress row={r} />
               </td>
               <td style={{ textAlign: 'right' }}>{formatBytes(r.total_bytes)}</td>
               <td style={{ textAlign: 'right' }}>{r.flow_count}</td>
@@ -211,6 +212,7 @@ function TalkersBody({ query }: { query: QueryShape<FlowTalker> }) {
           ))}
         </tbody>
       </table>
+      {rows.some((r) => r.asn != null) && <FlowAsnAttribution />}
     </>
   );
 }

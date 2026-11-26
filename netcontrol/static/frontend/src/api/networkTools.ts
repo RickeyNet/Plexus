@@ -289,6 +289,8 @@ export interface FlowTalker {
   ip: string;
   total_bytes: number;
   flow_count: number;
+  asn?: number;
+  asn_organization?: string | null;
 }
 
 export interface FlowApplication {
