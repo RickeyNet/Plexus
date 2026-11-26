@@ -199,7 +199,13 @@ docker-compose.yml          # App + PostgreSQL + nginx stack
 Dockerfile                  # App image
 ```
 
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, tests, and pull requests, and read the [Code of Conduct](CODE_OF_CONDUCT.md). Use the [issue templates](https://github.com/RickeyNet/Plexus/issues/new/choose) for public bug reports and feature requests.
+
 ## Security Notes
+
+Report suspected vulnerabilities privately using the [security policy](SECURITY.md).
 
 - **netcontrol.key** - AES-256-GCM encryption key for stored credentials and
   secrets (`routes/crypto.py`). Back it up. Losing it means stored passwords

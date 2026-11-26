@@ -2375,6 +2375,12 @@ def _api_error_response(status_code: int, code: str, message: str, detail: dict 
 
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException):
+    # A handler that catches everything and answers 500 keeps what it caught
+    # as the cause or context. Input the database refused is the caller's
+    # mistake there too.
+    caught = (exc.__cause__ or exc.__context__) if exc.status_code == 500 else None
+    if isinstance(caught, Exception) and client_error_for(caught) is not None:
+        return await database_exception_handler(request, caught)
     if not request.url.path.startswith("/api/"):
         return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
 
@@ -2391,12 +2397,6 @@ async def http_exception_handler(request: Request, exc: HTTPException):
     if structured is not None:
         structured = {**structured, "message": safe_detail}
     return _api_error_response(exc.status_code, "http_error", safe_detail, structured)
-    # A handler that catches everything and answers 500 keeps what it caught
-    # as the cause or context. Input the database refused is the caller's
-    # mistake there too.
-    caught = (exc.__cause__ or exc.__context__) if exc.status_code == 500 else None
-    if isinstance(caught, Exception) and client_error_for(caught) is not None:
-        return await database_exception_handler(request, caught)
 
 
 @app.exception_handler(RequestValidationError)
@@ -2410,6 +2410,21 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     problems = [{"type": e.get("type"), "loc": e.get("loc"), "msg": e.get("msg")} for e in exc.errors()]
     LOGGER.warning("Validation error on %s: %s", request.url.path, redact_value(problems))
     return _api_error_response(422, "validation_error", "Request payload validation failed")
+
+
+@app.exception_handler(asyncpg.PostgresError)
+@app.exception_handler(asyncpg.InterfaceError)
+async def database_exception_handler(request: Request, exc: Exception):
+    """Input the database refuses (a number out of range, a missing parent,
+    a taken name) is a client error; any other database error is re-raised
+    for ``unhandled_exception_handler``."""
+    error = client_error_for(exc)
+    if error is None:
+        raise exc
+    LOGGER.warning("Refused by the database on %s: %s", request.url.path, redact_value(str(exc)))
+    if not request.url.path.startswith("/api/"):
+        return JSONResponse(status_code=error.status, content={"detail": error.message})
+    return _api_error_response(error.status, error.code, error.message)
 
 
 @app.exception_handler(Exception)
@@ -2428,21 +2443,6 @@ async def _public_path_caller_authenticated(request: Request) -> bool:
     without refreshing the cookie)."""
     api_token = _extract_api_token(request)
     if APP_API_TOKEN and api_token and secrets.compare_digest(api_token, APP_API_TOKEN):
-@app.exception_handler(asyncpg.PostgresError)
-@app.exception_handler(asyncpg.InterfaceError)
-async def database_exception_handler(request: Request, exc: Exception):
-    """Input the database refuses (a number out of range, a missing parent,
-    a taken name) is a client error; any other database error is re-raised
-    for ``unhandled_exception_handler``."""
-    error = client_error_for(exc)
-    if error is None:
-        raise exc
-    LOGGER.warning("Refused by the database on %s: %s", request.url.path, redact_value(str(exc)))
-    if not request.url.path.startswith("/api/"):
-        return JSONResponse(status_code=error.status, content={"detail": error.message})
-    return _api_error_response(error.status, error.code, error.message)
-
-
         return True
     if _env_flag("APP_REQUIRE_API_TOKEN", False):
         return False
