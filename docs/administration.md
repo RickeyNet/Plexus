@@ -228,6 +228,21 @@ to present it.
   [TACACS+](../TACACS_CONFIGURATION_GUIDE.md), LDAP in
   [deploy/DEPLOYMENT.md](../deploy/DEPLOYMENT.md), and OIDC single sign-on,
   set up on this tab as well, in [sso-oidc.md](sso-oidc.md).
+- **Directory connections.** A RADIUS server that has not been set up
+  starts with **Require Message-Authenticator** on (CVE-2024-3596): Plexus
+  sends the attribute and refuses a reply without it. A server that does
+  not send it fails every sign-in as unreachable (local fallback then
+  applies); update the server, or turn the setting off for it. LDAP starts
+  with **Use SSL** on and port `636`. LDAP without **Use SSL** or **Use
+  STARTTLS** sends the bind password and every user's password
+  unencrypted: saving it enabled is refused (`400`) unless **Allow clear
+  text** is ticked, and no connection is opened without it. Turning SSL or
+  STARTTLS on clears the tick, so turning both off later asks again. A
+  server that was set up before these defaults keeps its settings across
+  an upgrade, clear-text LDAP included, and the security check warns about
+  it. In `PUT /api/admin/auth-config`, `radius.enforce_message_authenticator`
+  and `ldap.port`, `ldap.use_ssl`, `ldap.allow_cleartext` and
+  `ldap.username_attribute` keep their saved value when left out.
 - **Security check.** `GET /api/admin/security-check` (admin) lists
   warnings for the running configuration. For sign-in it warns while
   RADIUS is enabled without **Require Message-Authenticator**

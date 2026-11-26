@@ -341,7 +341,7 @@ sudo ufw allow 6514/tcp  # Syslog over TLS (optional)
 | Field                    | Example                                               | Notes                      |
 |--------------------------|-------------------------------------------------------|----------------------------|
 | LDAP Server              | `dc01.corp.local`                                     | Your domain controller     |
-| Port                     | `389` (or `636` for SSL)                              | Check "Use SSL" for LDAPS  |
+| Port                     | `636` with "Use SSL" (the default)                    | `389` with "Use STARTTLS"  |
 | Service Account DN       | `CN=svc_plexus,OU=Service Accounts,DC=corp,DC=local`  | Needs read access          |
 | Service Account Password | *(password)*                                          |                            |
 | Base DN                  | `DC=corp,DC=local`                                    | LDAP search root           |
@@ -351,6 +351,12 @@ sudo ufw allow 6514/tcp  # Syslog over TLS (optional)
 3. Check "Enable LDAP / Active Directory authentication"
 4. Save
 5. Test: log out, log back in with your AD credentials
+
+LDAP without "Use SSL" or "Use STARTTLS" sends the service account password
+and every user's password unencrypted. Plexus refuses to save it enabled
+unless "Allow clear text" is ticked; use that only on a network you trust
+end to end. A domain controller needs a server certificate for either TLS
+mode; with an internal CA, set "CA Certificate File" to its bundle.
 
 Without a service account (and without a user DN template) Plexus binds
 directly as `<username>@<domain>`, the domain taken from the Base DN's `DC=`

@@ -370,7 +370,7 @@ function RadiusPanel({ draft, setDraft, groups }: PanelProps) {
           label="Require Message-Authenticator"
           checked={r.enforce_message_authenticator}
           onChange={(v) => setR({ enforce_message_authenticator: v })}
-          help="Blast-RADIUS (CVE-2024-3596) mitigation; the server must echo it in replies."
+          help="Blast-RADIUS (CVE-2024-3596) mitigation; the server must echo it in replies. Turn it off only for a server that cannot."
         />
       </CheckboxRow>
       <FormRow>
@@ -557,6 +557,14 @@ function LdapPanel({ draft, setDraft, groups }: PanelProps) {
           onChange={(v) => setL({ use_starttls: v })}
           help="Ignored when Use SSL is on."
         />
+        {!l.use_ssl && !l.use_starttls && (
+          <CheckboxField
+            label="Allow clear text"
+            checked={l.allow_cleartext ?? false}
+            onChange={(v) => setL({ allow_cleartext: v })}
+            help="Without SSL or STARTTLS the bind password and every user's password cross the network unencrypted. LDAP cannot be enabled that way unless this is ticked."
+          />
+        )}
         <CheckboxField
           label="Fallback to local"
           checked={l.fallback_to_local}

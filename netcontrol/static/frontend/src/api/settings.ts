@@ -71,8 +71,8 @@ export interface RadiusConfig {
   port: number;
   secret: string;
   timeout: number;
-  // Blast-RADIUS (CVE-2024-3596) mitigation; requires a server that echoes
-  // Message-Authenticator in replies.
+  // Blast-RADIUS (CVE-2024-3596) mitigation, on for a new install; requires
+  // a server that echoes Message-Authenticator in replies.
   enforce_message_authenticator: boolean;
   fallback_to_local: boolean;
   fallback_on_reject: boolean;
@@ -109,6 +109,9 @@ export interface LdapConfig {
   use_ssl: boolean;
   // STARTTLS on the plaintext port; ignored when use_ssl is set.
   use_starttls: boolean;
+  /** Accept a connection without SSL or STARTTLS; the server refuses the
+   * save without it and clears it while either is on. */
+  allow_cleartext?: boolean;
   // OpenLDAP certificate policy for ldaps/STARTTLS connections.
   tls_verify: 'never' | 'allow' | 'try' | 'demand' | 'hard' | string;
   // CA bundle path on the Plexus host; empty = system trust store.

@@ -1200,7 +1200,7 @@ async def _load_persisted_security_settings():
     topology_discovery = await db.get_auth_setting("topology_discovery")
     topology_stp_discovery = await db.get_auth_setting("topology_stp_discovery")
     state.LOGIN_RULES = _sanitize_login_rules(login_rules)
-    state.AUTH_CONFIG = _sanitize_auth_config(auth_config)
+    state.AUTH_CONFIG = _sanitize_auth_config(state._stored_auth_config(auth_config))
     state.DISCOVERY_SYNC_CONFIG = _sanitize_discovery_sync_config(discovery_sync)
     state.SNMP_DISCOVERY_CONFIG = _sanitize_snmp_discovery_config(snmp_discovery)
     state.SNMP_DISCOVERY_PROFILES = _sanitize_snmp_discovery_profiles(snmp_discovery_profiles)

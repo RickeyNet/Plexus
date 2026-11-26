@@ -168,7 +168,8 @@ class RadiusConfigRequest(BaseModel):
     port: int = 1812
     secret: str = ""
     timeout: int = 5
-    enforce_message_authenticator: bool = False
+    # Omitted = keep the saved setting (on for a new install).
+    enforce_message_authenticator: bool | None = None
     fallback_to_local: bool = True
     fallback_on_reject: bool = False
     default_group_ids: list[int] = []
@@ -194,15 +195,19 @@ class TacacsConfigRequest(BaseModel):
 class LdapConfigRequest(BaseModel):
     enabled: bool = False
     server: str = ""
-    port: int = 389
-    use_ssl: bool = False
+    # Omitted = keep the saved value: port, use_ssl, allow_cleartext and
+    # username_attribute (LDAPS on 636 and no clear text for a new install).
+    port: int | None = None
+    use_ssl: bool | None = None
     use_starttls: bool = False
+    allow_cleartext: bool | None = None
     tls_verify: str = "demand"
     ca_cert_file: str = ""
     bind_dn: str = ""
     bind_password: str = ""
     base_dn: str = ""
     user_search_filter: str = "(sAMAccountName={username})"
+    username_attribute: str | None = None
     user_dn_template: str = ""
     group_search_base: str = ""
     group_search_filter: str = "(&(objectClass=group)(member={user_dn}))"
@@ -228,6 +233,8 @@ class OidcConfigRequest(BaseModel):
     token_auth_method: str = "client_secret_basic"
     scopes: str = "openid profile email"
     username_claim: str = "preferred_username"
+    # Omitted = keep the saved setting (older clients do not send it).
+    allow_unverified_email: bool | None = None
     display_name_claim: str = "name"
     groups_claim: str = "groups"
     admin_groups: list[str] = []
@@ -255,6 +262,9 @@ class SamlConfigRequest(BaseModel):
     email_attribute: str = ""
     display_name_attribute: str = ""
     groups_attribute: str = "groups"
+    # Omitted = keep the saved settings (older clients do not send them).
+    subject_attribute: str | None = None
+    required_authn_context: list[str] | None = None
     admin_groups: list[str] = []
     default_role: str = "user"
     default_group_ids: list[int] = []
@@ -424,7 +434,7 @@ def _sign_in_provider_warnings(auth_config: dict) -> list[str]:
         )
     ldap = auth_config.get("ldap") or {}
     if ldap.get("enabled"):
-        if not (ldap.get("use_ssl") or ldap.get("use_starttls")):
+        if not state.ldap_uses_tls(ldap):
             warnings.append(
                 "LDAP is enabled without TLS: the bind password and every user's password cross the network "
                 "in clear text. Turn on 'Use SSL' or 'Use STARTTLS'."
@@ -1111,6 +1121,28 @@ def _refuse_moved_auth_secrets(old: dict, new: dict, reused: list[str]) -> None:
             raise HTTPException(status_code=400, detail=f"{label}: {exc}") from exc
 
 
+def _keep_saved_when_omitted(submitted: dict, block: str) -> dict:
+    """``submitted`` with each setting the client left out (``None``) taken
+    from the saved ``block`` of the auth config, else from its default."""
+    saved = state.AUTH_CONFIG.get(block) or {}
+    defaults = state.AUTH_CONFIG_DEFAULTS[block]
+    return {key: saved.get(key, defaults.get(key)) if value is None else value for key, value in submitted.items()}
+
+
+def _refuse_cleartext_ldap(new: dict) -> None:
+    """400 when LDAP is enabled without SSL or STARTTLS and the admin did
+    not accept a clear-text connection."""
+    ldap = new.get("ldap") or {}
+    if ldap.get("enabled") and not state.ldap_uses_tls(ldap) and not ldap.get("allow_cleartext"):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "LDAP without TLS sends the bind password and every user's password in clear text: turn on "
+                "'Use SSL' or 'Use STARTTLS', or tick 'Allow clear text' to accept that"
+            ),
+        )
+
+
 async def _refuse_guarded_host(label: str, host: str) -> None:
     """400 when ``host`` fails the outbound address guard (``net_guard``)."""
     try:
@@ -1268,6 +1300,8 @@ async def admin_get_auth_config():
 @router.put("/api/admin/auth-config")
 async def admin_update_auth_config(body: AuthConfigRequest, request: Request = None):  # type: ignore[assignment]
     data = body.model_dump()
+    for block in ("radius", "ldap"):
+        data[block] = _keep_saved_when_omitted(data[block], block)
     # Preserve existing secrets when client sends back the redaction mask
     reused: list[str] = []
     for block, _label, field, _where in _AUTH_SECRET_DESTINATIONS:
@@ -1282,14 +1316,15 @@ async def admin_update_auth_config(body: AuthConfigRequest, request: Request = N
     if submitted_oidc is None:
         data["oidc"] = dict(state.AUTH_CONFIG.get("oidc") or {})
     else:
-        data["oidc"] = _oidc_config_to_store(submitted_oidc, request)
+        data["oidc"] = _oidc_config_to_store(_keep_saved_when_omitted(submitted_oidc, "oidc"), request)
     submitted_saml = data.pop("saml", None)
     if submitted_saml is None:
         data["saml"] = dict(state.AUTH_CONFIG.get("saml") or {})
     else:
-        data["saml"] = _saml_config_to_store(submitted_saml, request)
+        data["saml"] = _saml_config_to_store(_keep_saved_when_omitted(submitted_saml, "saml"), request)
     new_config = state._sanitize_auth_config(data)
     _refuse_moved_auth_secrets(state.AUTH_CONFIG, new_config, reused)
+    _refuse_cleartext_ldap(new_config)
     await _refuse_guarded_auth_servers(state.AUTH_CONFIG, new_config)
     old_config = state.AUTH_CONFIG
     state.AUTH_CONFIG = new_config

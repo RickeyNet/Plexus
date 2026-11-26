@@ -65,8 +65,11 @@ In Plexus:
 - `Port`: `1812`
 - `Shared Secret`: same as server-side client secret
 - `Timeout (sec)`: recommended `3-5`
-- `Require Message-Authenticator`: recommended `ON` if your RADIUS server
-  echoes the attribute (see Section 8) - mitigates Blast-RADIUS (CVE-2024-3596)
+- `Require Message-Authenticator`: `ON` by default for a server that is
+  being set up; mitigates Blast-RADIUS (CVE-2024-3596). Turn it off only
+  when your RADIUS server cannot send the attribute (see Section 8): with
+  it on, such a server fails every login as unreachable. A server set up
+  before this default keeps the setting it had.
 
 4. Configure fallback behavior:
 - `Fallback to local auth when RADIUS is unavailable`: recommended `ON`
@@ -102,7 +105,7 @@ Example payload:
   "provider": "radius",
   "radius": {
     "enabled": true,
-    "server": "10.10.10.20",
+    "server": "192.0.2.20",
     "port": 1812,
     "secret": "replace-with-strong-secret",
     "timeout": 5,
@@ -130,12 +133,14 @@ After enabling RADIUS, test these scenarios:
 
 ## 8. Security Recommendations
 
-- Enable `Require Message-Authenticator` (Blast-RADIUS / CVE-2024-3596
-  mitigation). Plexus then sends a Message-Authenticator in every
+- Keep `Require Message-Authenticator` on (Blast-RADIUS / CVE-2024-3596
+  mitigation; on by default, off on a server set up before the default
+  changed). Plexus then sends a Message-Authenticator in every
   Access-Request and rejects replies that omit or fail it. Requires a server
   updated after the July 2024 advisory (e.g. FreeRADIUS 3.0.27+/3.2.5+, or
   Microsoft NPS with the relevant update); enable the matching server-side
-  option, then turn this on and verify a test login before rollout.
+  option and verify a test login before rollout. While it is off,
+  `GET /api/admin/security-check` warns.
 - Use a long random shared secret
 - Restrict UDP/1812 to only required hosts
 - Keep at least one local admin account for recovery

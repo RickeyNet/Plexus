@@ -340,14 +340,16 @@ After the Plexus stack is running (per the main README):
 | Field                    | Example                                                 |
 |--------------------------|---------------------------------------------------------|
 | LDAP Server              | `dc01.<DOMAIN>`                                         |
-| Port                     | `389` (LDAP) or `636` (LDAPS - check "Use SSL")         |
+| Port                     | `636` with "Use SSL" (default), `389` with "Use STARTTLS" |
 | Service Account DN       | `CN=svc_plexus,OU=Service Accounts,DC=corp,DC=local`    |
 | Service Account Password | *(read-only AD service account)*                        |
 | Base DN                  | `DC=corp,DC=local`                                      |
 | User Search Filter       | `(sAMAccountName={username})`                           |
 | Admin Group DN           | `CN=Network Admins,OU=Groups,DC=corp,DC=local`          |
 
-5. Check "Enable LDAP / Active Directory authentication" → Save.
+5. Check "Enable LDAP / Active Directory authentication" → Save. Without
+   "Use SSL" or "Use STARTTLS" the save is refused unless "Allow clear
+   text" is ticked (passwords then cross the network unencrypted).
 6. Log out, log back in with your AD credentials.
 
 For a deeper walkthrough including troubleshooting, see

@@ -351,10 +351,11 @@ AUTH_CONFIG_DEFAULTS = {
         "secret": "",
         "timeout": 5,
         # Blast-RADIUS (CVE-2024-3596) mitigation: send Message-Authenticator
-        # in Access-Requests and require it on replies. Off by default because
-        # servers predating the CVE response may not echo the attribute, which
-        # would fail every login; admins should enable it once their server does.
-        "enforce_message_authenticator": False,
+        # in Access-Requests and require it on replies. On by default; a
+        # server predating the CVE response may not echo the attribute, which
+        # fails every login until the admin turns this off. A server set up
+        # before the setting existed keeps it off (_stored_auth_config).
+        "enforce_message_authenticator": True,
         "fallback_to_local": True,
         "fallback_on_reject": False,
         "default_group_ids": [],
@@ -389,11 +390,15 @@ AUTH_CONFIG_DEFAULTS = {
     "ldap": {
         "enabled": False,
         "server": "",
-        "port": 389,
-        "use_ssl": False,
+        "port": 636,
+        "use_ssl": True,
         # STARTTLS on the plaintext port (mutually exclusive with use_ssl,
         # which takes precedence). Without either, credentials transit clear.
         "use_starttls": False,
+        # The opt-in a connection without SSL or STARTTLS needs: without it
+        # the save is refused and no connection is opened. Only kept while
+        # both are off, so turning TLS off later asks for it again.
+        "allow_cleartext": False,
         # OpenLDAP certificate policy for ldaps/STARTTLS connections.
         "tls_verify": "demand",
         # Optional CA bundle path for internal PKI; empty = system trust store.
@@ -1042,6 +1047,48 @@ def _sanitize_positive_int_list(value) -> list[int]:
     return sorted(result)
 
 
+def ldap_uses_tls(ldap_cfg: dict) -> bool:
+    """True when the LDAP connection is encrypted (LDAPS or STARTTLS)."""
+    return bool(ldap_cfg.get("use_ssl") or ldap_cfg.get("use_starttls"))
+
+
+def _stored_auth_config(data: dict | None) -> dict | None:
+    """The auth config read from the database at startup, with the RADIUS
+    and LDAP transport settings an earlier release left out or defaulted
+    differently filled in before it is sanitized. An upgrade changes no
+    directory server that is set up (the block names a server):
+
+    - RADIUS saved before Message-Authenticator enforcement existed keeps it
+      off;
+    - LDAP saved without SSL or STARTTLS before the clear-text opt-in existed
+      keeps its clear-text connection.
+
+    A block that names no server holds nothing an admin chose for one: it
+    takes today's defaults (enforcement on, LDAPS on port 636). The security
+    check keeps warning about the first two cases."""
+    if not isinstance(data, dict):
+        return data
+    out = dict(data)
+    radius = data.get("radius")
+    if isinstance(radius, dict):
+        if not str(radius.get("server") or "").strip():
+            out["radius"] = {**radius, "enforce_message_authenticator": True}
+        else:
+            out["radius"] = {"enforce_message_authenticator": False, **radius}
+    ldap = data.get("ldap")
+    if isinstance(ldap, dict):
+        if not str(ldap.get("server") or "").strip():
+            if not ldap_uses_tls(ldap) and not ldap.get("allow_cleartext"):
+                defaults = AUTH_CONFIG_DEFAULTS["ldap"]
+                out["ldap"] = {**ldap, "use_ssl": defaults["use_ssl"], "port": defaults["port"]}
+        else:
+            # The values an earlier release applied when the key was absent.
+            kept = {"port": 389, "use_ssl": False, **ldap}
+            kept.setdefault("allow_cleartext", not ldap_uses_tls(kept))
+            out["ldap"] = kept
+    return out
+
+
 def _sanitize_auth_config(data: dict | None) -> dict:
     cfg = dict(AUTH_CONFIG_DEFAULTS)
     cfg["radius"] = dict(AUTH_CONFIG_DEFAULTS["radius"])
@@ -1132,6 +1179,7 @@ def _sanitize_auth_config(data: dict | None) -> dict:
                 "port": int(ldap.get("port", cfg["ldap"]["port"])),
                 "use_ssl": bool(ldap.get("use_ssl", cfg["ldap"]["use_ssl"])),
                 "use_starttls": bool(ldap.get("use_starttls", cfg["ldap"]["use_starttls"])),
+                "allow_cleartext": bool(ldap.get("allow_cleartext", cfg["ldap"]["allow_cleartext"])),
                 "tls_verify": str(ldap.get("tls_verify", cfg["ldap"]["tls_verify"])).lower().strip(),
                 "ca_cert_file": str(ldap.get("ca_cert_file", cfg["ldap"]["ca_cert_file"])).strip(),
                 "bind_dn": str(ldap.get("bind_dn", cfg["ldap"]["bind_dn"])).strip(),
@@ -1154,6 +1202,7 @@ def _sanitize_auth_config(data: dict | None) -> dict:
         )
     cfg["ldap"]["port"] = max(1, cfg["ldap"]["port"])
     cfg["ldap"]["timeout"] = max(1, cfg["ldap"]["timeout"])
+    cfg["ldap"]["allow_cleartext"] = cfg["ldap"]["allow_cleartext"] and not ldap_uses_tls(cfg["ldap"])
     if not _LDAP_ATTRIBUTE_NAME.fullmatch(cfg["ldap"]["username_attribute"]):
         cfg["ldap"]["username_attribute"] = ""
     if cfg["ldap"]["tls_verify"] not in _LDAP_TLS_VERIFY_LEVELS:

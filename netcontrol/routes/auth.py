@@ -197,7 +197,7 @@ def _radius_authenticate_sync(username: str, password: str, radius_cfg: dict) ->
             # Blast-RADIUS (CVE-2024-3596) mitigation: adds Message-Authenticator
             # to the Access-Request and rejects replies that omit or fail it.
             # Requires a server that echoes the attribute (post-CVE releases do).
-            enforce_ma=bool(radius_cfg.get("enforce_message_authenticator", False)),
+            enforce_ma=bool(radius_cfg.get("enforce_message_authenticator", True)),
         )
         req = client.CreateAuthPacket(code=radius_packet.AccessRequest, User_Name=username)
         req["User-Password"] = req.PwCrypt(password)
@@ -748,12 +748,20 @@ def _safe_unbind(conn) -> None:
         pass
 
 
+class LdapClearTextRefused(Exception):
+    """The LDAP settings ask for a clear-text connection nobody accepted."""
+
+
 def _ldap_open_connection(uri: str, ldap_cfg: dict, *, timeout: int):
     """Initialize a connection with timeouts, referral handling, and the
     admin-configured TLS policy; performs STARTTLS when configured.
 
     Every connection (service-account search AND user-credential bind) goes
-    through here so no path can silently downgrade the TLS policy."""
+    through here so no path can silently downgrade the TLS policy. A
+    connection without SSL or STARTTLS is opened only when the admin
+    accepted clear text (``allow_cleartext``)."""
+    if not state.ldap_uses_tls(ldap_cfg) and not ldap_cfg.get("allow_cleartext"):
+        raise LdapClearTextRefused("no SSL or STARTTLS and 'Allow clear text' is off - refusing to connect")
     conn = python_ldap.initialize(uri)
     conn.set_option(python_ldap.OPT_NETWORK_TIMEOUT, timeout)
     conn.set_option(python_ldap.OPT_TIMEOUT, timeout)

@@ -319,7 +319,11 @@ def test_ldap_and_radius_refuse_a_guarded_server_before_connecting(monkeypatch):
     monkeypatch.setattr(auth, "RadiusClient", lambda **kw: opened.append(kw))
     monkeypatch.setattr(auth, "RadiusDictionary", object)
     monkeypatch.setattr(auth, "radius_packet", object())
-    ldap_cfg = {"server": "169.254.169.254", "user_dn_template": "CN={username},DC=example,DC=com"}
+    ldap_cfg = {
+        "server": "169.254.169.254",
+        "user_dn_template": "CN={username},DC=example,DC=com",
+        "allow_cleartext": True,
+    }
     assert auth._ldap_authenticate_sync("jdoe", "pw", ldap_cfg) == (False, "error", {})
     radius_cfg = {"server": "169.254.169.254", "secret": "s"}
     assert auth._radius_authenticate_sync("jdoe", "pw", radius_cfg) == (False, "error")
@@ -450,6 +454,7 @@ def _install_fake_ldap(monkeypatch, fake):
 _SEARCH_CFG = {
     "server": "dc1.corp.local",
     "port": 389,
+    "allow_cleartext": True,
     "bind_dn": "CN=svc,DC=corp,DC=local",
     "bind_password": "svc-pass",
     "base_dn": "DC=corp,DC=local",
@@ -551,11 +556,25 @@ def test_upn_fallback_uses_dc_derived_domain(monkeypatch):
     fake = FakeLdapModule(search_hook=lambda base, flt: [])
     _install_fake_ldap(monkeypatch, fake)
 
-    cfg = {"server": "dc1.corp.local", "port": 389, "base_dn": "OU=Users,DC=corp,DC=local"}
+    cfg = {"server": "dc1.corp.local", "port": 389, "allow_cleartext": True, "base_dn": "OU=Users,DC=corp,DC=local"}
     ok, status, _ = auth._ldap_authenticate_sync("jdoe", "pw", cfg)
 
     assert (ok, status) == (True, "accept")
     assert fake.connections[0].binds[0][0] == "jdoe@corp.local"
+
+
+def test_a_clear_text_connection_needs_the_opt_in(monkeypatch):
+    fake = FakeLdapModule(search_hook=lambda base, flt: [_user_entry()])
+    _install_fake_ldap(monkeypatch, fake)
+
+    refused = {**_SEARCH_CFG, "allow_cleartext": False}
+    assert auth._ldap_authenticate_sync("jdoe", "user-pass", refused) == (False, "error", {})
+    # Neither the bind password nor the user's left Plexus.
+    assert fake.connections == []
+
+    for tls in ({"use_ssl": True}, {"use_starttls": True}):
+        ok, status, _ = auth._ldap_authenticate_sync("jdoe", "user-pass", {**refused, **tls})
+        assert (ok, status) == (True, "accept")
 
 
 def test_invalid_user_credentials_reject(monkeypatch):
@@ -572,7 +591,12 @@ def test_invalid_user_credentials_reject(monkeypatch):
 
 # ── Direct bind: the entry read after the bind is the bound user's ───────────
 
-_UPN_CFG = {"server": "ldap.example.com", "port": 389, "base_dn": "OU=Users,DC=example,DC=com"}
+_UPN_CFG = {
+    "server": "ldap.example.com",
+    "port": 389,
+    "allow_cleartext": True,
+    "base_dn": "OU=Users,DC=example,DC=com",
+}
 
 
 class WhoamiLdapModule(FakeLdapModule):
