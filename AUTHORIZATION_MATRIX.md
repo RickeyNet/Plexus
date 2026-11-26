@@ -72,8 +72,9 @@ or another key.
 
 `reports` has a Modify column, but only the audit and billing routers check
 `reports.write`. The other `reports` routers are mounted with
-`require_feature`: generating a report and saving or deleting a report
-definition need `reports` alone.
+`require_feature`: generating a report and saving a report definition need
+`reports` alone. A saved definition is deleted by the user who saved it or
+by an admin.
 
 Admins and the API token pass every feature check. A row marked admin, here
 or under Admin-only, is refused to every other caller whatever features
@@ -136,7 +137,7 @@ they hold.
 | `floor-plan` | `/api/geo/*` (sites, floors, floor images and device placements; writes need `floor-plan.write`) | geolocation |
 | `software` | `/api/software/*` (overview, history, advisories, end-of-life entries, alerts and job status; writes need `software.write`. The settings, the PSIRT sync and test and the CVE enrichment run are admin only, see Admin-only) | software, software_eol |
 | `reports` | `GET /api/hosts/{host_id}/interface-addresses` (gated like `GET /api/hosts/{host_id}/interface-inventory`) | network_objects (host_router) |
-| `reports` | `/api/reports/*` (saved reports, runs, artifacts and the CSV, PDF, SVG and draw.io exports. `POST /api/reports`, `POST /api/reports/generate` and `DELETE /api/reports/{report_id}` need `reports` alone, no `reports.write`: the router is mounted with `require_feature`) | reporting |
+| `reports` | `/api/reports/*` (saved reports, runs, artifacts and the CSV, PDF, SVG and draw.io exports. `POST /api/reports`, `POST /api/reports/generate` and `DELETE /api/reports/{report_id}` need `reports` alone, no `reports.write`: the router is mounted with `require_feature`. Every holder lists the saved definitions; `DELETE /api/reports/{report_id}` is for the user who saved the definition or an admin, `403` otherwise) | reporting |
 | `reports` | `/api/audit/*`, `GET /api/hosts/{host_id}/audit-findings`, `GET /api/hosts/{host_id}/interface-inventory`, `GET /api/hosts/{host_id}/vlans` (audit runs, schedules, findings and overrides. Starting a run and creating, changing, deleting or running a schedule or an override need `reports.write`; a caller limited to selected inventory groups cannot start runs or change schedules, `403`. The `created_by` of a schedule and of an override is the caller; a value in the request is ignored) | audit |
 | `reports` | `/api/graphs/*`, `GET /api/graph-image/{host_graph_id}.svg` (graph configuration, embed and image export) | graph_export |
 | `reports` | `/api/billing/*` (billing circuits, customers, periods, usage and summary. Creating, changing or deleting a billing circuit or a period and generating a period need `reports.write`) | billing |

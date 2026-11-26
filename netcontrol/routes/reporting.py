@@ -45,7 +45,7 @@ from netcontrol.object_scope import (
     scope_exempt,
     scoped,
 )
-from netcontrol.routes.shared import _audit, _corr_id, _get_session, _session_user
+from netcontrol.routes.shared import _audit, _corr_id, _get_session, _session_user, require_owner_or_admin
 from netcontrol.telemetry import configure_logging, increment_metric, redact_value
 
 router = APIRouter()
@@ -189,10 +189,13 @@ async def create_report(payload: ReportDefinitionCreate, request: Request):
 @router.delete("/api/reports/{report_id}")
 @scoped("report_definition")
 async def delete_report(report_id: int, request: Request):
+    definition = await db.get_report_definition(report_id)
     if (await request_scope(request)).restricted:
-        await require_row(
-            request, "report_definition", _scope_keys(await db.get_report_definition(report_id)), write=True
-        )
+        await require_row(request, "report_definition", _scope_keys(definition), write=True)
+    if definition is not None:
+        # Every holder of the feature sees the saved definitions; only the
+        # user who saved one, or an admin, deletes it.
+        await require_owner_or_admin(request, definition.get("created_by"))
     deleted = await db.delete_report_definition(report_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Report not found")

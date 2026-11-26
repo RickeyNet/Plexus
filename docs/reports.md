@@ -170,7 +170,8 @@ narrows the circuits, the periods and the cards.
 | Action | Needs |
 |---|---|
 | Generate reports, see History, download CSV and files | The `reports` feature |
-| Create or delete a scheduled report definition (API) | The `reports` feature |
+| Create or list scheduled report definitions (API) | The `reports` feature |
+| Delete a scheduled report definition (API) | The `reports` feature, and only the user who created it or an admin |
 | See billing circuits, periods and cards | The `reports` feature |
 | Create, edit or delete a circuit, generate billing | `reports.write` (**Modify** on Reports in the access group). Without it the buttons are not shown |
 
@@ -194,7 +195,9 @@ GET    /api/reports/export/{availability|compliance|interface}[?group_id=&days=]
 ```
 
 `GET`, `POST` and `DELETE /api/reports` manage scheduled report
-definitions.
+definitions. Every user with the feature sees them. `DELETE` answers `403`
+unless the caller created the definition or is an admin; a definition
+created with the server API token is deleted by an admin or the token.
 
 ```json
 POST /api/reports/generate
