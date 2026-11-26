@@ -25,6 +25,8 @@ Before you start:
 - For SNMP, an admin creates an SNMP profile and you assign it to the
   group. A group with no profile uses the global SNMP setting, which is off
   by default and set through the API (`/api/admin/snmp-discovery`, admin).
+  Reading it back shows the community and the SNMPv3 keys masked; a write
+  that sends the mask, or leaves them out, keeps the stored values.
   When SNMP is off for the group, discovery uses the other probes.
 - For SSH `show version`, set a Plexus service credential in Settings, or
   pick a credential in the discovery dialog. If you are not an admin, the

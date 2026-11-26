@@ -125,3 +125,48 @@ def test_snmp_test_targets_only_group_hosts_for_non_admins(env, monkeypatch):
     snmp_get.reset_mock()
     assert admin.post(path, json={"target_ip": "203.0.113.9"}).status_code == 200
     assert snmp_get.await_args.args[0] == "203.0.113.9"
+
+
+def test_admin_listing_of_group_discovery_profiles_is_masked(env):
+    admin, gid = env["admin"], env["gid"]
+    resp = admin.get("/api/admin/snmp-discovery-profiles")
+    assert resp.status_code == 200 and _no_secret(resp.text)
+    profile = resp.json()[str(gid)]
+    assert profile["community"] == SECRET_MASK
+    assert (profile["v3"]["auth_password"], profile["v3"]["priv_password"]) == (SECRET_MASK, SECRET_MASK)
+    assert profile["v3"]["username"] == "snmp-user"
+    # The stored profiles are untouched by the masked view.
+    assert state.SNMP_DISCOVERY_PROFILES[gid]["community"] == COMMUNITY
+
+
+def test_global_discovery_settings_are_masked_and_round_trip(env, monkeypatch):
+    admin = env["admin"]
+    monkeypatch.setattr(state, "SNMP_DISCOVERY_CONFIG", state._sanitize_snmp_discovery_config({}))
+    body = {
+        "enabled": True,
+        "version": "3",
+        "community": COMMUNITY,
+        "v3": {"username": "snmp-user", "auth_password": AUTH_KEY, "priv_password": PRIV_KEY},
+    }
+    saved = admin.put("/api/admin/snmp-discovery", json=body)
+    assert saved.status_code == 200 and _no_secret(saved.text)
+
+    read = admin.get("/api/admin/snmp-discovery")
+    assert read.status_code == 200 and _no_secret(read.text)
+    masked = read.json()
+    assert masked["community"] == SECRET_MASK and masked["v3"]["auth_password"] == SECRET_MASK
+
+    def stored() -> tuple[str, str, str]:
+        cfg = state.SNMP_DISCOVERY_CONFIG
+        return cfg["community"], cfg["v3"]["auth_password"], cfg["v3"]["priv_password"]
+
+    # Saving the masked form back (with a setting changed) keeps the secrets.
+    masked["port"] = 1161
+    assert admin.put("/api/admin/snmp-discovery", json=masked).status_code == 200
+    assert state.SNMP_DISCOVERY_CONFIG["port"] == 1161 and stored() == SECRETS
+
+    # Leaving the secrets out keeps them too; a new value replaces one and "" clears one.
+    assert admin.put("/api/admin/snmp-discovery", json={"enabled": False}).status_code == 200
+    assert stored() == SECRETS
+    admin.put("/api/admin/snmp-discovery", json={"community": "invented-new-community", "v3": {"priv_password": ""}})
+    assert stored() == ("invented-new-community", AUTH_KEY, "")

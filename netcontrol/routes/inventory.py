@@ -1454,19 +1454,25 @@ async def admin_confirm_host_addresses(body: HostAddressConfirm, request: Reques
 
 @admin_router.get("/api/admin/snmp-discovery")
 async def admin_get_snmp_discovery_config():
-    return state.SNMP_DISCOVERY_CONFIG
+    # Secrets are write-only, as in the per-group profile below.
+    return mask_secret_fields(state.SNMP_DISCOVERY_CONFIG, SNMP_SECRET_FIELDS)
 
 
 @admin_router.put("/api/admin/snmp-discovery")
 async def admin_update_snmp_discovery_config(body: dict):
+    # A secret sent as the mask, or left out, keeps the stored one.
+    body = merge_secret_fields(body, state.SNMP_DISCOVERY_CONFIG, SNMP_SECRET_FIELDS)
     state.SNMP_DISCOVERY_CONFIG = state._sanitize_snmp_discovery_config(body)
     await db.set_auth_setting("snmp_discovery", state.SNMP_DISCOVERY_CONFIG)
-    return state.SNMP_DISCOVERY_CONFIG
+    return mask_secret_fields(state.SNMP_DISCOVERY_CONFIG, SNMP_SECRET_FIELDS)
 
 
 @admin_router.get("/api/admin/snmp-discovery-profiles")
 async def admin_get_snmp_discovery_profiles():
-    return state.SNMP_DISCOVERY_PROFILES
+    return {
+        group_id: mask_secret_fields(profile, SNMP_SECRET_FIELDS)
+        for group_id, profile in state.SNMP_DISCOVERY_PROFILES.items()
+    }
 
 
 # ── Named SNMP Profiles CRUD ─────────────────────────────────────────────────

@@ -2382,7 +2382,11 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     if not request.url.path.startswith("/api/"):
         return JSONResponse(status_code=422, content={"detail": exc.errors()})
 
-    LOGGER.warning("Validation error on %s: %s", request.url.path, redact_value(exc.errors()))
+    # Where and why only. An error's ``input`` is the caller's body, and the
+    # redaction goes by key name: a secret under a name it does not know
+    # (a secret variable's ``value``) would be logged as sent.
+    problems = [{"type": e.get("type"), "loc": e.get("loc"), "msg": e.get("msg")} for e in exc.errors()]
+    LOGGER.warning("Validation error on %s: %s", request.url.path, redact_value(problems))
     return _api_error_response(422, "validation_error", "Request payload validation failed")
 
 

@@ -299,8 +299,10 @@ async def generate_availability_report_data(
     """Generate availability report rows for CSV export."""
     db = await _dbcore.get_db(read_only=True)
     try:
+        # In the order of the statement's placeholders: the outage subquery,
+        # the poll join, then the group filter.
         group_filter = ""
-        params: list = [days]
+        params: list = [days, days]
         if group_id is not None:
             group_filter = "AND h.group_id = ?"
             params.append(group_id)
@@ -325,9 +327,9 @@ async def generate_availability_report_data(
                   AND p.polled_at >= datetime('now', '-' || ? || ' days')
                 LEFT JOIN inventory_groups ig ON ig.id = h.group_id
                 WHERE 1=1 {group_filter}
-                GROUP BY h.id
+                GROUP BY h.id, ig.name
                 ORDER BY h.hostname""",
-            tuple(params + [days]),
+            tuple(params),
         )
         rows = rows_to_list(await cursor.fetchall())
         for r in rows:
@@ -393,7 +395,9 @@ async def generate_interface_report_data(
 
         cursor = await db.execute(
             f"""SELECT h.hostname, h.ip_address,
-                       its.if_index, its.if_name, its.if_speed_mbps,
+                       its.if_index,
+                       MAX(its.if_name) AS if_name,
+                       MAX(its.if_speed_mbps) AS if_speed_mbps,
                        COUNT(*) AS samples,
                        AVG(its.in_rate_bps) AS avg_in_bps,
                        AVG(its.out_rate_bps) AS avg_out_bps,
@@ -405,8 +409,8 @@ async def generate_interface_report_data(
                 JOIN hosts h ON h.id = its.host_id
                 WHERE its.sampled_at >= datetime('now', '-' || ? || ' days')
                   AND {where}
-                GROUP BY its.host_id, its.if_index
-                ORDER BY h.hostname, its.if_name""",
+                GROUP BY h.id, its.if_index
+                ORDER BY h.hostname, if_name""",
             tuple(params),
         )
         rows = rows_to_list(await cursor.fetchall())

@@ -14,6 +14,8 @@ from netcontrol.integrations.meraki import collector as meraki_collector
 from netcontrol.mcp import redact as mcp_redact
 from netcontrol.telemetry import RedactingFilter, redact_value
 
+from mcp_helpers import admin_client
+
 
 @pytest.mark.parametrize(
     ("line", "secret"),
@@ -209,3 +211,32 @@ def test_one_definition_of_a_secret_key_name():
         "routing_key": mcp_redact.MASK,
         "credential_id": 4,
     }
+
+
+def test_a_rejected_request_body_is_not_logged(monkeypatch, request):
+    """A body that fails validation is logged by where and why it failed,
+    never by its content: a secret may sit under a key name the redaction
+    does not know (a secret variable's ``value``)."""
+    admin = admin_client(monkeypatch, request)
+    secret = "invented-secret-variable-value"
+    lines: list[str] = []
+
+    class Lines(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            lines.append(record.getMessage())
+
+    handler = Lines()
+    handler.addFilter(RedactingFilter())  # as the application's own handler
+    logger = logging.getLogger("plexus.app")
+    logger.addHandler(handler)
+    try:
+        # No name: the request is refused before the handler runs.
+        resp = admin.post("/api/secret-variables", json={"value": secret, "description": "edge key"})
+    finally:
+        logger.removeHandler(handler)
+
+    assert resp.status_code == 422 and secret not in resp.text
+    [line] = [text for text in lines if text.startswith("Validation error on /api/secret-variables")]
+    assert secret not in line and "edge key" not in line
+    # What an operator needs is still there: the field and the reason.
+    assert "'missing'" in line and "'name'" in line

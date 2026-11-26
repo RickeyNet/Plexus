@@ -341,12 +341,11 @@ async def discover_data_sources(host_id: int, request: Request):
 
 @router.put("/api/data-sources/{ds_id}")
 @scoped("host_record")
-async def update_data_source(ds_id: int, request: Request):
-    body = await request.json()
+async def update_data_source(ds_id: int, body: dict, request: Request):
     existing = await require_row(
         request, "host_record", await db.get_snmp_data_source(ds_id), write=True, not_found="Data source not found"
     )
-    if isinstance(body, dict) and "host_id" in body and body["host_id"] != existing.get("host_id"):
+    if "host_id" in body and body["host_id"] != existing.get("host_id"):
         await require_new_row(request, "host_record", {"host_id": body["host_id"]})
     await db.update_snmp_data_source(ds_id, **body)
     return await db.get_snmp_data_source(ds_id)
