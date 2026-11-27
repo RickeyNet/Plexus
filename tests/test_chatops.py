@@ -465,6 +465,29 @@ async def test_jobs_job_and_presets(no_job_queue):
     assert reply.ok is False and "jobs.write" in reply.text
 
 
+async def test_job_reply_masks_configuration_secrets_for_every_caller(no_job_queue):
+    """The last lines of a job's output go to a chat channel: an admin gets
+    them masked too."""
+    admin = await _admin_chat()
+    job_id = await _seed_job("chat-admin")
+    await db.add_job_events(
+        job_id,
+        [
+            ("info", "-----BEGIN CERTIFICATE-----", "lab-sw-01"),
+            ("info", "ZXhhbXBsZWNoYXRzZWNyZXQwMDAx", "lab-sw-01"),
+            ("info", "-----END CERTIFICATE-----", "lab-sw-01"),
+            ("info", "snmp-server community example-chat-secret-0002 RO", "lab-sw-01"),
+            ("success", "Finished processing lab-sw-01 (192.0.2.50).", "lab-sw-01"),
+        ],
+    )
+    reply = await dispatcher.handle(admin, f"job {job_id}", ALL)
+    assert reply.ok and len(reply.items) == 5
+    text = "\n".join(reply.items)
+    assert "ZXhhbXBsZWNoYXRzZWNyZXQwMDAx" not in text and "example-chat-secret-0002" not in text
+    assert reply.items[3] == "snmp-server community ******** RO"
+    assert reply.items[4] == "Finished processing lab-sw-01 (192.0.2.50)."
+
+
 async def test_commit_preset_needs_confirm_and_playbook_permission(no_job_queue):
     job_id = await _seed_job("admin", permissions={"run": {"roles": ["admin"]}})
     from netcontrol.routes.jobs import job_clone_spec

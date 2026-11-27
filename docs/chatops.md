@@ -52,7 +52,7 @@ directly (Webex), or mention the outgoing webhook (Teams), then the command.
 | `ip <address or prefix>` | IPAM: the subnet an address is in (utilisation, conflicts, interfaces carrying it), or a prefix's usage, records and next free addresses | `ipam` |
 | `trace <source> <destination> [tcp\|udp\|icmp] [port]` | The path trace from stored routes, NAT and firewall rules: verdict, hops, return path. Nothing is sent on the network | `topology` |
 | `jobs [count]` | The most recent jobs (up to 25) | `jobs` |
-| `job <id>` | One job's status, mode, host counts and last log lines; only jobs you launched unless you are an admin | `jobs` |
+| `job <id>` | One job's status, mode, host counts and last log lines (device secrets masked for everyone); only jobs you launched unless you are an admin | `jobs` |
 | `run [preset] [confirm]` | Launches an approved [job preset](#job-presets); without a name, lists them | `jobs` and `jobs.write` |
 
 A device can be named by host name (or part of it), primary or secondary

@@ -6,6 +6,12 @@ to an account limited to selected inventory groups only when every target
 is readable (``job_visible``); launching, cancelling and re-running need
 every target writable, and ad-hoc addresses (outside the inventory) are
 refused for such accounts.
+
+Output: a job's log holds what the devices answered, configuration lines
+included. It is stored as written and returned as written to an admin, the
+API token, or a holder of ``config-backups.write`` who may change every
+target (the rule of ``config_visibility``); every other reader gets it with
+the configuration secrets masked (``_reads_raw_output``).
 """
 
 from __future__ import annotations
@@ -45,6 +51,7 @@ from netcontrol.managed_targets import (
     split_by_confirmation,
     unmanaged_addresses,
 )
+from netcontrol.mcp.redact import StreamRedactor, redact_log_events
 from netcontrol.object_scope import (
     READ_ONLY_DETAIL,
     ObjectScope,
@@ -55,6 +62,7 @@ from netcontrol.object_scope import (
     scoped,
     ws_scope,
 )
+from netcontrol.routes.config_visibility import RAW_CONFIG_FEATURE, has_raw_config_feature
 from netcontrol.routes.host_identity import host_ip_problem
 from netcontrol.routes.playbooks import effective_input_schema, playbook_permissions, playbook_supports_dry_run
 from netcontrol.routes.shared import (
@@ -115,6 +123,9 @@ _job_semaphore = asyncio.Semaphore(_MAX_CONCURRENT_JOBS)
 # Active WebSocket connections keyed by job_id
 _job_sockets: dict[int, list[WebSocket]] = {}
 _job_sockets_lock = asyncio.Lock()
+# One per job that has written output, from its first line to its end: the
+# masked form of the live stream, for viewers who do not read it as written.
+_job_output_maskers: dict[int, StreamRedactor] = {}
 
 # Cap for the history replay a WS client gets on connect; the full log is
 # available via GET /api/jobs/{id}/events (limit up to 100k).
@@ -134,6 +145,12 @@ _LIVE_JOB_STATUSES = _CANCELLABLE_JOB_STATUSES
 JOB_APPROVE_FEATURE = "jobs.approve"
 
 
+def _reads_raw(ws: WebSocket) -> bool:
+    """Whether a subscriber gets job output as written. ``websocket_job``
+    says so on the socket; one that says nothing gets it masked."""
+    return getattr(getattr(ws, "state", None), "raw_job_output", False) is True
+
+
 async def _broadcast_to_job_sockets(job_id: int, payload: dict) -> None:
     """Send one payload to every subscriber of a job, concurrently.
 
@@ -141,16 +158,34 @@ async def _broadcast_to_job_sockets(job_id: int, payload: dict) -> None:
     json encodes) and sends run in parallel, so a slow client only delays
     itself - bounded by the per-socket timeout - instead of holding up the
     other subscribers and the job's event loop. Dead sockets are pruned.
+
+    A log line (a payload with no ``type``) is serialized a second time,
+    masked, for the subscribers who do not read output as written. Every
+    line passes the job's masker, viewers or not, so it knows a key block is
+    open when a later line is masked.
     """
     async with _job_sockets_lock:
         sockets = list(_job_sockets.get(job_id, []))
+    message = payload.get("message") if "type" not in payload else None
+    masker = _job_output_maskers.setdefault(job_id, StreamRedactor()) if isinstance(message, str) else None
+    source = str(payload.get("host") or "")
     if not sockets:
+        if masker is not None:
+            masker.advance(source, message)
         return
     text = json.dumps(payload)
+    masked_text = text
+    if masker is not None:
+        if all(_reads_raw(ws) for ws in sockets):
+            masker.advance(source, message)
+        else:
+            masked = masker.mask(source, message)
+            if masked != message:
+                masked_text = json.dumps({**payload, "message": masked})
 
     async def _send(ws: WebSocket) -> WebSocket | None:
         try:
-            await asyncio.wait_for(ws.send_text(text), timeout=5)
+            await asyncio.wait_for(ws.send_text(text if _reads_raw(ws) else masked_text), timeout=5)
             return None
         except Exception:
             return ws
@@ -164,6 +199,15 @@ async def _broadcast_to_job_sockets(job_id: int, payload: dict) -> None:
                     _job_sockets[job_id].remove(ws)
                 except (ValueError, KeyError) as exc:
                     LOGGER.debug("job %s: dead WS already removed: %s", job_id, exc)
+
+
+async def _end_job_stream(job_id: int) -> list[WebSocket]:
+    """Forget a finished job's subscribers and masker; the subscribers it had."""
+    async with _job_sockets_lock:
+        _job_output_maskers.pop(job_id, None)
+        return _job_sockets.pop(job_id, [])
+
+
 _running_job_tasks: dict[int, asyncio.Task] = {}  # job_id -> asyncio.Task for cancellation
 _running_tasks_lock = asyncio.Lock()
 
@@ -639,6 +683,13 @@ async def job_visible(scope: ObjectScope, job: dict, username: str | None, *, wr
         return bool(username) and job.get("launched_by") == username
     group_id = job.get("inventory_group_id")
     return group_id is not None and allowed(group_id)
+
+
+async def _reads_raw_output(has_feature: bool, scope: ObjectScope, job: dict, username: str | None) -> bool:
+    """Whether a reader of ``job`` gets its output as written: the feature
+    that reads device configuration with its secrets (``has_feature``) and
+    the right to change every target of the job."""
+    return has_feature and await job_visible(scope, job, username, write=True)
 
 
 def _caller_name(request: Request) -> str:
@@ -1213,8 +1264,7 @@ async def _run_ansible_job(
 
     # Notify WebSocket clients that job is done
     await _broadcast_to_job_sockets(job_id, {"type": "job_complete", "job_id": job_id, "status": "done"})
-    async with _job_sockets_lock:
-        _job_sockets.pop(job_id, None)
+    await _end_job_stream(job_id)
 
     # Re-probe affected hosts via SNMP after a successful live job.
     if job_succeeded:
@@ -1306,8 +1356,7 @@ async def _run_job(
 
     # Notify WebSocket clients that job is done
     await _broadcast_to_job_sockets(job_id, {"type": "job_complete", "job_id": job_id, "status": "done"})
-    async with _job_sockets_lock:
-        _job_sockets.pop(job_id, None)
+    await _end_job_stream(job_id)
 
     # Re-probe affected hosts via SNMP after a successful live job so that
     # any transient SNMP agent restart doesn't leave inventory stale.
@@ -1389,8 +1438,7 @@ async def _decide_job(job_id: int, body: ApprovalDecision, request: Request, *, 
     await _broadcast_to_job_sockets(job_id, LogEvent(level, message).to_dict())
     if not approve:
         await _broadcast_to_job_sockets(job_id, {"type": "job_complete", "job_id": job_id, "status": db.JOB_DENIED})
-        async with _job_sockets_lock:
-            _job_sockets.pop(job_id, None)
+        await _end_job_stream(job_id)
     await _audit(
         "jobs",
         "job.approved" if approve else "job.approval_denied",
@@ -1431,7 +1479,11 @@ async def get_job(job_id: int, request: Request):
 async def get_job_events(job_id: int, request: Request, limit: int = Query(default=10000, ge=1, le=100000)):
     job = await _require_job(request, job_id)
     await require_owner_or_admin(request, job.get("launched_by"))
-    return await db.get_job_events(job_id, limit)
+    events = await db.get_job_events(job_id, limit)
+    raw = await _reads_raw_output(
+        await has_raw_config_feature(request), await request_scope(request), job, _caller_name(request)
+    )
+    return events if raw else redact_log_events(events)
 
 
 @router.post("/api/jobs/launch", status_code=201)
@@ -1656,8 +1708,7 @@ async def cancel_job_endpoint(job_id: int, request: Request):
 
     # Notify WebSocket clients
     done_msg = {"type": "job_complete", "job_id": job_id, "status": "cancelled"}
-    async with _job_sockets_lock:
-        sockets = _job_sockets.pop(job_id, [])
+    sockets = await _end_job_stream(job_id)
     for ws in sockets:
         try:
             # Timeout so one wedged client socket can't stall job teardown.
@@ -1809,12 +1860,34 @@ async def websocket_job(websocket: WebSocket, job_id: int):
         return
     # Object-level permissions: a job with a target the caller may not read
     # answers like an unknown job.
-    if not await job_visible(await ws_scope(session), job, session.get("user")):
+    scope = await ws_scope(session)
+    if not await job_visible(scope, job, session.get("user")):
         await websocket.close(code=1008)
         return
     if user.get("role") != "admin" and job.get("launched_by") != session.get("user"):
         await websocket.close(code=1008)
         return
+    raw = await _reads_raw_output(
+        user.get("role") == "admin" or RAW_CONFIG_FEATURE in features, scope, job, session.get("user")
+    )
+    websocket.state.raw_job_output = raw
+
+    async def stored_events() -> list[dict]:
+        stored = await db.get_job_events(job_id, limit=_WS_HISTORY_REPLAY_LIMIT)
+        return stored if raw else redact_log_events(stored)
+
+    async def send_events(batch: list[dict]) -> None:
+        for event in batch:
+            await websocket.send_text(
+                json.dumps(
+                    {
+                        "level": event["level"],
+                        "message": event["message"],
+                        "host": event["host"],
+                        "timestamp": event["timestamp"],
+                    }
+                )
+            )
 
     await websocket.accept()
 
@@ -1822,18 +1895,8 @@ async def websocket_job(websocket: WebSocket, job_id: int):
     # lines - a verbose multi-host job can log tens of thousands, and
     # replaying them one frame at a time stalled the event loop on every
     # page open. Full history: GET /api/jobs/{id}/events.
-    events = await db.get_job_events(job_id, limit=_WS_HISTORY_REPLAY_LIMIT)
-    for event in events:
-        await websocket.send_text(
-            json.dumps(
-                {
-                    "level": event["level"],
-                    "message": event["message"],
-                    "host": event["host"],
-                    "timestamp": event["timestamp"],
-                }
-            )
-        )
+    events = await stored_events()
+    await send_events(events)
 
     # Already finished: say so and close. A queued job is not finished - it
     # is waiting for a worker slot - so it subscribes like a running one
@@ -1856,23 +1919,9 @@ async def websocket_job(websocket: WebSocket, job_id: int):
     latest = await db.get_job(job_id)
     if latest and latest["status"] not in _LIVE_JOB_STATUSES:
         last_id = max((int(e["id"]) for e in events if e.get("id") is not None), default=0)
-        missed = [
-            e
-            for e in await db.get_job_events(job_id, limit=_WS_HISTORY_REPLAY_LIMIT)
-            if e.get("id") is not None and int(e["id"]) > last_id
-        ]
+        missed = [e for e in await stored_events() if e.get("id") is not None and int(e["id"]) > last_id]
         try:
-            for event in missed:
-                await websocket.send_text(
-                    json.dumps(
-                        {
-                            "level": event["level"],
-                            "message": event["message"],
-                            "host": event["host"],
-                            "timestamp": event["timestamp"],
-                        }
-                    )
-                )
+            await send_events(missed)
             await websocket.send_json({"type": "job_complete", "job_id": job_id, "status": latest["status"]})
             await websocket.close()
         except Exception as exc:

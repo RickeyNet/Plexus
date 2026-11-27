@@ -5,7 +5,7 @@ A device's configuration holds its secrets: enable and user passwords,
 SNMP communities and keys, TACACS+/RADIUS keys, pre-shared keys. Every copy
 Plexus keeps or derives from it follows one rule, whichever page returns it
 (config backups, drift snapshots, baselines and diffs, intended config,
-lab twins, risk analyses, correlations):
+lab twins, risk analyses, correlations, job output):
 
 - an admin, the API token, or a user holding ``config-backups.write`` whose
   object scope may change the device's inventory group reads it as

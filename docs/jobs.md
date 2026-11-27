@@ -103,6 +103,27 @@ A secret input stores only the reference (`{{secret.NAME}}`) on the job. The
 value is decrypted when the job starts and removed from the job log. A
 secret reference typed into any other field is refused.
 
+### Device secrets in job output
+
+A job's output holds what the devices answered. A task that shows or pushes
+configuration writes SNMP communities, TACACS+ and RADIUS keys, password
+hashes and certificates into it. The output is stored as written and read
+under the rule for device configuration
+([Config Backups](config-backups-and-drift.md#view-compare-and-download)):
+
+- An admin, or a user with `config-backups.write` and write access to every
+  target of the job, reads it as written.
+- Everyone else, the user who launched the job included, reads it with each
+  secret shown as `********`, in the job output window (live and afterwards)
+  and from `GET /api/jobs/{id}/events`.
+- The ChatOps `job` command shows the last lines masked to everyone, because
+  the answer goes to a chat service.
+
+The mask works on configuration syntax, so a line of ordinary text that
+reads like a configuration line (the word `password` or `secret` followed by
+another word) can show a masked word too. Masking is pattern based and cannot
+promise to catch a secret in every syntax.
+
 ### Run and commit permissions
 
 By default everyone with the `jobs` feature can run a task and commit its
@@ -376,7 +397,8 @@ days** or **Last 30 days**.
 
 | Action | Needs |
 |---|---|
-| See the job list and job output | `jobs` feature (View), plus `playbooks` to load the task list |
+| See the job list and job output | `jobs` feature (View), plus `playbooks` to load the task list; the output of a job only for the user who launched it, or an admin |
+| Read job output as written, device secrets included | Admin, or `config-backups.write` and write access to every target of the job; everyone else reads it with the secrets masked ([below](#device-secrets-in-job-output)) |
 | Launch a Python task, cancel, retry, run live, change a queued job's priority | `jobs` Modify (`jobs.write`) and the task's run permission; for a job, also being the user who launched it, or an admin |
 | Commit changes (run live, Run Live, retry a live job) | The task's commit permission |
 | Launch, retry or run live an Ansible task | Admin (a queued Ansible job whose launcher is not an admin fails when it starts) |

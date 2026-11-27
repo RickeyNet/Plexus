@@ -126,7 +126,8 @@ or lines taken from it: config drift snapshots, baselines and drift diffs,
 the revert job's command list, intended-config extra lines and remediation
 commands, lab twins cloned from a host (and their runs and drift diffs),
 risk analyses (the captured configuration, the predicted diff and the
-proposed commands), and the drift events listed beside an alert or a deployment.
+proposed commands), the drift events listed beside an alert or a deployment,
+and the output of a job ([jobs.md](jobs.md#device-secrets-in-job-output)).
 Without `config-backups.write` and write access to the device you read them
 masked. A lab twin cloned by such a user is built from the masked text. A
 baseline saved from a masked snapshot stores the captured lines, not the

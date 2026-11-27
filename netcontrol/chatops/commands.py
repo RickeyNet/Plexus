@@ -538,7 +538,9 @@ async def _job(inv: Invocation, args: list[str]) -> Reply:
     # Same rule as GET /api/jobs/{id}: the launcher or an admin.
     if not job or (not user.is_admin and job.get("launched_by") != user.username):
         raise CommandError(f"There is no job #{job_id} you can view.")
-    events = await db.get_job_events(job_id, 10000)
+    # A chat channel is read by everyone in it: the lines are masked for
+    # every caller, whatever they read in the web UI.
+    events = redact.redact_log_events(await db.get_job_events(job_id, 10000))
     tail = [str(e.get("message") or "") for e in events[-5:]]
     return Reply(
         title=f"Job #{job_id}: {job.get('playbook_name')}",

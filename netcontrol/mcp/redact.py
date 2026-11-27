@@ -258,6 +258,69 @@ def redact_config_text(text: str, *, keep_lines: bool = False) -> str:
     return "".join(out)
 
 
+# Put in front of a message that starts inside a block an earlier message
+# opened, so ``redact_config_text`` reads the message as the rest of it.
+_OPEN_BLOCK = "-----BEGIN KEY-----\n"
+
+
+def _block_open_after(text: str, is_open: bool) -> bool:
+    """Whether a key or certificate block is open at the end of ``text``,
+    given whether one was open at its start. Same rule as
+    ``redact_config_text``: a block opens at a BEGIN line that does not
+    close itself and ends at the next END line."""
+    if not is_open and "-----BEGIN" not in text:
+        return False
+    for line in text.splitlines():
+        if not is_open and _PEM_BEGIN.search(line) and not _PEM_INLINE.search(line):
+            is_open = True
+        if is_open and _PEM_END.search(line):
+            is_open = False
+    return is_open
+
+
+class StreamRedactor:
+    """``redact_config_text`` for output that arrives as messages from
+    several sources (a job's log lines, one source per host), fed in the
+    order they were written.
+
+    Each message is masked on its own and keeps its line count. A key or
+    certificate block that one message opens stays masked in the next
+    messages of the same source, up to its END line.
+    """
+
+    def __init__(self) -> None:
+        self._open: set[str] = set()
+
+    def advance(self, source: str, text: str) -> None:
+        """Read a message nobody needs masked, so a block it opens or
+        closes is known for the next one."""
+        if _block_open_after(text, source in self._open):
+            self._open.add(source)
+        else:
+            self._open.discard(source)
+
+    def mask(self, source: str, text: str) -> str:
+        """``text`` with its secrets masked."""
+        if source in self._open:
+            masked = redact_config_text(_OPEN_BLOCK + text, keep_lines=True).partition("\n")[2]
+        else:
+            masked = redact_config_text(text, keep_lines=True)
+        self.advance(source, text)
+        return masked
+
+
+def redact_log_events(events: list[dict]) -> list[dict]:
+    """Log lines as stored (rows with a ``host`` and a ``message``, oldest
+    first) with the secrets of their messages masked; the rows are copies."""
+    masker = StreamRedactor()
+    return [
+        {**event, "message": masker.mask(str(event.get("host") or ""), event["message"])}
+        if isinstance(event.get("message"), str)
+        else event
+        for event in events
+    ]
+
+
 # ── Structured values ────────────────────────────────────────────────────────
 
 def redact_value(value: Any) -> Any:
