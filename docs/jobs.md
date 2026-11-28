@@ -207,7 +207,10 @@ encrypted and never shown again; **Edit** lets you replace it.
 secret resolved. Tick **Admins only** to keep it to admins, or tick one or
 more access groups to add their members; nothing ticked (the default) lets
 every user who can run the job use it, and so does **Every user (role:
-user)**. The list shows each secret's rule under **Usable by**.
+user)**. The list shows each secret's rule under **Usable by**. The
+security check (`GET /api/admin/security-check`) names the secrets with
+nothing ticked, so a secret nobody set a rule on is not overlooked; tick
+**Every user (role: user)** to keep a secret open on purpose.
 
 - Admins and the server API token may always use every secret.
 - A user the rule does not allow gets the same answer as for a secret that

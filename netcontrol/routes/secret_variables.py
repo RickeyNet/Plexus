@@ -113,7 +113,7 @@ async def _checked_rule(raw: dict) -> dict:
 
 def _rule_text(rule: dict) -> str:
     """A rule for the audit log: roles and group ids, never a value."""
-    if not (rule["roles"] or rule["groups"]):
+    if job_inputs.is_open_rule(rule):
         return "usable by: every user who may run the job"
     roles = ", ".join(rule["roles"]) or "none"
     groups = ", ".join(map(str, rule["groups"])) or "none"

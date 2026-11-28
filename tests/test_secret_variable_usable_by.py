@@ -362,3 +362,47 @@ def test_queue_runs_a_job_the_launcher_may_still_use(env):
     assert "Secret variables resolved successfully" in events
     assert job["status"] != "failed", events
     assert SECRET_VALUE not in events
+
+
+# ── Security check ───────────────────────────────────────────────────────────
+
+
+def _secret_warnings(env) -> list[str]:
+    r = env["client"].get("/api/admin/security-check", headers=env["admin"])
+    assert r.status_code == 200, r.text
+    return [w for w in r.json()["warnings"] if "secret variable" in w]
+
+
+def test_security_check_names_the_secrets_left_on_the_open_rule(env):
+    (warning,) = _secret_warnings(env)
+    assert warning.startswith("1 secret variable(s)") and "open_key" in warning
+    # A rule an admin chose raises nothing, "every user" included.
+    assert not any(name in warning for name in ("role_key", "group_key", "admin_key"))
+    assert SECRET_VALUE not in warning
+
+    r = env["client"].put(
+        f"/api/secret-variables/{_secret_id(env, 'open_key')}",
+        json={"usable_by": {"roles": ["admin"]}},
+        headers=env["admin"],
+    )
+    assert r.status_code == 200, r.text
+    assert _secret_warnings(env) == []
+
+    r = env["client"].get("/api/admin/security-check", headers=env["login"]("runner"))
+    assert r.status_code == 403, r.text
+
+
+def test_security_check_warning_lists_ten_names_and_counts_the_rest(monkeypatch):
+    from netcontrol.routes import admin as admin_module
+
+    async def rows():
+        return [{"name": f"key_{n:02d}", "usable_by": ""} for n in range(12)] + [
+            {"name": "limited", "usable_by": '{"roles": ["admin"], "groups": []}'}
+        ]
+
+    monkeypatch.setattr(admin_module.db, "get_all_secret_variables", rows)
+
+    (warning,) = asyncio.run(admin_module._secret_variable_warnings())
+
+    assert warning.startswith("12 secret variable(s)")
+    assert "key_09 and 2 more" in warning and "key_10" not in warning and "limited" not in warning

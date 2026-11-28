@@ -252,7 +252,10 @@ to present it.
   attribute with no **Username Attribute** set, while OIDC names accounts
   by `email` with **Allow unverified email** on, while a provider's
   default role is `admin`, and while the session cookie is issued without
-  `Secure`. `cookies.session_cookie_secure` is the flag the
+  `Secure`. It also names the secret variables that have nothing ticked
+  under **Usable by**, which every user who can run a job may use
+  ([jobs.md](jobs.md#who-may-use-a-secret-variable)); the first ten names
+  are listed and the rest counted. `cookies.session_cookie_secure` is the flag the
   cookie really carries (`APP_COOKIE_SECURE` or `APP_HTTPS`), at sign-in
   and on every refresh.
 - **Server address check.** An enabled RADIUS, TACACS+ or LDAP server
@@ -612,7 +615,10 @@ See [ai-access.md](ai-access.md).
 - **Job history:** **Job Retention (days)**, at least 30.
 
 Install needs the host updater. Without it the tab says "Host updater not
-installed". Only the version the last check reported can be installed. How
+installed". Only the version the last check reported can be installed, and
+the check must be less than an hour old: after that the tab shows no result
+and **Install** answers "The last update check is too old; check again"
+(`409`), so choose **Check now** first. How
 the updater works and how to roll back by hand: [deploy/DEPLOYMENT.md](../deploy/DEPLOYMENT.md),
 section "Update from the web UI".
 

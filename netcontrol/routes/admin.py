@@ -17,9 +17,11 @@ import sys
 import routes.database as db
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
+from routes.secret_resolver import secret_rule
 
 import netcontrol.routes.state as state
 from netcontrol import account_rules, lab_images, listener_sources, oidc, saml
+from netcontrol.job_inputs import is_open_rule
 from netcontrol.object_scope import scope_for_user
 from netcontrol.routes.auth import (
     _oidc_redirect_uri,
@@ -466,6 +468,31 @@ def _sign_in_provider_warnings(auth_config: dict) -> list[str]:
     return warnings
 
 
+# How many secret variable names one security-check warning lists.
+_WARNING_NAME_LIMIT = 10
+
+
+async def _secret_variable_warnings() -> list[str]:
+    """A warning naming the secret variables left on the open "Usable by"
+    rule (``usable_by`` empty): every user who can run a job may have them
+    resolved. A rule that names a role or an access group, "Every user"
+    included, was chosen by an admin and raises nothing."""
+    names = [
+        str(row["name"])
+        for row in await db.get_all_secret_variables()
+        if is_open_rule(secret_rule(row.get("usable_by")))
+    ]
+    if not names:
+        return []
+    listed = ", ".join(names[:_WARNING_NAME_LIMIT])
+    if len(names) > _WARNING_NAME_LIMIT:
+        listed += f" and {len(names) - _WARNING_NAME_LIMIT} more"
+    return [
+        f'{len(names)} secret variable(s) have no "Usable by" rule, so every user who can run a job '
+        f"may use them: {listed}. Set a rule on each under Secret Variables."
+    ]
+
+
 def _security_check_payload() -> dict:
     """Build a runtime snapshot of transport and app hardening settings.
 
@@ -656,7 +683,9 @@ async def admin_update_listener_sources(body: AdminListenerSourcesRequest, reque
 @router.get("/api/admin/security-check")
 async def admin_security_check():
     """Return active security-relevant runtime settings for quick verification."""
-    return _security_check_payload()
+    payload = _security_check_payload()
+    payload["warnings"].extend(await _secret_variable_warnings())
+    return payload
 
 
 @router.get("/api/admin/users")

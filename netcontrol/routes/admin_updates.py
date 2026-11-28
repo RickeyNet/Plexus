@@ -57,6 +57,7 @@ import json
 import os
 import re
 import subprocess
+import time
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
@@ -101,10 +102,11 @@ _IMAGE_REPO_RE = re.compile(r"^[a-z0-9.-]+(/[a-z0-9._-]+)+$")
 _TARGET_RE = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
 _SHA_RE = re.compile(r"^[0-9a-f]{7,64}$")
 
-# How long to cache the last check result. Channel API calls are cheap but
-# the GH API has a 60/hr unauth rate limit, so we don't want the UI to
-# hammer it on every page mount.
-_CHECK_TTL_SECONDS = 60
+# How long a check result stands. The status page shows and the install
+# gate accepts only a check this recent, so a version a check reported long
+# ago, and that has been withdrawn or replaced since, is not installed
+# without a new check.
+_CHECK_MAX_AGE_SECONDS = 3600
 
 _HTTP_TIMEOUT = 10.0
 
@@ -336,6 +338,29 @@ async def _check_git_channel(cfg: dict[str, Any]) -> dict[str, Any]:
 # We don't persist this; a process restart drops it, which is fine - it just
 # means the first /status after restart is a freshly-rendered local snapshot.
 _last_check_cache: dict[str, dict[str, Any]] = {}
+# When each cached check was made (time.monotonic()).
+_last_check_time: dict[str, float] = {}
+
+
+def _remember_check(channel: str, result: dict[str, Any]) -> None:
+    _last_check_cache[channel] = result
+    _last_check_time[channel] = time.monotonic()
+
+
+def _forget_checks() -> None:
+    _last_check_cache.clear()
+    _last_check_time.clear()
+
+
+def _recent_check(channel: str) -> dict[str, Any] | None:
+    """The last check of ``channel``, or None when there is none or it is
+    older than ``_CHECK_MAX_AGE_SECONDS`` (a check with no recorded time
+    counts as too old)."""
+    result = _last_check_cache.get(channel)
+    made = _last_check_time.get(channel)
+    if result is None or made is None or time.monotonic() - made > _CHECK_MAX_AGE_SECONDS:
+        return None
+    return result
 
 
 def _local_version_payload() -> dict[str, Any]:
@@ -352,7 +377,7 @@ async def get_status() -> dict[str, Any]:
         "current": _local_version_payload(),
         "channel": cfg["channel"],
         "repo": cfg["repo"],
-        "last_check": _last_check_cache.get(cfg["channel"]),
+        "last_check": _recent_check(cfg["channel"]),
     }
 
 
@@ -366,7 +391,7 @@ async def update_config(body: dict[str, Any], request: Request) -> dict[str, Any
     new_cfg = _sanitize_config(body)
     await db.set_auth_setting(_SETTING_KEY, new_cfg)
     # Different channel/repo means previous check result is meaningless.
-    _last_check_cache.clear()
+    _forget_checks()
     session = _get_session(request)
     await _audit(
         "admin_updates",
@@ -403,7 +428,7 @@ async def check_for_updates(request: Request) -> dict[str, Any]:
 
     result["channel"] = channel
     result["current"] = _local_version_payload()
-    _last_check_cache[channel] = result
+    _remember_check(channel, result)
 
     session = _get_session(request)
     await _audit(
@@ -584,8 +609,11 @@ async def apply_update(body: dict[str, Any], request: Request) -> dict[str, Any]
     channel = cfg["channel"]
 
     # Only the version the last check reported can be installed, so a
-    # crafted request cannot point the host at an arbitrary ref.
-    last = _last_check_cache.get(channel)
+    # crafted request cannot point the host at an arbitrary ref. The check
+    # must be recent: an old answer may name a version that is gone.
+    last = _recent_check(channel)
+    if last is None and channel in _last_check_cache:
+        raise HTTPException(status_code=409, detail="The last update check is too old; check again")
     if not last or not last.get("ok"):
         raise HTTPException(status_code=409, detail="Run a successful update check first")
     if not last.get("is_newer"):

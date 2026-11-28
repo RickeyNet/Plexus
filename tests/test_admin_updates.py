@@ -47,9 +47,9 @@ def env(monkeypatch, tmp_path):
     monkeypatch.setattr(au, "_audit", _audit)
     monkeypatch.setattr(au, "_get_session", lambda request: {"user": "alice"})
     monkeypatch.setattr(au, "_session_user", lambda request: "alice")
-    au._last_check_cache.clear()
+    au._forget_checks()
     yield SimpleNamespace(dir=tmp_path, store=store, audits=audits)
-    au._last_check_cache.clear()
+    au._forget_checks()
 
 
 def _configure(env, **overrides):
@@ -64,7 +64,7 @@ def _install_agent(env):
 
 
 def _seed_check(channel: str, latest: str, newer: bool = True, ok: bool = True):
-    au._last_check_cache[channel] = {"ok": ok, "is_newer": newer, "latest_version": latest, "channel": channel}
+    au._remember_check(channel, {"ok": ok, "is_newer": newer, "latest_version": latest, "channel": channel})
 
 
 def _status(exc_info) -> int:
@@ -180,6 +180,37 @@ def test_apply_rejects_target_mismatch_and_not_newer(env):
     with pytest.raises(HTTPException) as exc:
         asyncio.run(au.apply_update({"target": "v9.9.9"}, _FakeRequest()))
     assert _status(exc) == 409
+
+
+def test_apply_refuses_a_check_that_is_too_old(env):
+    """A version a check reported long ago is not installed, and the status
+    page no longer offers it; a new check makes it installable again."""
+    _configure(env, channel="release")
+    _install_agent(env)
+    _seed_check("release", "v9.9.9")
+    au._last_check_time["release"] -= au._CHECK_MAX_AGE_SECONDS + 1
+
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(au.apply_update({"target": "v9.9.9"}, _FakeRequest()))
+    assert _status(exc) == 409 and "too old" in exc.value.detail
+    assert not (env.dir / "request.json").exists()
+    assert asyncio.run(au.get_status())["last_check"] is None
+
+    _seed_check("release", "v9.9.9")
+    assert asyncio.run(au.get_status())["last_check"]["latest_version"] == "v9.9.9"
+    asyncio.run(au.apply_update({"target": "v9.9.9"}, _FakeRequest()))
+    assert (env.dir / "request.json").exists()
+
+
+def test_apply_refuses_a_check_with_no_recorded_time(env):
+    _configure(env, channel="release")
+    _install_agent(env)
+    au._last_check_cache["release"] = {"ok": True, "is_newer": True, "latest_version": "v9.9.9"}
+
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(au.apply_update({"target": "v9.9.9"}, _FakeRequest()))
+    assert _status(exc) == 409
+    assert not (env.dir / "request.json").exists()
 
 
 @pytest.mark.parametrize("target", ["", "v1.2.3;rm", "../etc", "a" * 129, "v1 2"])

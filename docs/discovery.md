@@ -64,7 +64,11 @@ group's settings.
 
 The SNMPv3 passwords can hold a secret reference such as
 `{{secret.SNMP_AUTH}}` instead of the password. The secret variable must
-already exist, or saving fails.
+already exist, or saving fails. If the secret is deleted or renamed later,
+or its secrets provider does not answer, Plexus sends no SNMPv3 request to
+the devices that use it, and does not fall back to the community: the text
+of the reference is never used as a password. The poll reports "SNMPv3
+secret reference not resolved" and the server log names the secret.
 
 To check the settings without scanning, open **Discover Devices**, choose
 the **Target Inventory Group**, tick **Test only**, enter a **Test Target

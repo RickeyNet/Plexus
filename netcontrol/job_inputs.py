@@ -524,7 +524,9 @@ def normalize_rule(raw: object, field: str = "rule") -> dict:
     return rule
 
 
-def _is_open(rule: dict) -> bool:
+def is_open_rule(rule: dict) -> bool:
+    """Whether a rule names no role and no access group, so it lets every
+    user through."""
     return not rule.get("roles") and not rule.get("groups")
 
 
@@ -532,7 +534,7 @@ def rule_allows(rule: dict, *, role: str, group_ids: list[int]) -> bool:
     """Whether a user with ``role`` in access groups ``group_ids`` passes one
     rule: admins always, anyone on an open rule, else a listed role or a
     shared access group."""
-    if role == "admin" or _is_open(rule):
+    if role == "admin" or is_open_rule(rule):
         return True
     return role in rule.get("roles", []) or bool(set(group_ids) & set(rule.get("groups", [])))
 
@@ -540,7 +542,7 @@ def rule_allows(rule: dict, *, role: str, group_ids: list[int]) -> bool:
 def effective_rule(permissions: dict, action: str) -> dict:
     """The rule that decides ``action``; an empty commit rule is the run rule."""
     rule = permissions.get(action) or {}
-    if action == "commit" and _is_open(rule):
+    if action == "commit" and is_open_rule(rule):
         rule = permissions.get("run") or {}
     return rule
 

@@ -611,8 +611,8 @@ How it works:
 
 1. The app writes `state/updates/request.json` (bind-mounted into the
    container at `/app/state/updates`). It only accepts the exact version
-   the last check reported, and refuses while another request is queued or
-   running.
+   the last check reported, only while that check is less than an hour
+   old, and refuses while another request is queued or running.
 2. `plexus-updater.path` (systemd, `PathExists=`) starts
    `plexus-updater.service`, which runs `deploy/plexus-updater.sh` as root.
 3. The updater claims the request: `state/updates` must resolve to

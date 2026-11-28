@@ -423,6 +423,13 @@ async def _resolve_snmp_secrets(snmp_config: dict) -> dict:
     Returns a shallow copy of *snmp_config* with passwords replaced by
     their decrypted values.  If there are no secret references the
     original dict is returned unchanged (fast path).
+
+    A reference that cannot be resolved (the secret was deleted or renamed,
+    its provider did not answer, the name is not a valid one) leaves both
+    passwords empty and the reason under ``SECRET_ERROR_KEY``. A v3 config
+    with no authentication password builds no request, so the text of the
+    reference is never used as a passphrase, and a privacy reference that
+    fails does not turn the request into one without privacy.
     """
     v3 = snmp_config.get("v3")
     if not isinstance(v3, dict):
@@ -434,20 +441,29 @@ async def _resolve_snmp_secrets(snmp_config: dict) -> dict:
 
         if not (has_secret_references(auth_pw) or has_secret_references(priv_pw)):
             return snmp_config
-        resolved = await resolve_secrets([auth_pw, priv_pw])
-        cfg = dict(snmp_config)
-        cfg["v3"] = dict(v3)
-        cfg["v3"]["auth_password"] = resolved[0].strip()
-        cfg["v3"]["priv_password"] = resolved[1].strip()
-        LOGGER.debug(
-            "SNMPv3 secret resolution: auth_key_len=%d priv_key_len=%d",
-            len(cfg["v3"]["auth_password"]),
-            len(cfg["v3"]["priv_password"]),
-        )
-        return cfg
+        resolved = [value.strip() for value in await resolve_secrets([auth_pw, priv_pw])]
+        if any(has_secret_references(value) for value in resolved):
+            raise ValueError("a secret reference was left in place")
     except Exception as exc:
-        LOGGER.error("SNMPv3 secret resolution FAILED - using raw value as password: %s", exc)
-        return snmp_config
+        LOGGER.error("SNMPv3 secret resolution failed, no SNMPv3 request is sent: %s", exc)
+        return {
+            **snmp_config,
+            "v3": {**v3, "auth_password": "", "priv_password": ""},
+            SECRET_ERROR_KEY: "SNMPv3 secret reference not resolved",
+        }
+    return {**snmp_config, "v3": {**v3, "auth_password": resolved[0], "priv_password": resolved[1]}}
+
+
+# Set by ``_resolve_snmp_secrets`` on the config it returns when a secret
+# reference could not be resolved: the reason a request reports in place of
+# "SNMP not configured".
+SECRET_ERROR_KEY = "_secret_error"
+_NOT_CONFIGURED = "SNMP not configured"
+
+
+def _no_auth_reason(snmp_config: dict) -> str:
+    """Why no request was built from ``snmp_config``."""
+    return str(snmp_config.get(SECRET_ERROR_KEY) or _NOT_CONFIGURED)
 
 
 # The stored SNMPv3 protocol names (``state._sanitize_snmp_*``) and the pysnmp
@@ -870,7 +886,7 @@ async def _snmp_walk(
     snmp_config = await _resolve_snmp_secrets(snmp_config)
     auth_tuple = _build_snmp_auth(snmp_config)
     if auth_tuple is None:
-        return ({}, "SNMP not configured") if return_errors else {}
+        return ({}, _no_auth_reason(snmp_config)) if return_errors else {}
     auth_data, version, port, timeout, retries = auth_tuple
     timeout = max(timeout, timeout_seconds)
 
@@ -964,7 +980,7 @@ async def _snmp_get_values(
     snmp_config = await _resolve_snmp_secrets(snmp_config)
     auth_tuple = _build_snmp_auth(snmp_config)
     if auth_tuple is None:
-        return {}, "SNMP not configured"
+        return {}, _no_auth_reason(snmp_config)
     auth_data, _version, port, timeout, retries = auth_tuple
     timeout = max(timeout, timeout_seconds)
 
