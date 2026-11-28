@@ -69,12 +69,17 @@ export function tokenStatus(record: McpTokenRecord, now: Date = new Date()): Tok
   return today > expires ? 'expired' : 'active';
 }
 
+/** The UTC date `days` after `now` as YYYY-MM-DD, the form of a token's expiry date. */
+export function utcDateAfter(days: number, now: Date = new Date()): string {
+  return new Date(now.getTime() + days * 86_400_000).toISOString().slice(0, 10);
+}
+
 export interface TokenForm {
   name: string;
   ownerId: number | null;
   ownerIsAdmin: boolean;
   categories: string[];
-  /** '' or YYYY-MM-DD. */
+  /** YYYY-MM-DD. */
   expiresAt: string;
 }
 
@@ -82,7 +87,15 @@ export type TokenFormErrors = Partial<Record<'name' | 'owner' | 'categories' | '
 
 export const TOKEN_NAME_MAX = 80;
 
-export function validateTokenForm(form: TokenForm): TokenFormErrors {
+/**
+ * `expiryMaxDays` is the server's limit (`expiry_max_days` of the token list); the server checks
+ * the date again against its own clock.
+ */
+export function validateTokenForm(
+  form: TokenForm,
+  expiryMaxDays: number,
+  now: Date = new Date(),
+): TokenFormErrors {
   const errors: TokenFormErrors = {};
   const name = form.name.trim();
   if (!name) errors.name = 'Enter a name for the token.';
@@ -91,7 +104,11 @@ export function validateTokenForm(form: TokenForm): TokenFormErrors {
   if (form.categories.length === 0) errors.categories = 'Choose at least one data category.';
   else if (form.categories.includes('audit') && !form.ownerIsAdmin)
     errors.categories = 'The audit category needs an owner who is an admin.';
-  if (form.expiresAt && !/^\d{4}-\d{2}-\d{2}$/.test(form.expiresAt))
+  if (!form.expiresAt) errors.expiresAt = 'Enter an expiry date.';
+  else if (!/^\d{4}-\d{2}-\d{2}$/.test(form.expiresAt))
     errors.expiresAt = 'Use a date in the form YYYY-MM-DD.';
+  else if (form.expiresAt < utcDateAfter(0, now)) errors.expiresAt = 'Choose today or a later date.';
+  else if (form.expiresAt > utcDateAfter(expiryMaxDays, now))
+    errors.expiresAt = `Choose a date at most ${expiryMaxDays} days from today.`;
   return errors;
 }

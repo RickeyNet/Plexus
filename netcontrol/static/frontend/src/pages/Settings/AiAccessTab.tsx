@@ -240,8 +240,13 @@ function TokensSection() {
         </DataTable>
       )}
 
-      {creating && (
-        <McpTokenModal categories={tokens.data?.categories || []} onClose={() => setCreating(false)} />
+      {creating && tokens.data && (
+        <McpTokenModal
+          categories={tokens.data.categories}
+          expiryDefaultDays={tokens.data.expiry_default_days}
+          expiryMaxDays={tokens.data.expiry_max_days}
+          onClose={() => setCreating(false)}
+        />
       )}
     </div>
   );

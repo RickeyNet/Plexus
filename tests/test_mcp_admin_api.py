@@ -3,11 +3,18 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime, timedelta
 
 import pytest
 import routes.database as db
+from netcontrol.mcp import auth as mcp_auth
 
 from mcp_helpers import SETTINGS, TOKENS, admin_client, admin_id, create_user, user_client
+
+
+def _in_days(days: int) -> str:
+    """The UTC date ``days`` from now, in the form of a token's expiry."""
+    return (datetime.now(UTC).date() + timedelta(days=days)).isoformat()
 
 
 def _body(owner: int, **over) -> dict:
@@ -33,6 +40,8 @@ def test_create_returns_plaintext_once(monkeypatch, request):
     assert data["token"] not in listing.text
     body = listing.json()
     assert "audit" in body["categories"] and len(body["categories"]) == 8
+    assert body["expiry_default_days"] == mcp_auth.TOKEN_DEFAULT_DAYS
+    assert body["expiry_max_days"] == mcp_auth.TOKEN_MAX_DAYS
     (record,) = body["tokens"]
     assert record["name"] == "report-bot" and record["owner_username"] == "admin"
     assert "token" not in record and "token_hash" not in record
@@ -47,6 +56,9 @@ def test_create_returns_plaintext_once(monkeypatch, request):
         {"name": ""},
         {"name": "n" * 81},
         {"expires_at": "next week"},
+        {"expires_at": "2026-13-45"},
+        {"expires_at": "2020-01-01"},
+        {"expires_at": "2999-01-01"},
         {"categories": ["audit"], "owner_user_id": "non-admin"},
     ],
 )
@@ -56,6 +68,35 @@ def test_create_validation(monkeypatch, request, over):
         over = {**over, "owner_user_id": create_user(admin)}
     assert admin.post(TOKENS, json=_body(admin_id(admin), **over)).status_code == 422
     assert admin.get(TOKENS).json()["tokens"] == []
+
+
+def test_a_token_without_an_expiry_date_gets_the_default(monkeypatch, request):
+    admin = admin_client(monkeypatch, request)
+    before = _in_days(mcp_auth.TOKEN_DEFAULT_DAYS)
+    record = admin.post(TOKENS, json=_body(admin_id(admin))).json()["record"]
+    # Two dates only when the test runs across midnight UTC.
+    assert record["expires_at"] in {before, _in_days(mcp_auth.TOKEN_DEFAULT_DAYS)}
+
+    body = _body(admin_id(admin), name="no-field")
+    del body["expires_at"]
+    assert admin.post(TOKENS, json=body).json()["record"]["expires_at"] != ""
+
+
+def test_expiry_date_limits(monkeypatch, request):
+    admin = admin_client(monkeypatch, request)
+    owner = admin_id(admin)
+    # One day inside each limit, so midnight UTC during the test cannot flip a result.
+    soon, late = _in_days(1), _in_days(mcp_auth.TOKEN_MAX_DAYS - 1)
+    for name, expires in (("soon", soon), ("late", late)):
+        resp = admin.post(TOKENS, json=_body(owner, name=name, expires_at=expires))
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["record"]["expires_at"] == expires
+
+    past = admin.post(TOKENS, json=_body(owner, name="past", expires_at=_in_days(-2)))
+    assert past.status_code == 422 and "in the past" in past.text
+    far = admin.post(TOKENS, json=_body(owner, name="far", expires_at=_in_days(mcp_auth.TOKEN_MAX_DAYS + 2)))
+    assert far.status_code == 422 and f"at most {mcp_auth.TOKEN_MAX_DAYS} days" in far.text
+    assert {t["name"] for t in admin.get(TOKENS).json()["tokens"]} == {"soon", "late"}
 
 
 def test_duplicate_name_is_409(monkeypatch, request):
@@ -117,4 +158,5 @@ def test_audit_rows_written_without_plaintext(monkeypatch, request):
     assert {"token_create", "token_revoke", "settings_update"} <= actions
     assert all(e["user"] == "admin" for e in events)
     assert any("report-bot" in e["detail"] for e in events)
+    assert any(f"expires={created['record']['expires_at']}" in e["detail"] for e in events)
     assert all(created["token"] not in str(e) for e in events)

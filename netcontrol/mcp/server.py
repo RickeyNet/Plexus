@@ -4,18 +4,22 @@
 and the context manager its lifespan enters. Per request the app:
 
 1. answers 404 while AI access is switched off (the default);
-2. resolves the ``Authorization: Bearer`` token into an ``McpContext`` or
+2. answers 403 to a request a web page sent (it carries an ``Origin``
+   header), unless that origin is one of ``APP_CORS_ORIGINS``;
+3. resolves the ``Authorization: Bearer`` token into an ``McpContext`` or
    answers 401 (a session cookie or ``APP_API_TOKEN`` is never accepted);
-3. hands the request to the SDK's Streamable HTTP transport, run stateless
+4. hands the request to the SDK's Streamable HTTP transport, run stateless
    with plain JSON responses, so there is no stream to proxy and no session
    to keep.
 
 The server offers tools only. ``tools/list`` returns what the caller's token
 may see; ``tools/call`` goes through ``dispatch.call_tool``.
 
-DNS-rebinding protection in the SDK is off: it guards unauthenticated local
-servers, while every request here needs a bearer token and Plexus is served
-under whatever internal host name the deployment uses.
+DNS rebinding (a page of another site whose name is pointed at the Plexus
+address, so the browser treats its requests as same-origin) is covered by
+step 2: a browser sends ``Origin`` with every POST, also a same-origin one,
+and a page cannot remove it. The SDK's own protection stays off: it needs
+the list of host names Plexus is reached under, which Plexus does not have.
 """
 
 from __future__ import annotations
@@ -38,7 +42,7 @@ from netcontrol.mcp.auth import McpContext, extract_bearer, resolve_token
 from netcontrol.mcp.dispatch import call_tool, rate_limited
 from netcontrol.mcp.settings import load_settings
 from netcontrol.object_scope import MCP_SCOPED_DETAIL
-from netcontrol.routes.shared import _audit
+from netcontrol.routes.shared import _audit, origin_listed
 from netcontrol.telemetry import configure_logging
 from netcontrol.version import APP_VERSION
 
@@ -56,6 +60,11 @@ INSTRUCTIONS = (
 
 # Bad tokens from one address in a minute before it is answered 429.
 FAILED_AUTH_LIMIT = 20
+
+WEB_PAGE_REFUSAL = (
+    "Requests sent by a web page are refused. Use an MCP client that runs outside the browser, "
+    "or list the page's address in APP_CORS_ORIGINS."
+)
 
 _caller: contextvars.ContextVar[McpContext | None] = contextvars.ContextVar("mcp_caller", default=None)
 
@@ -158,10 +167,19 @@ class McpEndpoint:
             return
 
         headers = {key.decode("latin-1").lower(): value.decode("latin-1") for key, value in scope.get("headers", [])}
+        client = scope.get("client")
+        address = str(client[0]) if client else "unknown"
+        origin = headers.get("origin", "").strip()
+        if origin and not origin_listed(origin):
+            # A browser adds Origin to every POST a page sends and the page
+            # cannot remove it; an MCP client outside a browser sends none.
+            # The token is not looked at: a page has no business holding one.
+            if not rate_limited(f"mcp-origin-audit:{address}", 1):
+                await _audit("mcp", "web_page_refused", detail=f"address={address} origin={origin[:200]}")
+            await _respond(send, 403, {"error": "web_page_refused", "message": WEB_PAGE_REFUSAL})
+            return
         caller = await resolve_token(extract_bearer(headers.get("authorization", "")))
         if caller is None:
-            client = scope.get("client")
-            address = str(client[0]) if client else "unknown"
             throttled = rate_limited(f"mcp-auth-fail:{address}", FAILED_AUTH_LIMIT)
             if not rate_limited(f"mcp-auth-audit:{address}", 1):
                 await _audit("mcp", "auth_failed", detail=f"address={address}")

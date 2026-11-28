@@ -534,6 +534,15 @@ async def require_any_feature(request, *feature_keys: str) -> None:
 OWN_PAGE_FETCH_SITES = frozenset({"same-origin", "none"})
 
 
+def origin_listed(origin: str) -> bool:
+    """Whether ``origin`` (the value of an ``Origin`` header) is one of
+    ``APP_CORS_ORIGINS``."""
+    origin = (origin or "").strip().rstrip("/").lower()
+    return bool(origin) and origin in {
+        str(allowed).strip().rstrip("/").lower() for allowed in state.APP_CORS_ALLOW_ORIGINS
+    }
+
+
 def origin_allowed(connection, *, handshake: bool = False) -> bool:
     """Whether ``connection`` (a WebSocket handshake or an HTTP request)
     comes from a page of this site.
@@ -561,7 +570,7 @@ def origin_allowed(connection, *, handshake: bool = False) -> bool:
        ``$host``, which carries none.
     """
     origin = (connection.headers.get("origin") or "").strip().rstrip("/").lower()
-    if origin and origin in {str(allowed).strip().rstrip("/").lower() for allowed in state.APP_CORS_ALLOW_ORIGINS}:
+    if origin_listed(origin):
         return True
     fetch_site = (connection.headers.get("sec-fetch-site") or "").strip().lower()
     if fetch_site in OWN_PAGE_FETCH_SITES:

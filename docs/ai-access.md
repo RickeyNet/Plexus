@@ -67,7 +67,8 @@ While the endpoint is off it answers `404` and no token works.
 
 1. In **Settings > AI Access**, select **Create token**.
 2. Enter a name (the client or person that will use it), choose the owner,
-   tick the data categories, and optionally set an expiry date. A token works
+   tick the data categories, and set the expiry date. The date starts at 90
+   days from today and can be at most 365 days from today. A token works
    through the end of its expiry day (UTC).
 3. Select **Create token**. The token is shown **once**. Copy it, and the
    connection settings under it, before closing the dialog. Plexus stores only
@@ -77,7 +78,13 @@ To revoke a token, select **Revoke token** on its row and confirm. Clients
 using it stop working at once. A revoked token stays in the list so the audit
 log still shows its name.
 
-A token also stops working when it expires, or when its owner is deleted.
+A token also stops working when it expires, or when its owner is deleted or
+disabled. An expiry date cannot be changed: before a token ends, create a
+new one, put it in the client, and revoke the old one.
+
+A token created before an expiry date was required shows **Never** under
+**Expires** and keeps working. To give such a client an end date, create a
+new token for it and revoke the old one.
 
 Create one token per client. The token name appears on every audit entry, so
 separate tokens tell you which client asked for what.
@@ -112,7 +119,8 @@ Desktop). This uses the `mcp-remote` bridge, which needs Node.js:
 `https://plexus.example.com/mcp`, header `Authorization: Bearer plx_mcp_...`.
 
 The client must be able to reach Plexus over the network and must trust its
-TLS certificate. Once connected, ask the AI to call `plexus_overview` first:
+TLS certificate. It must run outside a web browser: a request sent by a web
+page is refused (see [Not supported](#not-supported)). Once connected, ask the AI to call `plexus_overview` first:
 it reports which categories the token can use and how recent each data source
 is.
 
@@ -272,8 +280,9 @@ for a narrower query.
 Every tool call writes an audit event in category `mcp` (action `tool_call`):
 the token name, its owner, the tool, the arguments, the number of rows and
 bytes returned, the duration and the outcome. The returned data is not
-logged. Creating or revoking a token, changing the settings, and failed
-sign-in attempts (`auth_failed`, at most one entry per address per minute)
+logged. Creating or revoking a token, changing the settings, failed
+sign-in attempts (`auth_failed`) and refused requests from a web page
+(`web_page_refused`), each at most one entry per address per minute,
 are logged too. See them on the audit page, or ask the AI with
 `search_audit_log` using an admin-owned token that has the `audit` category.
 
@@ -284,6 +293,14 @@ are logged too. See them on the audit page, or ask the AI with
   OAuth, which Plexus does not offer. Use a client that runs on your own
   machine and can reach Plexus directly.
 - **OAuth sign-in.** Tokens only.
+- **Clients that run in a web page.** A browser adds an `Origin` header to
+  every request a page sends, and Plexus refuses a request to `/mcp` that
+  carries one (`403`, `web_page_refused`), whatever token it holds. This
+  keeps a page you happen to have open from reaching the endpoint through
+  your browser. A web application you run yourself can be allowed by
+  listing its address in `APP_CORS_ORIGINS`.
+- **Tokens without an end date.** Every new token expires, at most 365 days
+  after it was created.
 - **Write actions.** No tool changes configuration, inventory or settings.
 - **Live checks.** No ping, SNMP poll, show command or re-collection. Answers
   come from stored data.
@@ -293,7 +310,8 @@ are logged too. See them on the audit page, or ask the AI with
 | Symptom | Cause and fix |
 |---|---|
 | `404` from `/mcp` | The endpoint is off. Turn it on in **Settings > AI Access**. |
-| `401 {"error": "unauthorized"}` | The token is missing, mistyped, revoked or expired, or its owner was deleted. Check the `Authorization: Bearer` header; create a new token if needed. A session cookie or the server's `APP_API_TOKEN` does not work here. |
+| `401 {"error": "unauthorized"}` | The token is missing, mistyped, revoked or expired (see **Expires** in the token list), or its owner was deleted or disabled. Check the `Authorization: Bearer` header; create a new token if needed. A session cookie or the server's `APP_API_TOKEN` does not work here. |
+| `403 {"error": "web_page_refused"}` | The request carries an `Origin` header, which a browser adds to what a web page sends. Use a client that runs outside the browser. For a web application of your own, list its address in `APP_CORS_ORIGINS` and restart Plexus. |
 | `429` | More than 20 failed sign-in attempts from one address in a minute. Fix the token and wait a minute. |
 | `405` | The endpoint accepts `POST` only. Use the Streamable HTTP transport. |
 | Only `plexus_overview` is listed | The token's owner lacks the features for its categories. Give the owner the features (Settings > Access Groups) or choose another owner. |

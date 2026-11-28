@@ -4,6 +4,9 @@ A token is ``plx_mcp_`` plus 32 random bytes (URL-safe). Only its SHA-256 is
 stored (``routes.db.mcp_tokens``). ``resolve_token`` reads the token row, its
 owner and the owner's current features on every call, so revoking a token or
 narrowing its owner's access takes effect on the next request.
+
+A new token always gets an expiry date (``new_token_expiry``); a row with
+none is from before that rule and never expires.
 """
 
 from __future__ import annotations
@@ -11,7 +14,7 @@ from __future__ import annotations
 import hashlib
 import secrets
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
 
 import routes.database as db
 
@@ -20,6 +23,11 @@ from netcontrol.routes.auth import _get_user_features
 
 TOKEN_PREFIX = "plx_mcp_"  # nosec B105 - a public prefix, not a credential
 CATEGORIES = ("inventory", "configs", "compliance", "monitoring", "topology", "software", "traffic", "audit")
+
+# Lifetime of a new token in days: what a token created without an expiry
+# date gets, and the latest expiry date that is accepted.
+TOKEN_DEFAULT_DAYS = 90
+TOKEN_MAX_DAYS = 365
 
 _DISPLAY_PREFIX_LEN = 12
 
@@ -58,9 +66,35 @@ def extract_bearer(authorization_header: str) -> str:
     return ""
 
 
+def new_token_expiry(requested: str, today: date | None = None) -> str:
+    """The expiry date (``YYYY-MM-DD``, UTC) to store for a new token.
+
+    An empty ``requested`` gets ``TOKEN_DEFAULT_DAYS`` from ``today``. A
+    date is accepted from ``today`` up to ``TOKEN_MAX_DAYS`` ahead.
+
+    Raises ``ValueError`` with a message for the admin otherwise.
+    """
+    today = today or datetime.now(UTC).date()
+    requested = (requested or "").strip()
+    if not requested:
+        return (today + timedelta(days=TOKEN_DEFAULT_DAYS)).isoformat()
+    try:
+        chosen = datetime.strptime(requested, "%Y-%m-%d").date()
+    except ValueError:
+        chosen = None
+    if chosen is None or chosen.isoformat() != requested:
+        raise ValueError("Expiry must be a date in the form YYYY-MM-DD.")
+    if chosen < today:
+        raise ValueError("The expiry date is in the past. Choose today or a later date.")
+    if chosen > today + timedelta(days=TOKEN_MAX_DAYS):
+        raise ValueError(f"The expiry date can be at most {TOKEN_MAX_DAYS} days from today.")
+    return requested
+
+
 def is_expired(expires_at: str, now: datetime | None = None) -> bool:
-    """``expires_at`` is ``""`` (never), ``YYYY-MM-DD`` (valid through that
-    day, UTC) or ``YYYY-MM-DD HH:MM:SS``."""
+    """``expires_at`` is ``""`` (never: a token created before an expiry
+    date was required), ``YYYY-MM-DD`` (valid through that day, UTC) or
+    ``YYYY-MM-DD HH:MM:SS``."""
     expires_at = (expires_at or "").strip()
     if not expires_at:
         return False

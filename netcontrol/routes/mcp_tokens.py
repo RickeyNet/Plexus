@@ -2,12 +2,12 @@
 
 Every route is admin-only (the router is registered with ``require_admin``).
 A token's plaintext is returned once, by the create route, and is never
-written to the database, a log line or an audit event.
+written to the database, a log line or an audit event. Every new token
+gets an expiry date (``mcp_auth.new_token_expiry``).
 """
 
 from __future__ import annotations
 
-import re
 from typing import Any
 
 import routes.database as db
@@ -18,8 +18,6 @@ from netcontrol.mcp import auth as mcp_auth, settings as mcp_settings
 from netcontrol.routes.shared import _audit, _corr_id, _session_user
 
 router = APIRouter(prefix="/api/admin/mcp")
-
-_DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
 
 
 class TokenCreate(BaseModel):
@@ -56,7 +54,12 @@ async def update_settings(body: dict[str, Any], request: Request) -> dict[str, A
 
 @router.get("/tokens")
 async def list_tokens() -> dict[str, Any]:
-    return {"tokens": await db.list_mcp_tokens(), "categories": list(mcp_auth.CATEGORIES)}
+    return {
+        "tokens": await db.list_mcp_tokens(),
+        "categories": list(mcp_auth.CATEGORIES),
+        "expiry_default_days": mcp_auth.TOKEN_DEFAULT_DAYS,
+        "expiry_max_days": mcp_auth.TOKEN_MAX_DAYS,
+    }
 
 
 @router.post("/tokens")
@@ -68,9 +71,10 @@ async def create_token(body: TokenCreate, request: Request) -> dict[str, Any]:
     unknown = sorted(set(categories) - set(mcp_auth.CATEGORIES))
     if unknown:
         raise _unprocessable(f"Unknown category: {', '.join(unknown)}")
-    expires_at = body.expires_at.strip()
-    if expires_at and not _DATE_RE.fullmatch(expires_at):
-        raise _unprocessable("Expiry must be a date in the form YYYY-MM-DD.")
+    try:
+        expires_at = mcp_auth.new_token_expiry(body.expires_at)
+    except ValueError as exc:
+        raise _unprocessable(str(exc)) from exc
     owner = await db.get_user_by_id(body.owner_user_id)
     if not owner:
         raise _unprocessable("The selected owner does not exist.")
@@ -94,7 +98,7 @@ async def create_token(body: TokenCreate, request: Request) -> dict[str, Any]:
         "mcp",
         "token_create",
         user=_session_user(request),
-        detail=f"token={name} owner={owner['username']} categories={','.join(categories)}",
+        detail=f"token={name} owner={owner['username']} categories={','.join(categories)} expires={expires_at}",
         correlation_id=_corr_id(request),
     )
     record = next((t for t in await db.list_mcp_tokens() if t["id"] == token_id), None)

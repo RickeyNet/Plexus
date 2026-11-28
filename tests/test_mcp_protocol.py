@@ -32,8 +32,10 @@ def bare_client(admin) -> TestClient:
     return client
 
 
-def post(client, token: str | None, method: str, params: dict | None = None, url: str = URL):
+def post(client, token: str | None, method: str, params: dict | None = None, url: str = URL, origin: str | None = None):
     headers = {"Accept": "application/json, text/event-stream", "Content-Type": "application/json"}
+    if origin is not None:
+        headers["Origin"] = origin
     if token is not None:
         headers["Authorization"] = f"Bearer {token}"
     body = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params or {}}
@@ -212,6 +214,54 @@ def test_repeated_bad_tokens_are_throttled_and_audited(monkeypatch, request):
     assert post(client, token, "tools/list").status_code == 200
     events = asyncio.run(db.get_audit_events(limit=50, category="mcp"))
     assert len([e for e in events if e["action"] == "auth_failed"]) == 1
+
+
+@pytest.mark.parametrize(
+    "origin",
+    [
+        "https://attacker.example.net",
+        # What a page sends when its name was pointed at the Plexus address
+        # (DNS rebinding): to the browser the request is same-origin.
+        "http://testserver",
+        "null",
+    ],
+)
+def test_a_request_from_a_web_page_is_refused(monkeypatch, request, origin):
+    monkeypatch.setattr(state, "APP_CORS_ALLOW_ORIGINS", [])
+    _admin, client, token = setup(monkeypatch, request)
+    for sent in (token, None, "plx_mcp_wrong"):
+        resp = post(client, sent, "tools/list", origin=origin)
+        assert resp.status_code == 403, resp.text
+        assert resp.json()["error"] == "web_page_refused"
+    assert post(client, token, "tools/list").status_code == 200
+
+
+def test_a_listed_origin_may_call_the_endpoint(monkeypatch, request):
+    monkeypatch.setattr(state, "APP_CORS_ALLOW_ORIGINS", ["https://portal.example.com/"])
+    _admin, client, token = setup(monkeypatch, request)
+    assert post(client, token, "tools/list", origin="https://portal.example.com").status_code == 200
+    assert post(client, None, "tools/list", origin="https://portal.example.com").status_code == 401
+    assert post(client, token, "tools/list", origin="https://other.example.com").status_code == 403
+
+
+def test_web_page_refusals_are_audited_once_a_minute_and_count_no_failed_sign_in(monkeypatch, request):
+    import asyncio
+
+    import routes.database as db
+
+    monkeypatch.setattr(state, "APP_CORS_ALLOW_ORIGINS", [])
+    _admin, client, token = setup(monkeypatch, request)
+    codes = {
+        post(client, "plx_mcp_wrong", "tools/list", origin="https://attacker.example.net").status_code
+        for _ in range(25)
+    }
+    assert codes == {403}
+    assert post(client, token, "tools/list").status_code == 200
+    events = asyncio.run(db.get_audit_events(limit=50, category="mcp"))
+    refused = [e for e in events if e["action"] == "web_page_refused"]
+    assert len(refused) == 1
+    assert "origin=https://attacker.example.net" in refused[0]["detail"]
+    assert not [e for e in events if e["action"] == "auth_failed"]
 
 
 def test_get_is_not_served(monkeypatch, request):

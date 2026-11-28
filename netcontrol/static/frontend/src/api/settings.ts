@@ -1174,7 +1174,7 @@ export interface McpTokenRecord {
   owner_username: string;
   owner_role: string;
   categories: string[];
-  /** '' (never) or YYYY-MM-DD. */
+  /** YYYY-MM-DD; '' (never) only on a token created before an expiry date was required. */
   expires_at: string;
   created_at: string;
   created_by: string;
@@ -1187,6 +1187,10 @@ export interface McpTokenRecord {
 export interface McpTokenList {
   tokens: McpTokenRecord[];
   categories: string[];
+  /** Days a new token lasts when no expiry date is sent. */
+  expiry_default_days: number;
+  /** The latest expiry date accepted for a new token, in days from today. */
+  expiry_max_days: number;
 }
 
 export interface McpTokenCreatePayload {

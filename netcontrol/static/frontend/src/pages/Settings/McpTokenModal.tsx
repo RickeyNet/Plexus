@@ -17,6 +17,7 @@ import {
   TOKEN_NAME_MAX,
   TokenFormErrors,
   connectionSnippets,
+  utcDateAfter,
   validateTokenForm,
 } from './aiAccess';
 
@@ -25,8 +26,21 @@ type Field = keyof TokenFormErrors;
 /**
  * Creates an MCP token. After the token is created the same dialog shows it,
  * once, with connection settings to copy; it cannot be shown again.
+ *
+ * `expiryDefaultDays` and `expiryMaxDays` come from the token list: the expiry
+ * date starts at the default and cannot be later than the maximum.
  */
-export function McpTokenModal({ categories, onClose }: { categories: string[]; onClose: () => void }) {
+export function McpTokenModal({
+  categories,
+  expiryDefaultDays,
+  expiryMaxDays,
+  onClose,
+}: {
+  categories: string[];
+  expiryDefaultDays: number;
+  expiryMaxDays: number;
+  onClose: () => void;
+}) {
   const users = useAdminUsers();
   const create = useCreateMcpToken();
   const id = useId();
@@ -34,7 +48,7 @@ export function McpTokenModal({ categories, onClose }: { categories: string[]; o
   const [name, setName] = useState('');
   const [ownerId, setOwnerId] = useState<number | null>(null);
   const [chosen, setChosen] = useState<string[]>([]);
-  const [expiresAt, setExpiresAt] = useState('');
+  const [expiresAt, setExpiresAt] = useState(() => utcDateAfter(expiryDefaultDays));
   const [touched, setTouched] = useState<Partial<Record<Field, boolean>>>({});
   const [failure, setFailure] = useState<string | null>(null);
   const [created, setCreated] = useState<McpTokenCreated | null>(null);
@@ -42,7 +56,7 @@ export function McpTokenModal({ categories, onClose }: { categories: string[]; o
   const owner = (users.data || []).find((u) => u.id === ownerId);
   const ownerIsAdmin = owner?.role === 'admin';
   const form = { name, ownerId, ownerIsAdmin, categories: chosen, expiresAt };
-  const errors = validateTokenForm(form);
+  const errors = validateTokenForm(form, expiryMaxDays);
   const shown = (field: Field) => (touched[field] ? errors[field] : undefined);
   const touch = (field: Field) => setTouched((t) => ({ ...t, [field]: true }));
 
@@ -208,20 +222,24 @@ export function McpTokenModal({ categories, onClose }: { categories: string[]; o
       </fieldset>
 
       <div className="form-group">
-        <label className="form-label" htmlFor={`${id}-expires`}>Expiry date (optional)</label>
+        <label className="form-label" htmlFor={`${id}-expires`}>Expiry date</label>
         <input
           id={`${id}-expires`}
           type="date"
           className="form-input"
           style={{ maxWidth: '14rem' }}
           value={expiresAt}
+          min={utcDateAfter(0)}
+          max={utcDateAfter(expiryMaxDays)}
+          required
           aria-invalid={!!shown('expiresAt')}
           aria-describedby={`${id}-expires-help ${id}-expires-error`}
           onChange={(e) => setExpiresAt(e.target.value)}
           onBlur={() => touch('expiresAt')}
         />
         <div className="form-help" id={`${id}-expires-help`}>
-          The token works through the end of this day (UTC). Leave empty for no expiry.
+          The token works through the end of this day (UTC), at most {expiryMaxDays} days from today.
+          Create a new token before it ends.
         </div>
         <FieldError id={`${id}-expires-error`}>{shown('expiresAt')}</FieldError>
       </div>

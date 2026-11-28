@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import date
+
 import pytest
 import routes.database as db
 from netcontrol.mcp import auth, settings
@@ -74,6 +76,53 @@ async def test_resolve_rejects(case):
     elif case == "empty":
         plaintext = ""
     assert await auth.resolve_token(plaintext) is None
+
+
+async def test_a_token_stored_without_expiry_still_works():
+    """Tokens created before an expiry date was required keep working."""
+    owner = await _user()
+    plaintext, _ = await _issue(owner, expires_at="")
+    assert await auth.resolve_token(plaintext) is not None
+
+
+TODAY = date(2026, 3, 10)
+
+
+@pytest.mark.parametrize(
+    ("requested", "stored"),
+    [
+        ("", "2026-06-08"),  # the default: 90 days
+        ("   ", "2026-06-08"),
+        ("2026-03-10", "2026-03-10"),  # today: works through the end of the day
+        (" 2026-04-01 ", "2026-04-01"),
+        ("2027-03-10", "2027-03-10"),  # the last day accepted: 365 days
+    ],
+)
+def test_new_token_expiry_accepts(requested, stored):
+    assert auth.new_token_expiry(requested, TODAY) == stored
+
+
+@pytest.mark.parametrize(
+    ("requested", "message"),
+    [
+        ("2026-03-09", "in the past"),
+        ("2027-03-11", "at most 365 days"),
+        ("2999-01-01", "at most 365 days"),
+        ("next week", "YYYY-MM-DD"),
+        ("2026-13-45", "YYYY-MM-DD"),
+        ("2026-02-30", "YYYY-MM-DD"),
+        ("2026-4-1", "YYYY-MM-DD"),
+        ("20260401", "YYYY-MM-DD"),
+        ("2026-04-01 10:00:00", "YYYY-MM-DD"),
+    ],
+)
+def test_new_token_expiry_refuses(requested, message):
+    with pytest.raises(ValueError, match=message):
+        auth.new_token_expiry(requested, TODAY)
+
+
+def test_the_default_lifetime_is_within_the_maximum():
+    assert 0 < auth.TOKEN_DEFAULT_DAYS <= auth.TOKEN_MAX_DAYS
 
 
 async def test_future_expiry_is_accepted():
