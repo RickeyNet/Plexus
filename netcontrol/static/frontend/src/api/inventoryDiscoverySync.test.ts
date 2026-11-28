@@ -41,7 +41,7 @@ describe('streamSyncInventoryGroup', () => {
     expect(events.map((e) => e.type)).toEqual(['start', 'progress', 'done']);
     // The host rows (model, software version), the map and the software tracker.
     expect(invalidatedKeys(qc)).toEqual(
-      expect.arrayContaining(['inventory-groups-full', 'inventory-groups', 'topology', 'software-overview']),
+      expect.arrayContaining(['inventory-groups', 'topology', 'software-overview']),
     );
   });
 
@@ -51,7 +51,7 @@ describe('streamSyncInventoryGroup', () => {
 
     await expect(streamSyncInventoryGroup(qc, 7, [], {}, () => undefined)).rejects.toThrow('upstream timed out');
 
-    expect(invalidatedKeys(qc)).toContain('inventory-groups-full');
+    expect(invalidatedKeys(qc)).toContain('inventory-groups');
   });
 
   it('shows the message of a refused stream, not its JSON body', async () => {

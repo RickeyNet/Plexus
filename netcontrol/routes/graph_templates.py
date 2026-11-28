@@ -22,7 +22,6 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
 from netcontrol.object_scope import (
-    filter_rows,
     readable_host_ids,
     request_scope,
     require_host,
@@ -31,6 +30,7 @@ from netcontrol.object_scope import (
     require_row,
     scope_exempt,
     scoped,
+    sql_condition,
 )
 from netcontrol.routes.shared import _session_user
 from netcontrol.telemetry import configure_logging
@@ -437,8 +437,9 @@ async def list_host_graphs_api(
         host_id=host_id,
         graph_template_id=graph_template_id,
         enabled_only=enabled_only,
+        scope_condition=await sql_condition("host_record", request, alias="hg"),
     )
-    return {"host_graphs": await filter_rows("host_record", graphs, request)}
+    return {"host_graphs": graphs}
 
 
 @router.get("/api/host-graphs/{host_graph_id}")
@@ -683,8 +684,10 @@ async def list_data_source_profiles_api(
     request: Request,
     host_id: int | None = Query(default=None),
 ):
-    profiles = await db.list_data_source_profiles(host_id=host_id)
-    return {"data_source_profiles": await filter_rows("host_record", profiles, request)}
+    profiles = await db.list_data_source_profiles(
+        host_id=host_id, scope_condition=await sql_condition("host_record", request)
+    )
+    return {"data_source_profiles": profiles}
 
 
 @router.get("/api/data-source-profiles/{profile_id}")

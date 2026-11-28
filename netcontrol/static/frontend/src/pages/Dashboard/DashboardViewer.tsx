@@ -4,13 +4,11 @@ import { Link, useNavigate, useParams } from 'react-router';
 import {
   type DashboardPanel,
   type DashboardVariable,
-  type InventoryGroupWithHosts,
   useCustomDashboard,
   useDeleteCustomDashboard,
   useDeletePanel,
-  useInventoryGroupsForDashboard,
 } from '@/api/dashboard';
-import { groupLabel } from '@/api/inventory';
+import { groupLabel, type InventoryGroupFull, useInventoryGroups } from '@/api/inventory';
 import { DeleteButton } from '@/components/DeleteButton';
 import { useDialogs } from '@/components/DialogProvider-context';
 import { PageHeader } from '@/components/PageHeader';
@@ -51,8 +49,10 @@ export function DashboardViewer() {
     () => parseVariables(dashQuery.data?.variables_json),
     [dashQuery.data?.variables_json],
   );
+  // A host variable needs the full listing; a group variable alone only the
+  // groups-only one; no variable, neither.
   const needsHosts = variables.some((v) => v.type === 'host');
-  const groupsQuery = useInventoryGroupsForDashboard(needsHosts || variables.some((v) => v.type === 'group'));
+  const groupsQuery = useInventoryGroups(needsHosts, needsHosts || variables.some((v) => v.type === 'group'));
 
   if (dashQuery.isPending) {
     return (
@@ -207,7 +207,7 @@ interface VariablesBarProps {
   variables: DashboardVariable[];
   values: Record<string, string>;
   onChange: (values: Record<string, string>) => void;
-  groups: InventoryGroupWithHosts[];
+  groups: InventoryGroupFull[];
 }
 
 function VariablesBar({ variables, values, onChange, groups }: VariablesBarProps) {

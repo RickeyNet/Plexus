@@ -9,8 +9,9 @@ import asyncio
 import netcontrol.app as app_module
 import netcontrol.routes.inventory as inventory_module
 from fastapi.middleware.gzip import GZipMiddleware
+from netcontrol import http_middleware
 from starlette.applications import Starlette
-from starlette.requests import Request
+from starlette.datastructures import MutableHeaders
 from starlette.responses import JSONResponse, StreamingResponse
 from starlette.routing import Mount
 from starlette.testclient import TestClient
@@ -48,15 +49,10 @@ def test_cached_static_files_send_their_policy(tmp_path):
     assert resp.headers["cache-control"] == "public, max-age=31536000, immutable"
 
 
-def _request(path: str = "/api/stream") -> Request:
-    return Request({"type": "http", "method": "GET", "path": path, "headers": [], "query_string": b""})
-
-
 async def _headers_for(response) -> dict:
-    async def call_next(_request):
-        return response
-
-    return dict((await app_module.security_headers_middleware(_request(), call_next)).headers)
+    headers = MutableHeaders(raw=list(response.raw_headers))
+    http_middleware.apply_security_headers(headers, hsts=None)
+    return dict(headers)
 
 
 async def test_event_streams_are_marked_unbuffered_for_nginx():

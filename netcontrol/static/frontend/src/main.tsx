@@ -3,6 +3,10 @@ import { createRoot } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { BrowserRouter } from 'react-router';
 
+// The one stylesheet, built by Vite (minified, hashed, cached as immutable
+// under /assets). It stays in netcontrol/static/css, so /static/css/style.css
+// still answers for anything outside the SPA that links it.
+import '../../css/style.css';
 import { App } from '@/App';
 import { AddSourceProvider } from '@/components/AddSourceProvider';
 import { DialogProvider } from '@/components/DialogProvider';

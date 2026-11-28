@@ -20,12 +20,13 @@ import {
   FlowInterface,
   FlowTalker,
   FlowTimelinePoint,
+  flowBucketMinutes,
   useFlowExporters,
   useFlowTimeline,
   useFlowTopApplications,
   useFlowTopConversations,
   useFlowTopInterfaces,
-  useFlowTopTalkers,
+  useFlowViewTalkers,
 } from '@/api/networkTools';
 
 interface Props {
@@ -148,7 +149,7 @@ function Item({ label, children }: { label: string; children: React.ReactNode })
 
 function TalkersView({ hostId, hours }: { hostId: number; hours: number }) {
   const [direction, setDirection] = useState<FlowDirection>('src');
-  const q = useFlowTopTalkers({ hours, direction, hostId });
+  const q = useFlowViewTalkers({ hours, direction, hostId });
 
   return (
     <div className="card-inset">
@@ -363,7 +364,7 @@ function TimelineView({ hostId, hours }: { hostId: number; hours: number }) {
   const points = timeline.data ?? [];
   if (points.length === 0) return <NoData />;
 
-  const bucketMinutes = hours <= 1 ? 1 : hours <= 6 ? 5 : 15;
+  const bucketMinutes = flowBucketMinutes(hours);
   const bucketSeconds = bucketMinutes * 60;
 
   const series = [

@@ -1,6 +1,7 @@
 """Tests for cloud visibility account and topology foundation."""
 
 import asyncio
+import json
 from datetime import UTC, datetime, timedelta
 
 import netcontrol.routes.cloud_visibility as cloud_visibility_module
@@ -829,14 +830,19 @@ async def test_cloud_policy_rules_api_supports_action_direction_and_resource_fil
     assert resource_rules["rules"][0]["rule_uid"] == deny_rule["rule_uid"]
 
 
-async def _topology(monkeypatch, hidden: bool, **query) -> dict:
+async def _topology_body(monkeypatch, hidden: bool, **query) -> bytes:
     async def _is_hidden(_request):
         return hidden
 
     monkeypatch.setattr(cloud_visibility_module, "_hidden", _is_hidden)
-    return await cloud_visibility_module.cloud_topology_api(
+    response = await cloud_visibility_module.cloud_topology_api(
         account_id=query.get("account_id"), provider=query.get("provider"), request=_DummyRequest()
     )
+    return response.body
+
+
+async def _topology(monkeypatch, hidden: bool, **query) -> dict:
+    return json.loads(await _topology_body(monkeypatch, hidden, **query))
 
 
 @pytest.mark.asyncio
@@ -866,13 +872,15 @@ async def test_topology_payload_sends_metadata_once_and_cache_never_crosses_scop
     # A scoped caller first: its empty view must not be served to anyone else.
     hidden = await _topology(monkeypatch, True)
     assert hidden["resources"] == [] and hidden["accounts"] == []
-    full = await _topology(monkeypatch, False)
+    full_body = await _topology_body(monkeypatch, False)
+    full = json.loads(full_body)
     assert [r["resource_uid"] for r in full["resources"]] == ["aws:vpc:cache-a"]
     resource = full["resources"][0]
     assert "metadata_json" not in resource and isinstance(resource["metadata"], dict)
     # And the unrestricted payload, now cached, is never served to a scoped caller.
     assert (await _topology(monkeypatch, True))["resources"] == []
-    assert await _topology(monkeypatch, False) is full
+    # A hit serves the cached body itself, not a new serialization.
+    assert await _topology_body(monkeypatch, False) is full_body
 
     # A write the UI re-reads at once clears the cache.
     cloud_visibility_module._topology_changed()

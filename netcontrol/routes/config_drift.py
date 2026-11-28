@@ -1274,9 +1274,28 @@ async def list_config_drift_events(
     host_id: int | None = Query(default=None),
     limit: int = Query(default=100, ge=1, le=10000),
 ):
-    """List drift events with optional filters."""
+    """List drift events with optional filters, without their diffs: each
+    row carries ``diff_size`` (characters of the diff as this caller may
+    read it) and ``diff_key`` (equal for events with the same added and
+    removed lines, to group them). ``GET /api/config-drift/events/{id}``
+    returns one event's diff."""
     rows = await db.get_config_drift_events(status=status, host_id=host_id, limit=limit, **await group_filter(request))
-    return await mask_config_rows(request, rows, "diff_text", keep_lines=True)
+    for row in await mask_config_rows(request, rows, "diff_text", keep_lines=True):
+        diff_text = str(row.pop("diff_text", "") or "")
+        row["diff_size"] = len(diff_text)
+        row["diff_key"] = _drift_change_key(diff_text)
+    return rows
+
+
+def _drift_change_key(diff_text: str) -> str:
+    """A short digest of the added and removed lines of a unified diff (not
+    its ``---``/``+++`` headers, hunk lines or context, which carry per-host
+    text), so the same change on several hosts has one key; ``""`` for an
+    empty diff."""
+    changed = "\n".join(
+        line for line in diff_text.split("\n") if line[:1] in ("+", "-") and not line.startswith(("---", "+++"))
+    ).strip()
+    return hashlib.sha256(changed.encode()).hexdigest()[:16] if changed else ""
 
 
 async def _bulk_close_drift_events(event_ids: list[int], to_status: str, request: Request) -> int:

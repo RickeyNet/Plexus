@@ -21,7 +21,6 @@ describe('applyCampaignCacheEvent', () => {
 
     expect(invalidatedKeys(qc)).toEqual(
       expect.arrayContaining([
-        ['inventory-groups-full'],
         ['inventory-groups'],
         ['topology'],
         ['software-overview'],

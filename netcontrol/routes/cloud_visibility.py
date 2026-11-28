@@ -31,6 +31,7 @@ from netcontrol.integrations.aws.sample import build_sample as build_aws_sample
 from netcontrol.integrations.azure.sample import build_sample as build_azure_sample
 from netcontrol.integrations.gcp.sample import build_sample as build_gcp_sample
 from netcontrol.object_scope import request_scope, scope_exempt, scoped
+from netcontrol.payload_cache import JsonPayload, PayloadCache, json_response
 from netcontrol.routes.cloud_collectors import (
     CloudCollectorAuthError,
     CloudCollectorError,
@@ -42,7 +43,6 @@ from netcontrol.routes.cloud_collectors import (
     with_skipped_note,
 )
 from netcontrol.routes.shared import _audit, _corr_id, _get_session, admin_session
-from netcontrol.secrets_providers.base import TTLCache
 from netcontrol.telemetry import configure_logging
 
 router = APIRouter()
@@ -124,23 +124,22 @@ def _topology_changed() -> None:
     and the cached cloud topology payloads."""
     from netcontrol.routes.topology import invalidate_topology_cache
 
-    global _snapshot_generation
     invalidate_topology_cache()
-    _snapshot_generation += 1
     _snapshot_cache.clear()
 
 
-# The /api/cloud/topology payload per (account_id, provider) query. The UI
-# re-reads it on every view and refresh, and each read is four table scans
-# that decode every row's metadata. Entries hold unscoped data only: the
-# endpoint decides a scoped caller sees nothing (_hidden) before the cache is
-# asked, so no caller can be served a view meant for another. Writes here
-# clear it (_topology_changed); the TTL bounds what another process wrote.
+# The /api/cloud/topology payload per (account_id, provider) query, with its
+# JSON body and ETag. The UI re-reads it on every view and refresh, and each
+# read is four table scans that decode every row's metadata. Entries hold
+# unscoped data only: the endpoint decides a scoped caller sees nothing
+# (_hidden) before the cache is asked, so no caller can be served a view meant
+# for another. Writes here clear it (_topology_changed), and a read that
+# started before a write does not store what it read (``PayloadCache``); the
+# TTL bounds what another process wrote.
 _SNAPSHOT_CACHE_TTL_SECONDS = 20.0
-_snapshot_cache = TTLCache(max_entries=64)
-# Bumped by every clear: a read that started before a write does not store
-# what it read after the write cleared the cache.
-_snapshot_generation = 0
+_snapshot_cache: PayloadCache[JsonPayload] = PayloadCache(
+    "cloud-topology", ttl=_SNAPSHOT_CACHE_TTL_SECONDS, max_entries=64
+)
 
 
 async def _availability_changed(provider: str | None) -> None:
@@ -1898,6 +1897,41 @@ async def cloud_flow_timeline_api(
     }
 
 
+@router.get("/api/cloud/flow-logs/overview")
+@scoped("hidden")
+async def cloud_flow_overview_api(
+    account_id: int | None = Query(default=None),
+    provider: str | None = Query(default=None),
+    hours: int = Query(default=24, ge=1, le=720),
+    limit: int = Query(default=20, ge=1, le=200),
+    bucket_minutes: int = Query(default=5, ge=1, le=60),
+    request: Request = None,  # type: ignore[assignment]
+) -> dict:
+    """The cloud flow view from one scan of the records: ``summary``,
+    ``top_src`` and ``top_dst`` (the talkers of each direction) and
+    ``timeline``, as the summary, top-talkers and timeline endpoints return
+    them for the same arguments."""
+    try:
+        normalized_provider = _normalize_provider(provider) if provider else None
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Unsupported cloud provider") from None
+
+    found = await db.get_cloud_flow_overview(
+        account_id=_NO_ACCOUNT if await _hidden(request) else account_id,
+        provider=normalized_provider,
+        hours=hours,
+        limit=limit,
+        bucket_minutes=bucket_minutes,
+    )
+    return {
+        **found,
+        "hours": hours,
+        "bucket_minutes": bucket_minutes,
+        "account_id": account_id,
+        "provider": normalized_provider,
+    }
+
+
 @router.get("/api/cloud/traffic-metrics/summary")
 @scoped("hidden")
 async def cloud_traffic_metric_summary_api(
@@ -2133,22 +2167,20 @@ async def cloud_topology_api(
     # Keyed by the query alone: the scope decision is made above, and a
     # scoped caller only ever reaches the _NO_ACCOUNT entry, which is empty.
     key = (account_id, normalized_provider)
-    payload = _snapshot_cache.get(key)
-    if payload is not None:
-        return payload
-    generation = _snapshot_generation
-    snapshot = await db.get_cloud_topology_snapshot(account_id=account_id, provider=normalized_provider)
-    payload = {
-        "accounts": [_serialize_account(a) for a in snapshot.get("accounts", []) if a],
-        "resources": [_with_metadata(r) for r in snapshot.get("resources", [])],
-        "connections": [_with_metadata(c) for c in snapshot.get("connections", [])],
-        "hybrid_links": [_with_metadata(link) for link in snapshot.get("hybrid_links", [])],
-        "summary": snapshot.get("summary", {}),
-    }
-    # A write that cleared the cache while this read ran may not be in it.
-    if generation == _snapshot_generation:
-        _snapshot_cache.set(key, payload, _SNAPSHOT_CACHE_TTL_SECONDS)
-    return payload
+
+    async def build() -> JsonPayload:
+        snapshot = await db.get_cloud_topology_snapshot(account_id=account_id, provider=normalized_provider)
+        return JsonPayload(
+            {
+                "accounts": [_serialize_account(a) for a in snapshot.get("accounts", []) if a],
+                "resources": [_with_metadata(r) for r in snapshot.get("resources", [])],
+                "connections": [_with_metadata(c) for c in snapshot.get("connections", [])],
+                "hybrid_links": [_with_metadata(link) for link in snapshot.get("hybrid_links", [])],
+                "summary": snapshot.get("summary", {}),
+            }
+        )
+
+    return json_response(request, await _snapshot_cache.get_or_build(key, build))  # type: ignore[return-value]
 
 
 # ═══════════════════════════════════════════════════════════════════════════

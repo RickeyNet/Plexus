@@ -132,9 +132,14 @@ async def _pg_get_pool_per_loop():
             pool = _pg_pools.get(loop)
         if pool is None or pool._closed:
             # Mirror routes.database._get_pg_pool, which pins the session
-            # time zone so TEXT timestamps cast to timestamptz compare to NOW().
+            # time zone so TEXT timestamps cast to timestamptz compare to NOW(),
+            # and uses the same connection class (the trimmed pool reset).
             pool = await _db.asyncpg.create_pool(
-                _db.APP_DATABASE_URL, min_size=1, max_size=10, server_settings={"timezone": "UTC"}
+                _db.APP_DATABASE_URL,
+                min_size=1,
+                max_size=10,
+                server_settings={"timezone": "UTC"},
+                **_db._pool_connection_options(),
             )
             with _pg_registry_lock:
                 _pg_pools[loop] = pool
@@ -262,15 +267,17 @@ def _pg_fresh_database(_pg_session_template):
     from netcontrol import hardware_components as _hardware_components
 
     _hardware_components.forget_all()
-    # /api/cloud/topology serves a cached payload for a short time; a test
+    # The dashboard, topology, cloud topology and software overview serve a
+    # cached payload for a short time (``netcontrol.payload_cache``); a test
     # must not get the payload of the test before it.
-    from netcontrol.routes import cloud_visibility as _cloud_visibility
+    from netcontrol import payload_cache as _payload_cache
 
-    _cloud_visibility._snapshot_cache.clear()
-    # /api/software/overview likewise caches the unscoped payload.
-    from netcontrol.routes import software as _software
+    _payload_cache.clear_all()
+    # The auth path keeps user rows, features and object scopes across
+    # requests, keyed by ids that restart with the database.
+    from netcontrol import authz_cache as _authz_cache
 
-    _software._overview_cache.clear()
+    _authz_cache.invalidate()
     yield
 
 

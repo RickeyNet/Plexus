@@ -13,6 +13,7 @@ Covers:
 from __future__ import annotations
 
 import asyncio
+import json
 import socket
 from typing import cast
 from unittest.mock import AsyncMock, patch
@@ -694,7 +695,7 @@ async def test_get_topology_builds_graph(monkeypatch):
     monkeypatch.setattr(app_module.db, "get_ipam_overview", AsyncMock(return_value={"subnets": []}))
     monkeypatch.setattr(topology_module, "db", app_module.db)
 
-    result = await topology_module.get_topology(group_id=None)
+    result = json.loads((await topology_module.get_topology(group_id=None)).body)
 
     assert "nodes" in result
     assert "edges" in result
@@ -730,7 +731,7 @@ async def test_get_topology_empty(monkeypatch):
     monkeypatch.setattr(app_module.db, "get_ipam_overview", AsyncMock(return_value={"subnets": []}))
     monkeypatch.setattr(topology_module, "db", app_module.db)
 
-    result = await topology_module.get_topology(group_id=None)
+    result = json.loads((await topology_module.get_topology(group_id=None)).body)
     assert result == {"nodes": [], "edges": [], "unacknowledged_changes": 0}
 
 
@@ -783,7 +784,7 @@ async def test_get_topology_enriches_nodes_with_ipam_utilization(monkeypatch):
     monkeypatch.setattr(app_module.db, "get_ipam_overview", AsyncMock(return_value=fake_ipam))
     monkeypatch.setattr(topology_module, "db", app_module.db)
 
-    result = await topology_module.get_topology(group_id=None)
+    result = json.loads((await topology_module.get_topology(group_id=None)).body)
 
     inv_node = next(n for n in result["nodes"] if n["id"] == 10)
     assert inv_node["ipam_subnet"] == "10.0.0.0/24"
@@ -876,7 +877,7 @@ async def test_get_topology_one_node_per_address_for_a_shared_name_and_end_devic
     monkeypatch.setattr(topology_module, "db", app_module.db)
     topology_module.invalidate_topology_cache()
 
-    result = await topology_module.get_topology(group_id=None)
+    result = json.loads((await topology_module.get_topology(group_id=None)).body)
     nodes = {n["id"]: n for n in result["nodes"]}
     phones = sorted(k for k in nodes if str(k).startswith("ext_polycom vvx 250"))
     assert phones == [f"ext_polycom vvx 250@10.0.5.{i}" for i in (1, 2, 3)]

@@ -5,7 +5,9 @@
 # multi-platform), so a re-pushed tag cannot change what is built. Dependabot
 # (.github/dependabot.yml, docker ecosystem) proposes digest bumps.
 FROM node:26-alpine@sha256:6bd9ab43c0ec0190ca7b2d193906cb8b7edf6e7f4afa43ddeccd6452710bffb5 AS frontend-build
-WORKDIR /frontend
+# Same layout as the repository: the bundle imports the stylesheet, fonts and
+# images from netcontrol/static/{css,fonts,img} by relative path.
+WORKDIR /src/netcontrol/static/frontend
 
 # Extra CA certificates the build trusts (deploy/build-ca/*.crt, PEM): the
 # root CA of a TLS-inspecting proxy on the build host (Cato, Zscaler, ...)
@@ -21,6 +23,9 @@ RUN if ls /build-ca/*.crt >/dev/null 2>&1; then \
     fi \
     && npm ci --no-audit --no-fund
 
+COPY netcontrol/static/css/ ../css/
+COPY netcontrol/static/fonts/ ../fonts/
+COPY netcontrol/static/img/ ../img/
 COPY netcontrol/static/frontend/ ./
 RUN npm run build
 
@@ -86,7 +91,7 @@ RUN if [ "$INCLUDE_PYODIDE" = "true" ]; then python scripts/fetch_pyodide.py; fi
 # to anyone, so everything else there is removed. (.dockerignore cannot
 # exclude them: the node stage above copies the source from the same context.)
 RUN find /app/netcontrol/static/frontend -mindepth 1 -maxdepth 1 ! -name dist -exec rm -rf {} +
-COPY --from=frontend-build /frontend/dist /app/netcontrol/static/frontend/dist
+COPY --from=frontend-build /src/netcontrol/static/frontend/dist /app/netcontrol/static/frontend/dist
 
 RUN mkdir -p /app/state /app/certs /app/state/software_images
 RUN useradd -m -u 1000 plexus && chown -R plexus:plexus /app

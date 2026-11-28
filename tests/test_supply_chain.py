@@ -141,6 +141,21 @@ def test_runtime_image_keeps_only_the_built_frontend():
     assert dockerfile.index(prune) < dockerfile.index("COPY --from=frontend-build")
 
 
+def test_frontend_build_stage_has_the_stylesheet_and_its_files():
+    # src/main.tsx imports ../../css/style.css, which loads ../fonts and ../img:
+    # the node stage must hold them at the same relative place.
+    dockerfile = _read(ROOT / "Dockerfile")
+    assert "WORKDIR /src/netcontrol/static/frontend" in dockerfile
+    build = dockerfile.index("RUN npm run build")
+    for folder, name in (("css", "style.css"), ("fonts", "inter-latin.woff2"), ("img", "space-scene.avif")):
+        copy = f"COPY netcontrol/static/{folder}/ ../{folder}/"
+        assert copy in dockerfile
+        assert dockerfile.index(copy) < build
+        assert (ROOT / "netcontrol" / "static" / folder / name).is_file()
+        assert not _dockerignore_excludes(f"netcontrol/static/{folder}/{name}")
+    assert "COPY --from=frontend-build /src/netcontrol/static/frontend/dist " in dockerfile
+
+
 def test_production_build_has_no_source_maps_and_ships_the_embed_echarts():
     from netcontrol.routes.graph_export import ECHARTS_SCRIPT_SRC
 

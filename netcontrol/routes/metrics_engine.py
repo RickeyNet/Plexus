@@ -52,6 +52,7 @@ from netcontrol.object_scope import (
     scope_exempt,
     scoped,
 )
+from netcontrol.payload_cache import PayloadCache
 from netcontrol.routes import opnsense_filterlog
 from netcontrol.routes.shared import _audit, _corr_id, _get_session
 from netcontrol.routes.snmp import decode_snmp_trap, snmp_inform_response, trap_community_matches
@@ -241,10 +242,11 @@ VENDOR_OID_DEFAULTS: dict[str, dict] = {
 # device_type (DB overrides change only via the admin vendor-OID endpoints,
 # which call clear_oid_cache()). Without this, a 500-host fleet issues 500
 # identical get_vendor_oid_for_host() round-trips every cycle. Keyed by
-# device_type; TTL bounds staleness if an override write somehow misses the
-# invalidation hook.
-_OID_CACHE: dict[str, tuple[float, dict]] = {}
+# device_type; hosts of one type polled at once share one lookup. TTL bounds
+# staleness if an override write somehow misses the invalidation hook.
+# Entries are never handed out: callers get a copy.
 _OID_CACHE_TTL = 300.0  # seconds
+_OID_CACHE: PayloadCache[dict] = PayloadCache("vendor-oids", ttl=_OID_CACHE_TTL, max_entries=1024)
 
 
 def clear_oid_cache() -> None:
@@ -279,15 +281,10 @@ async def resolve_oids_for_device(device_type: str) -> dict:
     Order: DB custom entries  →  built-in vendor map  →  _fallback.
     Cached per device_type for _OID_CACHE_TTL seconds (see _OID_CACHE).
     """
-    key = device_type or ""
-    now = time.monotonic()
-    hit = _OID_CACHE.get(key)
-    if hit is not None and now - hit[0] < _OID_CACHE_TTL:
-        return dict(hit[1])
+    async def build() -> dict:
+        return dict(await _resolve_oids_uncached(device_type))
 
-    resolved = await _resolve_oids_uncached(device_type)
-    _OID_CACHE[key] = (now, dict(resolved))
-    return dict(resolved)
+    return dict(await _OID_CACHE.get_or_build(device_type or "", build))
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -418,10 +415,13 @@ async def store_interface_error_metrics_from_poll(
     host_id: int,
     if_details: list[dict],
 ) -> int:
-    """Store interface error/discard counters as metric_samples and detect spikes.
+    """Store interface error/discard rates as metric_samples and detect spikes.
 
-    For each interface, stores raw counter values in metric_samples with labels.
-    Computes delta rates by comparing with previous counters in interface_error_stats.
+    Computes per-second rates by comparing with the previous counters in
+    interface_error_stats and stores one ``<metric>_rate`` sample per counter
+    and interface. The raw counters themselves are not written as samples:
+    the newest values live in interface_error_stats (which the error summary
+    reads), and every chart, rollup and spike check works from the rates.
     Detects spikes by comparing current rate to recent baseline average.
     """
     if not if_details:
@@ -434,12 +434,7 @@ async def store_interface_error_metrics_from_poll(
 
     metric_rows: list[tuple] = []
     error_stat_rows: list[tuple] = []
-    counter_fields = [
-        ("in_errors", "if_in_errors"),
-        ("out_errors", "if_out_errors"),
-        ("in_discards", "if_in_discards"),
-        ("out_discards", "if_out_discards"),
-    ]
+    counter_fields = db.INTERFACE_ERROR_COUNTERS
 
     for i, iface in enumerate(if_details):
         if_index = iface.get("if_index") or (i + 1)
@@ -450,8 +445,6 @@ async def store_interface_error_metrics_from_poll(
 
         for field, metric_name in counter_fields:
             counter_val = iface.get(field, 0) or 0
-            # Store raw counter value as a metric sample
-            metric_rows.append((host_id, metric_name, labels, float(counter_val)))
 
             # Compute rate if we have a previous sample
             t_prev = _parse_db_time(prev.get("polled_at")) if prev is not None and prev.get("prev_polled_at") else None
@@ -730,6 +723,8 @@ _DOWNSAMPLE_METRICS = [
     "vpn_tunnels_up",
     "vpn_tunnels_down",
     "route_count",
+    # The raw error counters are no longer sampled (the rates below are); the
+    # names stay so samples written before that change still roll up.
     "if_in_errors",
     "if_out_errors",
     "if_in_discards",
@@ -1765,7 +1760,12 @@ async def metrics_query(
     group: int | None = Query(default=None, description="Filter by inventory group ID"),
 ) -> dict:
     """Structured metrics query - no PromQL needed.
-    Returns time-series data for the requested metric across hosts."""
+    Returns time-series data for the requested metric across hosts, newest
+    first. ``step=auto`` aggregates on the server (``bucket_seconds``: raw
+    samples averaged into buckets sized to the range, or the hourly or
+    daily rollups); ``raw``, ``hourly`` and ``daily`` return the stored rows.
+    ``limit`` is the row cap and ``truncated`` says when it cut the oldest
+    rows."""
 
     # Parse host filter
     host_ids = None
@@ -1803,14 +1803,14 @@ async def metrics_query(
     start_time = (now - delta).strftime("%Y-%m-%d %H:%M:%S")
     end_time = now.strftime("%Y-%m-%d %H:%M:%S")
 
-    # Determine step (resolution)
+    # Resolution: step=auto buckets on the server (_auto_resolution); an
+    # explicit raw, hourly or daily step returns the stored rows, capped.
+    bucket_seconds = 0
+    cap = _QUERY_EXPLICIT_CAP
     if step == "auto":
-        if delta <= timedelta(hours=2):
-            step = "raw"
-        elif delta <= timedelta(days=2):
-            step = "hourly"
-        else:
-            step = "daily"
+        series = len(host_ids) if host_ids else await db.count_hosts()
+        step, bucket_seconds = _auto_resolution(delta, series)
+        cap = _QUERY_AUTO_CAP
 
     if step == "raw":
         data = await db.query_metric_samples(
@@ -1818,15 +1818,9 @@ async def metrics_query(
             host_ids=host_ids,
             start=start_time,
             end=end_time,
-            limit=10000,
+            limit=cap + 1,
+            bucket_seconds=bucket_seconds,
         )
-        return {
-            "metric": metric,
-            "step": "raw",
-            "range": range,
-            "count": len(data),
-            "data": data,
-        }
     else:
         data = await db.query_metric_rollups(
             metric_name=metric,
@@ -1834,15 +1828,53 @@ async def metrics_query(
             host_ids=host_ids,
             start=start_time,
             end=end_time,
-            limit=10000,
+            limit=cap + 1,
         )
-        return {
-            "metric": metric,
-            "step": step,
-            "range": range,
-            "count": len(data),
-            "data": data,
-        }
+    # Newest first: a capped response loses the oldest rows and says so.
+    truncated = len(data) > cap
+    data = data[:cap]
+    return {
+        "metric": metric,
+        "step": step,
+        "range": range,
+        "bucket_seconds": bucket_seconds,
+        "count": len(data),
+        "limit": cap,
+        "truncated": truncated,
+        "data": data,
+    }
+
+
+# step=auto of /api/metrics/query: raw samples (kept 48 h,
+# ``run_retention_cleanup``) bucketed on the server up to that span, hourly
+# rollups (kept 30 d) when they give few enough points, else daily rollups.
+_RAW_SAMPLE_SPAN = timedelta(hours=48)
+_HOURLY_ROLLUP_SPAN = timedelta(days=30)
+# Points per series step=auto aims for, and the most it allows.
+_QUERY_TARGET_POINTS = 360
+_QUERY_MAX_POINTS = 1000
+# Rows a response holds at most (``truncated`` says when more matched).
+_QUERY_AUTO_CAP = 20_000
+_QUERY_EXPLICIT_CAP = 10_000
+# The bucket widths step=auto picks from, in seconds (1 min to 6 h).
+_QUERY_BUCKET_WIDTHS = (60, 120, 300, 600, 900, 1800, 3600, 7200, 10800, 21600)
+
+
+def _auto_resolution(delta: timedelta, series: int) -> tuple[str, int]:
+    """``(step, bucket_seconds)`` of a step=auto query over ``delta`` for
+    about ``series`` series (hosts): the points per series shrink when
+    many series would pass the row cap."""
+    per_series = _QUERY_AUTO_CAP // max(1, series)
+    target = max(1, min(_QUERY_TARGET_POINTS, per_series))
+    most = max(1, min(_QUERY_MAX_POINTS, per_series))
+    span = delta.total_seconds()
+    if delta <= _RAW_SAMPLE_SPAN:
+        wanted = span / target
+        width = next((w for w in _QUERY_BUCKET_WIDTHS if w >= wanted), _QUERY_BUCKET_WIDTHS[-1])
+        return "raw", width
+    if delta <= _HOURLY_ROLLUP_SPAN and span / 3600 <= most:
+        return "hourly", 0
+    return "daily", 0
 
 
 @router.get("/api/metrics/capacity-planning")

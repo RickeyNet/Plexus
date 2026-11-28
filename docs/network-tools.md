@@ -231,6 +231,7 @@ GET  /api/flows/top-talkers?hours=&direction=src|dst&host_id=&limit=
 GET  /api/flows/top-applications?hours=&host_id=&limit=
 GET  /api/flows/top-conversations?hours=&host_id=&limit=
 GET  /api/flows/timeline?hours=&bucket_minutes=&host_id=
+GET  /api/flows/overview?parts=&hours=&limit=&bucket_minutes=&host_id=
 GET  /api/flows/status
 GET  /api/flows/exporters
 ```

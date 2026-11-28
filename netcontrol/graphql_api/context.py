@@ -9,7 +9,9 @@ Access is decided as the REST API decides it:
   and inventory groups outside it are never listed or reachable, and the
   rows of every other model go through the scope model registry
   (``visible``: ``object_scope.filter_rows`` on rows keyed by
-  ``scope_keyed``).
+  ``scope_keyed``). The large root lists (hosts, IP addresses) take the
+  scope, their filters and their page in SQL (``host_page``,
+  ``allocation_page``).
 
 Every reader runs once per request (``_once``) or is a ``DataLoader`` that
 batches the keys of one execution step into one query, so nested queries
@@ -28,7 +30,7 @@ from strawberry.dataloader import DataLoader
 
 from netcontrol.custom_fields import OBJECT_TYPE_SPECS, OBJECT_TYPES
 from netcontrol.dynamic_groups import resolve_hosts
-from netcontrol.object_scope import ObjectScope, filter_rows
+from netcontrol.object_scope import ObjectScope, filter_rows, sql_condition
 from netcontrol.routes.custom_fields import object_custom_data_bulk
 from netcontrol.routes.inventory import _visible_tree
 
@@ -160,19 +162,24 @@ class GraphQLContext:
         if self.features is not None and feature not in self.features:
             raise GraphQLAccessError(f"Access denied for feature '{feature}'")
 
-    def page(self, rows: list[Any], limit: int | None, offset: int, *, bounded: bool = True) -> list[Any]:
-        """``rows[offset:offset + limit]``; ``limit`` None (nested lists
-        only) is at most ``max_limit`` rows from ``offset``, the size the
-        cost estimate assumes for it (``limits._list_size``)."""
+    def page_size(self, limit: int | None, offset: int, *, bounded: bool = True) -> int:
+        """The rows a page of ``limit`` from ``offset`` holds at most, after
+        checking both: ``limit`` None (nested lists only) is ``max_limit``,
+        the size the cost estimate assumes for it (``limits._list_size``)."""
         if offset < 0:
             raise GraphQLClientError("offset must be 0 or more")
         if limit is None:
             if bounded:
                 raise GraphQLClientError("limit is required")
-            return rows[offset : offset + self.max_limit]
+            return self.max_limit
         if not 1 <= limit <= self.max_limit:
             raise GraphQLClientError(f"limit must be between 1 and {self.max_limit}")
-        return rows[offset : offset + limit]
+        return limit
+
+    def page(self, rows: list[Any], limit: int | None, offset: int, *, bounded: bool = True) -> list[Any]:
+        """``rows[offset:offset + limit]`` (``page_size``)."""
+        size = self.page_size(limit, offset, bounded=bounded)
+        return rows[offset : offset + size]
 
     def count_objects(self, count: int) -> None:
         """Add ``count`` resolved list items to the request's total; past
@@ -240,6 +247,36 @@ class GraphQLContext:
             return out
 
         return await self._once("hosts_by_group", load)
+
+    async def host_page(
+        self,
+        limit: int,
+        offset: int,
+        *,
+        group_ids: Iterable[int] | None = None,
+        host_ids: Iterable[int] | None = None,
+        equal: dict[str, str] | None = None,
+        keep: Callable[[dict], bool] | None = None,
+    ) -> list[dict]:
+        """One page of the readable hosts (``hosts()`` order), narrowed in
+        SQL by ``group_ids``, ``host_ids`` and ``equal`` (``get_all_hosts``)
+        and by ``keep``, a test of a host's ``hostname`` and ``ip_address``
+        that SQL cannot state exactly (substring ignoring case, address
+        match). Without ``keep`` the database pages; with it, only the ids,
+        names and addresses are read, tested and paged, then the page's
+        rows are read."""
+        size = self.page_size(limit, offset)
+        groups = set(self.scope.read_groups) if self.scope.restricted else None
+        if group_ids is not None:
+            wanted = {int(g) for g in group_ids}
+            groups = wanted if groups is None else groups & wanted
+        kwargs: dict[str, Any] = {"group_ids": groups, "host_ids": host_ids, "equal": equal}
+        if keep is None:
+            return await db.get_all_hosts(**kwargs, limit=size, offset=offset)
+        thin = [h for h in await db.get_all_hosts(**kwargs, thin=True) if keep(h)]
+        ids = [int(h["id"]) for h in thin[offset : offset + size]]
+        found = {int(h["id"]): h for h in await db.get_all_hosts(**{**kwargs, "host_ids": ids})} if ids else {}
+        return [found[i] for i in ids if i in found]
 
     async def dynamic_group_hosts(self, group: dict) -> list[dict]:
         """The readable hosts dynamic group ``group`` matches now, resolved
@@ -367,8 +404,17 @@ class GraphQLContext:
 
         return await self._once("prefix_vlan_ids", load)
 
-    async def allocation_records(self, address: str | None) -> list[dict]:
-        return await self.visible("ip_address", await db.list_ipam_allocation_records(address=address))
+    async def allocation_page(self, address: str | None, vrf: str | None, limit: int, offset: int) -> list[dict]:
+        """One page of the readable address allocations (by address and
+        id), filtered, scoped and paged in SQL."""
+        size = self.page_size(limit, offset)
+        return await db.list_ipam_allocation_records(
+            address=address,
+            vrf_name=vrf,
+            scope_condition=await sql_condition("ipam_allocation", self.scope, alias="a"),
+            limit=size,
+            offset=offset,
+        )
 
     async def vrf_route_targets(self) -> dict[int, dict[str, list[dict]]]:
         """VRF id -> its ``{"import", "export"}`` route targets (readable
@@ -536,8 +582,13 @@ class GraphQLContext:
 
     async def dcim_records(self, kind: str, filters: dict[str, Any], q: str = "") -> list[dict]:
         """A root list of DCIM records of ``kind`` (``db.list_dcim_records``
-        filters), within the caller's scope."""
-        return await self.visible(kind, await db.list_dcim_records(kind, filters, q))
+        filters), within the caller's scope. Records of a host are read for
+        the readable hosts only, so the reader's row cap applies to them
+        and not to the whole table."""
+        host_ids = None
+        if kind in HOST_RECORD_KINDS and self.scope.restricted:
+            host_ids = (await self.scope.keys(_SCOPE_MODELS[kind]))["host"]
+        return await self.visible(kind, await db.list_dcim_records(kind, filters, q, host_ids=host_ids))
 
     async def cables(self, filters: dict[str, Any]) -> list[dict]:
         return await self.visible("cable", await db.list_cables(filters))
@@ -562,8 +613,10 @@ class GraphQLContext:
         return [found.get(h, []) for h in host_ids]
 
     async def _load_allocations(self, keys: list[tuple[int, str]]) -> list[list[dict]]:
-        rows = await db.list_ipam_allocation_records(prefix_subnets=[subnet for _, subnet in keys])
-        rows = await self.visible("ip_address", rows)
+        rows = await db.list_ipam_allocation_records(
+            prefix_subnets=[subnet for _, subnet in keys],
+            scope_condition=await sql_condition("ipam_allocation", self.scope, alias="a"),
+        )
         grouped: dict[tuple[int, str], list[dict]] = {}
         for row in rows:
             grouped.setdefault((int(row["source_id"]), str(row["prefix_subnet"])), []).append(row)

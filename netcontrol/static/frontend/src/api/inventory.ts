@@ -2,16 +2,17 @@
  * Inventory API - groups, hosts, SNMP profiles, discovery.
  *
  * Mirrors the legacy api.js inventory functions on top of the React-app
- * apiRequest wrapper. Reuses the lightweight `useInventoryGroups` /
- * `useCredentials` from compliance.ts but adds the richer types the
- * inventory page itself needs (model, serial_number, software_version, etc).
+ * apiRequest wrapper. Owns the one query of the `/api/inventory` group
+ * listing (`inventoryGroupKeys`, `useInventoryGroupsFull`): other API modules
+ * and pages import it rather than fetching the listing themselves.
  */
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { queryOptions, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import type { HostNetworkFields } from '@/lib/networkObjects';
 
 import { apiRequest, errorMessage, getCsrfToken } from './client';
 import type { CustomValue, TagRef } from './customData';
+import { invalidateTopologyMaps } from './topology';
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -299,13 +300,87 @@ export interface BulkSerialFetchResult {
 
 // ── Queries ────────────────────────────────────────────────────────────────
 
-export function useInventoryGroupsFull(includeHosts = true, enabled = true) {
-  return useQuery<InventoryGroupFull[]>({
-    queryKey: ['inventory-groups-full', includeHosts],
+/**
+ * The one key family of the `/api/inventory` group listing. Every page that
+ * reads the listing goes through `useInventoryGroupsFull` (or a hook built on
+ * it), so the full payload (`include_hosts=true`) is one cache entry and one
+ * request however many views show it, and the groups-only listing is
+ * another; `invalidateInventory` refreshes both through `all`.
+ */
+export const inventoryGroupKeys = {
+  all: ['inventory-groups'] as const,
+  list: (includeHosts: boolean) => ['inventory-groups', includeHosts] as const,
+};
+
+/**
+ * The inventory groups, with their hosts when `includeHosts` (the full
+ * payload) or without (the light listing: names, paths and host counts).
+ * `select` reshapes the cached listing for one view without a second
+ * request; pass a stable function (module level or memoised) so the result
+ * keeps its identity while the data is unchanged.
+ */
+export function useInventoryGroupsFull<T = InventoryGroupFull[]>(
+  includeHosts = true,
+  enabled = true,
+  select?: (groups: InventoryGroupFull[]) => T,
+) {
+  return useQuery({ ...inventoryGroupsQueryOptions(includeHosts), enabled, select });
+}
+
+/** The key and fetch of one inventory listing (the hooks above; tests observe it directly). */
+export function inventoryGroupsQueryOptions(includeHosts: boolean) {
+  return queryOptions({
+    queryKey: inventoryGroupKeys.list(includeHosts),
     queryFn: ({ signal }) =>
-      apiRequest(includeHosts ? '/inventory?include_hosts=true' : '/inventory', { signal }),
-    enabled,
+      apiRequest<InventoryGroupFull[]>(includeHosts ? '/inventory?include_hosts=true' : '/inventory', { signal }),
   });
+}
+
+/** The groups-only listing unless `includeHosts`: `useInventoryGroupsFull` with the light default. */
+export function useInventoryGroups(includeHosts = false, enabled = true) {
+  return useInventoryGroupsFull(includeHosts, enabled);
+}
+
+/** One inventory host as a picker option, with the group it sits in. */
+export interface HostOption {
+  id: number;
+  hostname: string;
+  ip_address: string;
+  status?: string | null;
+  /** What a picker shows: the hostname, else the address, else `host-<id>`. */
+  label: string;
+  group_id: number;
+  /** The group's path (`groupLabel`). */
+  group_name: string;
+}
+
+/**
+ * Every host of the listing once (a host listed twice keeps its first
+ * group), sorted by label. Module level, so TanStack Query reuses the result
+ * while the cached listing is unchanged.
+ */
+export function selectHostOptions(groups: InventoryGroupFull[]): HostOption[] {
+  const byId = new Map<number, HostOption>();
+  for (const g of groups) {
+    for (const h of g.hosts ?? []) {
+      if (byId.has(h.id)) continue;
+      byId.set(h.id, {
+        id: h.id,
+        hostname: h.hostname,
+        ip_address: h.ip_address,
+        status: h.status,
+        label: h.hostname || h.ip_address || `host-${h.id}`,
+        group_id: g.id,
+        group_name: groupLabel(g),
+      });
+    }
+  }
+  return [...byId.values()].sort((a, b) => a.label.localeCompare(b.label));
+}
+
+/** Every inventory host as a flat, sorted option list, read from the full listing's cache entry. */
+export function useHostOptions(enabled = true) {
+  return useInventoryGroupsFull(true, enabled, selectHostOptions);
 }
 
 export function useSnmpProfiles(enabled = true) {
@@ -339,10 +414,9 @@ export function useGroupSnmpAssignments(groupIds: number[]) {
 
 // ── Mutations: groups & hosts ──────────────────────────────────────────────
 
-/** Refetches both inventory group listings (full and light). */
+/** Refetches both inventory group listings (full and light) and every view built on them. */
 export function invalidateInventory(qc: ReturnType<typeof useQueryClient>) {
-  qc.invalidateQueries({ queryKey: ['inventory-groups-full'] });
-  qc.invalidateQueries({ queryKey: ['inventory-groups'] });
+  qc.invalidateQueries({ queryKey: inventoryGroupKeys.all });
 }
 
 /** The query key root of the device model catalogues (api/deviceModel). */
@@ -596,7 +670,7 @@ export function useBulkAddHosts() {
       // Hosts and possibly new groups (both group lists).
       invalidateInventory(qc);
       // Added hosts become inventory nodes on the map.
-      qc.invalidateQueries({ queryKey: ['topology'] });
+      invalidateTopologyMaps(qc);
     },
   });
 }
@@ -838,7 +912,7 @@ export function useScanInventoryGroup() {
  */
 export function invalidateHostFacts(qc: ReturnType<typeof useQueryClient>) {
   invalidateInventory(qc);
-  qc.invalidateQueries({ queryKey: ['topology'] });
+  invalidateTopologyMaps(qc);
   qc.invalidateQueries({ queryKey: ['software-overview'] });
 }
 

@@ -254,6 +254,8 @@ def test_logout_without_a_valid_session_answers_200(monkeypatch, request, cookie
         client.cookies.set("session", cookie)
     resp = client.post("/api/auth/logout")
     assert resp.status_code == 200 and resp.json() == {"ok": True}
+    # Signing out also drops the API bodies the browser kept for revalidation.
+    assert resp.headers["Clear-Site-Data"] == '"cache"'
 
 
 def test_a_deleted_users_session_is_refused_everywhere(monkeypatch, request):

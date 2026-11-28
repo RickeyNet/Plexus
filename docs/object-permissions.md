@@ -22,6 +22,14 @@ read and write.
     access groups. A group is writable when any grant covering it has Read
     and write. A scoped user with no grants (or with no access group at all)
     sees no devices.
+- **When changes apply**: on the user's next request. The server keeps each
+  user's account row, features and grants in memory between requests
+  (`APP_AUTHZ_CACHE_TTL`, default 20 seconds) and drops them on every change
+  to accounts, memberships, access groups, grants, scope rules or the
+  inventory group tree made through Plexus (including directory and SSO
+  sign-in group sync). Which hosts, tenants and sites the grants reach is
+  read on every request. Only a change written straight into the database
+  waits for the cache time.
 
 Answers to a scoped user:
 
@@ -202,6 +210,11 @@ any page that gates writes with `canWriteFeature`.
   attribute, tenant or site is `400`; changes are audited
   (`access_group.scope_rules`).
 
+A new `routes.db` function that writes `users`, `user_group_memberships`,
+an `access_group*` table or the `inventory_groups` tree must carry
+`@invalidates` (`netcontrol/authz_cache.py`), as the existing writers do, or
+the change waits for the cache time; `tests/test_authz_cache.py` lists them.
+
 ## Enrolling another module
 
 1. Enforce scope in every route of its routers with the helpers in
@@ -217,7 +230,14 @@ any page that gates writes with `canWriteFeature`.
      `can_access(...)`.
    - SQL pushdown for lists and counts: `**await group_filter(request)` for
      readers taking `group_ids`, `sql_condition(model, request, alias=...)`,
-     `readable_host_ids(request)`.
+     `readable_host_ids(request)`. Prefer them to `filter_rows` for a list
+     that grows with the fleet or applies a `LIMIT`: the database then
+     returns only visible rows and the limit counts visible rows only. A
+     `routes/db` list reader takes the condition as
+     `scope_condition=(sql, params)`. `sql_condition` keeps exactly the rows
+     `filter_rows` keeps for models whose keys are integer columns; it
+     refuses a model with a derived list key (`scope_host_ids`, `host_ids`
+     ...), which stays on `filter_rows`.
    - `refuse_scoped(request)` for an action that cannot be confined.
    - A model the registry lacks: `register_model(ScopeModel(name, keys,
      shared=...))` in the route module.

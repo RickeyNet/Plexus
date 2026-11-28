@@ -419,6 +419,10 @@ POST   /api/config-drift/check                          {"host_id", "credential_
        (capture and check: credential_id optional; left out or null, only
         OPNsense firewalls are captured, any other host answers 400)
 GET    /api/config-drift/events?status=open&host_id=&limit=
+       (no diff_text: each row has diff_size, the diff's length in
+        characters, and diff_key, equal for events with the same added
+        and removed lines)
+GET    /api/config-drift/events/{id}                    (with diff_text)
 PUT    /api/config-drift/events/{id}/status             {"status": "accepted"}
 POST   /api/config-drift/events/bulk-accept             {"event_ids": [..]}
 POST   /api/config-drift/events/bulk-resolve            {"event_ids": [..]}

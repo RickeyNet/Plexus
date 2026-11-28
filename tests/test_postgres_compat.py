@@ -156,13 +156,72 @@ async def test_failed_statement_rolls_back_savepoint_not_transaction():
     fake.fail_queries.add("UPDATE t SET a = $1")
     with pytest.raises(RuntimeError):
         await conn.execute("UPDATE t SET a = ?", (2,))
-    assert ("savepoint.rollback",) in fake.calls
+    assert ("execute", "ROLLBACK TO SAVEPOINT plexus_stmt", ()) in fake.calls
     assert fake.tx_depth == 1  # outer transaction survives
 
     # ...and the section can keep writing, then commit atomically.
     await conn.execute("INSERT INTO some_junction_tbl (a, b) VALUES (?, ?)", (1, 2))
     await conn.commit()
     assert fake.tx_depth == 0
+
+
+def _sql_calls(fake) -> list:
+    """The calls a section sent, as (kind, sql) with transaction events kept."""
+    return [c if c[0].startswith(("tx.", "savepoint.")) else (c[0], c[1]) for c in fake.calls]
+
+
+@pytest.mark.asyncio
+async def test_single_write_runs_without_a_savepoint():
+    fake = _FakeConn()
+    conn = _PostgresConnectionCompat(fake)
+    await conn.execute("DELETE FROM t WHERE id = ?", (1,))
+    await conn.commit()
+    assert _sql_calls(fake) == [("tx.start",), ("execute", "DELETE FROM t WHERE id = $1"), ("tx.commit",)]
+
+
+@pytest.mark.asyncio
+async def test_later_statements_share_one_savepoint_round_trip():
+    fake = _FakeConn()
+    conn = _PostgresConnectionCompat(fake)
+    await conn.execute("DELETE FROM t WHERE id = ?", (1,))
+    await conn.execute("DELETE FROM t WHERE id = ?", (2,))
+    await conn.execute("SELECT a FROM t")
+    await conn.commit()
+    assert _sql_calls(fake) == [
+        ("tx.start",),
+        ("execute", "DELETE FROM t WHERE id = $1"),
+        ("execute", "SAVEPOINT plexus_stmt"),
+        ("execute", "DELETE FROM t WHERE id = $1"),
+        ("execute", "RELEASE SAVEPOINT plexus_stmt; SAVEPOINT plexus_stmt"),
+        ("fetch", "SELECT a FROM t"),
+        ("tx.commit",),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_failed_first_statement_discards_the_fresh_transaction():
+    fake = _FakeConn()
+    conn = _PostgresConnectionCompat(fake)
+    fake.fail_queries.add("DELETE FROM t WHERE id = $1")
+    with pytest.raises(RuntimeError):
+        await conn.execute("DELETE FROM t WHERE id = ?", (1,))
+    assert fake.tx_depth == 0 and not conn.in_transaction
+    assert ("tx.rollback",) in fake.calls
+    # Nothing to commit, and the next write opens a new transaction.
+    await conn.commit()
+    await conn.execute("INSERT INTO some_junction_tbl (a, b) VALUES (?, ?)", (1, 2))
+    assert fake.tx_depth == 1
+    await conn.commit()
+    assert fake.tx_depth == 0
+
+
+@pytest.mark.asyncio
+async def test_reads_outside_a_transaction_stay_bare():
+    fake = _FakeConn()
+    conn = _PostgresConnectionCompat(fake)
+    await conn.execute("SELECT a FROM t")
+    await conn.execute("SELECT b FROM t")
+    assert _sql_calls(fake) == [("fetch", "SELECT a FROM t"), ("fetch", "SELECT b FROM t")]
 
 
 def test_minute_bucket_expr_uses_native_postgres_sql():

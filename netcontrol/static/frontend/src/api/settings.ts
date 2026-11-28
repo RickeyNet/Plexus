@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { ExternalReferenceBody, ReferencedRow } from '@/lib/secretsProviders';
 
 import { apiRequest } from './client';
+import { useInventoryGroups } from './inventory';
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -433,11 +434,6 @@ export interface StpRootPolicyPayload {
   expected_root_bridge_id: string;
   expected_root_hostname: string;
   enabled: boolean;
-}
-
-export interface InventoryGroupSummary {
-  id: number;
-  name: string;
 }
 
 /** `ext_*`: the external secrets provider reference of the credential, if
@@ -1248,11 +1244,9 @@ export function useRevokeMcpToken() {
 
 // ── Helpers reused across tabs ─────────────────────────────────────────────
 
+/** The groups-only inventory listing (api/inventory owns the query and its key). */
 export function useInventoryGroupsList() {
-  return useQuery<InventoryGroupSummary[]>({
-    queryKey: ['inventory', 'groups-list'],
-    queryFn: ({ signal }) => apiRequest('/inventory', { signal }),
-  });
+  return useInventoryGroups(false);
 }
 
 export function useCredentialsList() {

@@ -217,8 +217,9 @@ pattern:
 
 ## Styling
 
-**Legacy CSS only.** The React app loads
-`netcontrol/static/css/style.css` and reuses its class names. This is a
+**Legacy CSS only.** The React app imports
+`netcontrol/static/css/style.css` from `src/main.tsx` (Vite minifies and
+content-hashes it into `/assets`) and reuses its class names. This is a
 hard rule from the 2026-05-02 decision (see `docs/FRONTEND_MIGRATION.md`).
 
 Common classes:

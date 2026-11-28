@@ -260,12 +260,14 @@ async def list_routing_instances(
     status: str | None = None,
     tenant_id: int | None = None,
     search: str | None = None,
+    scope_condition: tuple[str, tuple] = ("", ()),
 ) -> list[dict]:
     """Filters: the device, the local AS number, the status, the tenant (of
     the device or of the local AS) and text in the name, device or
-    description."""
-    where: list[str] = []
-    params: list = []
+    description. ``scope_condition``: an object scope SQL condition on
+    alias ``ri`` (``object_scope.sql_condition("routing_instance", ...)``)."""
+    where: list[str] = [scope_condition[0]] if scope_condition[0] else []
+    params: list = list(scope_condition[1])
     if host_id is not None:
         where.append("ri.host_id = ?")
         params.append(int(host_id))
@@ -352,10 +354,16 @@ def _group(row: dict) -> dict:
 
 
 async def list_bgp_peer_groups(
-    *, routing_instance_id: int | None = None, host_id: int | None = None, search: str | None = None
+    *,
+    routing_instance_id: int | None = None,
+    host_id: int | None = None,
+    search: str | None = None,
+    scope_condition: tuple[str, tuple] = ("", ()),
 ) -> list[dict]:
-    where: list[str] = []
-    params: list = []
+    """``scope_condition``: an object scope SQL condition on alias ``ri``
+    (the group's routing instance)."""
+    where: list[str] = [scope_condition[0]] if scope_condition[0] else []
+    params: list = list(scope_condition[1])
     if routing_instance_id is not None:
         where.append("g.routing_instance_id = ?")
         params.append(int(routing_instance_id))
@@ -451,13 +459,15 @@ async def list_bgp_peerings(
     status: str | None = None,
     tenant_id: int | None = None,
     search: str | None = None,
+    scope_condition: tuple[str, tuple] = ("", ()),
 ) -> list[dict]:
     """Filters: the device, several devices, the instance, an AS number (the
     local or the remote AS), the status, the tenant (of the device or of
     the remote AS) and text in the addresses, device, peer group or
-    description."""
-    where: list[str] = []
-    params: list = []
+    description. ``scope_condition``: an object scope SQL condition on
+    alias ``ri`` (the peering's routing instance)."""
+    where: list[str] = [scope_condition[0]] if scope_condition[0] else []
+    params: list = list(scope_condition[1])
     if host_id is not None:
         where.append("ri.host_id = ?")
         params.append(int(host_id))

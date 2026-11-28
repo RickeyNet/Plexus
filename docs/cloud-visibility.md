@@ -195,7 +195,7 @@ The full list is in [API reference](api-reference.md).
 | `GET /api/cloud/accounts?provider=`, `POST`, `PUT/DELETE /api/cloud/accounts/{id}` | Accounts |
 | `POST /api/cloud/accounts/{id}/discover` | Discover now; `GET .../discover/progress` while it runs |
 | `GET /api/cloud/topology?provider=&account_id=` | Resources, connections, hybrid links and counts |
-| `GET /api/cloud/flow-logs/summary`, `/top-talkers`, `/timeline` | Flow data (`hours` 1 to 720) |
+| `GET /api/cloud/flow-logs/summary`, `/top-talkers`, `/timeline`, `/overview` | Flow data (`hours` 1 to 720); `overview` returns the summary, the talkers of both directions and the timeline from one pass over the records |
 | `GET /api/cloud/traffic-metrics/summary`, `/top-resources`, `/timeline` | Traffic metric data |
 | `GET /api/cloud/policies/effective`, `GET /api/cloud/policies/rules` | Policy |
 | `GET/PUT /api/cloud/discovery-sync/config`, `/flow-sync/config`, `/traffic-sync/config` | Schedules |

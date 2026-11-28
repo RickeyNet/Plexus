@@ -24,7 +24,7 @@ from itsdangerous import BadSignature, URLSafeTimedSerializer
 from pydantic import BaseModel, Field
 
 import netcontrol.routes.state as state
-from netcontrol import account_rules, object_scope, oidc, saml
+from netcontrol import account_rules, authz_cache, object_scope, oidc, saml
 from netcontrol.routes.net_guard import OutboundRequestError, validate_outbound_host
 from netcontrol.routes.shared import (
     _audit,
@@ -1380,7 +1380,15 @@ async def _get_user_features(user: dict, *, request: Request | None = None) -> l
         return []
     if user.get("role") == "admin":
         return list(FEATURE_FLAGS)
-    effective = await db.get_user_effective_features(int(user["id"]))
+    user_id = int(user["id"])
+
+    async def load() -> tuple[str, ...] | None:
+        found = await db.get_user_effective_features(user_id)
+        return None if found is None else tuple(found)
+
+    # Kept across requests (authz_cache): every membership and access-group
+    # write drops it. FEATURE_FLAGS and the scope filter apply per call.
+    effective = await authz_cache.get_or_load(("features", user_id), load)
     if effective is None:
         # No group_memberships rows at all - legacy/unassigned user.
         # Default to empty (least-privilege).  Admins should assign groups.
@@ -1747,6 +1755,9 @@ async def logout(request: Request):
             await _audit("auth", "logout", user=user["username"], correlation_id=_corr_id(request))
     response = JSONResponse({"ok": True})
     response.delete_cookie("session", samesite="strict")
+    # The browser may hold revalidated API bodies (payload_cache.json_response
+    # sends them ``private, no-cache``); signing out drops them.
+    response.headers["Clear-Site-Data"] = '"cache"'
     return response
 
 

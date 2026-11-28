@@ -13,6 +13,7 @@ import {
   useUpdateSourceSchedule,
   useValidateMerakiOrg,
 } from "@/api/meraki";
+import { invalidateTopologyMaps } from "@/api/topology";
 import { Badge } from "@/components/Badge";
 import { Callout } from "@/components/Callout";
 import { LoadingState } from "@/components/LoadingState";
@@ -198,7 +199,7 @@ export function SourceSetupModal({ org, onEdit, onClose }: SourceSetupModalProps
   useEffect(() => {
     if (!settled) return;
     qc.invalidateQueries({ queryKey: ["meraki"] });
-    qc.invalidateQueries({ queryKey: ["topology"] });
+    invalidateTopologyMaps(qc);
   }, [settled, qc]);
 
   const step: SetupStep = phase === "credentials" ? "credentials" : collected ? "import" : "collecting";

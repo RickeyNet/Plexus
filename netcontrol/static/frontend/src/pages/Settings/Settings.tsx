@@ -1,3 +1,5 @@
+import { lazy, Suspense } from 'react';
+
 import { useAdminCapabilities } from '@/api/settings';
 import { useAuthStatus } from '@/api/auth';
 import { ApiError } from '@/api/client';
@@ -6,35 +8,46 @@ import { useDialogs } from '@/components/DialogProvider-context';
 import { LoadingState } from '@/components/LoadingState';
 import { PageHeader } from '@/components/PageHeader';
 import { PageHelp } from '@/components/PageHelp';
+import { PageLoader } from '@/components/PageLoader';
 import { QueryError } from '@/components/QueryError';
 import { TabBar } from '@/components/TabBar';
 import { usePathTab } from '@/lib/usePathTab';
 
-import { AccessGroupsTab } from './AccessGroupsTab';
-import { AiAccessTab } from './AiAccessTab';
-import { AppearanceTab } from './AppearanceTab';
-import { ChatOpsTab } from './ChatOpsTab';
-import { AuthTab } from './AuthTab';
-import { CustomDataTab } from './CustomDataTab';
-import { DeviceModelTab } from './DeviceModelTab';
-import { DiscoveryTab } from './DiscoveryTab';
-import { EventReceiversTab } from './EventReceiversTab';
-import { ExportTemplatesTab } from './ExportTemplatesTab';
-import { FeaturesTab } from './FeaturesTab';
-import { GitSourcesTab } from './GitSourcesTab';
-import { ChangeLogRetentionSection, JobRetentionSection } from './JobRetentionSection';
-import { LoggingTab } from './LoggingTab';
-import { MonitoringTab } from './MonitoringTab';
-import { NetFlowTab } from './NetFlowTab';
-import { NotificationsTab } from './NotificationsTab';
-import { PluginsTab } from './PluginsTab';
-import { SecretsProvidersTab } from './SecretsProvidersTab';
-import { SiemTab } from './SiemTab';
-import { SystemTab } from './SystemTab';
 import { UnsavedContext, useUnsavedRegistry } from './unsaved-context';
-import { UsersTab } from './UsersTab';
-import { ValidationRulesTab } from './ValidationRulesTab';
-import { WebhooksTab } from './WebhooksTab';
+
+// Each tab is its own chunk, fetched when the tab is first opened. A chunk
+// that fails to load (stale deploy) reaches the route ErrorBoundary in App.
+const AccessGroupsTab = lazy(() => import('./AccessGroupsTab').then((m) => ({ default: m.AccessGroupsTab })));
+const AiAccessTab = lazy(() => import('./AiAccessTab').then((m) => ({ default: m.AiAccessTab })));
+const AppearanceTab = lazy(() => import('./AppearanceTab').then((m) => ({ default: m.AppearanceTab })));
+const ChatOpsTab = lazy(() => import('./ChatOpsTab').then((m) => ({ default: m.ChatOpsTab })));
+const AuthTab = lazy(() => import('./AuthTab').then((m) => ({ default: m.AuthTab })));
+const CustomDataTab = lazy(() => import('./CustomDataTab').then((m) => ({ default: m.CustomDataTab })));
+const DeviceModelTab = lazy(() => import('./DeviceModelTab').then((m) => ({ default: m.DeviceModelTab })));
+const DiscoveryTab = lazy(() => import('./DiscoveryTab').then((m) => ({ default: m.DiscoveryTab })));
+const EventReceiversTab = lazy(() => import('./EventReceiversTab').then((m) => ({ default: m.EventReceiversTab })));
+const ExportTemplatesTab = lazy(() => import('./ExportTemplatesTab').then((m) => ({ default: m.ExportTemplatesTab })));
+const FeaturesTab = lazy(() => import('./FeaturesTab').then((m) => ({ default: m.FeaturesTab })));
+const GitSourcesTab = lazy(() => import('./GitSourcesTab').then((m) => ({ default: m.GitSourcesTab })));
+const JobRetentionSection = lazy(() =>
+  import('./JobRetentionSection').then((m) => ({ default: m.JobRetentionSection })),
+);
+const ChangeLogRetentionSection = lazy(() =>
+  import('./JobRetentionSection').then((m) => ({ default: m.ChangeLogRetentionSection })),
+);
+const LoggingTab = lazy(() => import('./LoggingTab').then((m) => ({ default: m.LoggingTab })));
+const MonitoringTab = lazy(() => import('./MonitoringTab').then((m) => ({ default: m.MonitoringTab })));
+const NetFlowTab = lazy(() => import('./NetFlowTab').then((m) => ({ default: m.NetFlowTab })));
+const NotificationsTab = lazy(() => import('./NotificationsTab').then((m) => ({ default: m.NotificationsTab })));
+const PluginsTab = lazy(() => import('./PluginsTab').then((m) => ({ default: m.PluginsTab })));
+const SecretsProvidersTab = lazy(() =>
+  import('./SecretsProvidersTab').then((m) => ({ default: m.SecretsProvidersTab })),
+);
+const SiemTab = lazy(() => import('./SiemTab').then((m) => ({ default: m.SiemTab })));
+const SystemTab = lazy(() => import('./SystemTab').then((m) => ({ default: m.SystemTab })));
+const UsersTab = lazy(() => import('./UsersTab').then((m) => ({ default: m.UsersTab })));
+const ValidationRulesTab = lazy(() => import('./ValidationRulesTab').then((m) => ({ default: m.ValidationRulesTab })));
+const WebhooksTab = lazy(() => import('./WebhooksTab').then((m) => ({ default: m.WebhooksTab })));
 
 type Tab =
   | 'appearance'
@@ -263,7 +276,9 @@ export function Settings() {
         <TabBar tabs={NON_ADMIN_TABS} active={tab} onChange={(next) => void selectTab(next)} aria-label="Settings sections" />
 
         <div className="card card-sm">
-          <AppearanceTab />
+          <Suspense fallback={<PageLoader />}>
+            <AppearanceTab />
+          </Suspense>
         </div>
       </div>
     );
@@ -305,42 +320,44 @@ export function Settings() {
         <UnsavedContext.Provider value={unsaved}>
           <div className="card card-sm side-nav-main">
             <PageHelp pageKey={`settings.${tab}`} title={TAB_HELP[tab].title} text={TAB_HELP[tab].text} />
-            {tab === 'appearance' && <AppearanceTab />}
-            {tab === 'users' && <UsersTab />}
-            {tab === 'access-groups' && <AccessGroupsTab capabilities={caps} />}
-            {tab === 'auth' && <AuthTab capabilities={caps} />}
-            {tab === 'logging' && <LoggingTab />}
-            {tab === 'siem' && <SiemTab />}
-            {tab === 'discovery' && <DiscoveryTab />}
-            {tab === 'monitoring' && <MonitoringTab />}
-            {tab === 'netflow' && <NetFlowTab />}
-            {tab === 'event-receivers' && <EventReceiversTab />}
-            {tab === 'notifications' && <NotificationsTab />}
-            {tab === 'webhooks' && <WebhooksTab />}
-            {tab === 'features' && <FeaturesTab capabilities={caps} />}
-            {tab === 'custom-data' && <CustomDataTab />}
-            {tab === 'device-model' && <DeviceModelTab />}
-            {tab === 'validation-rules' && <ValidationRulesTab />}
-            {tab === 'export-templates' && <ExportTemplatesTab />}
-            {tab === 'git-sources' && <GitSourcesTab />}
-            {tab === 'secrets-providers' && <SecretsProvidersTab />}
-            {tab === 'ai-access' && <AiAccessTab />}
-            {tab === 'chatops' && <ChatOpsTab />}
-            {tab === 'plugins' && <PluginsTab />}
-            {tab === 'system' && (
-              <div className="stack">
-                <SystemTab />
-                {/* Outside SystemTab so an updater error does not hide it. */}
-                <section>
-                  <h4 style={{ margin: '0 0 0.5rem 0' }}>Job history</h4>
-                  <JobRetentionSection />
-                </section>
-                <section>
-                  <h4 style={{ margin: '0 0 0.5rem 0' }}>Change log</h4>
-                  <ChangeLogRetentionSection />
-                </section>
-              </div>
-            )}
+            <Suspense fallback={<PageLoader />}>
+              {tab === 'appearance' && <AppearanceTab />}
+              {tab === 'users' && <UsersTab />}
+              {tab === 'access-groups' && <AccessGroupsTab capabilities={caps} />}
+              {tab === 'auth' && <AuthTab capabilities={caps} />}
+              {tab === 'logging' && <LoggingTab />}
+              {tab === 'siem' && <SiemTab />}
+              {tab === 'discovery' && <DiscoveryTab />}
+              {tab === 'monitoring' && <MonitoringTab />}
+              {tab === 'netflow' && <NetFlowTab />}
+              {tab === 'event-receivers' && <EventReceiversTab />}
+              {tab === 'notifications' && <NotificationsTab />}
+              {tab === 'webhooks' && <WebhooksTab />}
+              {tab === 'features' && <FeaturesTab capabilities={caps} />}
+              {tab === 'custom-data' && <CustomDataTab />}
+              {tab === 'device-model' && <DeviceModelTab />}
+              {tab === 'validation-rules' && <ValidationRulesTab />}
+              {tab === 'export-templates' && <ExportTemplatesTab />}
+              {tab === 'git-sources' && <GitSourcesTab />}
+              {tab === 'secrets-providers' && <SecretsProvidersTab />}
+              {tab === 'ai-access' && <AiAccessTab />}
+              {tab === 'chatops' && <ChatOpsTab />}
+              {tab === 'plugins' && <PluginsTab />}
+              {tab === 'system' && (
+                <div className="stack">
+                  <SystemTab />
+                  {/* Outside SystemTab so an updater error does not hide it. */}
+                  <section>
+                    <h4 style={{ margin: '0 0 0.5rem 0' }}>Job history</h4>
+                    <JobRetentionSection />
+                  </section>
+                  <section>
+                    <h4 style={{ margin: '0 0 0.5rem 0' }}>Change log</h4>
+                    <ChangeLogRetentionSection />
+                  </section>
+                </div>
+              )}
+            </Suspense>
           </div>
         </UnsavedContext.Provider>
       </div>

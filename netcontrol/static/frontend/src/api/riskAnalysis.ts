@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { apiRequest } from './client';
+import { useInventoryGroups } from './inventory';
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -99,11 +100,6 @@ export interface RiskCredential {
   name: string;
 }
 
-export interface RiskInventoryGroup {
-  id: number;
-  name: string;
-}
-
 // ── Queries ────────────────────────────────────────────────────────────────
 
 export function useRiskAnalysisSummary() {
@@ -142,11 +138,9 @@ export function useRiskCredentials() {
   });
 }
 
+/** The groups-only inventory listing (api/inventory owns the query and its key). */
 export function useRiskInventoryGroups() {
-  return useQuery<RiskInventoryGroup[]>({
-    queryKey: ['inventory-groups', false],
-    queryFn: ({ signal }) => apiRequest('/inventory', { signal }),
-  });
+  return useInventoryGroups(false);
 }
 
 // ── Mutations ──────────────────────────────────────────────────────────────

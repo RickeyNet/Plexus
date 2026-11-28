@@ -52,20 +52,6 @@ export interface FloorPlacement {
   y_pct: number;
 }
 
-export interface InventoryGroup {
-  id: number;
-  name: string;
-  hosts?: InventoryHost[];
-}
-
-export interface InventoryHost {
-  id: number;
-  hostname: string;
-  ip_address?: string | null;
-  status?: string | null;
-  group_id?: number;
-}
-
 /** The body of POST / PUT /api/geo/sites; on an update a key left out keeps its value. */
 export interface SiteInput {
   name?: string;
@@ -134,15 +120,6 @@ export function useFloorPlacements(floorId: number | null) {
     queryKey: ['geo', 'floor', floorId, 'placements'],
     queryFn: ({ signal }) => apiRequest<FloorPlacement[]>(`/geo/floors/${floorId}/placements`, { signal }),
     enabled: floorId !== null,
-  });
-}
-
-export function useInventoryGroupsWithHosts(enabled: boolean) {
-  return useQuery({
-    queryKey: ['inventory', 'with-hosts'],
-    queryFn: ({ signal }) =>
-      apiRequest<InventoryGroup[]>('/inventory?include_hosts=true', { signal }),
-    enabled,
   });
 }
 

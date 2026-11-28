@@ -139,6 +139,8 @@ async def test_scope_for_request_user_shares_only_the_request_users_scope(monkey
     async def no_rules(user_id: int) -> list:
         return []
 
+    # Within one request only: the cross-request cache (tests/test_authz_cache.py) is off.
+    monkeypatch.setenv("APP_AUTHZ_CACHE_TTL", "0")
     monkeypatch.setattr(db, "get_user_object_scope", fake_scope)
     monkeypatch.setattr(object_scope.scope_db, "get_user_scope_rules", no_rules)
     user = {"id": 7, "role": "user"}
@@ -186,6 +188,8 @@ def test_scoped_request_builds_its_scope_once(monkeypatch, request):
     other = int(admin.post("/api/inventory", json={"name": "west"}).json()["id"])
     user = user_client(admin, "east-viewer", features=["inventory"], read_groups=[gid])
 
+    # Within one request only: the cross-request cache (tests/test_authz_cache.py) is off.
+    monkeypatch.setenv("APP_AUTHZ_CACHE_TTL", "0")
     real = db.get_user_object_scope
     calls: list[int] = []
 

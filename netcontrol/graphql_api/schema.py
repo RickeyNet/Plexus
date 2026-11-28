@@ -21,6 +21,7 @@ from every list and every relation (a hidden parent group reads ``null``).
 from __future__ import annotations
 
 import ipaddress
+from collections.abc import Callable
 from typing import Any
 
 import routes.database as db
@@ -770,27 +771,38 @@ class InventoryQuery:
     ) -> list[Host] | None:
         ctx = _ctx(info)
         ctx.require("inventory")
-        rows = await ctx.hosts()
+        # Scope, group, type, status and tags narrow the list in SQL; the
+        # name (substring ignoring case) and address tests run on the ids,
+        # names and addresses only (``GraphQLContext.host_page``).
+        tests: list[Callable[[dict], bool]] = []
         if name:
-            rows = [h for h in rows if name.lower() in _text(h, "hostname").lower()]
+            needle = name.lower()
+            tests.append(lambda h: needle in _text(h, "hostname").lower())
         if ip:
             match = _ip_matcher(ip)
-            rows = [h for h in rows if match(_text(h, "ip_address"))]
+            tests.append(lambda h: match(_text(h, "ip_address")))
+        group_ids: set[int] | None = None
         if group_id is not None:
-            rows = [h for h in rows if int(h["group_id"]) == group_id]
+            group_ids = {group_id}
         if group:
             groups = await ctx.groups_by_id()
             wanted = group.strip().lower()
             ids = {gid for gid, g in groups.items() if wanted in (_text(g, "name").lower(), _text(g, "path").lower())}
-            rows = [h for h in rows if int(h["group_id"]) in ids]
-        if device_type:
-            rows = [h for h in rows if _text(h, "device_type") == device_type]
-        if status:
-            rows = [h for h in rows if _text(h, "status") == status]
+            group_ids = ids if group_ids is None else group_ids & ids
+        equal = {k: v for k, v in (("device_type", device_type), ("status", status)) if v}
+        host_ids: list[int] | None = None
         if tags:
             keys = await ctx.tagged_keys("host", tags)
-            rows = [h for h in rows if str(h["id"]) in keys]
-        return [Host(row=r) for r in ctx.page(rows, limit, offset)]
+            host_ids = [int(k) for k in keys if k.isascii() and k.isdigit() and str(int(k)) == k]
+        rows = await ctx.host_page(
+            limit,
+            offset,
+            group_ids=group_ids,
+            host_ids=host_ids,
+            equal=equal,
+            keep=(lambda h: all(t(h) for t in tests)) if tests else None,
+        )
+        return [Host(row=r) for r in rows]
 
     @strawberry.field(description="One host by id (null when unknown or outside your scope).")
     async def host(self, info: Info, id: int) -> Host | None:
@@ -874,10 +886,9 @@ class InventoryQuery:
     ) -> list[IPAddress] | None:
         ctx = _ctx(info)
         ctx.require("ipam")
-        rows = await ctx.allocation_records(address.strip() if address else None)
-        if vrf is not None:
-            rows = [r for r in rows if _text(r, "vrf_name") == vrf.strip()]
-        return [IPAddress(row=r) for r in ctx.page(rows, limit, offset)]
+        vrf_name = vrf.strip() if vrf is not None else None
+        rows = await ctx.allocation_page(address.strip() if address else None, vrf_name, limit, offset)
+        return [IPAddress(row=r) for r in rows]
 
     @strawberry.field(description="VLAN records, by site and VLAN id.")
     async def vlans(

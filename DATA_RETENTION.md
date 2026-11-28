@@ -14,9 +14,9 @@ or the corresponding API endpoint without a restart.
 |----------------------------------|-------------------|---------------------------------------------------------------|
 | Job history (completed jobs)     | 30 days           | `Settings > Authentication Provider > Job History Retention`  |
 | **Raw flow records**             | **48 hours**      | `Settings > NetFlow > Retention (hours)` / `retention_hours`  |
-| **Aggregated flow summaries**    | **30 days**       | `Settings > NetFlow > Summary retention (days)` / `summary_retention_days` |
+| Flow summaries (no longer written; older rows drain) | 30 days | `Settings > NetFlow > Summary retention (days)` / `summary_retention_days` |
 | Config backups                   | 90 days           | `Settings > Config Backup`                                    |
-| Monitoring poll history          | 30 days           | `Settings > Monitoring`                                       |
+| Monitoring poll history          | 30 days           | `Settings > Monitoring`. A poll's interface, VPN and route details are stored only on the newest poll and where they changed (`docs/monitoring.md`, "Rules worth knowing") |
 | Monitoring alerts                | 90 days           | `Settings > Monitoring`                                       |
 | Interface error/discard events   | 90 days           | `Settings > Monitoring`                                       |
 | Interface time-series counters   | 30 days           | `Settings > Monitoring`                                       |
@@ -45,24 +45,22 @@ The flow collector writes two tables:
 - **`flow_records`** - one row per decoded flow record (NetFlow v5/v9,
   IPFIX, or sFlow sample). High write volume. Default retention is
   **48 hours**.
-- **`flow_summaries`** - hourly rollups produced by the aggregation loop:
-  top-talkers (src + dst), top applications, top conversations. Cheap to
-  store. Default retention is **30 days**.
+- **`flow_summaries`** - hourly global top-50 lists an older release
+  wrote. Nothing writes or reads them now: they had no host dimension (so
+  the object scope could not apply), no interfaces or timeline, and a top
+  50 per hour does not add up to the top N of a longer window. The table
+  stays; old rows are deleted at `summary_retention_days` (**30 days**).
 
-The aggregation loop runs hourly while the collector is enabled. Each
-cycle it:
+The upkeep loop runs hourly while the collector is enabled. Each cycle it:
 
-1. Computes the previous hour's top-talkers / top-applications /
-   top-conversations from `flow_records` and inserts them into
-   `flow_summaries`.
+1. Re-reads the exporter cache.
 2. Deletes `flow_records` older than `retention_hours`.
 3. Deletes `flow_summaries` written more than `summary_retention_days`
    ago.
 
-The split is intentional: detailed per-flow data is expensive to keep and
-loses utility after a couple of days, but the aggregated views are small
-and useful for week-over-week or month-over-month trend questions in the
-Traffic Analysis page.
+The flow views (Traffic Analysis, a device's Flow tab, the cloud flow tab)
+aggregate `flow_records` directly, one pass per view, so they cover at most
+`retention_hours`.
 
 If you need longer raw-flow retention (e.g. for security forensics) you
 can bump `retention_hours` - flow record rows are small but volume scales

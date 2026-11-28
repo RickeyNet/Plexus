@@ -7,8 +7,9 @@ import {
   useBulkAddHosts,
   type BulkAddHostsResult,
   type BulkAddRun,
+  useInventoryGroups,
 } from '@/api/inventory';
-import { useInventoryGroupsLite, type TopologyEdge, type TopologyNode } from '@/api/topology';
+import { type TopologyEdge, type TopologyNode } from '@/api/topology';
 import { Callout } from '@/components/Callout';
 import { Modal } from '@/components/Modal';
 import { DEVICE_TYPES } from '@/lib/deviceTypes';
@@ -55,7 +56,7 @@ const SUMMARY_LIST_MAX = 100;
  */
 export function BulkAddToInventoryModal({ isOpen, nodes, edges, onClose, onAdded }: Props) {
   const fid = useId();
-  const groupsQuery = useInventoryGroupsLite();
+  const groupsQuery = useInventoryGroups();
   const groups = useMemo(() => groupsQuery.data ?? [], [groupsQuery.data]);
   const bulkAdd = useBulkAddHosts();
 

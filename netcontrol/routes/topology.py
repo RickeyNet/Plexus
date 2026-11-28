@@ -16,8 +16,6 @@ import ipaddress
 import json
 import os
 import re
-import time
-import weakref
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -37,6 +35,7 @@ from netcontrol.object_scope import (
     require_host,
     scoped,
 )
+from netcontrol.payload_cache import JsonPayload, PayloadCache, json_response
 from netcontrol.prefix_index import PrefixIndex
 from netcontrol.routes.shared import DISCOVERY_RUNS, LIVE_STREAMS, fan_out
 from netcontrol.routes.snmp import _discover_neighbors, _infer_device_category, _snmp_walk  # noqa: F401
@@ -1474,25 +1473,15 @@ async def _change_count(links: LinkScope | None) -> int:
 # dedup passes), and on SQLite it serializes behind the global access lock. The
 # frontend loads it per Topology view and the util SSE re-pulls related data;
 # caching the finished {nodes, edges, unacknowledged_changes} per group_id for a
-# few seconds removes almost all of that cost. A coalescing lock collapses
-# concurrent misses (e.g. several tabs opening at once) into one build.
+# few seconds removes almost all of that cost. Concurrent misses (e.g. several
+# tabs opening at once) share one build, per cache key, so one slow build does
+# not hold up the graphs of other groups or scopes (``PayloadCache``).
 # invalidate_topology_cache() is called when discovery rewrites links or a user
 # acknowledges changes; the short TTL bounds staleness otherwise.
 # A scoped caller's graph is cached under (group_id, its readable groups).
-# The coalescing lock is per cache key, so one slow build does not hold up
-# the graphs of other groups or scopes; a key's lock goes away with its last
-# holder.
-_TOPOLOGY_CACHE: dict[Any, tuple[float, dict]] = {}
+# Each entry keeps its JSON body and ETag, so a hit is not serialized again.
 _TOPOLOGY_CACHE_TTL = 15.0  # seconds
-_topology_build_locks: weakref.WeakValueDictionary[Any, asyncio.Lock] = weakref.WeakValueDictionary()
-
-
-def _topology_build_lock(key: Any) -> asyncio.Lock:
-    lock = _topology_build_locks.get(key)
-    if lock is None:
-        lock = asyncio.Lock()
-        _topology_build_locks[key] = lock
-    return lock
+_TOPOLOGY_CACHE: PayloadCache[JsonPayload] = PayloadCache("topology", ttl=_TOPOLOGY_CACHE_TTL, max_entries=256)
 
 
 def invalidate_topology_cache() -> None:
@@ -1505,34 +1494,31 @@ def invalidate_topology_cache() -> None:
 async def get_topology(group_id: int | None = Query(default=None), request: Request = None) -> dict:  # type: ignore[assignment]
     """Return topology graph data (nodes + edges) for vis-network rendering.
 
-    Served from a short-TTL per-group cache (see _TOPOLOGY_CACHE). A scoped
-    caller gets the graph of its inventory groups (``LinkScope``)."""
+    Served from a short-TTL per-group cache (see _TOPOLOGY_CACHE), with an
+    ETag (a 304 when the caller holds this body). A scoped caller gets the
+    graph of its inventory groups (``LinkScope``)."""
     scope = await request_scope(request)
     if scope.restricted and group_id is not None:
         await require_group(request, group_id)
-    return await topology_graph(group_id, scope)
+    return json_response(request, await _topology_payload(group_id, scope))  # type: ignore[return-value]
 
 
 async def topology_graph(group_id: int | None, scope: ObjectScope | None = None) -> dict:
     """The topology graph of ``group_id`` (every group when ``None``) as
     ``scope`` may see it (``None``: everything), from the TTL cache."""
+    return (await _topology_payload(group_id, scope)).value
+
+
+async def _topology_payload(group_id: int | None, scope: ObjectScope | None) -> JsonPayload:
     restricted = scope is not None and scope.restricted
     key: Any = (group_id, scope.read_groups) if scope is not None and restricted else group_id
-    now = time.monotonic()
-    hit = _TOPOLOGY_CACHE.get(key)
-    if hit is not None and now - hit[0] < _TOPOLOGY_CACHE_TTL:
-        return hit[1]
-    async with _topology_build_lock(key):
-        # Re-check: a request that held the lock ahead of us may have just built it.
-        hit = _TOPOLOGY_CACHE.get(key)
-        if hit is not None and time.monotonic() - hit[0] < _TOPOLOGY_CACHE_TTL:
-            return hit[1]
+
+    async def build() -> JsonPayload:
         if scope is not None and restricted:
-            result = await _build_topology(group_id, await link_scope(scope))
-        else:
-            result = await _build_topology(group_id)
-        _TOPOLOGY_CACHE[key] = (time.monotonic(), result)
-        return result
+            return JsonPayload(await _build_topology(group_id, await link_scope(scope)))
+        return JsonPayload(await _build_topology(group_id))
+
+    return await _TOPOLOGY_CACHE.get_or_build(key, build)
 
 
 async def _build_topology(group_id: int | None, links_scope: LinkScope | None = None) -> dict:
@@ -1958,10 +1944,10 @@ async def _merge_meraki(
 # that's N* the DB+compute work per tick, all through the global SQLite lock.
 # Caching the (links, util_map) briefly coalesces concurrent streams onto one
 # computation without meaningfully staling a 5-300s SSE cadence. Each endpoint
-# still builds its own edge list (they filter edges differently).
-_UTIL_CACHE: dict[int | None, tuple[float, tuple[list, dict]]] = {}
+# still builds its own edge list (they filter edges differently). Entries are
+# unscoped; a scoped caller's links are filtered after the cache.
 _UTIL_CACHE_TTL = 4.0  # seconds
-_util_cache_lock = asyncio.Lock()
+_UTIL_CACHE: PayloadCache[tuple[list, dict]] = PayloadCache("topology-utilization", ttl=_UTIL_CACHE_TTL, max_entries=256)
 
 
 async def _compute_util_map_and_links(group_id: int | None) -> tuple[list, dict]:
@@ -1984,17 +1970,7 @@ async def _compute_util_map_and_links(group_id: int | None) -> tuple[list, dict]
 
 
 async def _get_util_map_and_links(group_id: int | None) -> tuple[list, dict]:
-    now = time.monotonic()
-    hit = _UTIL_CACHE.get(group_id)
-    if hit is not None and now - hit[0] < _UTIL_CACHE_TTL:
-        return hit[1]
-    async with _util_cache_lock:
-        hit = _UTIL_CACHE.get(group_id)
-        if hit is not None and time.monotonic() - hit[0] < _UTIL_CACHE_TTL:
-            return hit[1]
-        data = await _compute_util_map_and_links(group_id)
-        _UTIL_CACHE[group_id] = (time.monotonic(), data)
-        return data
+    return await _UTIL_CACHE.get_or_build(group_id, lambda: _compute_util_map_and_links(group_id))
 
 
 async def _visible_links(request: Any, group_id: int | None) -> LinkScope | None:

@@ -128,7 +128,6 @@ export function useImportSourceDevices() {
       for (const key of [
         "inventory",
         "inventory-groups",
-        "inventory-groups-full",
         "snmp-profile-assignments",
         "config-backup-policies",
         "config-backup-summary",

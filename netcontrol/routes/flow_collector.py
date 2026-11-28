@@ -16,7 +16,6 @@ and exporters of the hosts of those groups only.
 from __future__ import annotations
 
 import asyncio
-import json
 import socket
 import struct
 import time
@@ -1151,35 +1150,13 @@ async def flow_aggregation_loop() -> None:
 
 
 async def flow_aggregation_cycle():
-    """Aggregate raw flow records into hourly summaries. Also re-reads the
-    exporter cache, so interface addresses a discovery recorded without a
-    host edit resolve their exporters within the hour."""
+    """Hourly upkeep: re-read the exporter cache, so interface addresses a
+    discovery recorded without a host edit resolve their exporters within
+    the hour, and prune old records. The flow views aggregate the raw
+    records (one scan per view, ``db.get_flow_overview``); no summaries are
+    written, and the ones an older release wrote age out at
+    ``summary_retention_days``."""
     await sync_exporter_hosts()
-    now = datetime.now(UTC)
-    period_end = now.replace(minute=0, second=0, microsecond=0)
-    period_start = period_end - timedelta(hours=1)
-
-    # Top talkers
-    top_src = await db.get_flow_top_talkers(hours=1, direction="src", limit=50)
-    top_dst = await db.get_flow_top_talkers(hours=1, direction="dst", limit=50)
-    top_apps = await db.get_flow_top_applications(hours=1, limit=50)
-    top_convos = await db.get_flow_top_conversations(hours=1, limit=50)
-
-    for summary_type, data in [
-        ("top_src", top_src),
-        ("top_dst", top_dst),
-        ("top_applications", top_apps),
-        ("top_conversations", top_convos),
-    ]:
-        if data:
-            await db.create_flow_summary(
-                host_id=None,
-                summary_type=summary_type,
-                time_window="hourly",
-                period_start=period_start.isoformat(),
-                period_end=period_end.isoformat(),
-                data_json=json.dumps(data),
-            )
 
     # Cleanup old raw records
     retention_hours = FLOW_COLLECTOR_CONFIG.get("retention_hours", 48)
@@ -1217,12 +1194,30 @@ async def api_top_talkers(
 ):
     scope_kwargs = await _flow_scope(request, host_id)
     results = await db.get_flow_top_talkers(host_id, hours, direction, limit, **scope_kwargs)
-    asns = await lookup_flow_asns([r["ip"] for r in results])
-    for r in results:
-        r["protocol_name"] = ""  # flows are aggregated, no single protocol
-        if (network := asns.get(r["ip"])) is not None:
-            r.update(network)
-    return results
+    return await _with_talker_networks(results)
+
+
+async def _with_talker_networks(*talker_lists: list[dict]) -> list[dict]:
+    """Each talker row (``ip``) of ``talker_lists`` with its ASN details when
+    known, from one lookup; returns the first list."""
+    asns = await lookup_flow_asns([r["ip"] for rows in talker_lists for r in rows])
+    for rows in talker_lists:
+        for r in rows:
+            r["protocol_name"] = ""  # flows are aggregated, no single protocol
+            if (network := asns.get(r["ip"])) is not None:
+                r.update(network)
+    return talker_lists[0]
+
+
+def _with_service_names(rows: list[dict]) -> list[dict]:
+    """Application rows (``port``, ``protocol``) with ``service_name`` and
+    ``protocol_name``."""
+    for r in rows:
+        port = r.get("port", 0)
+        proto = r.get("protocol", 0)
+        r["service_name"] = PORT_SERVICES.get(port, f"port-{port}")
+        r["protocol_name"] = PROTOCOL_NAMES.get(proto, f"proto-{proto}")
+    return rows
 
 
 @router.get("/api/flows/top-applications")
@@ -1234,13 +1229,7 @@ async def api_top_applications(
     request: Request = None,  # type: ignore[assignment]
 ):
     scope_kwargs = await _flow_scope(request, host_id)
-    results = await db.get_flow_top_applications(host_id, hours, limit, **scope_kwargs)
-    for r in results:
-        port = r.get("port", 0)
-        proto = r.get("protocol", 0)
-        r["service_name"] = PORT_SERVICES.get(port, f"port-{port}")
-        r["protocol_name"] = PROTOCOL_NAMES.get(proto, f"proto-{proto}")
-    return results
+    return _with_service_names(await db.get_flow_top_applications(host_id, hours, limit, **scope_kwargs))
 
 
 @router.get("/api/flows/top-conversations")
@@ -1282,6 +1271,36 @@ async def api_flow_timeline(
 ):
     scope_kwargs = await _flow_scope(request, host_id)
     return await db.get_flow_timeline(host_id, hours, bucket_minutes, **scope_kwargs)
+
+
+@router.get("/api/flows/overview")
+@scoped("list")
+async def api_flow_overview(
+    host_id: int | None = Query(None),
+    hours: int = Query(1, ge=1, le=168),
+    limit: int = Query(20, ge=1, le=100),
+    bucket_minutes: int = Query(5, ge=1, le=60),
+    parts: str = Query("", max_length=200),
+    request: Request = None,  # type: ignore[assignment]
+) -> dict:
+    """Flow views from one scan of the records: ``top_src``, ``top_dst``,
+    ``top_applications``, ``top_conversations``, ``top_interfaces`` and
+    ``timeline``, each as the endpoint of that name returns it for the same
+    arguments. ``parts``: a comma-separated choice of those (empty: all), so
+    a page shows what one tab needs without computing the rest."""
+    chosen = [p.strip() for p in parts.split(",") if p.strip()]
+    if set(chosen) - set(db.FLOW_OVERVIEW_PARTS):
+        raise HTTPException(400, f"parts must be among: {', '.join(db.FLOW_OVERVIEW_PARTS)}")
+    scope_kwargs = await _flow_scope(request, host_id)
+    found = await db.get_flow_overview(
+        host_id, hours, limit, bucket_minutes, parts=chosen or None, **scope_kwargs
+    )
+    if "top_src" in found or "top_dst" in found:
+        await _with_talker_networks(found.get("top_src", []), found.get("top_dst", []))
+    _with_service_names(found.get("top_applications", []))
+    if "top_interfaces" in found:
+        found["top_interfaces"] = await db.with_interface_names(found["top_interfaces"])
+    return {**found, "hours": hours, "bucket_minutes": bucket_minutes}
 
 
 @router.get("/api/flows/status")

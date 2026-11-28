@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router';
-import { echarts } from '@/lib/echart-core';
-import { observeChartResize } from '@/lib/useEChart';
+import { useEChart } from '@/lib/useEChart';
 import { resolveThemeVars, useThemeName } from '@/lib/themeColors';
 
 import { FLOW_RANGES, type FlowTalker, useFlowStatus, useFlowTopTalkers } from '@/api/networkTools';
@@ -98,10 +97,13 @@ function TalkersBars({ rows }: { rows: FlowTalker[] }) {
   );
   const hasAsns = sorted.some((r) => r.asn != null);
 
+  // One instance for the life of the panel; data and theme changes reuse it.
+  const chartRef = useEChart(ref);
+
   useEffect(() => {
-    if (!ref.current) return;
+    const chart = chartRef.current;
+    if (!chart) return;
     const shortLabels = new Map(sorted.map((r) => [r.ip, r.asn_organization || (r.asn != null ? `AS${r.asn}` : '')]));
-    const chart = echarts.init(ref.current, undefined, { renderer: 'canvas' });
 
     chart.setOption(resolveThemeVars({
       animation: false,
@@ -157,14 +159,8 @@ function TalkersBars({ rows }: { rows: FlowTalker[] }) {
           barMaxWidth: 18,
         },
       ],
-    }));
-
-    const stopObserving = observeChartResize(chart, ref.current);
-    return () => {
-      stopObserving();
-      chart.dispose();
-    };
-  }, [sorted, theme]);
+    }), { notMerge: true });
+  }, [chartRef, sorted, theme]);
 
   return (
     <>

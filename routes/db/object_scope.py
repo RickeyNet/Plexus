@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
+from netcontrol.authz_cache import invalidates
+
 import routes.database as _dbcore
 from routes.database import rows_to_list
 
@@ -75,6 +77,7 @@ async def get_access_group_scope_rules(access_group_id: int) -> list[dict]:
         await db.close()
 
 
+@invalidates  # the auth path caches users' scope rules (netcontrol.authz_cache)
 async def set_access_group_scope_rules(access_group_id: int, rules: Iterable[dict]) -> list[dict]:
     """Replace the scope rules of an access group. Each rule's ``attribute``
     must be in ``SCOPE_RULE_ATTRIBUTES`` and its ``value_id`` an existing

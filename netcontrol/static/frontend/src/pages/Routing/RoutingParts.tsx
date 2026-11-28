@@ -102,7 +102,7 @@ export function HostSelect({
       <option value="">{query.isPending ? 'Loading devices…' : allowNone ? noneLabel : 'Choose a device'}</option>
       {options.map((o) => (
         <option key={o.id} value={o.id}>
-          {o.name}
+          {o.label}
         </option>
       ))}
     </select>

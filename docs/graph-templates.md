@@ -66,9 +66,11 @@ A series plots one metric of the device. Use the names the monitoring
 poller records: `cpu_percent`, `memory_percent`, `memory_used_mb`,
 `memory_total_mb`, `uptime_seconds`, `response_time_ms`, `packet_loss_pct`,
 `if_up_count`, `if_down_count`, `vpn_tunnels_up`, `vpn_tunnels_down`,
-`route_count`, and the interface counters `if_in_errors`, `if_out_errors`,
-`if_in_discards`, `if_out_discards` (each with a `_rate` version). See
-[Metrics collected](monitoring.md#metrics-collected).
+`route_count`, and the interface error and discard rates
+`if_in_errors_rate`, `if_out_errors_rate`, `if_in_discards_rate`,
+`if_out_discards_rate`. The raw counters (`if_in_errors` and the others
+without `_rate`) are no longer recorded, so a series on one of them has no
+new data. See [Metrics collected](monitoring.md#metrics-collected).
 
 The suggestion list of the **Metric** field also offers names that the
 poller does not record: `cpu_usage`, `memory_usage`, `uptime`, `ping_rtt`,

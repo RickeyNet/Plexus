@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 
-import { useAddHost, useInventoryGroupsLite } from '@/api/topology';
+import { useInventoryGroups } from '@/api/inventory';
+import { useAddHost } from '@/api/topology';
 import { FieldError } from '@/components/FieldError';
 import { Modal } from '@/components/Modal';
 
@@ -16,7 +17,7 @@ interface Props {
 }
 
 export function AddToInventoryModal({ isOpen, hostname, ip, extNodeId, onClose, onAdded }: Props) {
-  const groupsQuery = useInventoryGroupsLite();
+  const groupsQuery = useInventoryGroups();
   const groups = useMemo(() => groupsQuery.data ?? [], [groupsQuery.data]);
   const addHost = useAddHost();
 

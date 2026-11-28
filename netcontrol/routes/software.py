@@ -74,11 +74,11 @@ from netcontrol.object_scope import (
     scope_exempt,
     scoped,
 )
+from netcontrol.payload_cache import JsonPayload, PayloadCache, encoded_json, json_response
 from netcontrol.routes import background_jobs, notification_channels, software_cve
 from netcontrol.routes.meraki_topology import latest_snapshots
 from netcontrol.routes.shared import _audit, _corr_id, _session_user, admin_session, supervise_task
 from netcontrol.routes.software_eol import device_statuses, router as eol_router, sync_lifecycle_advisories
-from netcontrol.secrets_providers.base import TTLCache
 from netcontrol.telemetry import configure_logging
 
 router = APIRouter()
@@ -119,17 +119,16 @@ _MAX_IMPORT = 1000
 # unrestricted callers only: a scoped caller's payload is filtered by its
 # groups, so it is always built and never stored. Writes made here clear it
 # (_overview_changed); the TTL bounds writes made elsewhere (lifecycle data,
-# alerts acknowledged from another page, another process).
+# alerts acknowledged from another page, another process). A build that
+# started before a write does not store what it read (``PayloadCache``).
+# Entries keep their JSON body and ETag.
 _OVERVIEW_CACHE_TTL_SECONDS = 20.0
-_overview_cache = TTLCache(max_entries=64)
-# Bumped by every clear: a build that started before a write does not store
-# what it read after the write cleared the cache.
-_overview_generation = 0
+_overview_cache: PayloadCache[JsonPayload] = PayloadCache(
+    "software-overview", ttl=_OVERVIEW_CACHE_TTL_SECONDS, max_entries=64
+)
 
 
 def _overview_changed() -> None:
-    global _overview_generation
-    _overview_generation += 1
     _overview_cache.clear()
 
 
@@ -683,20 +682,31 @@ async def software_overview_api(
 ):
     # Only an unrestricted caller's payload is cached: a scoped one is
     # filtered by the caller's groups and is never stored or served from here.
+    # Either way the response carries the ETag of the body this caller gets.
     unscoped = (await request_scope(request)).unrestricted
     cache_key = (platform, search, source)
     if unscoped:
-        cached = _overview_cache.get(cache_key)
+        cached = _overview_cache.peek(cache_key)
         if cached is not None:
-            return cached
+            return json_response(request, cached)
     raw = await _settings()
     if not raw.get("last_refresh_at"):
         # First visit: build the tracked set from what is already stored.
         await refresh_software(notify=False)
         raw = await _settings()
-    # Taken after the first-visit refresh, whose own clear would otherwise
-    # keep this build from ever being stored.
-    generation = _overview_generation
+
+    async def build() -> JsonPayload:
+        # The body as this handler (no return annotation) has always written it.
+        return JsonPayload(await _overview_payload(request, raw, platform, search, source), encoded_json)
+
+    # The cache's build starts after the first-visit refresh, whose own clear
+    # would otherwise keep this build from being stored.
+    payload = await _overview_cache.get_or_build(cache_key, build) if unscoped else await build()
+    return json_response(request, payload)
+
+
+async def _overview_payload(request: Request, raw: dict, platform: str, search: str, source: str) -> dict:
+    """The overview of the tracked software the caller of ``request`` may read."""
     scope_kwargs: dict[str, Any] = await group_filter(request)
     filters = bool(platform or search or source)
 
@@ -735,7 +745,7 @@ async def software_overview_api(
     for device in every:
         sources[device["source"]] = sources.get(device["source"], 0) + 1
     by_severity = alert_summary["by_severity"]
-    payload = {
+    return {
         "summary": {
             "devices": len(every),
             "platforms": len(spread),
@@ -763,10 +773,6 @@ async def software_overview_api(
         "changes": changes,
         "settings": _public_settings(raw),
     }
-    # A write that cleared the cache while this build ran may not be in it.
-    if unscoped and generation == _overview_generation:
-        _overview_cache.set(cache_key, payload, _OVERVIEW_CACHE_TTL_SECONDS)
-    return payload
 
 
 @router.post("/api/software/refresh")

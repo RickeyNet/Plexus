@@ -16,6 +16,7 @@ from collections.abc import Iterable
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from netcontrol.authz_cache import invalidates
 from netcontrol.device_categories import device_type_category
 
 import routes.database as _dbcore
@@ -401,6 +402,9 @@ async def get_group(group_id: int) -> dict | None:
     return group
 
 
+# Group tree writers carry @invalidates: a scoped user's groups are the
+# granted groups' subtrees, cached by the auth path (netcontrol.authz_cache).
+@invalidates
 @tracks_changes("group", "create")
 async def create_group(name: str, description: str = "", parent_id: int | None = None) -> int:
     """Create a group, at the top level or under ``parent_id``.
@@ -425,6 +429,7 @@ async def create_group(name: str, description: str = "", parent_id: int | None =
 _UNCHANGED: Any = object()
 
 
+@invalidates
 @tracks_changes("group", "update", id_arg="group_id")
 async def update_group(group_id: int, name: str, description: str = "", parent_id: int | None = _UNCHANGED):
     """Rename a group and, when ``parent_id`` is given, move it (``None``
@@ -451,6 +456,7 @@ async def update_group(group_id: int, name: str, description: str = "", parent_i
         await db.close()
 
 
+@invalidates
 async def get_or_create_group_path(names: list[str], description: str = "") -> list[dict]:
     """The groups along ``names`` (from the top), creating each missing one
     under the previous one with ``description``.
@@ -537,6 +543,7 @@ async def set_group_discovery_credential(group_id: int, credential_id: int | Non
         await db.close()
 
 
+@invalidates
 @tracks_changes("group", "delete", id_arg="group_id")
 async def delete_group(group_id: int):
     """Delete a group, its hosts and the jobs that targeted it. Raises
@@ -601,14 +608,52 @@ async def get_hosts_by_ids(host_ids: list[int]) -> list[dict]:
         await db.close()
 
 
-async def get_all_hosts() -> list[dict]:
-    """Get every host across all groups, ordered by hostname."""
+async def get_all_hosts(
+    *,
+    group_ids: Iterable[int] | None = None,
+    host_ids: Iterable[int] | None = None,
+    equal: dict[str, str] | None = None,
+    thin: bool = False,
+    limit: int | None = None,
+    offset: int = 0,
+) -> list[dict]:
+    """Every host across all groups, ordered by hostname, address and id.
+
+    The optional arguments narrow and page the list in SQL (GraphQL host
+    lists): ``group_ids`` keeps hosts in those groups (object scope or a
+    group filter; empty: none), ``host_ids`` those ids (empty: none),
+    ``equal`` hosts whose column (``device_type`` or ``status``) is the
+    given text; ``thin`` reads only ``id``, ``hostname`` and ``ip_address``;
+    ``limit``/``offset`` page after every condition."""
+    clauses: list[str] = []
+    params: list[Any] = []
+    for cond in (group_ids_condition("group_id", group_ids), group_ids_condition("id", host_ids)):
+        if cond[0]:
+            clauses.append(cond[0])
+            params.extend(cond[1])
+    for column, value in (equal or {}).items():
+        if column not in _HOST_EQUAL_COLUMNS:
+            raise ValueError(f"hosts cannot be filtered on {column!r}")
+        clauses.append(f"{column} = ?")
+        params.append(value)
+    columns = "id, hostname, ip_address" if thin else "*"
+    sql = f"SELECT {columns} FROM hosts"  # nosec B608 - fixed column lists and clauses, placeholders only
+    if clauses:
+        sql += " WHERE " + " AND ".join(clauses)
+    sql += " ORDER BY hostname, ip_address, id"
+    if limit is not None:
+        sql += " LIMIT ? OFFSET ?"
+        params.extend((int(limit), max(0, int(offset))))
     db = await _dbcore.get_db(read_only=True)
     try:
-        cursor = await db.execute("SELECT * FROM hosts ORDER BY hostname, ip_address")
+        cursor = await db.execute(sql, tuple(params))
         return rows_to_list(await cursor.fetchall())
     finally:
         await db.close()
+
+
+# The host columns ``get_all_hosts(equal=...)`` may compare (fixed identifiers).
+_HOST_EQUAL_COLUMNS = frozenset({"device_type", "status"})
 
 
 async def find_host_by_ip(ip_address: str, include_aliases: bool = False) -> dict | None:

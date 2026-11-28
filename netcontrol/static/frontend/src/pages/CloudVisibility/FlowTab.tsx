@@ -1,11 +1,9 @@
 import { useId, useMemo, useState } from 'react';
 
 import {
-  useCloudFlowSummary,
+  useCloudFlowOverview,
   useCloudFlowSyncConfig,
   useCloudFlowSyncCursors,
-  useCloudFlowTimeline,
-  useCloudFlowTopTalkers,
   useTriggerCloudFlowPull,
   useUpdateCloudFlowSyncConfig,
 } from '@/api/cloud';
@@ -36,17 +34,16 @@ export function FlowTab({ filter }: Props) {
     bucket_minutes: filters.bucketMinutes,
   };
 
-  const summary = useCloudFlowSummary(params);
-  const talkers = useCloudFlowTopTalkers(params);
-  const timeline = useCloudFlowTimeline(params);
+  // One request for the summary, both talker directions and the timeline.
+  const overview = useCloudFlowOverview(params);
   const syncConfig = useCloudFlowSyncConfig();
   const syncCursors = useCloudFlowSyncCursors();
   const updateConfig = useUpdateCloudFlowSyncConfig();
   const triggerPull = useTriggerCloudFlowPull();
 
-  const s = summary.data?.summary ?? {};
-  const tList = talkers.data?.talkers ?? [];
-  const tlList = timeline.data?.timeline;
+  const s = overview.data?.summary ?? {};
+  const tList = (direction === 'dst' ? overview.data?.top_dst : overview.data?.top_src) ?? [];
+  const tlList = overview.data?.timeline;
   // Bytes only: packets and flows are orders of magnitude smaller and would
   // flatten to the axis on a shared scale; they are in the tiles and table.
   const series = useMemo(
@@ -76,14 +73,14 @@ export function FlowTab({ filter }: Props) {
         title={
           <>
             Cloud flow analytics
-            {summary.dataUpdatedAt > 0 && (
+            {overview.dataUpdatedAt > 0 && (
               <small className="text-muted" style={{ marginLeft: 'var(--space-2)', fontWeight: 400 }}>
-                Updated {formatBackendTime(summary.dataUpdatedAt)}
+                Updated {formatBackendTime(overview.dataUpdatedAt)}
               </small>
             )}
           </>
         }
-        query={summary}
+        query={overview}
         what="flow summary"
       >
         <StatGrid compact>
@@ -98,7 +95,7 @@ export function FlowTab({ filter }: Props) {
 
       <AnalyticsSection
         title="Traffic over time"
-        query={timeline}
+        query={overview}
         what="flow timeline"
         empty={!series[0].data.length && 'No timeline data for the current filters.'}
       >
@@ -109,7 +106,7 @@ export function FlowTab({ filter }: Props) {
 
       <AnalyticsSection
         title="Top talkers"
-        query={talkers}
+        query={overview}
         what="top talkers"
         empty={!tList.length && 'No flow talkers for the current filters.'}
       >

@@ -252,6 +252,13 @@ async def test_site_mute_hides_every_problem_of_the_site():
 # ── HTTP API ─────────────────────────────────────────────────────────────────
 
 
+def _cached_dashboard() -> dict:
+    """The shared, unscoped dashboard payload the cache holds now."""
+    cached = app_module._dashboard_cache.peek(app_module._DASHBOARD_KEY)
+    assert cached is not None
+    return cached.value
+
+
 @pytest.fixture
 def client(monkeypatch, request):
     monkeypatch.setenv("APP_SECRET_KEY", "test-secret-key-dashboard-topology")
@@ -260,8 +267,7 @@ def client(monkeypatch, request):
     monkeypatch.setenv("PLEXUS_DEV_BOOTSTRAP", "1")
     monkeypatch.setattr(app_module, "APP_API_TOKEN", "")
     # The dashboard cache is module state shared by every test.
-    monkeypatch.setitem(app_module._dashboard_cache, "data", None)
-    monkeypatch.setitem(app_module._dashboard_cache, "expires", 0.0)
+    app_module._dashboard_cache.clear()
 
     from starlette.testclient import TestClient
 
@@ -313,7 +319,7 @@ def test_dashboard_omits_topology_without_monitoring_feature(client):
     # Only the counts: every other key belongs to a feature this user lacks.
     assert set(body) == {"stats"}
     # The cached object itself still carries every section for other users.
-    assert set(app_module._dashboard_cache["data"]) >= {
+    assert set(_cached_dashboard()) >= {
         "topology",
         "device_health",
         "open_alerts",
@@ -357,9 +363,9 @@ def test_dashboard_jobs_and_groups_follow_features(client):
     assert body["recent_jobs"] and {job["launched_by"] for job in body["recent_jobs"]} == {"jobs-user"}
     # The job counts cover the same jobs; the admin's count covers both.
     assert body["stats"]["total_jobs"] == 1
-    assert app_module._dashboard_cache["data"]["stats"]["total_jobs"] == 2
+    assert _cached_dashboard()["stats"]["total_jobs"] == 2
     assert isinstance(body["groups"], list)
     assert not {"device_health", "open_alerts", "monitoring", "topology"} & set(body)
     # The cache was not changed by the per-user filter.
-    cached = app_module._dashboard_cache["data"]["recent_jobs"]
+    cached = _cached_dashboard()["recent_jobs"]
     assert {job["launched_by"] for job in cached} >= {"admin", "jobs-user"}

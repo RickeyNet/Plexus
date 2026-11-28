@@ -14,6 +14,7 @@ import os
 import re
 from collections.abc import Iterable
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import routes.database as _dbcore
 from routes.database import (
@@ -1495,19 +1496,41 @@ async def list_ipam_prefix_records() -> list[dict]:
 
 
 async def list_ipam_allocation_records(
-    *, prefix_subnets: list[str] | None = None, address: str | None = None
+    *,
+    prefix_subnets: list[str] | None = None,
+    address: str | None = None,
+    vrf_name: str | None = None,
+    scope_condition: tuple[str, tuple] = ("", ()),
+    limit: int | None = None,
+    offset: int = 0,
 ) -> list[dict]:
     """IPAM address allocations with their source's ``provider`` and
-    ``source_name`` (never ``metadata_json``): those of the given
-    ``prefix_subnets`` (``[]``: none), only ``address`` when it is given,
-    every one when neither is."""
+    ``source_name`` (never ``metadata_json``), by address and id: those of
+    the given ``prefix_subnets`` (``[]``: none), only ``address`` when it
+    is given, only those of VRF ``vrf_name`` (``""``: no VRF), every one
+    when none is. ``scope_condition``: an object scope SQL condition on
+    alias ``a`` (``object_scope.sql_condition("ipam_allocation", ...)``).
+    ``limit``/``offset`` page after every condition (not with
+    ``prefix_subnets``)."""
     if prefix_subnets is not None and not prefix_subnets:
         return []
+    if limit is not None and prefix_subnets is not None:
+        raise ValueError("limit cannot be combined with prefix_subnets")
     clauses: list[str] = []
-    params: list[str] = []
+    params: list[Any] = []
     if address is not None:
         clauses.append("a.address = ?")
         params.append(address)
+    if vrf_name is not None:
+        clauses.append("COALESCE(a.vrf_name, '') = ?")
+        params.append(vrf_name)
+    if scope_condition[0]:
+        clauses.append(scope_condition[0])
+        params.extend(scope_condition[1])
+    page_sql = ""
+    page_params: tuple[int, ...] = ()
+    if limit is not None:
+        page_sql, page_params = " LIMIT ? OFFSET ?", (int(limit), max(0, int(offset)))
     batches: list[list[str]] = [[]]
     if prefix_subnets is not None:
         wanted = sorted(set(prefix_subnets))
@@ -1520,7 +1543,8 @@ async def list_ipam_allocation_records(
             if batch:
                 where.append(f"a.prefix_subnet IN ({','.join('?' * len(batch))})")
             sql = _ALLOCATION_RECORD_SELECT + (" WHERE " + " AND ".join(where) if where else "")
-            cursor = await db.execute(sql + " ORDER BY a.address, a.id", (*params, *batch))  # nosec B608 - placeholders only
+            sql += " ORDER BY a.address, a.id" + page_sql
+            cursor = await db.execute(sql, (*params, *batch, *page_params))  # nosec B608 - placeholders only
             out.extend(rows_to_list(await cursor.fetchall()))
     finally:
         await db.close()

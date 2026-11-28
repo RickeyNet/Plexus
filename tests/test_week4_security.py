@@ -639,11 +639,13 @@ def test_session_refresh_keeps_the_secure_flag_of_sign_in(monkeypatch, request):
     admin = admin_client(monkeypatch, request)
     monkeypatch.setattr(app_module, "APP_HTTPS_ENABLED", True)
     monkeypatch.setattr(app_module, "APP_COOKIE_SECURE", False)
+    # A cookie this fresh is not due for a refresh otherwise.
+    monkeypatch.setattr(app_module, "SESSION_REFRESH_MAX_LAG_SECONDS", 0)
 
     resp = admin.get("/api/admin/login-rules")
 
     assert resp.status_code == 200
-    refreshed = [h for h in resp.headers.get_list("set-cookie") if h.startswith("session=")]
+    refreshed =[h for h in resp.headers.get_list("set-cookie") if h.startswith("session=")]
     assert refreshed and all("Secure" in h for h in refreshed)
 
 

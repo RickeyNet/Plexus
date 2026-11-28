@@ -3,8 +3,9 @@
  *
  * Mirrors the legacy api.js topology helpers on top of apiRequest.
  */
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 
+import { onPageVisibilityChange, pageHidden } from '@/lib/pageVisibility';
 import { apiRequest, getCsrfToken } from './client';
 
 // ── Types ──────────────────────────────────────────────────────────────────
@@ -203,10 +204,44 @@ export interface InventoryGroupLite {
 
 // ── Queries ────────────────────────────────────────────────────────────────
 
+/**
+ * Query key of the map of one inventory group, or of every group (null, also
+ * for an empty id). A numeric string and its number are one key.
+ */
+export function topologyMapKey(groupId?: number | string | null) {
+  const id = groupId == null || groupId === '' ? null : Number(groupId);
+  return ['topology', id] as const;
+}
+
+export const topologyOverlayStatusKey = ['topology', 'overlay', 'status'] as const;
+
+/**
+ * Refetch every cached map (the one shown at once, the others when next
+ * shown), but not the status overlay: for changes that reach any group's map,
+ * such as a host added (it resolves links to it in every group), a source
+ * collected or host facts stored.
+ */
+export function invalidateTopologyMaps(qc: QueryClient) {
+  return qc.invalidateQueries({ queryKey: ['topology'], predicate: (q) => q.queryKey.length === 2 });
+}
+
+/**
+ * Refetch the maps a change to one group's links shows in: that group's
+ * map and the all-groups map, exactly. Every map when `groupId` is null.
+ */
+export function invalidateTopologyGroupMaps(qc: QueryClient, groupId: number | string | null | undefined) {
+  const key = topologyMapKey(groupId);
+  if (key[1] === null) return invalidateTopologyMaps(qc);
+  return Promise.all([
+    qc.invalidateQueries({ queryKey: key, exact: true }),
+    qc.invalidateQueries({ queryKey: topologyMapKey(null), exact: true }),
+  ]);
+}
+
 export function useTopology(groupId?: number | string | null) {
   const params = groupId ? `?group_id=${groupId}` : '';
   return useQuery<TopologyData>({
-    queryKey: ['topology', groupId ?? null],
+    queryKey: topologyMapKey(groupId),
     queryFn: ({ signal }) => apiRequest(`/topology${params}`, { signal }),
   });
 }
@@ -269,7 +304,7 @@ export function useAddHost() {
         body: { hostname, ip_address: ipAddress, device_type: deviceType },
       }),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['topology'] });
+      invalidateTopologyMaps(qc);
       qc.invalidateQueries({ queryKey: ['inventory'] });
     },
   });
@@ -414,6 +449,9 @@ export interface UtilizationStreamEdge {
 
 /**
  * Open an EventSource for live utilization. Returns a teardown function.
+ * The stream is closed while the page is hidden and opened again when it is
+ * shown; the server sends its first update as soon as a stream opens, so the
+ * map is current again at once.
  */
 export function openUtilizationStream(
   intervalSec: number,
@@ -423,13 +461,22 @@ export function openUtilizationStream(
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   let stopped = false;
 
+  function close() {
+    if (reconnectTimer) clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+    es?.close();
+    es = null;
+  }
+
   function open() {
-    if (stopped) return;
+    reconnectTimer = null;
+    if (stopped || es || pageHidden()) return;
     try {
-      es = new EventSource(
+      const source = new EventSource(
         `/api/topology/utilization/stream?interval=${intervalSec}`,
       );
-      es.onmessage = (event) => {
+      es = source;
+      source.onmessage = (event) => {
         try {
           const data = JSON.parse(event.data);
           if (data.edges) onEdges(data.edges as UtilizationStreamEdge[]);
@@ -437,12 +484,11 @@ export function openUtilizationStream(
           /* skip */
         }
       };
-      es.onerror = () => {
-        if (es) {
-          es.close();
-          es = null;
-        }
-        if (!stopped) {
+      source.onerror = () => {
+        source.close();
+        if (es !== source) return;
+        es = null;
+        if (!stopped && !pageHidden()) {
           reconnectTimer = setTimeout(open, 10000);
         }
       };
@@ -450,19 +496,16 @@ export function openUtilizationStream(
       /* SSE unsupported */
     }
   }
+  const unsubscribe = onPageVisibilityChange((hidden) => {
+    if (hidden) close();
+    else open();
+  });
   open();
   return () => {
     stopped = true;
-    if (reconnectTimer) clearTimeout(reconnectTimer);
-    if (es) es.close();
+    unsubscribe();
+    close();
   };
-}
-
-export function useInventoryGroupsLite() {
-  return useQuery<InventoryGroupLite[]>({
-    queryKey: ['inventory-groups'],
-    queryFn: ({ signal }) => apiRequest('/inventory', { signal }),
-  });
 }
 
 // ── Topology Status Overlay (Phase D) ──────────────────────────────────────
@@ -486,7 +529,7 @@ export interface TopologyOverlayStatus {
 
 export function useTopologyOverlayStatus(enabled = true) {
   return useQuery<TopologyOverlayStatus>({
-    queryKey: ['topology', 'overlay', 'status'],
+    queryKey: topologyOverlayStatusKey,
     queryFn: ({ signal }) => apiRequest('/topology/overlay/status', { signal }),
     enabled,
     refetchInterval: enabled ? 60_000 : false,

@@ -683,8 +683,10 @@ async def reload_webhooks() -> None:
 async def _prune_loop() -> None:
     """Prune the delivery log hourly, and re-read the webhooks every
     ``REFRESH_INTERVAL`` so a change saved through another worker process
-    reaches this one too (the saving process reloads at once)."""
+    reaches this one too (the saving process reloads at once). The first
+    pass only prunes: ``start_dispatcher`` has just loaded the webhooks."""
     last_prune = 0.0
+    loaded = True
     while True:
         try:
             if time.monotonic() - last_prune >= PRUNE_INTERVAL:
@@ -692,11 +694,13 @@ async def _prune_loop() -> None:
                 removed = await db.prune_webhook_deliveries(retention_days())
                 if removed:
                     LOGGER.info("webhooks: pruned %d delivery log rows", removed)
-            await reload_webhooks()
+            if not loaded:
+                await reload_webhooks()
         except asyncio.CancelledError:
             raise
         except Exception as exc:
             LOGGER.warning("webhooks: maintenance pass failed: %s", type(exc).__name__)
+        loaded = False
         await asyncio.sleep(REFRESH_INTERVAL)
 
 

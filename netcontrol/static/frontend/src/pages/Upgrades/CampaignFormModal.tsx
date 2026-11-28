@@ -1,8 +1,6 @@
 import { useId, useMemo, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
 
-import { groupLabel } from '@/api/inventory';
-import { apiRequest } from '@/api/client';
+import { groupLabel, type InventoryGroupFull, useInventoryGroupsFull } from '@/api/inventory';
 import { useCredentials } from '@/api/compliance';
 import {
   type UpgradeCampaign,
@@ -18,26 +16,6 @@ import { FieldError } from '@/components/FieldError';
 import { LoadingState } from '@/components/LoadingState';
 import { Modal } from '@/components/Modal';
 import { parseBoundedInt } from '@/lib/numberInput';
-
-interface Host {
-  id: number;
-  hostname?: string;
-  ip_address: string;
-  model?: string | null;
-}
-
-interface Group {
-  id: number;
-  name: string;
-  hosts?: Host[];
-}
-
-function useInventoryGroupsWithHosts() {
-  return useQuery({
-    queryKey: ['inventory-groups', 'with-hosts'],
-    queryFn: ({ signal }) => apiRequest<Group[]>('/inventory?include_hosts=true', { signal }),
-  });
-}
 
 interface Props {
   mode: 'create' | 'edit';
@@ -125,7 +103,7 @@ export function CampaignFormModal({ mode, campaignId, onClose }: Props) {
   const create = useCreateUpgradeCampaign();
   const update = useUpdateUpgradeCampaign();
   const imagesQ = useUpgradeImages();
-  const groupsQ = useInventoryGroupsWithHosts();
+  const groupsQ = useInventoryGroupsFull(true);
   const credsQ = useCredentials();
   const campaignQ = useUpgradeCampaign(isEdit ? campaignId ?? null : null);
 
@@ -255,7 +233,7 @@ export function CampaignFormModal({ mode, campaignId, onClose }: Props) {
     });
   };
 
-  const toggleGroup = (group: Group, checked: boolean) => {
+  const toggleGroup = (group: InventoryGroupFull, checked: boolean) => {
     const editableHosts = (group.hosts || []).filter(
       (h) => !lockedIps.has(h.ip_address),
     );
@@ -270,7 +248,7 @@ export function CampaignFormModal({ mode, campaignId, onClose }: Props) {
     });
   };
 
-  const groupCheckboxState = (group: Group): 'all' | 'some' | 'none' => {
+  const groupCheckboxState = (group: InventoryGroupFull): 'all' | 'some' | 'none' => {
     const hosts = group.hosts || [];
     if (hosts.length === 0) return 'none';
     const editable = hosts.filter((h) => !lockedIps.has(h.ip_address));

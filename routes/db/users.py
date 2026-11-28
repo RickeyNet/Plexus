@@ -14,6 +14,7 @@ import os
 import re
 from datetime import UTC, datetime, timedelta
 
+from netcontrol.authz_cache import invalidates
 from netcontrol.secret_fields import (
     NOTIFICATION_CHANNEL_SECRET_FIELDS,
     SIEM_SINK_SECRET_FIELDS,
@@ -105,6 +106,10 @@ async def get_user_by_id(user_id: int) -> dict | None:
         await db.close()
 
 
+# Every writer of users, user_group_memberships and the access_group* tables
+# carries @invalidates: the auth path caches what they change
+# (netcontrol.authz_cache).
+@invalidates
 async def create_user(
     username: str,
     password_hash: str,
@@ -131,6 +136,7 @@ async def create_user(
         await db.close()
 
 
+@invalidates
 async def update_user_password(
     user_id: int,
     password_hash: str,
@@ -148,6 +154,7 @@ async def update_user_password(
         await db.close()
 
 
+@invalidates
 async def bump_user_session_epoch(user_id: int) -> int:
     """Increment a user's session_epoch, invalidating all previously-issued
     session tokens for that user. Returns the new epoch (0 on failure)."""
@@ -165,6 +172,7 @@ async def bump_user_session_epoch(user_id: int) -> int:
         await db.close()
 
 
+@invalidates
 async def set_user_auth_provider(user_id: int, provider: str, *, clear_external_id: bool = False):
     """Mark an account as managed by an external auth provider ('ldap',
     'radius', 'tacacs', 'oidc', 'saml'; '' = a local account).
@@ -184,6 +192,7 @@ async def set_user_auth_provider(user_id: int, provider: str, *, clear_external_
         await db.close()
 
 
+@invalidates
 async def set_user_external_id(user_id: int, external_id: str):
     """Bind an account to its OIDC subject (``sub``); see migration 0088."""
     db = await _dbcore.get_db()
@@ -210,6 +219,7 @@ async def get_users_by_external_id(provider: str, external_id: str) -> list[dict
         await db.close()
 
 
+@invalidates
 async def update_user_profile(user_id: int, display_name: str = None):
     db = await _dbcore.get_db()
     try:
@@ -220,6 +230,7 @@ async def update_user_profile(user_id: int, display_name: str = None):
         await db.close()
 
 
+@invalidates
 async def update_user_admin(
     user_id: int,
     username: str = None,
@@ -295,6 +306,7 @@ async def get_all_users() -> list[dict]:
         await db.close()
 
 
+@invalidates
 async def delete_user(user_id: int):
     db = await _dbcore.get_db()
     try:
@@ -308,6 +320,7 @@ async def delete_user(user_id: int):
         await db.close()
 
 
+@invalidates
 async def delete_user_guarded(user_id: int) -> str:
     """Delete a user, refusing to remove the last remaining enabled admin
     (a disabled admin cannot sign in, so it does not count).
@@ -359,6 +372,7 @@ async def get_user_group_ids(user_id: int) -> list[int]:
         await db.close()
 
 
+@invalidates
 async def set_user_groups(user_id: int, group_ids: list[int]):
     db = await _dbcore.get_db()
     try:
@@ -478,6 +492,7 @@ async def get_access_group(group_id: int) -> dict | None:
         await db.close()
 
 
+@invalidates
 async def create_access_group(
     name: str,
     description: str,
@@ -513,6 +528,7 @@ async def create_access_group(
         await db.close()
 
 
+@invalidates
 async def update_access_group(
     group_id: int,
     name: str,
@@ -548,6 +564,7 @@ async def update_access_group(
         await db.close()
 
 
+@invalidates
 async def delete_access_group(group_id: int):
     db = await _dbcore.get_db()
     try:

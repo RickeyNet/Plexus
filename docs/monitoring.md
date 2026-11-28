@@ -90,7 +90,7 @@ dashboard panels and graph templates:
 | `if_up_count`, `if_down_count` | Interfaces up, and down but not admin down |
 | `vpn_tunnels_up`, `vpn_tunnels_down` | VPN tunnels |
 | `route_count` | Routes in the global table |
-| `if_in_errors`, `if_out_errors`, `if_in_discards`, `if_out_discards` | Interface counters, with `_rate` versions per second |
+| `if_in_errors_rate`, `if_out_errors_rate`, `if_in_discards_rate`, `if_out_discards_rate` | Interface errors and discards per second, one sample per interface from the second poll on. The raw counters are not sampled; their newest values are on the **Interface Errors** tab |
 | `module_down` | Hardware modules down (only when the poll read the module table) |
 | `power_supply_down`, `fan_down`, `temperature_alarm`, `optic_level_alarm` | Power supplies down, fans down, temperature sensors and optics in alarm (each only when the poll read a table for it) |
 | `poe_port_fault`, `poe_supply_down`, `poe_budget_high` | PoE ports faulty, PoE power sources faulty, PoE budgets at their threshold (each only when the poll read the table) |
@@ -750,6 +750,14 @@ Poll**, and the matching IPAM subnet when there is one.
   cycle. Metric samples are kept 48 hours, hourly rollups 30 days and daily
   rollups 365 days; interface traffic and syslog / trap events 30 days;
   interface error events 90 days.
+- **Poll details are stored where they change.** A poll's interface list,
+  VPN details and route snapshot are kept on the host's newest poll and on
+  the first and last poll of each run in which they did not change
+  (interface counters do not count as a change: per-poll traffic is in the
+  interface time series). The polls in between store none. Poll history
+  read with `include_details=true` fills such a poll from a poll of its run
+  and names it in `details_from_poll_id`; the interface counters in that
+  `if_details` are the named poll's.
 - **Hosts awaiting admin confirmation are not polled.** A host that a user
   who is not an admin added, or whose address such a user changed, shows
   **Awaiting admin confirmation** on the Inventory page. Monitoring, the

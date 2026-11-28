@@ -62,6 +62,7 @@ import routes.db.object_scope as scope_db
 from fastapi import HTTPException
 from starlette.requests import HTTPConnection
 
+from netcontrol import authz_cache
 from netcontrol.routes.shared import _get_session
 
 # Feature keys a scoped user keeps: every gateable feature of the catalog
@@ -381,19 +382,37 @@ async def scope_for_user(user: dict | None, *, token: bool = False) -> ObjectSco
         return NO_ACCESS
     if user.get("role") == "admin":
         return UNRESTRICTED
-    data = await db.get_user_object_scope(int(user["id"]))
-    if data["unrestricted"]:
+    user_id = int(user["id"])
+    # The grants are kept across requests (authz_cache; every membership,
+    # access-group, scope-rule and group-tree write drops them). The scope
+    # itself is built per call, so what it reaches (hosts, tenants, sites)
+    # is read afresh for each request.
+    parts = await authz_cache.get_or_load(("scope", user_id), lambda: _load_scope_parts(user_id))
+    if parts is None:
         return UNRESTRICTED
-    rules = await scope_db.get_user_scope_rules(int(user["id"]))
+    read_groups, write_groups, rules = parts
     return ObjectScope(
         unrestricted=False,
-        read_groups=frozenset(int(g) for g in data["read_group_ids"]),
-        write_groups=frozenset(int(g) for g in data["write_group_ids"]),
-        rules=tuple(
-            ScopeRule(r["model"], r["attribute"], int(r["value_id"]), bool(r["can_write"]))
-            for r in rules
-            if r["model"] == "*" or r["model"] in MODELS
-        ),
+        read_groups=read_groups,
+        write_groups=write_groups,
+        # Filtered per call: a model registered later is picked up at once.
+        rules=tuple(r for r in rules if r.model == "*" or r.model in MODELS),
+    )
+
+
+async def _load_scope_parts(
+    user_id: int,
+) -> tuple[frozenset[int], frozenset[int], tuple[ScopeRule, ...]] | None:
+    """The read groups, write groups and scope rules of a scoped user, as
+    immutable values; ``None`` for an unrestricted one."""
+    data = await db.get_user_object_scope(user_id)
+    if data["unrestricted"]:
+        return None
+    rules = await scope_db.get_user_scope_rules(user_id)
+    return (
+        frozenset(int(g) for g in data["read_group_ids"]),
+        frozenset(int(g) for g in data["write_group_ids"]),
+        tuple(ScopeRule(r["model"], r["attribute"], int(r["value_id"]), bool(r["can_write"])) for r in rules),
     )
 
 
@@ -852,11 +871,16 @@ async def sql_condition(
 ) -> tuple[str, tuple[int, ...]]:
     """A SQL condition (``?`` placeholders) keeping the rows of ``model`` the
     caller may read (``write``: change), for a query whose row columns are
-    named like the model's key fields (``alias.`` prefixed when given; list
-    fields such as ``scope_host_ids`` are not columns and are skipped).
-    ``("", ())`` for an unrestricted caller; ``("1 = 0", ())`` when nothing
-    matches. Shared models also keep rows with every key NULL."""
+    named like the model's key fields (``alias.`` prefixed when given) and
+    hold integer ids or NULL: it keeps exactly the rows ``filter_rows``
+    keeps. ``("", ())`` for an unrestricted caller; ``("1 = 0", ())`` when
+    nothing matches. Shared models also keep rows with every key NULL.
+
+    ``ValueError`` for a model with a list key field (``scope_host_ids``,
+    ``host_ids`` ...): such a field is derived per row, not a column, so no
+    SQL condition can match what ``filter_rows`` decides for it."""
     spec = get_model(model)
+    columns = _key_columns(spec)
     scope = await _scope_of(scope_or_request)
     if scope.unrestricted:
         return "", ()
@@ -864,7 +888,6 @@ async def sql_condition(
     allowed = await scope.keys(model, write=write)
     parts: list[str] = []
     params: list[int] = []
-    columns = [(attr, fld) for attr, fld in spec.keys.items() if fld.isidentifier() and not fld.startswith("scope_")]
     for attr, fld in columns:
         ids = sorted(allowed.get(attr, frozenset()))
         if ids:
@@ -875,6 +898,16 @@ async def sql_condition(
     if not parts:
         return "1 = 0", ()
     return "(" + " OR ".join(parts) + ")", tuple(params)
+
+
+def _key_columns(spec: ScopeModel) -> list[tuple[str, str]]:
+    """``(attribute, column)`` of every key of ``spec``; ``ValueError`` when
+    a key field is a derived list (``scope_*`` or ``*_ids``) rather than a
+    column, or is not a plain identifier."""
+    derived = [f for f in spec.keys.values() if not f.isidentifier() or f.startswith("scope_") or f.endswith("_ids")]
+    if derived:
+        raise ValueError(f"object scope model {spec.name!r} has derived key fields {sorted(derived)}: use filter_rows")
+    return list(spec.keys.items())
 
 
 def model_catalog() -> list[dict]:

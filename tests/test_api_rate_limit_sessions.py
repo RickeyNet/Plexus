@@ -48,13 +48,10 @@ def _request(token: str | None) -> Request:
 
 
 async def _statuses(token: str | None, count: int) -> list[int]:
-    async def call_next(request):
-        return type("R", (), {"status_code": 200})()
-
     out = []
     for _ in range(count):
-        response = await app_module.api_rate_limit_middleware(_request(token), call_next)
-        out.append(response.status_code)
+        response = await app_module.api_rate_limit_guard(_request(token))
+        out.append(200 if response is None else response.status_code)
     return out
 
 

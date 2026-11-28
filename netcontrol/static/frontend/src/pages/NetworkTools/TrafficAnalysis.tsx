@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 import { Link } from 'react-router';
 
 import { PageHelp } from '@/components/PageHelp';
@@ -6,7 +6,7 @@ import { QueryError } from '@/components/QueryError';
 import { TabBar } from '@/components/TabBar';
 import { ClampedRangeHint } from '@/components/TimeRangeBar';
 import { BarChart, TimeSeriesChart } from '@/lib/echart';
-import { useInventoryGroupsFull } from '@/api/inventory';
+import { useHostOptions } from '@/api/inventory';
 import {
   FLOW_RANGES,
   FlowApplication,
@@ -15,12 +15,13 @@ import {
   FlowStatus,
   FlowTalker,
   FlowTimelinePoint,
+  flowBucketMinutes,
   useFlowExporters,
   useFlowStatus,
   useFlowTopApplications,
   useFlowTopConversations,
-  useFlowTopTalkers,
   useFlowTimeline,
+  useFlowViewTalkers,
 } from '@/api/networkTools';
 import { formatBackendDateTime } from '@/lib/datetime';
 import { useTimeRange } from '@/lib/timeRange-context';
@@ -77,18 +78,8 @@ export function TrafficAnalysis() {
 
   const status = useFlowStatus();
 
-  // Single host list for the filter dropdown - flatten groups → hosts.
-  const groups = useInventoryGroupsFull(true);
-  const hostOptions = useMemo(() => {
-    const list: { id: number; label: string }[] = [];
-    for (const group of groups.data ?? []) {
-      for (const h of group.hosts ?? []) {
-        list.push({ id: h.id, label: h.hostname ?? `host-${h.id}` });
-      }
-    }
-    list.sort((a, b) => a.label.localeCompare(b.label));
-    return list;
-  }, [groups.data]);
+  // Single host list for the filter dropdown.
+  const hostOptions = useHostOptions().data ?? [];
 
   return (
     <>
@@ -160,8 +151,8 @@ function CollectorBadges({ status }: { status: FlowStatus | undefined }) {
 // ── Top Talkers tab ─────────────────────────────────────────────────────────
 
 function TopTalkersView({ hours, hostId }: { hours: number; hostId: number | null }) {
-  const src = useFlowTopTalkers({ hours, direction: 'src', hostId });
-  const dst = useFlowTopTalkers({ hours, direction: 'dst', hostId });
+  const src = useFlowViewTalkers({ hours, direction: 'src', hostId });
+  const dst = useFlowViewTalkers({ hours, direction: 'dst', hostId });
 
   return (
     <div className="chart-grid-2col">
@@ -325,9 +316,7 @@ function TimelineView({ hours, hostId }: { hours: number; hostId: number | null 
   if (points.length === 0) return <NoData />;
 
   // The chart wants bytes-per-second so the y-axis bps formatter renders right.
-  // We don't know the exact bucket width from the response, but it's
-  // deterministic - match the same logic the hook uses.
-  const bucketMinutes = hours <= 1 ? 1 : hours <= 6 ? 5 : 15;
+  const bucketMinutes = flowBucketMinutes(hours);
   const bucketSeconds = bucketMinutes * 60;
 
   const series = [

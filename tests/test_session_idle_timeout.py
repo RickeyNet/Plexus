@@ -6,7 +6,9 @@ Covers:
   2. Kiosk accounts (session_never_expires=1) bypass the idle check.
   3. session_idle_timeout=0 disables the check globally.
   4. Activity inside the window passes through and re-issues a refreshed
-     cookie (so the SPA's idle countdown gets reset).
+     cookie (so the SPA's idle countdown gets reset) once the cookie's
+     last_activity is SESSION_REFRESH_MAX_LAG_SECONDS old (or a tenth of the
+     idle timeout); the heartbeat always re-issues it.
   5. /api/auth/status mirrors the same enforcement and emits an audit event.
   6. /api/auth/status returns the idle_timeout_seconds / session_last_activity
      / session_never_expires / server_time fields the SPA needs.
@@ -155,7 +157,7 @@ async def test_active_session_refreshes_cookie(monkeypatch):
 
     monkeypatch.setattr(app_module.db, "get_user_by_id", fake_get_user_by_id)
 
-    token = _make_expired_token("carol", 4, age_seconds=10)
+    token = _make_expired_token("carol", 4, age_seconds=app_module.SESSION_REFRESH_MAX_LAG_SECONDS + 5)
     req = DummyRequest(cookies={"session": token})
     resp = Response()
 
@@ -167,6 +169,32 @@ async def test_active_session_refreshes_cookie(monkeypatch):
     assert any(b"session=" in v for _, v in cookies), (
         f"expected refreshed session cookie, got headers: {resp.raw_headers}"
     )
+
+
+@pytest.mark.asyncio
+async def test_recently_refreshed_cookie_is_not_reissued(monkeypatch):
+    monkeypatch.setattr(app_module, "APP_API_TOKEN", "")
+    monkeypatch.setitem(state.LOGIN_RULES, "session_idle_timeout", 1800)
+
+    async def fake_get_user_by_id(uid):
+        return {"id": uid, "username": "carol", "role": "user", "must_change_password": 0, "session_never_expires": 0}
+
+    monkeypatch.setattr(app_module.db, "get_user_by_id", fake_get_user_by_id)
+
+    async def set_cookies(path: str, age: int) -> list:
+        resp = Response()
+        req = DummyRequest(cookies={"session": _make_expired_token("carol", 4, age_seconds=age)}, path=path)
+        await app_module.require_auth(cast(Request, req), response=resp)
+        return [v for k, v in resp.raw_headers if k.decode().lower() == "set-cookie" and v.startswith(b"session=")]
+
+    # Within the allowed lag: no Set-Cookie.
+    assert await set_cookies("/api/inventory", 10) == []
+    # The "Stay signed in" heartbeat always renews.
+    assert len(await set_cookies("/api/auth/heartbeat", 10)) == 1
+    # A short idle timeout shortens the lag to a tenth of it.
+    monkeypatch.setitem(state.LOGIN_RULES, "session_idle_timeout", 60)
+    assert await set_cookies("/api/inventory", 5) == []
+    assert len(await set_cookies("/api/inventory", 6)) == 1
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -421,7 +449,7 @@ async def test_profile_dependency_enforces_idle_timeout(monkeypatch):
 
     # An active session passes and gets its cookie refreshed.
     resp = Response()
-    req = DummyRequest(cookies={"session": _make_token(24, idle_age=5)}, path="/api/auth/profile")
+    req = DummyRequest(cookies={"session": _make_token(24, idle_age=30)}, path="/api/auth/profile")
     session = await auth_module._require_auth_dep(cast(Request, req), resp)
     assert session["user_id"] == 24
     assert any(k.decode().lower() == "set-cookie" and v.startswith(b"session=") for k, v in resp.raw_headers)

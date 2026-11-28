@@ -53,6 +53,7 @@ Tables:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import contextvars
 import functools
 import hashlib
@@ -806,18 +807,22 @@ CREATE TABLE IF NOT EXISTS monitoring_polls (
     if_up_count     INTEGER DEFAULT 0,
     if_down_count   INTEGER DEFAULT 0,
     if_admin_down   INTEGER DEFAULT 0,
-    if_details      TEXT    NOT NULL DEFAULT '[]',
+    -- The three detail blobs are NULL on a poll in the middle of a run of
+    -- polls with the same details_digest (migration 0143); the first and
+    -- the last poll of each run, so the newest poll, keep them.
+    if_details      TEXT    DEFAULT '[]',
     vpn_tunnels_up  INTEGER DEFAULT 0,
     vpn_tunnels_down INTEGER DEFAULT 0,
-    vpn_details     TEXT    NOT NULL DEFAULT '[]',
+    vpn_details     TEXT    DEFAULT '[]',
     route_count     INTEGER DEFAULT 0,
-    route_snapshot  TEXT    NOT NULL DEFAULT '',
+    route_snapshot  TEXT    DEFAULT '',
     poll_status     TEXT    NOT NULL DEFAULT 'ok',
     poll_error      TEXT    DEFAULT '',
     response_time_ms REAL   DEFAULT NULL,
     packet_loss_pct  REAL   DEFAULT NULL,
     icmp_alive       INTEGER DEFAULT NULL,
     icmp_rtt_ms      REAL    DEFAULT NULL,
+    details_digest   TEXT    DEFAULT NULL,
     polled_at       TEXT    NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -2683,6 +2688,34 @@ def _strip_nuls_from_params(params: tuple) -> tuple:
     return tuple(v.replace("\x00", "") if isinstance(v, str) else v for v in params)
 
 
+# Statements that leave state on the backend session beyond the transaction:
+# session advisory locks, settings, LISTEN, cursors, prepared statements and
+# temp tables. A pooled connection that ran one gets asyncpg's full reset
+# query before its next borrower (see ``_PooledConnection``); every other
+# release skips that round trip. A false positive only costs the reset.
+_SESSION_STATE_RE = re.compile(
+    r"^\s*(?:SET|RESET|DISCARD|LISTEN|DECLARE|PREPARE|LOAD)\b"
+    r"|\bpg_(?:try_)?advisory_lock(?:_shared)?\s*\("
+    r"|\bset_config\s*\("
+    r"|\bCREATE\s+(?:(?:GLOBAL|LOCAL)\s+)?TEMP(?:ORARY)?\b",
+    re.IGNORECASE,
+)
+
+
+@functools.lru_cache(maxsize=_STATEMENT_CACHE_SIZE)
+def _touches_session_state(query: str) -> bool:
+    return _SESSION_STATE_RE.search(query) is not None
+
+
+# The savepoint that guards one statement inside an open transaction. One
+# name is reused and its release is deferred: the next guarded statement
+# releases the previous savepoint and sets a new one in a single round trip,
+# and COMMIT or ROLLBACK ends whatever is left, so at most one is open.
+_SQL_SAVEPOINT_SET = "SAVEPOINT plexus_stmt"
+_SQL_SAVEPOINT_RENEW = "RELEASE SAVEPOINT plexus_stmt; SAVEPOINT plexus_stmt"
+_SQL_SAVEPOINT_UNDO = "ROLLBACK TO SAVEPOINT plexus_stmt"
+
+
 class _PostgresConnectionCompat:
     """sqlite3/DB-API-shaped facade over an asyncpg connection.
 
@@ -2693,42 +2726,131 @@ class _PostgresConnectionCompat:
     Transactions mirror sqlite3's implicit model, which the callers were
     written against, so multi-statement writes stay atomic: the first
     data/schema-modifying statement opens a real transaction (BEGIN), and
-    ``commit()``/``rollback()`` end it. Inside an open transaction every
-    statement runs in a savepoint, so an expected failure (e.g. the
+    ``commit()``/``rollback()`` end it. A statement that fails inside the
+    transaction undoes only itself, so an expected failure (e.g. the
     unique-violation branch of a try/except upsert) doesn't poison the
     transaction — in SQLite a failed statement never aborts the implicit
     transaction, and callers rely on that. A section released with the
-    transaction still open is rolled back (see ``_release_db``)."""
+    transaction still open is rolled back (see ``_release_db``).
+
+    How a failed statement is undone, cheapest first:
+
+    * the first statement of a fresh transaction runs bare; if it fails,
+      the transaction holds nothing else, so it is rolled back whole and
+      the next write opens a new one;
+    * statements inside an ``atomic()`` block run bare; a failure undoes
+      the whole block;
+    * every other statement runs under a savepoint, set (and the previous
+      one released) in one round trip before it and rolled back to if it
+      fails.
+    """
 
     def __init__(self, conn):
         self._conn = conn
         self._tx = None  # open implicit transaction, if any
+        self._tx_fresh = False  # no statement has succeeded in self._tx yet
+        self._savepoint_open = False  # plexus_stmt is set and not released
+        self._atomic_depth = 0
         self.row_factory = None
+
+    @property
+    def in_transaction(self) -> bool:
+        """True while a transaction is open on the connection: this section's
+        implicit one, or one a caller opened around it."""
+        if self._tx is not None:
+            return True
+        check = getattr(self._conn, "is_in_transaction", None)
+        return bool(check()) if callable(check) else False
 
     async def _ensure_tx(self):
         if self._tx is None:
             self._tx = self._conn.transaction()
             await self._tx.start()
+            self._tx_fresh = True
+            self._savepoint_open = False
+
+    def _end_tx(self):
+        tx, self._tx = self._tx, None
+        self._tx_fresh = False
+        self._savepoint_open = False
+        return tx
+
+    async def _discard_tx(self):
+        """Roll back a transaction no statement has succeeded in, so the
+        caller sees the same state as if it had never been opened."""
+        tx = self._end_tx()
+        if tx is None:
+            return
+        try:
+            await tx.rollback()
+        except Exception as exc:
+            _LOGGER.debug("pg compat: rollback of a failed fresh transaction failed: %s", exc)
+
+    def _note_session_state(self, query: str) -> None:
+        if _touches_session_state(query):
+            mark = getattr(self._conn, "plexus_mark_session_state", None)
+            if callable(mark):
+                mark()
 
     async def _run_statement(self, fn):
-        """Run one statement; wrap it in a savepoint when a transaction is
-        open (asyncpg nests transaction() as SAVEPOINT automatically)."""
-        if self._tx is None:
+        """Run one statement so that, if it fails, it alone is undone."""
+        if self._tx is None or self._atomic_depth:
             return await fn()
-        sub = self._conn.transaction()
-        await sub.start()
+        if self._tx_fresh:
+            try:
+                result = await fn()
+            except BaseException:
+                await self._discard_tx()
+                raise
+            self._tx_fresh = False
+            return result
+        await self._conn.execute(_SQL_SAVEPOINT_RENEW if self._savepoint_open else _SQL_SAVEPOINT_SET)
+        self._savepoint_open = True
         try:
-            result = await fn()
+            return await fn()
         except BaseException:
             try:
-                await sub.rollback()
+                await self._conn.execute(_SQL_SAVEPOINT_UNDO)
             except Exception as exc:
                 _LOGGER.debug("pg compat: savepoint rollback failed: %s", exc)
             raise
-        await sub.commit()
-        return result
+
+    @contextlib.asynccontextmanager
+    async def atomic(self):
+        """Run the block's statements as one unit inside the implicit
+        transaction, without a savepoint per statement.
+
+        If the block raises, everything it did is undone, work done before
+        it stays pending, and the error propagates. A statement that fails
+        inside the block aborts the block, so its error must leave the
+        block (catching it inside and carrying on fails on the next
+        statement). Do not commit or roll back inside the block. A nested
+        block gets a savepoint of its own."""
+        await self._ensure_tx()
+        guard = None
+        if self._atomic_depth or not self._tx_fresh:
+            guard = self._conn.transaction()
+            await guard.start()
+        self._atomic_depth += 1
+        try:
+            yield self
+        except BaseException:
+            self._atomic_depth -= 1
+            if guard is None:
+                await self._discard_tx()
+            else:
+                try:
+                    await guard.rollback()
+                except Exception as exc:
+                    _LOGGER.debug("pg compat: atomic block rollback failed: %s", exc)
+            raise
+        self._atomic_depth -= 1
+        self._tx_fresh = False
+        if guard is not None:
+            await guard.commit()
 
     async def execute(self, query: str, params=()):
+        self._note_session_state(query)
         plan = _plan_statement(query)
         converted = plan.sql
         params = _apply_text_casts(plan.text_casts, _strip_nuls_from_params(tuple(params or ())))
@@ -2757,9 +2879,11 @@ class _PostgresConnectionCompat:
     async def executescript(self, script: str):
         await self._ensure_tx()
         for stmt in _split_sql_statements(script):
+            self._note_session_state(stmt)
             await self._run_statement(lambda s=stmt: self._conn.execute(s))
 
     async def executemany(self, query: str, params):
+        self._note_session_state(query)
         converted, text_casts = _plan_executemany(query)
         cleaned = [_apply_text_casts(text_casts, _strip_nuls_from_params(tuple(row))) for row in params]
         await self._ensure_tx()
@@ -2767,15 +2891,15 @@ class _PostgresConnectionCompat:
         return _PostgresCursorCompat(rowcount=len(cleaned))
 
     async def commit(self):
-        if self._tx is not None:
-            tx, self._tx = self._tx, None
+        tx = self._end_tx()
+        if tx is not None:
             await tx.commit()
 
     async def rollback(self):
         # No-op when no write opened a transaction, so error-path
         # ``await db.rollback()`` calls stay safe on read-only sections.
-        if self._tx is not None:
-            tx, self._tx = self._tx, None
+        tx = self._end_tx()
+        if tx is not None:
             await tx.rollback()
 
     async def close(self):
@@ -2875,6 +2999,35 @@ def _db_pool_settings() -> dict:
     }
 
 
+if asyncpg is not None:
+
+    class _PooledConnection(asyncpg.Connection):
+        """Pool connection whose release skips asyncpg's reset query
+        (``pg_advisory_unlock_all(); CLOSE ALL; UNLISTEN *; RESET ALL``, one
+        round trip on every release) unless the compat layer saw it run a
+        statement that leaves session state behind (``_touches_session_state``).
+        The pool still rolls back an open transaction on every release.
+        Code that drives the raw asyncpg connection directly and changes
+        session state must call ``plexus_mark_session_state()`` itself."""
+
+        _plexus_session_state = False
+
+        def plexus_mark_session_state(self) -> None:
+            self._plexus_session_state = True
+
+        def get_reset_query(self) -> str:
+            if not self._plexus_session_state:
+                return ""
+            self._plexus_session_state = False
+            return super().get_reset_query()
+
+
+def _pool_connection_options() -> dict:
+    """``create_pool`` keyword arguments for the connection behaviour the
+    compat layer relies on (the trimmed reset above)."""
+    return {"connection_class": _PooledConnection}
+
+
 async def _get_pg_pool():
     global _pg_pool, _pg_acquire_timeout
     if _pg_pool is not None:
@@ -2895,6 +3048,7 @@ async def _get_pg_pool():
             max_size=settings["max_size"],
             statement_cache_size=settings["statement_cache_size"],
             server_settings={"timezone": "UTC"},
+            **_pool_connection_options(),
         )
         return _pg_pool
 

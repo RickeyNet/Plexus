@@ -44,6 +44,7 @@ __all__ = [
     "query_interface_ts_series",
     "query_interface_ts_multi",
     "delete_old_interface_ts",
+    "INTERFACE_ERROR_COUNTERS",
     "get_interface_error_stats_for_host",
     "upsert_interface_error_stat",
     "upsert_interface_error_stats_batch",
@@ -137,13 +138,34 @@ async def create_metric_samples_batch(rows: list[tuple]) -> int:
         await db.close()
 
 
+def _epoch_bucket_sql(column: str) -> str:
+    """SQL for the UTC-aligned bucket number of a naive-UTC timestamp text
+    ``column`` (a fixed identifier); takes one parameter, the width in
+    seconds. ``_bucket_start_sql`` turns the number back into stored text."""
+    return f"floor(extract(epoch FROM {column}::timestamptz) / CAST(? AS INTEGER))"
+
+
+def _bucket_start_sql(bucket: str) -> str:
+    """SQL for the start of bucket number ``bucket`` (a fixed expression) as
+    naive UTC text like the stored samples; takes the width parameter."""
+    return f"to_char(to_timestamp({bucket} * CAST(? AS INTEGER)) AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS')"
+
+
 async def query_metric_samples(
     metric_name: str,
     host_ids: list[int] | None = None,
     start: str | None = None,
     end: str | None = None,
     limit: int = 5000,
+    *,
+    bucket_seconds: int = 0,
 ) -> list[dict]:
+    """Samples of ``metric_name``, newest first. ``bucket_seconds`` > 0
+    groups each series (host and labels) into UTC-aligned buckets of that
+    width: ``sampled_at`` and ``period_start`` are the bucket start,
+    ``value`` and ``val_avg`` the mean, ``val_min``/``val_max`` the extremes
+    and ``sample_count`` the samples behind the point; rows are ordered by
+    bucket (newest first), host and labels. ``limit`` caps the rows."""
     db = await _dbcore.get_db(read_only=True)
     try:
         clauses = ["metric_name = ?"]
@@ -159,16 +181,41 @@ async def query_metric_samples(
             clauses.append("sampled_at <= ?")
             params.append(end)
         where = " AND ".join(clauses)
-        params.append(limit)
+        if bucket_seconds <= 0:
+            params.append(limit)
+            cursor = await db.execute(
+                f"""SELECT ms.*, h.hostname, h.ip_address
+                    FROM metric_samples ms
+                    JOIN hosts h ON h.id = ms.host_id
+                    WHERE {where}
+                    ORDER BY ms.sampled_at DESC LIMIT ?""",  # nosec B608 - fixed clauses, placeholders only
+                tuple(params),
+            )
+            return rows_to_list(await cursor.fetchall())
+        width = int(bucket_seconds)
         cursor = await db.execute(
-            f"""SELECT ms.*, h.hostname, h.ip_address
-                FROM metric_samples ms
-                JOIN hosts h ON h.id = ms.host_id
-                WHERE {where}
-                ORDER BY ms.sampled_at DESC LIMIT ?""",
-            tuple(params),
+            f"""SELECT b.host_id, b.metric_name, b.labels_json,
+                       {_bucket_start_sql("b.bucket")} AS sampled_at,
+                       b.val_avg AS value, b.val_min, b.val_avg, b.val_max, b.sample_count,
+                       h.hostname, h.ip_address
+                FROM (
+                    SELECT host_id, metric_name, labels_json,
+                           {_epoch_bucket_sql("sampled_at")} AS bucket,
+                           MIN(value) AS val_min, AVG(value) AS val_avg, MAX(value) AS val_max,
+                           COUNT(*) AS sample_count
+                    FROM metric_samples
+                    WHERE {where}
+                    GROUP BY host_id, metric_name, labels_json, 4
+                ) b
+                JOIN hosts h ON h.id = b.host_id
+                ORDER BY b.bucket DESC, b.host_id, b.labels_json
+                LIMIT ?""",  # nosec B608 - fixed clauses, placeholders only
+            (width, width, *params, limit),
         )
-        return rows_to_list(await cursor.fetchall())
+        rows = rows_to_list(await cursor.fetchall())
+        for row in rows:
+            row["period_start"] = row["sampled_at"]
+        return rows
     finally:
         await db.close()
 
@@ -545,13 +592,12 @@ async def query_interface_ts_series(
         # start is written back as naive UTC text like the stored samples.
         cursor = await db.execute(
             f"""SELECT b.host_id, b.if_index, b.if_name, b.if_speed_mbps,
-                       to_char(to_timestamp(b.bucket * CAST(? AS INTEGER)) AT TIME ZONE 'UTC',
-                               'YYYY-MM-DD HH24:MI:SS') AS sampled_at,
+                       {_bucket_start_sql("b.bucket")} AS sampled_at,
                        b.in_octets, b.out_octets,
                        b.in_rate_bps, b.out_rate_bps, b.utilization_pct, b.sample_count
                 FROM (
                     SELECT host_id, if_index,
-                           floor(extract(epoch FROM sampled_at::timestamptz) / CAST(? AS INTEGER)) AS bucket,
+                           {_epoch_bucket_sql("sampled_at")} AS bucket,
                            MAX(if_name) AS if_name,
                            MAX(if_speed_mbps) AS if_speed_mbps,
                            MAX(in_octets) AS in_octets,
@@ -645,6 +691,19 @@ async def delete_old_interface_ts(retention_days: int = 30) -> int:
 # ═════════════════════════════════════════════════════════════════════════════
 # Interface Error/Discard Tracking
 # ═════════════════════════════════════════════════════════════════════════════
+
+# (if_details / interface_error_stats field, raw counter metric name). The
+# poll stores ``<metric>_rate`` samples; see get_interface_error_summary for
+# where the raw counters are read from.
+INTERFACE_ERROR_COUNTERS: tuple[tuple[str, str], ...] = (
+    ("in_errors", "if_in_errors"),
+    ("out_errors", "if_out_errors"),
+    ("in_discards", "if_in_discards"),
+    ("out_discards", "if_out_discards"),
+)
+_ERROR_METRICS_SQL = ", ".join(
+    f"'{name}'" for _field, metric in INTERFACE_ERROR_COUNTERS for name in (metric, f"{metric}_rate")
+)
 
 
 async def get_interface_error_stats_for_host(host_id: int) -> list[dict]:
@@ -857,27 +916,63 @@ async def get_interface_error_summary(
     host_id: int,
     days: int = 1,
 ) -> list[dict]:
-    """Per-interface error/discard rate summary with totals."""
+    """Per-interface error/discard summary over the last ``days``: one row
+    per interface and metric (``labels_json``, ``metric_name``,
+    ``sample_count``, ``avg_value``, ``max_value``, ``min_value``).
+
+    The ``_rate`` metrics are aggregated from their samples. The poll no
+    longer samples the raw counters, so a raw counter's row is the
+    interface's newest counter from ``interface_error_stats`` (count 1,
+    min = avg = max = that counter) for every interface polled in the
+    window; raw counter samples still in retention from before that change
+    are aggregated as they were and take precedence."""
     db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
-            """SELECT ms.host_id, ms.labels_json, ms.metric_name,
+            f"""SELECT ms.host_id, ms.labels_json, ms.metric_name,
                       COUNT(*) AS sample_count,
                       AVG(ms.value) AS avg_value,
                       MAX(ms.value) AS max_value,
                       MIN(ms.value) AS min_value
                FROM metric_samples ms
                WHERE ms.host_id = ?
-                 AND ms.metric_name IN ('if_in_errors', 'if_out_errors',
-                                        'if_in_discards', 'if_out_discards')
+                 AND ms.metric_name IN ({_ERROR_METRICS_SQL})
                  AND ms.sampled_at >= datetime('now', '-' || ? || ' days')
-               GROUP BY ms.host_id, ms.metric_name, ms.labels_json
-               ORDER BY ms.metric_name, ms.labels_json""",
+               GROUP BY ms.host_id, ms.metric_name, ms.labels_json""",
             (host_id, days),
         )
-        return rows_to_list(await cursor.fetchall())
+        rows = rows_to_list(await cursor.fetchall())
+        cursor = await db.execute(
+            """SELECT if_index, if_name, in_errors, out_errors, in_discards, out_discards
+               FROM interface_error_stats
+               WHERE host_id = ? AND polled_at >= datetime('now', '-' || ? || ' days')""",
+            (host_id, days),
+        )
+        stats = rows_to_list(await cursor.fetchall())
     finally:
         await db.close()
+    present = {(r["labels_json"], r["metric_name"]) for r in rows}
+    for stat in stats:
+        # The labels the poll writes on the rate samples (see
+        # metrics_engine.store_interface_error_metrics_from_poll).
+        labels = json.dumps({"if_index": stat["if_index"], "if_name": stat["if_name"]})
+        for field, metric in INTERFACE_ERROR_COUNTERS:
+            if (labels, metric) in present:
+                continue
+            value = float(stat.get(field) or 0)
+            rows.append(
+                {
+                    "host_id": host_id,
+                    "labels_json": labels,
+                    "metric_name": metric,
+                    "sample_count": 1,
+                    "avg_value": value,
+                    "max_value": value,
+                    "min_value": value,
+                }
+            )
+    rows.sort(key=lambda r: (r["metric_name"], r["labels_json"]))
+    return rows
 
 
 async def get_interface_error_trending(
@@ -887,17 +982,20 @@ async def get_interface_error_trending(
     end: str | None = None,
     limit: int = 5000,
 ) -> list[dict]:
-    """Query error/discard metric_samples for a host, optionally filtered by interface."""
+    """Query error/discard metric_samples for a host, optionally filtered by
+    interface: the ``_rate`` samples the poll writes, plus any raw counter
+    samples still in retention from before the poll stopped writing them."""
     db = await _dbcore.get_db(read_only=True)
     try:
         clauses = [
             "host_id = ?",
-            "metric_name IN ('if_in_errors', 'if_out_errors', 'if_in_discards', 'if_out_discards')",
+            f"metric_name IN ({_ERROR_METRICS_SQL})",
         ]
         params: list = [host_id]
         if if_index is not None:
+            # The comma ends the number, so ifIndex 5 does not match 50.
             clauses.append("labels_json LIKE ?")
-            params.append(f'%"if_index": {if_index}%')
+            params.append(f'%"if_index": {int(if_index)},%')
         if start:
             clauses.append("sampled_at >= ?")
             params.append(start)

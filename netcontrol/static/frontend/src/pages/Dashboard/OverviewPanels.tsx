@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router';
-import { echarts } from '@/lib/echart-core';
-import { observeChartResize } from '@/lib/useEChart';
+import { useEChart } from '@/lib/useEChart';
 import { resolveThemeVars, useThemeName } from '@/lib/themeColors';
 
 import type { DeviceHealth } from '@/api/dashboard';
@@ -54,9 +53,12 @@ function HealthDonut({ devices }: { devices: DeviceHealth[] }) {
 
   const total = devices.length;
 
+  // One instance for the life of the card; data and theme changes reuse it.
+  const chartRef = useEChart(ref);
+
   useEffect(() => {
-    if (!ref.current) return;
-    const chart = echarts.init(ref.current, undefined, { renderer: 'canvas' });
+    const chart = chartRef.current;
+    if (!chart) return;
     const hasData = slices.some((s) => s.value > 0);
 
     // The legend is the list beside the chart (links, keyboard reachable),
@@ -86,20 +88,18 @@ function HealthDonut({ devices }: { devices: DeviceHealth[] }) {
           silent: !hasData,
         },
       ],
-    }));
+    }), { notMerge: true });
 
     // A slice opens the Devices panel filtered to its bucket, like its legend entry.
-    chart.on('click', (params) => {
+    const onClick = (params: { dataIndex: number }) => {
       const slice = hasData ? slices[params.dataIndex] : undefined;
       if (slice && slice.value > 0) void navigate(devicesPanelLink(slice.filter));
-    });
-
-    const stopObserving = observeChartResize(chart, ref.current);
-    return () => {
-      stopObserving();
-      chart.dispose();
     };
-  }, [slices, total, theme, navigate]);
+    chart.on('click', onClick);
+    return () => {
+      if (!chart.isDisposed()) chart.off('click', onClick);
+    };
+  }, [chartRef, slices, total, theme, navigate]);
 
   return (
     <div className="dashboard-donut" style={{ height: PANEL_BODY_HEIGHT }}>

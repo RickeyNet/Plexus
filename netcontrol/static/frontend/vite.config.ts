@@ -1,4 +1,4 @@
-import { defineConfig, type Plugin } from 'vite';
+import { defineConfig, searchForWorkspaceRoot, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -73,6 +73,17 @@ export default defineConfig({
   server: {
     port: 5173,
     strictPort: true,
+    fs: {
+      // src/main.tsx imports ../../css/style.css, which pulls in the fonts
+      // and background images beside it: let the dev server read
+      // netcontrol/static/{css,fonts,img} as well as this project.
+      allow: [
+        searchForWorkspaceRoot(process.cwd()),
+        fileURLToPath(new URL('../css', import.meta.url)),
+        fileURLToPath(new URL('../fonts', import.meta.url)),
+        fileURLToPath(new URL('../img', import.meta.url)),
+      ],
+    },
     proxy: {
       '/api': {
         target: BACKEND_URL,

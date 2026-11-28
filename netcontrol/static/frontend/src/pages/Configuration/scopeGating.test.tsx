@@ -32,8 +32,8 @@ const POLICIES: ConfigBackupPolicy[] = [
 ];
 const BACKUPS: ConfigBackup[] = [];
 const EVENTS: ConfigDriftEvent[] = [
-  { id: 11, host_id: 40, hostname: 'edge-a', ip_address: '192.0.2.10', status: 'open', diff_text: '-a\n+b\n' },
-  { id: 12, host_id: 50, hostname: 'edge-b', ip_address: '198.51.100.20', status: 'open', diff_text: '-c\n+d\n' },
+  { id: 11, host_id: 40, hostname: 'edge-a', ip_address: '192.0.2.10', status: 'open', diff_key: 'k1' },
+  { id: 12, host_id: 50, hostname: 'edge-b', ip_address: '198.51.100.20', status: 'open', diff_key: 'k2' },
 ];
 const GROUPS = [
   { id: 4, name: 'site-a', hosts: [{ id: 40, hostname: 'edge-a', ip_address: '192.0.2.10' }] },

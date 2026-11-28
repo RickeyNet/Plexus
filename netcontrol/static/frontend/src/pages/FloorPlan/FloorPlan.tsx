@@ -9,14 +9,13 @@ import {
   FloorPlacement,
   GeoFloor,
   GeoSiteSummary,
-  InventoryHost,
   useFloorPlacements,
   useGeoFloor,
   useGeoOverview,
   useGeoSite,
   useGeoSites,
-  useInventoryGroupsWithHosts,
 } from '@/api/floorPlan';
+import { type HostOption, useHostOptions } from '@/api/inventory';
 import { clickableProps } from '@/lib/clickable';
 
 import { FloorCanvas } from './FloorCanvas';
@@ -30,6 +29,8 @@ import { statusColor } from './statusColor';
 import { useConfirmDeleteFloor } from './useConfirmDeleteFloor';
 
 type ModalKind = 'add-site' | 'add-floor' | 'edit-floor' | 'upload-image' | null;
+
+const NO_HOSTS: HostOption[] = [];
 
 export function FloorPlan() {
   const { alert } = useDialogs();
@@ -51,12 +52,8 @@ export function FloorPlan() {
 
   // Only fetch inventory groups when the user enters place-mode, matching the
   // legacy module's lazy load.
-  const inventory = useInventoryGroupsWithHosts(placeMode);
-
-  const allHosts: InventoryHost[] = useMemo(
-    () => (inventory.data ?? []).flatMap((g) => g.hosts ?? []),
-    [inventory.data],
-  );
+  const inventory = useHostOptions(placeMode);
+  const allHosts = inventory.data ?? NO_HOSTS;
 
   const placedIds = useMemo(
     () => new Set((placements.data ?? []).map((p) => p.host_id)),
@@ -375,7 +372,7 @@ function CanvasPanel({
   onUploadImage: () => void;
   onEditFloor: () => void;
   onDeleteFloor: () => void;
-  unplaced: InventoryHost[];
+  unplaced: HostOption[];
   unplacedError: ReactNode;
 }) {
   const breadcrumb = floor
@@ -517,7 +514,7 @@ function UnplacedDevicesSidebar({
   hosts,
   loadError,
 }: {
-  hosts: InventoryHost[];
+  hosts: HostOption[];
   loadError: ReactNode;
 }) {
   return (

@@ -19,7 +19,12 @@ export interface ConfigDriftEvent {
   device_type?: string | null;
   status: 'open' | 'accepted' | 'resolved' | string;
   detected_at?: string | null;
+  /** Only on the single-event read (`useConfigDriftEvent`); the list leaves it out. */
   diff_text?: string | null;
+  /** List rows: characters in the diff. */
+  diff_size?: number;
+  /** List rows: equal for events with the same added and removed lines ("" for no change). */
+  diff_key?: string;
   diff_lines_added?: number;
   diff_lines_removed?: number;
 }

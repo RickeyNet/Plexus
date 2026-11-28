@@ -128,17 +128,34 @@ async def create_monitoring_poll(
     packet_loss_pct: float | None = None,
     icmp_alive: bool | None = None,
     icmp_rtt_ms: float | None = None,
+    details_digest: str | None = None,
 ) -> int:
+    """Store one poll row; returns its id.
+
+    ``details_digest`` identifies the state the detail blobs (``if_details``,
+    ``vpn_details``, ``route_snapshot``) describe. The new row always keeps
+    its blobs, so the newest poll of a host has them. When the host's two
+    previous rows carry the same digest, the newer of them is in the middle
+    of a run of unchanged polls and its blobs are cleared (NULL): every run
+    keeps its first and its last row, and a cleared row is read back from a
+    later row of its run (``get_monitoring_poll_history``)."""
     db = await _dbcore.get_db()
     try:
+        previous: list = []
+        if details_digest:
+            cursor = await db.execute(
+                "SELECT id, details_digest FROM monitoring_polls WHERE host_id = ? ORDER BY id DESC LIMIT 2",
+                (host_id,),
+            )
+            previous = list(await cursor.fetchall())
         cursor = await db.execute(
             """INSERT INTO monitoring_polls
                (host_id, cpu_percent, memory_percent, memory_used_mb, memory_total_mb,
                 uptime_seconds, if_up_count, if_down_count, if_admin_down, if_details,
                 vpn_tunnels_up, vpn_tunnels_down, vpn_details,
                 route_count, route_snapshot, poll_status, poll_error,
-                response_time_ms, packet_loss_pct, icmp_alive, icmp_rtt_ms, polled_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))""",
+                response_time_ms, packet_loss_pct, icmp_alive, icmp_rtt_ms, details_digest, polled_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))""",
             (
                 host_id,
                 cpu_percent,
@@ -161,12 +178,72 @@ async def create_monitoring_poll(
                 packet_loss_pct,
                 None if icmp_alive is None else int(bool(icmp_alive)),
                 icmp_rtt_ms,
+                details_digest,
             ),
         )
+        poll_id = cursor.lastrowid
+        if len(previous) == 2 and previous[0][1] == details_digest and previous[1][1] == details_digest:
+            await db.execute(
+                """UPDATE monitoring_polls SET if_details = NULL, vpn_details = NULL, route_snapshot = NULL
+                   WHERE id = ? AND details_digest = ?""",
+                (previous[0][0], details_digest),
+            )
         await db.commit()
-        return cursor.lastrowid
+        return poll_id
     finally:
         await db.close()
+
+
+def _poll_detail_digests_to_fill(rows: list[dict]) -> set[str]:
+    """Fill the cleared blobs of ``rows`` (newest first) from a row of the
+    page with the same digest; return the digests no page row could fill."""
+    stored: dict[str, dict] = {}
+    for row in rows:
+        if row.get("if_details") is not None and row.get("details_digest"):
+            stored.setdefault(row["details_digest"], row)
+    missing: set[str] = set()
+    for row in rows:
+        row["details_from_poll_id"] = None
+        if row.get("if_details") is not None:
+            continue
+        source = stored.get(row.get("details_digest") or "")
+        if source is None:
+            if row.get("details_digest"):
+                missing.add(row["details_digest"])
+            continue
+        _copy_poll_details(row, source)
+    return missing
+
+
+def _copy_poll_details(row: dict, source: dict) -> None:
+    row["if_details"] = source["if_details"]
+    row["vpn_details"] = source["vpn_details"]
+    row["route_snapshot"] = source["route_snapshot"]
+    row["details_from_poll_id"] = source["id"]
+
+
+async def _fill_poll_details(db, host_id: int, rows: list[dict]) -> None:
+    """Give each row of a history page whose blobs were cleared (a poll in
+    the middle of a run of unchanged ones) the blobs of a row of the same
+    run, which hold the same state; ``details_from_poll_id`` names that row
+    (``None`` on a row that stores its own)."""
+    missing = _poll_detail_digests_to_fill(rows)
+    if not missing:
+        return
+    digests = sorted(missing)
+    marks = ", ".join("?" for _ in digests)
+    # Every run keeps its newest row, so a stored row with the digest exists.
+    cursor = await db.execute(
+        f"""SELECT DISTINCT ON (details_digest) id, details_digest, if_details, vpn_details, route_snapshot
+            FROM monitoring_polls
+            WHERE host_id = ? AND details_digest IN ({marks}) AND if_details IS NOT NULL
+            ORDER BY details_digest, id DESC""",
+        (host_id, *digests),
+    )
+    sources = {r["details_digest"]: r for r in rows_to_list(await cursor.fetchall())}
+    for row in rows:
+        if row.get("if_details") is None and row.get("details_digest") in sources:
+            _copy_poll_details(row, sources[row["details_digest"]])
 
 
 async def get_latest_monitoring_polls(
@@ -222,8 +299,14 @@ async def get_monitoring_poll_history(
 ) -> list[dict]:
     """Poll history for a host, newest first. The large per-poll blobs
     (if_details, vpn_details, route_snapshot) are only selected when
-    include_details is set — history tables just need the lean columns."""
-    detail_cols = ", p.if_details, p.vpn_details, p.route_snapshot" if include_details else ""
+    include_details is set — history tables just need the lean columns.
+
+    A poll in the middle of a run of unchanged polls does not store its
+    blobs; with include_details it gets those of a row of its run (same
+    interface states, VPN details and route snapshot; the interface counters
+    in ``if_details`` are that row's) and ``details_from_poll_id`` names the
+    row. Per-poll interface counters and rates are in ``interface_ts``."""
+    detail_cols = ", p.if_details, p.vpn_details, p.route_snapshot, p.details_digest" if include_details else ""
     db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
@@ -242,6 +325,12 @@ async def get_monitoring_poll_history(
                LIMIT ?""",
             (host_id, limit),
         )
+        if include_details:
+            rows = rows_to_list(await cursor.fetchall())
+            await _fill_poll_details(db, host_id, rows)
+            for row in rows:
+                row.pop("details_digest", None)
+            return rows
         return rows_to_list(await cursor.fetchall())
     finally:
         await db.close()

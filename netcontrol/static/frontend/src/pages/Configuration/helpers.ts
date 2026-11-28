@@ -63,41 +63,23 @@ export function statusColor(status: string | null | undefined): string {
   return 'var(--success)';
 }
 
-// Key a drift on only its changed lines so events with the same logical
-// change group together regardless of host-specific surrounding config.
-// A unified diff carries 3 lines of context around each hunk; that context
-// contains per-host text (interface names, IPs, hostnames), so keying on the
-// full diff splits identical changes apart. Keep only the added/removed lines
-// (excluding the `---`/`+++` file headers, which also start with -/+).
-export function normalizeDiffForGrouping(diffText: string | null | undefined): string {
-  if (!diffText) return '';
-  return diffText
-    .split('\n')
-    .filter(
-      (line) =>
-        (line.startsWith('+') || line.startsWith('-')) &&
-        !line.startsWith('---') &&
-        !line.startsWith('+++'),
-    )
-    .join('\n')
-    .trim();
-}
-
 export interface DriftGroup {
-  diff_text: string | null | undefined;
   diff_lines_added?: number;
   diff_lines_removed?: number;
   events: ConfigDriftEvent[];
+  /** The event whose diff the group card shows. */
   representative_id: number;
 }
 
+// The server keys each listed event on its added and removed lines only
+// (`diff_key`): the context lines of a unified diff carry per-host text, so
+// the same change on several hosts shares a key.
 export function groupDriftEvents(events: ConfigDriftEvent[]): DriftGroup[] {
   const groups = new Map<string, DriftGroup>();
   for (const ev of events) {
-    const key = normalizeDiffForGrouping(ev.diff_text);
+    const key = ev.diff_key ?? '';
     if (!groups.has(key)) {
       groups.set(key, {
-        diff_text: ev.diff_text,
         diff_lines_added: ev.diff_lines_added,
         diff_lines_removed: ev.diff_lines_removed,
         events: [],

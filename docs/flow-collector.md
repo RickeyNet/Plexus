@@ -191,8 +191,32 @@ already queued are decoded and stored first. Packets that arrive while it
 is stopping are dropped and counted the same way.
 
 
-- Raw flow records: 48 hours (configurable via `retention_hours`).
-- Hourly aggregated summaries: 30 days (configurable via
-  `summary_retention_days`).
+- Raw flow records: 48 hours (configurable via `retention_hours`). The
+  flow views read these, so a window longer than the retention shows only
+  what is kept.
+- `flow_summaries`: no longer written. Rows an older release wrote are
+  deleted once they are older than `summary_retention_days` (30 days).
 
-Aggregation runs hourly. See `DATA_RETENTION.md` for details.
+The upkeep cycle runs hourly. See `DATA_RETENTION.md` for details.
+
+### How the views read the records
+
+The Traffic Analysis page, a device's **Flow** tab and the cloud flow tab
+read overview endpoints that take every aggregate a tab shows from one pass
+over the raw records (`GROUPING SETS`), instead of one query per aggregate:
+
+- `GET /api/flows/overview?parts=&hours=&limit=&bucket_minutes=&host_id=`
+  returns `top_src`, `top_dst`, `top_applications`, `top_conversations`,
+  `top_interfaces` and `timeline`, each as the endpoint of that name returns
+  it for the same arguments, plus `hours` and `bucket_minutes`. `parts`
+  (comma-separated names; empty: all) limits it to what a tab shows: the
+  talkers tab asks for `top_src,top_dst`, so both directions come from one
+  scan. The object scope and `host_id` apply to every part.
+- `GET /api/cloud/flow-logs/overview?hours=&limit=&bucket_minutes=&provider=&account_id=`
+  returns `summary`, `top_src`, `top_dst` (the talkers of each direction)
+  and `timeline`.
+
+The single endpoints (`/api/flows/top-talkers` and the others) stay; the
+Dashboard's top talkers panel reads `top-talkers`. Ties in a ranked list
+are broken by the address, port or interface, so a list is the same on
+every read.

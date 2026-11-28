@@ -3,6 +3,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router";
 
 import { useAuthStatus } from "@/api/auth";
+import { invalidateTopologyMaps } from "@/api/topology";
 import {
   useCloudDiscoveryProgress,
   useDiscoverCloudAccount,
@@ -174,7 +175,8 @@ export function SourcesModal({
 
   const refreshMap = () => {
     qc.invalidateQueries({ queryKey: ["meraki"] });
-    qc.invalidateQueries({ queryKey: ["topology"] });
+    // Any source can change any group's map (inventory neighbours, matched hosts).
+    invalidateTopologyMaps(qc);
     qc.invalidateQueries({ queryKey: ["mac-tracking"] });
   };
 

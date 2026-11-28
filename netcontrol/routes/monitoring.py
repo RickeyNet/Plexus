@@ -28,6 +28,7 @@ from pydantic import BaseModel, Field
 
 import netcontrol.routes.state as state
 from netcontrol import device_restart, ha_health, hardware_components, health_checks, monitoring_repoll, snmp_health
+from netcontrol.client_cache import fingerprint
 from netcontrol.drivers import supports_cli
 from netcontrol.executors import run_long_blocking
 from netcontrol.integrations.apc import snmp as apc_snmp
@@ -1200,6 +1201,21 @@ async def _resolve_expired_poll_events() -> int:
     return resolved
 
 
+# Per-poll interface counters: they change on every poll of a busy port and
+# are stored per poll in interface_ts (octets and rates) and as error rate
+# samples, so they are left out of the poll's detail digest.
+_IF_COUNTER_KEYS = frozenset({"in_octets", "out_octets", *(field for field, _metric in db.INTERFACE_ERROR_COUNTERS)})
+
+
+def poll_details_digest(if_details: list[dict], vpn_details: str, route_snapshot: str) -> str:
+    """The state a poll's detail blobs describe: each interface without its
+    counters (index, name, status, speed, ...), the VPN details and the
+    stored route snapshot. Polls with the same digest show the same state,
+    so ``create_monitoring_poll`` keeps the blobs only where it changes."""
+    interfaces = [{k: v for k, v in iface.items() if k not in _IF_COUNTER_KEYS} for iface in if_details or []]
+    return fingerprint(json.dumps(interfaces, sort_keys=True, default=str), vpn_details, route_snapshot)
+
+
 async def _process_poll_result(
     h: dict,
     res: dict,
@@ -1227,6 +1243,8 @@ async def _process_poll_result(
             monitoring_repoll.mark_hardware_stale(res["host_id"])
 
     # Store poll result
+    vpn_details = json.dumps(res["vpn_details"])
+    route_snapshot = res["route_snapshot"][:5000]
     poll_id = await db.create_monitoring_poll(
         host_id=res["host_id"],
         cpu_percent=res["cpu_percent"],
@@ -1240,15 +1258,16 @@ async def _process_poll_result(
         if_details=json.dumps(res["if_details"]),
         vpn_tunnels_up=res["vpn_tunnels_up"],
         vpn_tunnels_down=res["vpn_tunnels_down"],
-        vpn_details=json.dumps(res["vpn_details"]),
+        vpn_details=vpn_details,
         route_count=res["route_count"],
-        route_snapshot=res["route_snapshot"][:5000],
+        route_snapshot=route_snapshot,
         poll_status=res["poll_status"],
         poll_error=res["poll_error"],
         response_time_ms=res.get("response_time_ms"),
         packet_loss_pct=res.get("packet_loss_pct"),
         icmp_alive=res.get("icmp_alive"),
         icmp_rtt_ms=res.get("icmp_rtt_ms"),
+        details_digest=poll_details_digest(res["if_details"], vpn_details, route_snapshot),
     )
 
     # ── Vendor state: an APC UPS's newest state and identity ──

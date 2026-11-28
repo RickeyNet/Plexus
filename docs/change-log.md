@@ -48,7 +48,7 @@ and the VRF name rewritten on prefixes and addresses when a VRF is renamed
 | `action` | `create`, `update` or `delete` |
 | `user` | Who made the change; `system` for background work, `api-token` for the server API token |
 | `changed_at` | UTC time, `YYYY-MM-DD HH:MM:SS` |
-| `correlation_id` | The request's `X-Correlation-ID` (sent by the client or generated); use it to find the request in the server logs and the audit log. Empty for background work |
+| `correlation_id` | The request's `X-Correlation-ID` (the client's when it is 1 to 128 letters, digits, `.`, `_`, `:` or `-`, else generated); use it to find the request in the server logs and the audit log. Empty for background work |
 | `object_label` | The object's name at the time (hostname, group name, subnet, address, `vid name` of a VLAN, VRF name). It stays readable after the object is deleted |
 | `changes` | For an update: `{"field": {"before": x, "after": y}}` for each changed field |
 | `before`, `after` | The object before and after the change: `before` is empty for a create, `after` for a delete |

@@ -66,12 +66,6 @@ export interface ComplianceFinding {
   remediation?: string[];
 }
 
-export interface InventoryGroup {
-  id: number;
-  name: string;
-  hosts?: { id: number; hostname: string; ip_address: string }[];
-}
-
 export interface Credential {
   id: number;
   name: string;
@@ -195,14 +189,8 @@ export function useComplianceHostStatus() {
   });
 }
 
-export function useInventoryGroups(includeHosts = false, enabled = true) {
-  return useQuery<InventoryGroup[]>({
-    queryKey: ['inventory-groups', includeHosts],
-    queryFn: ({ signal }) =>
-      apiRequest(includeHosts ? '/inventory?include_hosts=true' : '/inventory', { signal }),
-    enabled,
-  });
-}
+/** The inventory group listing (api/inventory owns the query and its key). */
+export { useInventoryGroups } from './inventory';
 
 export function useCredentials() {
   return useQuery<Credential[]>({

@@ -373,6 +373,7 @@ export function useFlowStatus(enabled = true) {
   });
 }
 
+/** One direction's talkers alone (the Dashboard panel); pages with several flow views use `useFlowViewTalkers`. */
 export function useFlowTopTalkers(args: {
   hours: number;
   direction: FlowDirection;
@@ -393,70 +394,83 @@ export function useFlowTopTalkers(args: {
   });
 }
 
-export function useFlowTopApplications(args: {
+/** Flow views of one window from GET /api/flows/overview (the `parts` asked for). */
+export interface FlowOverview {
+  top_src?: FlowTalker[];
+  top_dst?: FlowTalker[];
+  top_applications?: FlowApplication[];
+  top_conversations?: FlowConversation[];
+  top_interfaces?: FlowInterface[];
+  timeline?: FlowTimelinePoint[];
   hours: number;
-  hostId?: number | null;
-  limit?: number;
-}) {
-  const { hours, hostId, limit = 15 } = args;
-  return useQuery({
-    queryKey: ['flows', 'top-applications', hours, limit, hostId ?? null],
-    queryFn: ({ signal }) =>
-      apiRequest<FlowApplication[]>(
-        withHost(`/flows/top-applications?hours=${hours}&limit=${limit}`, hostId),
-        { signal },
-      ),
-  });
+  bucket_minutes: number;
 }
 
-export function useFlowTopConversations(args: {
-  hours: number;
-  hostId?: number | null;
-  limit?: number;
-}) {
-  const { hours, hostId, limit = 15 } = args;
-  return useQuery({
-    queryKey: ['flows', 'top-conversations', hours, limit, hostId ?? null],
-    queryFn: ({ signal }) =>
-      apiRequest<FlowConversation[]>(
-        withHost(`/flows/top-conversations?hours=${hours}&limit=${limit}`, hostId),
-        { signal },
-      ),
-  });
+type FlowOverviewPart = Exclude<keyof FlowOverview, 'hours' | 'bucket_minutes'>;
+
+/** Rows per ranked flow view (talkers, applications, conversations, interfaces). */
+const FLOW_VIEW_LIMIT = 15;
+
+/** Timeline bucket for a window: tighter for short windows, coarser for long ones. */
+export function flowBucketMinutes(hours: number): number {
+  return hours <= 1 ? 1 : hours <= 6 ? 5 : 15;
 }
 
-export function useFlowTopInterfaces(args: {
+interface FlowViewArgs {
   hours: number;
   hostId?: number | null;
-  limit?: number;
-}) {
-  const { hours, hostId, limit = 15 } = args;
-  return useQuery({
-    queryKey: ['flows', 'top-interfaces', hours, limit, hostId ?? null],
-    queryFn: ({ signal }) =>
-      apiRequest<FlowInterface[]>(
-        withHost(`/flows/top-interfaces?hours=${hours}&limit=${limit}`, hostId),
-        { signal },
-      ),
-  });
 }
 
-export function useFlowTimeline(args: { hours: number; hostId?: number | null }) {
-  const { hours, hostId } = args;
-  // Match the bucket-size logic in the legacy module so timeline shape stays
-  // consistent: tighter bucketing for short windows, coarser for long ones.
-  const bucketMinutes = hours <= 1 ? 1 : hours <= 6 ? 5 : 15;
+/**
+ * The `parts` of the flow overview one sub-tab of the Traffic Analysis or
+ * device Flow page shows, in one request (one scan of the flow records on
+ * the server): both talker directions come together, so switching the
+ * direction needs no new request, and no tab pays for another tab's views.
+ */
+function useFlowOverview<T>(
+  { hours, hostId }: FlowViewArgs,
+  parts: FlowOverviewPart[],
+  select: (overview: FlowOverview) => T,
+) {
+  const bucketMinutes = flowBucketMinutes(hours);
+  const partList = parts.join(',');
   return useQuery({
-    queryKey: ['flows', 'timeline', hours, bucketMinutes, hostId ?? null],
+    queryKey: ['flows', 'overview', partList, hours, bucketMinutes, FLOW_VIEW_LIMIT, hostId ?? null],
     queryFn: ({ signal }) =>
-      apiRequest<FlowTimelinePoint[]>(
+      apiRequest<FlowOverview>(
         withHost(
-          `/flows/timeline?hours=${hours}&bucket_minutes=${bucketMinutes}`,
+          `/flows/overview?parts=${partList}&hours=${hours}&limit=${FLOW_VIEW_LIMIT}&bucket_minutes=${bucketMinutes}`,
           hostId,
         ),
         { signal },
       ),
+    select,
   });
+}
+
+const TALKER_PARTS: FlowOverviewPart[] = ['top_src', 'top_dst'];
+
+export function useFlowViewTalkers(args: FlowViewArgs & { direction: FlowDirection }) {
+  const { direction } = args;
+  return useFlowOverview(args, TALKER_PARTS, (o) =>
+    (direction === 'src' ? o.top_src : o.top_dst) ?? [],
+  );
+}
+
+export function useFlowTopApplications(args: FlowViewArgs) {
+  return useFlowOverview(args, ['top_applications'], (o) => o.top_applications ?? []);
+}
+
+export function useFlowTopConversations(args: FlowViewArgs) {
+  return useFlowOverview(args, ['top_conversations'], (o) => o.top_conversations ?? []);
+}
+
+export function useFlowTopInterfaces(args: FlowViewArgs) {
+  return useFlowOverview(args, ['top_interfaces'], (o) => o.top_interfaces ?? []);
+}
+
+export function useFlowTimeline(args: FlowViewArgs) {
+  return useFlowOverview(args, ['timeline'], (o) => o.timeline ?? []);
 }
 
 export function useFlowExporters() {

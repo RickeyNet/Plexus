@@ -36,18 +36,20 @@ __all__ = [
 # ═════════════════════════════════════════════════════════════════════════════
 
 
-# Serializes audit-event inserts within this process so concurrent writers
-# cannot fork the hash chain. On Postgres an advisory lock (below) extends
-# the same guarantee across worker processes.
+# Serializes audit-event inserts within this process. The advisory lock
+# below is what keeps the chain linear; this lock queues this process's
+# writers in memory, so N concurrent audit writes hold one pooled
+# connection instead of N connections all blocked on the advisory lock.
 _audit_chain_lock = asyncio.Lock()
 
-# Session-scoped Postgres advisory lock key for chain writes. The asyncio
-# lock above cannot stop a second worker process from reading the same
-# chain tail; every writer takes this advisory lock around the tail-read +
-# insert instead. Session-scoped (not xact-scoped) because the compat
-# layer runs autocommit, so there is no surrounding transaction to bind an
-# xact lock to. asyncpg's pool reset releases advisory locks when the
-# connection is returned, so a dropped connection cannot strand the lock.
+# Postgres advisory lock key for chain writes, so writers in other processes
+# cannot read the same chain tail. Normally taken transaction-scoped
+# (``pg_advisory_xact_lock``) inside the transaction that inserts the row,
+# so COMMIT or ROLLBACK releases it with no unlock round trip and the next
+# writer reads the tail only after this row is committed. When the caller
+# already has a transaction open on the connection, that transaction may
+# outlive this function, so the session lock is taken and released
+# explicitly instead.
 _AUDIT_CHAIN_PG_LOCK_KEY = 0x506C_6578_4155_4454  # "PlexAUDT"
 
 
@@ -212,33 +214,43 @@ async def add_audit_event(
 
     async with _audit_chain_lock:
         conn = await _dbcore.get_db()
+        # See _AUDIT_CHAIN_PG_LOCK_KEY for why the lock scope depends on this.
+        session_lock = conn.in_transaction
         pg_locked = False
         try:
-            await conn.execute("SELECT pg_advisory_lock(?)", (_AUDIT_CHAIN_PG_LOCK_KEY,))
-            pg_locked = True
-            cursor = await conn.execute("SELECT row_hash FROM audit_events ORDER BY id DESC LIMIT 1")
-            tail = await cursor.fetchone()
-            prev_hash = (tail[0] if tail else "") or ""
+            # One unit: BEGIN, lock, tail read, insert, COMMIT with no
+            # per-statement savepoints. The lock and the tail read must be
+            # separate statements: a statement's snapshot is taken before
+            # it waits for the lock, so a combined one could read a stale tail.
+            async with conn.atomic():
+                if session_lock:
+                    await conn.execute("SELECT pg_advisory_lock(?)", (_AUDIT_CHAIN_PG_LOCK_KEY,))
+                    pg_locked = True
+                else:
+                    await conn.execute("SELECT pg_advisory_xact_lock(?)", (_AUDIT_CHAIN_PG_LOCK_KEY,))
+                cursor = await conn.execute("SELECT row_hash FROM audit_events ORDER BY id DESC LIMIT 1")
+                tail = await cursor.fetchone()
+                prev_hash = (tail[0] if tail else "") or ""
 
-            row_hash = _audit_row_hash(timestamp, category, action, user, detail, correlation_id, prev_hash)
+                row_hash = _audit_row_hash(timestamp, category, action, user, detail, correlation_id, prev_hash)
 
-            cursor = await conn.execute(
-                """INSERT INTO audit_events
-                   (timestamp, category, action, "user", detail, correlation_id,
-                    prev_hash, row_hash)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    timestamp,
-                    category,
-                    action,
-                    user,
-                    detail,
-                    correlation_id,
-                    prev_hash,
-                    row_hash,
-                ),
-            )
-            new_id = cursor.lastrowid
+                cursor = await conn.execute(
+                    """INSERT INTO audit_events
+                       (timestamp, category, action, "user", detail, correlation_id,
+                        prev_hash, row_hash)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        timestamp,
+                        category,
+                        action,
+                        user,
+                        detail,
+                        correlation_id,
+                        prev_hash,
+                        row_hash,
+                    ),
+                )
+                new_id = cursor.lastrowid
             await conn.commit()
         finally:
             if pg_locked:

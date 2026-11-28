@@ -1,17 +1,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router';
-import { DataSet, Network } from 'vis-network/standalone';
-import type { Edge as VisEdge, Node as VisNode } from 'vis-network';
+import type { DataSet, Network } from 'vis-network/standalone';
+import type { Edge as VisEdge, Node as VisNode, Options as VisOptions } from 'vis-network';
 
 import {
   fetchTopologyChanges,
   fetchTopologyStpEvents,
   fetchTopologyStpState,
+  invalidateTopologyGroupMaps,
   openUtilizationStream,
+  topologyMapKey,
+  topologyOverlayStatusKey,
   useDeleteTopologyPositions,
   useDiscoverTopologyStp,
-  useInventoryGroupsLite,
   useSaveTopologyPositions,
   useTopology,
   useTopologyOverlayStatus,
@@ -25,7 +27,7 @@ import {
   type TopologyNode,
   type UtilizationStreamEdge,
 } from '@/api/topology';
-import { groupLabel } from '@/api/inventory';
+import { groupLabel, useInventoryGroups } from '@/api/inventory';
 import { topologyExportUrl, useMerakiSubnets, usePathAppSuggestions, useTopologyDeepSearch, type MerakiSubnet, type TopologyExportPath } from '@/api/meraki';
 import { useRecordToolHistory } from '@/api/toolHistory';
 import { useDialogs } from '@/components/DialogProvider-context';
@@ -83,6 +85,7 @@ import {
   type TopoThemeColors,
 } from './helpers';
 import { crowdedGroups, fitTitles, labelWidth, siteBoxName, straighten, tidyLabel, tidyTree, type XY } from './layout';
+import { TopologyNetwork, seedPosition } from './networkSync';
 import { distanceToRoute, routeSourceLinks, traceRoute } from './routes';
 import { EdgeDetails } from './EdgeDetails';
 import { MAX_PATH_ENDPOINTS, appCandidate, appOptions, appPick, connectPicks, findNamedHosts, findSubnets, hostAddress, isAddressText, pickEnd, pickNodes, suggestHosts, parseTraffic, pathModeHint, pathSites, subnetOptionLabel, subnetPick, userPick, type PathPick } from './paths';
@@ -115,6 +118,24 @@ interface NodeMeta {
 interface EdgeMeta {
   raw: TopologyEdge;
   roundness: number;
+}
+
+// What vis-network passes the click, drag and context-menu handlers.
+interface MapPointerParams {
+  nodes: (number | string)[];
+  edges: (number | string)[];
+  pointer: { canvas: XY };
+  event: Event;
+}
+
+// The map's event handlers, bound once per vis-network instance and read
+// through a ref, so they always see the current render's data and state.
+interface MapHandlers {
+  click(params: MapPointerParams): void;
+  dragging(params: MapPointerParams): void;
+  dragEnd(params: MapPointerParams): void;
+  context(params: MapPointerParams): void;
+  draw(ctx: CanvasRenderingContext2D): void;
 }
 
 interface SearchResult {
@@ -236,6 +257,9 @@ export function Topology() {
   const [tunnelPref, setTunnelPref] = useState<boolean | null>(null);
 
   const containerRef = useRef<HTMLDivElement | null>(null);
+  // The vis-network instance lives as long as the view (group and layout);
+  // a data refresh is diffed into its DataSets.
+  const mapRef = useRef<TopologyNetwork | null>(null);
   const networkRef = useRef<Network | null>(null);
   const nodesDSRef = useRef<DataSet<VisNode> | null>(null);
   const edgesDSRef = useRef<DataSet<VisEdge> | null>(null);
@@ -244,7 +268,6 @@ export function Topology() {
   const stpStateRef = useRef<Map<string, StpState>>(new Map());
   const originalColorsRef = useRef<{ nodes: [number | string, unknown][]; edges: [number | string, unknown][] } | null>(null);
   const savePosTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const utilCleanupRef = useRef<(() => void) | null>(null);
   const nodeMetaRef = useRef<Map<number | string, NodeMeta>>(new Map());
   const edgeMetaRef = useRef<Map<number | string, EdgeMeta>>(new Map());
   const flashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -292,7 +315,7 @@ export function Topology() {
   const groupId = groupFilter ? parseInt(groupFilter, 10) : null;
   const topologyQuery = useTopology(groupId);
   const positionsQuery = useTopologyPositions();
-  const groupsQuery = useInventoryGroupsLite();
+  const groupsQuery = useInventoryGroups();
   const savePositions = useSaveTopologyPositions();
   const deletePositions = useDeleteTopologyPositions();
   const stpScan = useDiscoverTopologyStp();
@@ -359,7 +382,15 @@ export function Topology() {
       .catch(() => {});
   }, []);
 
-  // Build / rebuild network when data + positions ready, or layout changes.
+  // The view: a new group or layout builds a new vis-network instance; any
+  // other change (a refresh, a filter) is diffed into the one drawn.
+  const viewKey = `${groupId ?? 'all'}|${layout}`;
+  // A filter change keeps the instance but fits the view to what is left.
+  const filterKey = `${activeFilter}|${showEndDevices}`;
+  const fittedFilterRef = useRef(filterKey);
+
+  // Draw the map once the data and the saved positions are in, and on every
+  // change to either, to the layout or to the group.
   useEffect(() => {
     if (!data || !positions || !containerRef.current) return;
     if (!data.nodes.length) {
@@ -370,35 +401,34 @@ export function Topology() {
     // the position it was pinned at under the id it had before.
     Object.assign(savedPositionsRef.current, carriedPositions(data.nodes, savedPositionsRef.current));
     // The live copy, not the query's: it has the nodes moved since the page opened.
-    renderGraph(data, savedPositionsRef.current, layout);
-    return () => {
-      // do not destroy here - destroy only on unmount
-    };
+    const created = renderGraph(data, savedPositionsRef.current, layout, viewKey);
+    const refit = !created && fittedFilterRef.current !== filterKey;
+    fittedFilterRef.current = filterKey;
+    if (refit) setTimeout(() => fitView(300), 50);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data, positions, layout]);
+  }, [data, positions, layout, viewKey]);
 
   // Cleanup on unmount.
   useEffect(() => {
     return () => {
-      if (utilCleanupRef.current) utilCleanupRef.current();
       if (savePosTimerRef.current) clearTimeout(savePosTimerRef.current);
       destroyNetwork();
     };
   }, []);
 
-  // Util overlay stream.
+  // Util overlay stream. It reads the latest data through a ref, since the
+  // stream outlives the render that opened it; the stream itself closes
+  // while the tab is hidden.
+  const applyUtilizationRef = useRef<(edges: UtilizationStreamEdge[]) => void>(() => {});
+  applyUtilizationRef.current = applyUtilizationUpdate;
   useEffect(() => {
-    if (utilOverlay) {
-      utilCleanupRef.current = openUtilizationStream(30, applyUtilizationUpdate);
-    } else if (utilCleanupRef.current) {
-      utilCleanupRef.current();
-      utilCleanupRef.current = null;
-    }
+    if (!utilOverlay) return;
+    return openUtilizationStream(30, (edges) => applyUtilizationRef.current(edges));
+  }, [utilOverlay]);
+
+  useEffect(() => {
     refreshEdgeStyles();
     refreshNodeStyles();
-    return () => {
-      // cleanup handled by next toggle / unmount
-    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [utilOverlay]);
 
@@ -509,12 +539,12 @@ export function Topology() {
   }, [spacing, repulsion, edgeLen]);
 
   function destroyNetwork() {
-    if (networkRef.current) {
-      networkRef.current.destroy();
-      networkRef.current = null;
-    }
+    mapRef.current?.destroy();
+    networkRef.current = null;
     nodesDSRef.current = null;
     edgesDSRef.current = null;
+    // Highlight colours saved from the instance destroyed mean nothing to the next.
+    originalColorsRef.current = null;
   }
 
   function flash(msg: string) {
@@ -603,7 +633,7 @@ export function Topology() {
     const node: VisNode = {
       id: n.id as never,
       label: tidyPosRef.current ? tidyLabel(n.label) : n.label,
-      title: nodeTitle(n),
+      title: nodeTooltip(n),
       shape: iconUrl ? 'circularImage' : nodeShapeOf(n),
       image: iconUrl,
       color: overlay.color,
@@ -854,12 +884,26 @@ export function Topology() {
     crowdedSitesRef.current = crowdedGroups(placed, frame.padX, frame.padY);
   }
 
-  function renderGraph(d: typeof data, savedPos: Record<string, { x: number; y: number }>, mode: LayoutMode) {
-    if (!d || !containerRef.current) return;
+  // Draw `d`: a new vis-network instance when the view key (group and layout)
+  // changed, otherwise the changes only, into the instance drawn, which keeps
+  // its viewport, selection, dragged nodes and settled layout. Returns
+  // whether a new instance was built.
+  function renderGraph(
+    d: typeof data,
+    savedPos: Record<string, { x: number; y: number }>,
+    mode: LayoutMode,
+    viewKey: string,
+  ): boolean {
+    const container = containerRef.current;
+    if (!d || !container) return false;
+    const map = (mapRef.current ??= new TopologyNetwork());
+    const reuse = map.keeps(container, viewKey);
     themeRef.current = getTopoThemeColors();
     const isTidy = mode === 'tidy';
+    const wasLarge = largeMapRef.current;
     const large = d.nodes.length > LARGE_MAP_NODES || d.edges.length > LARGE_MAP_EDGES;
     largeMapRef.current = large;
+    const previousTidy = tidyPosRef.current;
     const tidy = isTidy ? tidyTree(d.nodes, d.edges) : null;
     tidyPosRef.current = tidy?.positions ?? null;
     tidyPiecesRef.current = tidy?.pieces ?? new Map();
@@ -897,142 +941,90 @@ export function Topology() {
       d.nodes.length > 0 && d.nodes.every((n) => savedPos[String(n.id)] || (n.x != null && n.y != null));
     const usePhysics = mode === 'physics' && !allPinned;
 
-    const circularXYMap = new Map<number | string, { x: number; y: number }>();
-    if (isCircular) {
-      const radius = Math.max(200, d.nodes.length * 35);
-      d.nodes.forEach((n, i) => {
-        if (!savedPos[String(n.id)]) {
-          const angle = (2 * Math.PI * i) / d.nodes.length - Math.PI / 2;
-          circularXYMap.set(n.id, {
-            x: Math.round(radius * Math.cos(angle)),
-            y: Math.round(radius * Math.sin(angle)),
-          });
-        }
-      });
-    }
+    // Where nodes go that have no saved, tidy or pre-arranged place: round a
+    // circle in a new circular layout; next to their neighbours when added
+    // to a map already drawn, so the rest of the map stays where it is.
+    const placeXY = reuse
+      ? isTidy ? new Map<number | string, XY>() : seededPlaces(d, savedPos)
+      : isCircular ? circlePlaces(d, savedPos) : new Map<number | string, XY>();
 
-    const nodes = new DataSet<VisNode>(d.nodes.map((n) => buildVisNode(n, savedPos, circularXYMap.get(n.id))));
-    const edges = new DataSet<VisEdge>(d.edges.map((e) => {
-      const meta = edgeMetaRef.current.get(e.id);
-      return buildVisEdge(e, meta?.roundness ?? 0.4);
-    }));
+    const visNodes = d.nodes.map((n) => buildVisNode(n, savedPos, placeXY.get(n.id)));
+    const visEdges = d.edges.map((e) => buildVisEdge(e, edgeMetaRef.current.get(e.id)?.roundness ?? 0.4));
 
-    let layoutConfig: Record<string, unknown> = {};
-    if (isHier) {
-      const direction = mode.split('-')[1];
-      layoutConfig = {
-        hierarchical: { direction, sortMethod: 'hubsize', nodeSpacing: spacing, levelSeparation: 180 },
-      };
-    }
-
-    const options = {
-      nodes: { brokenImage: '/static/img/topo/unknown.svg' },
-      physics: {
-        enabled: isCircular || isTidy ? false : usePhysics,
-        barnesHut: {
-          gravitationalConstant: -repulsion,
-          centralGravity: 0.15,
-          springLength: edgeLen,
-          springConstant: 0.025,
-          damping: 0.12,
-          avoidOverlap: 0.5,
+    const created = map.show(container, viewKey, visNodes, visEdges, () => {
+      let layoutConfig: Record<string, unknown> = {};
+      if (isHier) {
+        const direction = mode.split('-')[1];
+        layoutConfig = {
+          hierarchical: { direction, sortMethod: 'hubsize', nodeSpacing: spacing, levelSeparation: 180 },
+        };
+      }
+      const options: VisOptions = {
+        nodes: { brokenImage: '/static/img/topo/unknown.svg' },
+        physics: {
+          enabled: isCircular || isTidy ? false : usePhysics,
+          barnesHut: {
+            gravitationalConstant: -repulsion,
+            centralGravity: 0.15,
+            springLength: edgeLen,
+            springConstant: 0.025,
+            damping: 0.12,
+            avoidOverlap: 0.5,
+          },
+          stabilization: { iterations: 300, updateInterval: 20 },
         },
-        stabilization: { iterations: 300, updateInterval: 20 },
-      },
-      interaction: {
-        // Links stay drawn while panning and zooming, even on a large map:
-        // without the glow they are cheap, and a map that blinks its links
-        // out on every scroll is harder to follow than one a little slower.
-        hover: !large,
-        tooltipDelay: 150,
-        navigationButtons: false,
-        keyboard: { enabled: true },
-        zoomSpeed: 0.6,
-      },
-      layout: { improvedLayout: !large, ...layoutConfig },
-      edges: { smooth: { enabled: true, type: 'continuous', roundness: 0.4 } },
-    };
-
-    if (networkRef.current) networkRef.current.destroy();
-    networkRef.current = new Network(containerRef.current, { nodes, edges }, options);
-    nodesDSRef.current = nodes;
-    edgesDSRef.current = edges;
-
-    networkRef.current.on('click', (params) => {
-      if (pathModeRef.current) {
-        if (params.nodes.length > 0) togglePathPick(nodePick(params.nodes[0]));
-        return;
-      }
-      if (params.nodes.length > 0) {
-        const meta = nodeMetaRef.current.get(params.nodes[0]);
-        if (meta) setDetailsNode(meta.raw);
-        setDetailsEdge(null);
-      } else if (params.edges.length > 0) {
-        // Edge-only click: open the edge details panel.
-        const edgeId = params.edges[0];
-        const meta = edgeMetaRef.current.get(edgeId);
-        if (meta) setDetailsEdge(meta.raw);
-        setDetailsNode(null);
-      } else {
-        // vis does not know the routed links (between sources, on a comb).
-        const routed = routeAt(params.pointer.canvas);
-        const meta = routed != null ? edgeMetaRef.current.get(routed) : undefined;
-        setDetailsNode(null);
-        setDetailsEdge(meta ? meta.raw : null);
-      }
+        interaction: {
+          // Links stay drawn while panning and zooming, even on a large map:
+          // without the glow they are cheap, and a map that blinks its links
+          // out on every scroll is harder to follow than one a little slower.
+          hover: !large,
+          tooltipDelay: 150,
+          navigationButtons: false,
+          keyboard: { enabled: true },
+          zoomSpeed: 0.6,
+        },
+        layout: { improvedLayout: !large, ...layoutConfig },
+        edges: { smooth: { enabled: true, type: 'continuous', roundness: 0.4 } },
+      };
+      return options;
     });
+    const parts = map.current!;
+    const network = parts.network;
+    networkRef.current = network;
+    nodesDSRef.current = parts.nodes;
+    edgesDSRef.current = parts.edges;
 
-    refreshCrowdedSites();
-    networkRef.current.on('beforeDrawing', drawMerakiSites);
-    networkRef.current.on('dragging', (params) => {
-      // A node is being moved: its site frame has to follow.
-      if (params.nodes.length) siteBoxesRef.current = null;
-    });
-
-    networkRef.current.on('dragEnd', (params) => {
-      if (!params.nodes.length) return;
-      const network = networkRef.current!;
-      const positionsAfter = network.getPositions(params.nodes);
-      const updates: Record<string, { x: number; y: number }> = {};
-      for (const nid of params.nodes) {
-        const pos = positionsAfter[nid];
-        if (!pos) continue;
-        const key = String(nid);
-        updates[key] = { x: Math.round(pos.x), y: Math.round(pos.y) };
-        savedPositionsRef.current[key] = updates[key];
-        nodes.update({ id: nid, fixed: { x: true, y: true }, physics: false } as never);
-      }
-      schedulePositionSave(updates);
-      refreshCrowdedSites();
-    });
-
-    networkRef.current.on('oncontext', (params) => {
-      params.event.preventDefault();
-      if (!params.nodes || !params.nodes.length) return;
-      const nid = params.nodes[0];
-      const key = String(nid);
-      if (savedPositionsRef.current[key]) {
-        // With the ids the node had before it was a host, or the position
-        // pinned under one of them would be carried over again.
-        const raw = nodeMetaRef.current.get(nid)?.raw;
-        const cleared = [key, ...(raw ? formerNodeIds(raw) : []).filter((id) => savedPositionsRef.current[id])];
-        for (const id of cleared) delete savedPositionsRef.current[id];
-        const home = tidyPosRef.current?.get(nid);
-        if (home) {
-          // Tidy layout: an unpinned node goes back to its place in the tree.
-          nodes.update({ id: nid, x: home.x, y: home.y, fixed: false, physics: false } as never);
-          refreshCrowdedSites();
-        } else {
-          nodes.update({ id: nid, fixed: false, physics: true } as never);
+    if (!created) {
+      if (large !== wasLarge) network.setOptions({ interaction: { hover: !large } });
+      if (tidy) {
+        // The tidy tree is worked out from the whole graph: a node or link
+        // added or removed moves the nodes the tree places (not those pinned).
+        const moves: VisNode[] = [];
+        for (const [id, at] of tidy.positions) {
+          const before = previousTidy?.get(id);
+          if (savedPos[String(id)] || (before && before.x === at.x && before.y === at.y)) continue;
+          moves.push({ id: id as never, x: at.x, y: at.y });
         }
-        savePositions.mutate(Object.fromEntries(cleared.map((id) => [id, null])));
-        flash('Node unpinned');
+        if (moves.length) parts.nodes.update(moves);
       }
-    });
+      refreshCrowdedSites();
+      // A highlight dims colours the refresh may just have replaced: it is
+      // dropped (a path is drawn again by its own effect).
+      if (originalColorsRef.current) restoreOriginalColors();
+      network.redraw();
+      return false;
+    }
+
+    // Bound once per instance; the handlers are read through the ref.
+    network.on('click', (params: MapPointerParams) => mapHandlersRef.current.click(params));
+    network.on('dragging', (params: MapPointerParams) => mapHandlersRef.current.dragging(params));
+    network.on('dragEnd', (params: MapPointerParams) => mapHandlersRef.current.dragEnd(params));
+    network.on('oncontext', (params: MapPointerParams) => mapHandlersRef.current.context(params));
+    network.on('beforeDrawing', (ctx: CanvasRenderingContext2D) => mapHandlersRef.current.draw(ctx));
+    refreshCrowdedSites();
 
     if (isHier) {
-      networkRef.current.once('stabilizationIterationsDone', () => {
-        const network = networkRef.current!;
+      network.once('stabilizationIterationsDone', () => {
         const computedPos = network.getPositions();
         const nodeUpdates: VisNode[] = [];
         for (const [nid, pos] of Object.entries(computedPos)) {
@@ -1041,18 +1033,140 @@ export function Topology() {
             nodeUpdates.push({ id: idVal as never, x: pos.x, y: pos.y } as VisNode);
           }
         }
-        if (nodeUpdates.length) nodes.update(nodeUpdates);
+        if (nodeUpdates.length) parts.nodes.update(nodeUpdates);
         network.setOptions({ layout: { hierarchical: { enabled: false } }, physics: { enabled: false } });
         fitView(500);
       });
     } else if (usePhysics) {
-      networkRef.current.once('stabilizationIterationsDone', () => fitView(500));
+      network.once('stabilizationIterationsDone', () => fitView(500));
     } else if (allPinned || isCircular || isTidy) {
       setTimeout(() => fitView(300), 50);
     } else if (pendingFocusRef.current != null) {
       setTimeout(() => fitView(300), 50);
     }
+    return true;
   }
+
+  // Circular layout: every node without a saved place, round one circle.
+  function circlePlaces(d: TopologyData, savedPos: Record<string, XY>): Map<number | string, XY> {
+    const places = new Map<number | string, XY>();
+    const radius = Math.max(200, d.nodes.length * 35);
+    d.nodes.forEach((n, i) => {
+      if (savedPos[String(n.id)]) return;
+      const angle = (2 * Math.PI * i) / d.nodes.length - Math.PI / 2;
+      places.set(n.id, { x: Math.round(radius * Math.cos(angle)), y: Math.round(radius * Math.sin(angle)) });
+    });
+    return places;
+  }
+
+  // A map already drawn: each node not on it yet (and with no saved place)
+  // starts next to its neighbours as they are drawn now, or as just seeded.
+  function seededPlaces(d: TopologyData, savedPos: Record<string, XY>): Map<number | string, XY> {
+    const places = new Map<number | string, XY>();
+    const map = mapRef.current;
+    const network = map?.current?.network;
+    if (!map || !network) return places;
+    const fresh = d.nodes.filter((n) => !map.hasNode(n.id) && !savedPos[String(n.id)]);
+    if (!fresh.length) return places;
+    const live = network.getPositions();
+    const neighbours = new Map<number | string, (number | string)[]>();
+    for (const e of d.edges) {
+      for (const [a, b] of [[e.from, e.to], [e.to, e.from]]) {
+        const list = neighbours.get(a);
+        if (list) list.push(b);
+        else neighbours.set(a, [b]);
+      }
+    }
+    fresh.forEach((n, ordinal) => {
+      const around = (neighbours.get(n.id) ?? []).flatMap((id) => {
+        const at = places.get(id) ?? live[id as never];
+        return at ? [{ x: at.x, y: at.y }] : [];
+      });
+      const at = seedPosition(around, ordinal);
+      if (at) places.set(n.id, at);
+    });
+    return places;
+  }
+
+  // ── Map event handlers (bound once per instance, see renderGraph) ──────
+
+  function handleMapClick(params: MapPointerParams) {
+    if (pathModeRef.current) {
+      if (params.nodes.length > 0) togglePathPick(nodePick(params.nodes[0]));
+      return;
+    }
+    if (params.nodes.length > 0) {
+      const meta = nodeMetaRef.current.get(params.nodes[0]);
+      if (meta) setDetailsNode(meta.raw);
+      setDetailsEdge(null);
+    } else if (params.edges.length > 0) {
+      // Edge-only click: open the edge details panel.
+      const meta = edgeMetaRef.current.get(params.edges[0]);
+      if (meta) setDetailsEdge(meta.raw);
+      setDetailsNode(null);
+    } else {
+      // vis does not know the routed links (between sources, on a comb).
+      const routed = routeAt(params.pointer.canvas);
+      const meta = routed != null ? edgeMetaRef.current.get(routed) : undefined;
+      setDetailsNode(null);
+      setDetailsEdge(meta ? meta.raw : null);
+    }
+  }
+
+  function handleMapDragEnd(params: MapPointerParams) {
+    const network = networkRef.current;
+    const nodesDS = nodesDSRef.current;
+    if (!params.nodes.length || !network || !nodesDS) return;
+    const positionsAfter = network.getPositions(params.nodes);
+    const updates: Record<string, { x: number; y: number }> = {};
+    for (const nid of params.nodes) {
+      const pos = positionsAfter[nid];
+      if (!pos) continue;
+      const key = String(nid);
+      updates[key] = { x: Math.round(pos.x), y: Math.round(pos.y) };
+      savedPositionsRef.current[key] = updates[key];
+      nodesDS.update({ id: nid, fixed: { x: true, y: true }, physics: false } as never);
+    }
+    schedulePositionSave(updates);
+    refreshCrowdedSites();
+  }
+
+  function handleMapContext(params: MapPointerParams) {
+    params.event.preventDefault();
+    const nodesDS = nodesDSRef.current;
+    if (!params.nodes || !params.nodes.length || !nodesDS) return;
+    const nid = params.nodes[0];
+    const key = String(nid);
+    if (!savedPositionsRef.current[key]) return;
+    // With the ids the node had before it was a host, or the position
+    // pinned under one of them would be carried over again.
+    const raw = nodeMetaRef.current.get(nid)?.raw;
+    const cleared = [key, ...(raw ? formerNodeIds(raw) : []).filter((id) => savedPositionsRef.current[id])];
+    for (const id of cleared) delete savedPositionsRef.current[id];
+    const home = tidyPosRef.current?.get(nid);
+    if (home) {
+      // Tidy layout: an unpinned node goes back to its place in the tree.
+      nodesDS.update({ id: nid, x: home.x, y: home.y, fixed: false, physics: false } as never);
+      refreshCrowdedSites();
+    } else {
+      nodesDS.update({ id: nid, fixed: false, physics: true } as never);
+    }
+    savePositions.mutate(Object.fromEntries(cleared.map((id) => [id, null])));
+    flash('Node unpinned');
+  }
+
+  const mapHandlers: MapHandlers = {
+    click: handleMapClick,
+    // A node is being moved: its site frame has to follow.
+    dragging: (params) => {
+      if (params.nodes.length) siteBoxesRef.current = null;
+    },
+    dragEnd: handleMapDragEnd,
+    context: handleMapContext,
+    draw: drawMerakiSites,
+  };
+  const mapHandlersRef = useRef(mapHandlers);
+  mapHandlersRef.current = mapHandlers;
 
   // Fit the drawn map to the view, or zoom in on the device a `?host=` link
   // asked for (once; a device the filters leave off the map is reported).
@@ -1448,21 +1562,24 @@ export function Topology() {
     const tc = themeRef.current ?? getTopoThemeColors();
     const updates = data.nodes.map((n) => {
       const overlay = nodeOverlayProps(n, tc);
-      const baseTitle = nodeTitle(n);
-      const statusTitle =
-        statusOverlay && typeof n.id === 'number'
-          ? formatStatusTooltip(statusByHostRef.current.get(n.id))
-          : '';
       return {
         id: n.id,
         color: overlay.color,
         borderWidth: overlay.borderWidth,
         shadow: glow(overlay.shadowColor, overlay.shadowSize),
-        title: statusTitle ? `${baseTitle}\n\n${statusTitle}` : baseTitle,
+        title: nodeTooltip(n),
       } as VisNode;
     });
     nodesDS.update(updates);
     network.redraw();
+  }
+
+  // A node's tooltip, with its findings while the status overlay is on.
+  function nodeTooltip(n: TopologyNode): string {
+    const baseTitle = nodeTitle(n);
+    const statusTitle =
+      statusOverlay && typeof n.id === 'number' ? formatStatusTooltip(statusByHostRef.current.get(n.id)) : '';
+    return statusTitle ? `${baseTitle}\n\n${statusTitle}` : baseTitle;
   }
 
   function formatStatusTooltip(s: TopologyHostStatus | undefined): string {
@@ -1501,7 +1618,9 @@ export function Topology() {
   // ── Toolbar handlers ───────────────────────────────────────────────────
 
   async function handleRefresh() {
-    qc.invalidateQueries({ queryKey: ['topology'] });
+    // The map shown (other cached maps refetch when opened, once stale).
+    qc.invalidateQueries({ queryKey: topologyMapKey(groupId), exact: true });
+    qc.invalidateQueries({ queryKey: topologyOverlayStatusKey, exact: true });
     qc.invalidateQueries({ queryKey: ['topology-positions'] });
     flash('Topology refreshed');
   }
@@ -1527,8 +1646,15 @@ export function Topology() {
     try {
       await deletePositions.mutateAsync();
       savedPositionsRef.current = {};
+      const tidy = tidyPosRef.current;
       if (layout === 'tidy') {
-        renderGraph(data, {}, layout);
+        // Every node back to its place in the tree, in the instance drawn.
+        const nodesDS = nodesDSRef.current;
+        if (tidy && nodesDS) {
+          nodesDS.update([...tidy].map(([id, at]) => ({ id, x: at.x, y: at.y, fixed: false, physics: false }) as never));
+          refreshCrowdedSites();
+          fitView(300);
+        }
         flash('Node positions reset');
         return;
       }
@@ -1828,8 +1954,14 @@ export function Topology() {
     const edgesDS = edgesDSRef.current;
     const orig = originalColorsRef.current;
     if (!orig || !nodesDS || !edgesDS) return;
-    nodesDS.update(orig.nodes.map(([id, color]) => ({ id, color, opacity: 1, borderWidth: 2.5 })) as never);
-    edgesDS.update(orig.edges.map(([id, color]) => ({ id, color, opacity: 1 })) as never);
+    // Only items still drawn: a refresh may have removed some since, and an
+    // update of an id the DataSet does not hold would add it back.
+    const nodeIds = new Set(nodesDS.getIds());
+    const edgeIds = new Set(edgesDS.getIds());
+    nodesDS.update(
+      orig.nodes.filter(([id]) => nodeIds.has(id)).map(([id, color]) => ({ id, color, opacity: 1, borderWidth: 2.5 })) as never,
+    );
+    edgesDS.update(orig.edges.filter(([id]) => edgeIds.has(id)).map(([id, color]) => ({ id, color, opacity: 1 })) as never);
     originalColorsRef.current = null;
     pathRoutesRef.current.clear();
     syncTunnelVisibility();
@@ -2589,17 +2721,11 @@ export function Topology() {
                 const target = rawData.nodes.find((n) => n.id === hostId);
                 if (!target) return;
                 const updatedNode = { ...target, device_category: newCategory };
-                qc.setQueryData(['topology', groupId ?? null], {
+                // The map diffs the new data: only this node's icon is redrawn.
+                qc.setQueryData(topologyMapKey(groupId), {
                   ...rawData,
                   nodes: rawData.nodes.map((n) => (n.id === hostId ? updatedNode : n)),
                 });
-                const iconUrl = nodeIconUrl(updatedNode);
-                const nodesDS = nodesDSRef.current;
-                nodesDS?.update({
-                  id: hostId,
-                  shape: iconUrl ? 'circularImage' : nodeShapeOf(updatedNode),
-                  image: iconUrl,
-                } as never);
                 flash(`Role updated to ${newCategory || '(auto)'}`);
               }}
             />
@@ -2723,7 +2849,7 @@ export function Topology() {
                 /* ignore */
               }
             }
-            qc.invalidateQueries({ queryKey: ['topology'] });
+            // useAddHost has refetched the maps.
             qc.invalidateQueries({ queryKey: ['inventory-groups'] });
             setDetailsNode(null);
             flash(`Added ${addInvTarget.label} (${addInvTarget.ip}) to ${groupName}`);
@@ -2752,7 +2878,8 @@ export function Topology() {
         groupId={groupId}
         onClose={() => setDiscoveryOpen(false)}
         onComplete={() => {
-          qc.invalidateQueries({ queryKey: ['topology'] });
+          // Links sourced from this group's hosts: its map and the all-groups map.
+          invalidateTopologyGroupMaps(qc, groupId);
           qc.invalidateQueries({ queryKey: ['meraki', 'sources'] });
         }}
       />

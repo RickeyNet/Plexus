@@ -181,7 +181,11 @@ to present it.
   **Lockout time (s)** (default 900). **Rate limit max** (default 10)
   refuses new attempts from an IP after that many failures in the window,
   without a lockout. **Idle timeout (s, 0 = off)** (default 1800, at most
-  86400) signs out a session with no requests for that long. Choose
+  86400) signs out a session with no requests for that long. The session
+  cookie records the last request at most every 60 seconds (every tenth
+  of the idle timeout when that is shorter), so a session can end up to
+  that much before the full timeout; **Stay signed in** always renews it.
+  Choose
   **Save Login Rules**. Every save is audited as `auth` /
   `login_rules.update` with the old and new value of each rule that
   changed.

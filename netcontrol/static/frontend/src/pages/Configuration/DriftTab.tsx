@@ -4,6 +4,7 @@ import {
   type ConfigDriftEvent,
   useBulkAcceptDriftEvents,
   useBulkResolveDriftEvents,
+  useConfigDriftEvent,
   useConfigDriftEvents,
   useConfigDriftSummary,
   useUpdateDriftEventStatus,
@@ -279,6 +280,14 @@ function DriftSummaryStrip({
   return <SummaryStrip items={items} />;
 }
 
+/** One event's diff, read when the card expands (the list carries no diffs). */
+function EventDiff({ eventId }: { eventId: number }) {
+  const event = useConfigDriftEvent(eventId);
+  if (event.isPending) return <LoadingState variant="inline" text="Loading diff…" />;
+  if (event.isError && !event.data) return <QueryError what="the diff" query={event} />;
+  return <UnifiedDiff diffText={event.data?.diff_text} style={{ marginTop: '0.5rem' }} />;
+}
+
 /** "View Diff" on every drift card: expands the diff in place. */
 function DiffToggle({ open, onToggle }: { open: boolean; onToggle: () => void }) {
   return (
@@ -390,7 +399,7 @@ function DriftEventCard({
         </KebabMenu>
         {isBusy && <LoadingState variant="inline" text="Updating…" />}
       </div>
-      {showDiff && <UnifiedDiff diffText={ev.diff_text} style={{ marginTop: '0.5rem' }} />}
+      {showDiff && <EventDiff eventId={ev.id} />}
     </div>
   );
 }
@@ -559,7 +568,7 @@ function DriftGroupCard({
       <div style={{ marginTop: '0.5rem' }}>
         <DiffToggle open={showDiff} onToggle={() => setShowDiff((v) => !v)} />
       </div>
-      {showDiff && <UnifiedDiff diffText={group.diff_text} style={{ marginTop: '0.5rem' }} />}
+      {showDiff && <EventDiff eventId={group.representative_id} />}
 
       {evs.length > 1 && (
         <>

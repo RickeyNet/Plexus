@@ -3,7 +3,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
 
-import type { InventoryGroupFull } from '@/api/inventory';
+import { type InventoryGroupFull, inventoryGroupKeys } from '@/api/inventory';
 import { DialogContext } from '@/components/DialogProvider-context';
 import type { AccessGroup } from '@/api/settings';
 
@@ -53,7 +53,7 @@ const EVERYTHING: AccessGroup = {
 
 function client(): QueryClient {
   const qc = new QueryClient();
-  qc.setQueryData(['inventory-groups-full', false], INVENTORY);
+  qc.setQueryData(inventoryGroupKeys.list(false), INVENTORY);
   qc.setQueryData(['admin', 'access-groups'], [SCOPED, EVERYTHING]);
   return qc;
 }

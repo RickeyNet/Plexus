@@ -268,29 +268,25 @@ export interface FlowAnalyticsParams extends CloudFilter {
   bucket_minutes?: number;
 }
 
-export function useCloudFlowSummary(params: FlowAnalyticsParams) {
-  return useQuery({
-    queryKey: ['cloud-flow-summary', params],
-    queryFn: ({ signal }) =>
-      apiRequest<{ summary: CloudFlowSummary }>(`/cloud/flow-logs/summary${qs(params)}`, { signal }),
-    refetchInterval: MONITOR_REFETCH_MS,
-  });
+/** The cloud flow view of one window from GET /api/cloud/flow-logs/overview. */
+export interface CloudFlowOverview {
+  summary: CloudFlowSummary;
+  top_src: CloudFlowTalker[];
+  top_dst: CloudFlowTalker[];
+  timeline: CloudFlowTimelinePoint[];
 }
 
-export function useCloudFlowTopTalkers(params: FlowAnalyticsParams) {
+/**
+ * Summary, talkers of both directions and timeline in one request (one scan
+ * of the flow records on the server); switching the talker direction needs
+ * no new request, so `direction` is not sent.
+ */
+export function useCloudFlowOverview(params: FlowAnalyticsParams) {
+  const { direction: _direction, ...rest } = params;
   return useQuery({
-    queryKey: ['cloud-flow-talkers', params],
+    queryKey: ['cloud-flow-overview', rest],
     queryFn: ({ signal }) =>
-      apiRequest<{ talkers: CloudFlowTalker[] }>(`/cloud/flow-logs/top-talkers${qs(params)}`, { signal }),
-    refetchInterval: MONITOR_REFETCH_MS,
-  });
-}
-
-export function useCloudFlowTimeline(params: FlowAnalyticsParams) {
-  return useQuery({
-    queryKey: ['cloud-flow-timeline', params],
-    queryFn: ({ signal }) =>
-      apiRequest<{ timeline: CloudFlowTimelinePoint[] }>(`/cloud/flow-logs/timeline${qs(params)}`, { signal }),
+      apiRequest<CloudFlowOverview>(`/cloud/flow-logs/overview${qs(rest)}`, { signal }),
     refetchInterval: MONITOR_REFETCH_MS,
   });
 }

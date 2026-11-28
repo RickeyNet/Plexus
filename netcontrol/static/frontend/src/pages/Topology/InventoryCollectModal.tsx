@@ -1,8 +1,7 @@
 import { useState } from "react";
 
-import { groupLabel } from "@/api/inventory";
+import { groupLabel, useInventoryGroups } from "@/api/inventory";
 import type { InventoryCollectRequest } from "@/api/meraki";
-import { useInventoryGroupsLite } from "@/api/topology";
 import { Callout } from "@/components/Callout";
 import { CredentialSelect } from "@/components/CredentialSelect";
 import { Modal } from "@/components/Modal";
@@ -39,7 +38,7 @@ export function InventoryCollectModal({
   error,
   onClose,
 }: Props) {
-  const groups = useInventoryGroupsLite();
+  const groups = useInventoryGroups();
   const choice = useCredentialChoice(serviceCredentialId, isAdmin);
   const [group, setGroup] = useState<string>(
     groupId != null ? String(groupId) : "",

@@ -9,6 +9,7 @@ import netcontrol.app as app_module
 import pytest
 from netcontrol import body_limit
 from netcontrol.body_limit import MIB, BodyLimitMiddleware
+from netcontrol.http_middleware import PlexusHTTPMiddleware
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse
@@ -190,7 +191,10 @@ def test_upload_paths_get_their_route_caps():
 
 
 def test_registered_outermost_in_the_app():
-    assert app_module.app.user_middleware[0].cls is BodyLimitMiddleware
+    # The outermost middleware enforces the body limit before its guards.
+    outer = app_module.app.user_middleware[0]
+    assert outer.cls is PlexusHTTPMiddleware
+    assert isinstance(PlexusHTTPMiddleware(None).body_limit, BodyLimitMiddleware)
 
 
 def test_app_refuses_oversized_unauthenticated_body_before_auth(monkeypatch):

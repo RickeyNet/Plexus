@@ -20,7 +20,6 @@ from routes.database import (
     _LOGGER,
     _is_unique_violation,
     _minute_bucket_expr,
-    row_to_dict,
     rows_to_list,
 )
 from routes.db.inventory import group_ids_condition
@@ -31,7 +30,8 @@ __all__ = [
     "get_flow_top_applications",
     "get_flow_top_conversations",
     "get_flow_timeline",
-    "create_flow_summary",
+    "get_flow_overview",
+    "FLOW_OVERVIEW_PARTS",
     "cleanup_old_flow_records",
     "cleanup_old_flow_summaries",
     "get_flow_top_interfaces",
@@ -46,6 +46,7 @@ __all__ = [
     "get_cloud_flow_summary",
     "get_cloud_flow_top_talkers",
     "get_cloud_flow_timeline",
+    "get_cloud_flow_overview",
 ]
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -88,6 +89,151 @@ def _with_host_scope(where: str, params: list, group_ids: Iterable[int] | None) 
     return f"{where} AND host_id IN (SELECT id FROM hosts WHERE {scope_sql})"
 
 
+def _flow_where(hours: int, host_id: int | None, group_ids: Iterable[int] | None) -> tuple[str, list]:
+    """The ``WHERE`` clause and its parameters of the flow views: the records
+    received in the last ``hours`` hours, of ``host_id`` when given, of the
+    exporters in the inventory groups ``group_ids`` when given."""
+    where = "WHERE received_at >= datetime('now', ? || ' hours')"
+    params: list = [f"-{max(1, int(hours))}"]
+    if host_id is not None:
+        where += " AND host_id = ?"
+        params.append(host_id)
+    return _with_host_scope(where, params, group_ids), params
+
+
+# The aggregates the flow views show, each one grouping set over the records:
+# name -> (column, name of the column in the result rows), in grouping order.
+_FLOW_SETS: dict[str, tuple[tuple[str, str], ...]] = {
+    "total": (),
+    "top_src": (("src_ip", "ip"),),
+    "top_dst": (("dst_ip", "ip"),),
+    "top_applications": (("dst_port", "port"), ("protocol", "protocol")),
+    "top_conversations": (("src_ip", "src_ip"), ("dst_ip", "dst_ip")),
+    "if_in": (("host_id", "host_id"), ("exporter_ip", "exporter_ip"), ("input_if", "if_index")),
+    "if_out": (("host_id", "host_id"), ("exporter_ip", "exporter_ip"), ("output_if", "if_index")),
+    "timeline": (("bucket", "bucket"),),
+}
+# The sets cut to their ``limit`` biggest groups by bytes; the others are whole.
+_RANKED_SETS = frozenset({"top_src", "top_dst", "top_applications", "top_conversations"})
+
+
+async def _flow_aggregates(
+    where: str, params: list, sets: Iterable[str], limit: int = 20, bucket_minutes: int = 5
+) -> tuple[dict[str, list[dict]], dict[str, int]]:
+    """The grouping sets ``sets`` (names of ``_FLOW_SETS``) of the flow
+    records ``where`` selects, all from one scan of ``flow_records``
+    (``GROUPING SETS``), as ``({name: rows}, {name: number of groups})``.
+
+    Each row holds its set's columns (by their result name) and
+    ``total_bytes``, ``total_packets`` and ``flow_count``; ``total`` also
+    ``first_seen`` and ``last_seen``. A ranked set is cut to its ``limit``
+    biggest groups by bytes (ties by the grouping columns), each with its own
+    top-N sort; ``timeline`` (``bucket_minutes`` buckets) is in bucket order.
+    The group counts (of the whole set, before the cut) are read only with
+    ``total``: for ``top_src`` and ``top_dst``, ``0`` for the others."""
+    wanted = set(sets)
+    names = [name for name in _FLOW_SETS if name in wanted]
+    columns = list(dict.fromkeys(col for name in names for col, _ in _FLOW_SETS[name]))
+    source = [col for col in columns if col != "bucket"]
+    if "bucket" in columns:
+        source.append(f"{_minute_bucket_expr('received_at', max(1, min(int(bucket_minutes), 60)))} AS bucket")
+    source += ["bytes", "packets", "received_at"] if "total" in names else ["bytes", "packets"]
+    # GROUPING(...) has one bit per column, the first the highest, set when
+    # the row's set does not group by that column: the set's fingerprint.
+    masks = {
+        name: sum(
+            1 << (len(columns) - 1 - i) for i, col in enumerate(columns) if col not in {c for c, _ in _FLOW_SETS[name]}
+        )
+        for name in names
+    }
+    gset = f"GROUPING({', '.join(columns)})" if columns else "0"
+    grouping_sets = ", ".join(f"({', '.join(col for col, _ in _FLOW_SETS[name])})" for name in names)
+    seen, last = ("MIN(received_at)", "MAX(received_at)") if "total" in names else ("NULL", "NULL")
+    fields = ["gset", *columns, "total_bytes", "total_packets", "flow_count", "first_seen", "last_seen"]
+    branches = []
+    for name in names:
+        branch = f"SELECT {', '.join(fields)}, 0 AS set_rows, 'r' AS kind FROM g WHERE gset = {masks[name]}"
+        if name in _RANKED_SETS:
+            order = "".join(f", {col}" for col, _ in _FLOW_SETS[name])
+            branch += f" ORDER BY total_bytes DESC{order} LIMIT {max(1, int(limit))}"
+        branches.append(f"({branch})")
+        if "total" in names and name in {"top_src", "top_dst"}:
+            nulls = ", ".join("NULL" for _ in fields[1:])
+            branches.append(f"(SELECT {masks[name]}, {nulls}, COUNT(*), 'c' FROM g WHERE gset = {masks[name]})")
+    aggregate = f"""SELECT {gset} AS gset, {"".join(f"{col}, " for col in columns)}
+                          SUM(bytes) AS total_bytes, SUM(packets) AS total_packets, COUNT(*) AS flow_count,
+                          {seen} AS first_seen, {last} AS last_seen
+                   FROM (SELECT {", ".join(source)} FROM flow_records {where}) f"""
+    if len(branches) == 1 and columns:
+        # One set: a plain GROUP BY (``g`` is read once, so it is inlined),
+        # as cheap as the query of one view was.
+        one = aggregate.replace(gset, str(masks[names[0]]), 1)
+        sql = f"WITH g AS ({one} GROUP BY {', '.join(columns)}) {branches[0][1:-1]}"
+    else:
+        # ``g`` is read by every branch, so it is computed once (one scan
+        # of the records); each ranked branch keeps only its top N.
+        sql = f"WITH g AS ({aggregate} GROUP BY GROUPING SETS ({grouping_sets})) " + " UNION ALL ".join(branches)
+    db = await _dbcore.get_db(read_only=True)
+    try:
+        cursor = await db.execute(sql, params)
+        rows = rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+    by_mask = {mask: name for name, mask in masks.items()}
+    found: dict[str, list[dict]] = {name: [] for name in names}
+    sizes: dict[str, int] = dict.fromkeys(names, 0)
+    for row in rows:
+        name = by_mask.get(row["gset"])
+        if name is None:
+            continue
+        if row["kind"] == "c":
+            sizes[name] = int(row["set_rows"])
+            continue
+        item = {label: row[col] for col, label in _FLOW_SETS[name]}
+        item.update(total_bytes=row["total_bytes"], total_packets=row["total_packets"], flow_count=row["flow_count"])
+        if name == "total":
+            item.update(first_seen=row["first_seen"], last_seen=row["last_seen"])
+        found[name].append(item)
+    for name in _RANKED_SETS & set(found):
+        # Each branch comes in its own order; a stable sort keeps the ties
+        # in it (by the grouping columns).
+        found[name].sort(key=lambda r: -(r["total_bytes"] or 0))
+    if "timeline" in found:
+        found["timeline"].sort(key=lambda r: r["bucket"])
+    return found, sizes
+
+
+def _interfaces(found: dict[str, list[dict]], limit: int) -> list[dict]:
+    """The ``limit`` interfaces with the most bytes from the ``if_in`` and
+    ``if_out`` sets: ``host_id``, ``exporter_ip``, ``if_index``,
+    ``in_bytes``, ``out_bytes``, ``total_bytes`` and ``flow_count`` (records
+    that name it either way, one that names it both ways twice)."""
+    merged: dict[tuple, dict] = {}
+    for name, side in (("if_in", "in_bytes"), ("if_out", "out_bytes")):
+        for row in found.get(name, []):
+            key = (row["host_id"], row["exporter_ip"], row["if_index"])
+            entry = merged.setdefault(
+                key,
+                {
+                    "host_id": row["host_id"],
+                    "exporter_ip": row["exporter_ip"],
+                    "if_index": row["if_index"],
+                    "in_bytes": 0,
+                    "out_bytes": 0,
+                    "flow_count": 0,
+                },
+            )
+            entry[side] += int(row["total_bytes"] or 0)
+            entry["flow_count"] += int(row["flow_count"] or 0)
+    for entry in merged.values():
+        entry["total_bytes"] = entry["in_bytes"] + entry["out_bytes"]
+    ranked = sorted(
+        merged.values(),
+        key=lambda r: (-r["total_bytes"], r["host_id"] is None, r["host_id"] or 0, r["exporter_ip"], r["if_index"]),
+    )
+    return ranked[: max(1, int(limit))]
+
+
 async def get_flow_top_talkers(
     host_id: int | None = None,
     hours: int = 1,
@@ -96,76 +242,28 @@ async def get_flow_top_talkers(
     group_ids: Iterable[int] | None = None,
 ) -> list[dict]:
     """``group_ids``: over the flows of exporters in those inventory groups."""
-    db = await _dbcore.get_db(read_only=True)
-    try:
-        col = "src_ip" if direction == "src" else "dst_ip"
-        where = "WHERE received_at >= datetime('now', ? || ' hours')"
-        params: list = [f"-{hours}"]
-        if host_id is not None:
-            where += " AND host_id = ?"
-            params.append(host_id)
-        where = _with_host_scope(where, params, group_ids)
-        params.append(limit)
-        cursor = await db.execute(
-            f"""SELECT {col} as ip, SUM(bytes) as total_bytes, SUM(packets) as total_packets,
-                       COUNT(*) as flow_count
-               FROM flow_records {where}
-               GROUP BY {col} ORDER BY total_bytes DESC LIMIT ?""",
-            params,
-        )
-        return rows_to_list(await cursor.fetchall())
-    finally:
-        await db.close()
+    name = "top_src" if direction == "src" else "top_dst"
+    where, params = _flow_where(hours, host_id, group_ids)
+    found, _ = await _flow_aggregates(where, params, {name}, limit)
+    return found[name]
 
 
 async def get_flow_top_applications(
     host_id: int | None = None, hours: int = 1, limit: int = 20, group_ids: Iterable[int] | None = None
 ) -> list[dict]:
     """``group_ids``: over the flows of exporters in those inventory groups."""
-    db = await _dbcore.get_db(read_only=True)
-    try:
-        where = "WHERE received_at >= datetime('now', ? || ' hours')"
-        params: list = [f"-{hours}"]
-        if host_id is not None:
-            where += " AND host_id = ?"
-            params.append(host_id)
-        where = _with_host_scope(where, params, group_ids)
-        params.append(limit)
-        cursor = await db.execute(
-            f"""SELECT dst_port as port, protocol, SUM(bytes) as total_bytes,
-                       SUM(packets) as total_packets, COUNT(*) as flow_count
-               FROM flow_records {where}
-               GROUP BY dst_port, protocol ORDER BY total_bytes DESC LIMIT ?""",
-            params,
-        )
-        return rows_to_list(await cursor.fetchall())
-    finally:
-        await db.close()
+    where, params = _flow_where(hours, host_id, group_ids)
+    found, _ = await _flow_aggregates(where, params, {"top_applications"}, limit)
+    return found["top_applications"]
 
 
 async def get_flow_top_conversations(
     host_id: int | None = None, hours: int = 1, limit: int = 20, group_ids: Iterable[int] | None = None
 ) -> list[dict]:
     """``group_ids``: over the flows of exporters in those inventory groups."""
-    db = await _dbcore.get_db(read_only=True)
-    try:
-        where = "WHERE received_at >= datetime('now', ? || ' hours')"
-        params: list = [f"-{hours}"]
-        if host_id is not None:
-            where += " AND host_id = ?"
-            params.append(host_id)
-        where = _with_host_scope(where, params, group_ids)
-        params.append(limit)
-        cursor = await db.execute(
-            f"""SELECT src_ip, dst_ip, SUM(bytes) as total_bytes,
-                       SUM(packets) as total_packets, COUNT(*) as flow_count
-               FROM flow_records {where}
-               GROUP BY src_ip, dst_ip ORDER BY total_bytes DESC LIMIT ?""",
-            params,
-        )
-        return rows_to_list(await cursor.fetchall())
-    finally:
-        await db.close()
+    where, params = _flow_where(hours, host_id, group_ids)
+    found, _ = await _flow_aggregates(where, params, {"top_conversations"}, limit)
+    return found["top_conversations"]
 
 
 async def get_flow_timeline(
@@ -173,30 +271,9 @@ async def get_flow_timeline(
 ) -> list[dict]:
     """Aggregate flow data into time buckets; ``group_ids``: over the flows
     of exporters in those inventory groups."""
-    # Validate bucket_minutes to prevent SQL injection via f-string
-    bucket_minutes = max(1, min(int(bucket_minutes), 60))
-    db = await _dbcore.get_db(read_only=True)
-    try:
-        where = "WHERE received_at >= datetime('now', ? || ' hours')"
-        params: list = [f"-{max(1, int(hours))}"]
-        if host_id is not None:
-            where += " AND host_id = ?"
-            params.append(host_id)
-        where = _with_host_scope(where, params, group_ids)
-        bucket_expr = _minute_bucket_expr("received_at", bucket_minutes)
-        cursor = await db.execute(
-            f"""SELECT
-                   {bucket_expr} as bucket,
-                   SUM(bytes) as total_bytes,
-                   SUM(packets) as total_packets,
-                   COUNT(*) as flow_count
-               FROM flow_records {where}
-               GROUP BY bucket ORDER BY bucket""",
-            params,
-        )
-        return rows_to_list(await cursor.fetchall())
-    finally:
-        await db.close()
+    where, params = _flow_where(hours, host_id, group_ids)
+    found, _ = await _flow_aggregates(where, params, {"timeline"}, bucket_minutes=bucket_minutes)
+    return found["timeline"]
 
 
 async def get_flow_top_interfaces(
@@ -208,48 +285,37 @@ async def get_flow_top_interfaces(
     ``out_bytes`` (flows that left on it: ``output_if``), ``total_bytes``
     and ``flow_count`` (records that name it either way). ``group_ids``:
     over the flows of exporters in those inventory groups."""
-    db = await _dbcore.get_db(read_only=True)
-    try:
-        where = "WHERE received_at >= datetime('now', ? || ' hours')"
-        params: list = [f"-{hours}"]
-        if host_id is not None:
-            where += " AND host_id = ?"
-            params.append(host_id)
-        where = _with_host_scope(where, params, group_ids)
-        cursor = await db.execute(
-            f"""SELECT host_id, exporter_ip, if_index,
-                       SUM(in_bytes) as in_bytes, SUM(out_bytes) as out_bytes,
-                       SUM(in_bytes) + SUM(out_bytes) as total_bytes, COUNT(*) as flow_count
-               FROM (
-                   SELECT host_id, exporter_ip, input_if as if_index, bytes as in_bytes, 0 as out_bytes
-                   FROM flow_records {where}
-                   UNION ALL
-                   SELECT host_id, exporter_ip, output_if as if_index, 0 as in_bytes, bytes as out_bytes
-                   FROM flow_records {where}
-               ) sides
-               GROUP BY host_id, exporter_ip, if_index ORDER BY total_bytes DESC LIMIT ?""",
-            [*params, *params, limit],
-        )
-        return rows_to_list(await cursor.fetchall())
-    finally:
-        await db.close()
+    where, params = _flow_where(hours, host_id, group_ids)
+    found, _ = await _flow_aggregates(where, params, {"if_in", "if_out"})
+    return _interfaces(found, limit)
 
 
-async def create_flow_summary(
-    host_id: int | None, summary_type: str, time_window: str, period_start: str, period_end: str, data_json: str
-) -> int:
-    db = await _dbcore.get_db()
-    try:
-        cursor = await db.execute(
-            """INSERT INTO flow_summaries
-               (host_id, summary_type, time_window, period_start, period_end, data_json)
-               VALUES (?, ?, ?, ?, ?, ?)""",
-            (host_id, summary_type, time_window, period_start, period_end, data_json),
-        )
-        await db.commit()
-        return cursor.lastrowid
-    finally:
-        await db.close()
+async def get_flow_overview(
+    host_id: int | None = None,
+    hours: int = 1,
+    limit: int = 20,
+    bucket_minutes: int = 5,
+    group_ids: Iterable[int] | None = None,
+    parts: Iterable[str] | None = None,
+) -> dict[str, list[dict]]:
+    """The aggregates of the flow views from one scan of the records:
+    ``top_src`` and ``top_dst`` (``get_flow_top_talkers``),
+    ``top_applications``, ``top_conversations``, ``top_interfaces`` and
+    ``timeline``, each the rows its own reader returns for the same
+    arguments; ``parts`` (names of ``FLOW_OVERVIEW_PARTS``): only those
+    (``None``: all). ``group_ids``: over the flows of exporters in those
+    inventory groups."""
+    chosen = [p for p in FLOW_OVERVIEW_PARTS if parts is None or p in set(parts)]
+    sets = {s for p in chosen for s in (("if_in", "if_out") if p == "top_interfaces" else (p,))}
+    if not sets:
+        return {}
+    where, params = _flow_where(hours, host_id, group_ids)
+    found, _ = await _flow_aggregates(where, params, sets, limit, bucket_minutes)
+    return {p: _interfaces(found, limit) if p == "top_interfaces" else found[p] for p in chosen}
+
+
+# The parts of ``get_flow_overview``, in response order.
+FLOW_OVERVIEW_PARTS = ("top_src", "top_dst", "top_applications", "top_conversations", "top_interfaces", "timeline")
 
 
 async def cleanup_old_flow_records(hours: int = 48) -> int:
@@ -261,8 +327,10 @@ async def cleanup_old_flow_records(hours: int = 48) -> int:
 
 
 async def cleanup_old_flow_summaries(days: int = 30) -> int:
-    """Delete hourly flow summaries written more than ``days`` ago
-    (``summary_retention_days``)."""
+    """Delete flow summaries written more than ``days`` ago
+    (``summary_retention_days``). Nothing writes the table any more (the
+    flow views aggregate the raw records); this drains the rows an older
+    release wrote."""
     return await _dbcore.chunked_delete(
         "flow_summaries",
         "created_at < datetime('now', '-' || ? || ' days')",
@@ -537,48 +605,48 @@ def _cloud_flow_exporter(account_id: int) -> str:
     return f"cloud-account-{int(account_id)}"
 
 
+def _cloud_flow_where(account_id: int | None, provider: str | None, hours: int) -> tuple[str, list]:
+    """The ``WHERE`` clause and its parameters of the cloud flow views: the
+    cloud flow records received in the last ``hours`` hours, of one account
+    and one provider when given."""
+    clauses = [
+        "received_at >= datetime('now', ? || ' hours')",
+        "flow_type LIKE 'cloud_%'",
+    ]
+    params: list = [f"-{max(1, int(hours))}"]
+    if account_id is not None:
+        clauses.append("exporter_ip = ?")
+        params.append(_cloud_flow_exporter(account_id))
+    if provider:
+        clauses.append("flow_type = ?")
+        params.append(_cloud_flow_type(provider))
+    return "WHERE " + " AND ".join(clauses), params
+
+
+def _cloud_summary(found: dict[str, list[dict]], sizes: dict[str, int]) -> dict:
+    """The cloud flow summary from the ``total``, ``top_src`` and ``top_dst``
+    sets of ``_flow_aggregates`` (the distinct addresses are their group
+    counts)."""
+    total = (found.get("total") or [{}])[0]
+    return {
+        "flow_count": int(total.get("flow_count") or 0),
+        "total_bytes": total.get("total_bytes") or 0,
+        "total_packets": total.get("total_packets") or 0,
+        "unique_sources": sizes.get("top_src", 0),
+        "unique_destinations": sizes.get("top_dst", 0),
+        "first_seen": total.get("first_seen"),
+        "last_seen": total.get("last_seen"),
+    }
+
+
 async def get_cloud_flow_summary(
     account_id: int | None = None,
     provider: str | None = None,
     hours: int = 24,
 ) -> dict:
-    db = await _dbcore.get_db(read_only=True)
-    try:
-        clauses = [
-            "received_at >= datetime('now', ? || ' hours')",
-            "flow_type LIKE 'cloud_%'",
-        ]
-        params: list = [f"-{max(1, int(hours))}"]
-        if account_id is not None:
-            clauses.append("exporter_ip = ?")
-            params.append(_cloud_flow_exporter(account_id))
-        if provider:
-            clauses.append("flow_type = ?")
-            params.append(_cloud_flow_type(provider))
-        where = " AND ".join(clauses)
-        cursor = await db.execute(
-            f"""SELECT COUNT(*) as flow_count,
-                       COALESCE(SUM(bytes), 0) as total_bytes,
-                       COALESCE(SUM(packets), 0) as total_packets,
-                       COUNT(DISTINCT src_ip) as unique_sources,
-                       COUNT(DISTINCT dst_ip) as unique_destinations,
-                       MIN(received_at) as first_seen,
-                       MAX(received_at) as last_seen
-               FROM flow_records
-               WHERE {where}""",
-            tuple(params),
-        )
-        return row_to_dict(await cursor.fetchone()) or {
-            "flow_count": 0,
-            "total_bytes": 0,
-            "total_packets": 0,
-            "unique_sources": 0,
-            "unique_destinations": 0,
-            "first_seen": None,
-            "last_seen": None,
-        }
-    finally:
-        await db.close()
+    where, params = _cloud_flow_where(account_id, provider, hours)
+    found, sizes = await _flow_aggregates(where, params, {"total", "top_src", "top_dst"}, limit=1)
+    return _cloud_summary(found, sizes)
 
 
 async def get_cloud_flow_top_talkers(
@@ -588,37 +656,10 @@ async def get_cloud_flow_top_talkers(
     direction: str = "src",
     limit: int = 20,
 ) -> list[dict]:
-    db = await _dbcore.get_db(read_only=True)
-    try:
-        col = "src_ip" if direction == "src" else "dst_ip"
-        clauses = [
-            "received_at >= datetime('now', ? || ' hours')",
-            "flow_type LIKE 'cloud_%'",
-        ]
-        params: list = [f"-{max(1, int(hours))}"]
-        if account_id is not None:
-            clauses.append("exporter_ip = ?")
-            params.append(_cloud_flow_exporter(account_id))
-        if provider:
-            clauses.append("flow_type = ?")
-            params.append(_cloud_flow_type(provider))
-        params.append(max(1, int(limit)))
-        where = " AND ".join(clauses)
-        cursor = await db.execute(
-            f"""SELECT {col} as ip,
-                       SUM(bytes) as total_bytes,
-                       SUM(packets) as total_packets,
-                       COUNT(*) as flow_count
-                FROM flow_records
-                WHERE {where}
-                GROUP BY {col}
-                ORDER BY total_bytes DESC
-                LIMIT ?""",
-            tuple(params),
-        )
-        return rows_to_list(await cursor.fetchall())
-    finally:
-        await db.close()
+    name = "top_src" if direction == "src" else "top_dst"
+    where, params = _cloud_flow_where(account_id, provider, hours)
+    found, _ = await _flow_aggregates(where, params, {name}, limit)
+    return found[name]
 
 
 async def get_cloud_flow_timeline(
@@ -627,34 +668,29 @@ async def get_cloud_flow_timeline(
     hours: int = 24,
     bucket_minutes: int = 5,
 ) -> list[dict]:
-    bucket_minutes = max(1, min(int(bucket_minutes), 60))
-    db = await _dbcore.get_db(read_only=True)
-    try:
-        clauses = [
-            "received_at >= datetime('now', ? || ' hours')",
-            "flow_type LIKE 'cloud_%'",
-        ]
-        params: list = [f"-{max(1, int(hours))}"]
-        if account_id is not None:
-            clauses.append("exporter_ip = ?")
-            params.append(_cloud_flow_exporter(account_id))
-        if provider:
-            clauses.append("flow_type = ?")
-            params.append(_cloud_flow_type(provider))
-        where = " AND ".join(clauses)
-        bucket_expr = _minute_bucket_expr("received_at", bucket_minutes)
-        cursor = await db.execute(
-            f"""SELECT
-                   {bucket_expr} as bucket,
-                   SUM(bytes) as total_bytes,
-                   SUM(packets) as total_packets,
-                   COUNT(*) as flow_count
-               FROM flow_records
-               WHERE {where}
-               GROUP BY bucket
-               ORDER BY bucket""",
-            tuple(params),
-        )
-        return rows_to_list(await cursor.fetchall())
-    finally:
-        await db.close()
+    where, params = _cloud_flow_where(account_id, provider, hours)
+    found, _ = await _flow_aggregates(where, params, {"timeline"}, bucket_minutes=bucket_minutes)
+    return found["timeline"]
+
+
+async def get_cloud_flow_overview(
+    account_id: int | None = None,
+    provider: str | None = None,
+    hours: int = 24,
+    limit: int = 20,
+    bucket_minutes: int = 5,
+) -> dict:
+    """The cloud flow view from one scan of the records: ``summary``
+    (``get_cloud_flow_summary``), ``top_src`` and ``top_dst``
+    (``get_cloud_flow_top_talkers``) and ``timeline``
+    (``get_cloud_flow_timeline``) for the same arguments."""
+    where, params = _cloud_flow_where(account_id, provider, hours)
+    found, sizes = await _flow_aggregates(
+        where, params, {"total", "top_src", "top_dst", "timeline"}, limit, bucket_minutes
+    )
+    return {
+        "summary": _cloud_summary(found, sizes),
+        "top_src": found["top_src"],
+        "top_dst": found["top_dst"],
+        "timeline": found["timeline"],
+    }

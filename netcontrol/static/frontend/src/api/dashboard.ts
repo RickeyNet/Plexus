@@ -385,32 +385,3 @@ export function useTopInterfaces({
     enabled,
   });
 }
-
-// ── Inventory groups (with optional hosts) ────────────────────────────────
-
-export interface InventoryHostBrief {
-  id: number;
-  hostname: string;
-  ip_address?: string;
-}
-
-export interface InventoryGroupWithHosts {
-  id: number;
-  name: string;
-  hosts?: InventoryHostBrief[];
-}
-
-interface InventoryListResponse {
-  groups?: InventoryGroupWithHosts[];
-}
-
-export function useInventoryGroupsForDashboard(includeHosts: boolean) {
-  return useQuery<InventoryGroupWithHosts[]>({
-    queryKey: ['dashboard-inventory-groups', includeHosts],
-    queryFn: async ({ signal }) => {
-      const path = includeHosts ? '/inventory?include_hosts=true' : '/inventory';
-      const res = await apiRequest<InventoryListResponse | InventoryGroupWithHosts[]>(path, { signal });
-      return Array.isArray(res) ? res : (res?.groups ?? []);
-    },
-  });
-}

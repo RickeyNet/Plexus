@@ -14,6 +14,7 @@ import hashlib
 import ipaddress
 import json
 import os
+import random
 import secrets
 import socket
 import sys
@@ -41,14 +42,15 @@ import asyncpg
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from pydantic import BaseModel, ConfigDict, Field
 
-from netcontrol import listener_sources, syslog_tls
+from netcontrol import authz_cache, listener_sources, syslog_tls
 from netcontrol.account_rules import API_TOKEN_USER
-from netcontrol.body_limit import BodyLimitMiddleware
 from netcontrol.bounded_map import prune_expired
 from netcontrol.db_errors import client_error_for
+from netcontrol.http_middleware import PlexusHTTPMiddleware
 from netcontrol.integrations.cisco_fdm.collector import fdm_poll_loop
 from netcontrol.mcp.server import build_mcp_app
 from netcontrol.object_scope import request_scope
+from netcontrol.payload_cache import JsonPayload, PayloadCache, json_response
 from netcontrol.plugins import registry as plugin_registry
 from netcontrol.routes import notification_channels, object_changes, siem_forwarder, webhooks
 from netcontrol.routes.admin import (
@@ -352,6 +354,7 @@ from netcontrol.routes.scope_rules import router as scope_rules_router
 from netcontrol.routes.secret_variables import router as secret_variables_router
 from netcontrol.routes.secrets_providers import router as secrets_providers_router
 from netcontrol.routes.security_events import router as security_events_router
+from netcontrol.routes.shared import caller_features
 from netcontrol.routes.snmp import (
     PYSMNP_AVAILABLE,
     _build_snmp_auth,
@@ -697,6 +700,7 @@ async def _ensure_default_admin():
                 await conn.commit()
             finally:
                 await conn.close()
+                authz_cache.invalidate()
         return
 
     password = configured_password or default_bootstrap_password
@@ -855,6 +859,33 @@ def _refresh_session_token(data: dict) -> str:
     return _serializer.dumps(refreshed)
 
 
+# The most a session cookie's `last_activity` may lag behind before an
+# authenticated request re-issues the cookie. Never more than a tenth of the
+# idle timeout, so the idle timeout a user sees moves by at most that much.
+SESSION_REFRESH_MAX_LAG_SECONDS = 60
+# Paths that always re-issue the cookie: the SPA's "Stay signed in" button
+# reports the new last activity as now.
+_SESSION_ALWAYS_REFRESH_PATHS = frozenset({"/api/auth/heartbeat"})
+
+
+def _session_cookie_due(request: Request, session: dict) -> bool:
+    """Whether ``require_auth`` re-issues the session cookie for this request:
+    when its `last_activity` is at least ``SESSION_REFRESH_MAX_LAG_SECONDS``
+    (or a tenth of the idle timeout, if smaller) old, when the token lacks a
+    field a refresh adds, and on the heartbeat. Re-signing on every request
+    cost an HMAC and a Set-Cookie per response."""
+    if request.url.path in _SESSION_ALWAYS_REFRESH_PATHS:
+        return True
+    last_activity = int(session.get("last_activity") or 0)
+    if last_activity <= 0 or "originally_issued_at" not in session:
+        return True
+    idle_timeout = int(state.LOGIN_RULES.get("session_idle_timeout", 1800))
+    lag = SESSION_REFRESH_MAX_LAG_SECONDS
+    if idle_timeout > 0:
+        lag = min(lag, idle_timeout // 10)
+    return int(time.time()) - last_activity >= lag
+
+
 def verify_session_token(token: str) -> dict | None:
     """Returns the decoded payload or None. Validates the signature only;
     idle timeout and absolute lifetime are enforced in require_auth where we
@@ -906,7 +937,7 @@ SAML_ACS_PATH = "/api/auth/saml/acs"
 
 # Inbound webhook receivers: no session and no CSRF (the sender can do
 # neither; each authenticates its body itself). Unlike PUBLIC_PATHS they stay
-# rate limited, under their own per-IP budget (``api_rate_limit_middleware``).
+# rate limited, under their own per-IP budget (``api_rate_limit_guard``).
 WEBHOOK_PATHS = frozenset({MERAKI_WEBHOOK_PATH}) | CHATOPS_WEBHOOK_PATHS
 # Webhook deliveries per rate-limit window per source IP. Meraki bursts when
 # many devices alert at once, so this is above the anonymous write limit.
@@ -944,9 +975,28 @@ async def _load_request_user(request: Request, session: dict) -> dict | None:
     cached = getattr(request.state, "auth_user", _AUTH_STATE_UNSET)
     if cached is not _AUTH_STATE_UNSET:
         return cached
-    user = await db.get_user_by_id(session["user_id"])
+    user = await _cached_user_row(session)
     request.state.auth_user = user
     return user
+
+
+async def _cached_user_row(session: dict) -> dict | None:
+    """The session user's row, from ``authz_cache`` across requests (keyed
+    by user id and the token's session epoch; every ``users`` write drops
+    it). Each call returns a new dict, so a handler that changes it changes
+    nothing cached. A session whose ids do not parse reads the database."""
+    try:
+        user_id = int(session["user_id"])
+        epoch = int(session.get("session_epoch") or 0)
+    except KeyError, TypeError, ValueError:
+        return await db.get_user_by_id(session["user_id"])
+
+    async def load() -> tuple | None:
+        row = await db.get_user_by_id(user_id)
+        return tuple(row.items()) if row else None
+
+    items = await authz_cache.get_or_load(("user", user_id, epoch), load)
+    return dict(items) if items is not None else None
 
 
 async def _load_request_features(request: Request, user: dict) -> list[str]:
@@ -1048,9 +1098,9 @@ async def require_auth(request: Request, response: Response = None):
         )
 
     # Bump activity by re-issuing the cookie, with the attributes the login
-    # flow uses. Kiosk accounts keep their cookie; a call with no Response
-    # has nowhere to set one.
-    if not user.get("session_never_expires") and response is not None:
+    # flow uses, once it is due (_session_cookie_due). Kiosk accounts keep
+    # their cookie; a call with no Response has nowhere to set one.
+    if not user.get("session_never_expires") and response is not None and _session_cookie_due(request, session):
         refreshed = _refresh_session_token(session)
         response.set_cookie(
             key="session",
@@ -1710,6 +1760,17 @@ async def _cloud_traffic_metric_sync_loop() -> None:
 # App Lifecycle
 # ═════════════════════════════════════════════════════════════════════════════
 
+# The longest random delay before a background loop's first pass.
+BACKGROUND_LOOP_START_JITTER_SECONDS = 30.0
+
+
+async def _start_jittered(loop_fn) -> None:
+    """Run ``loop_fn`` after a random delay of up to
+    ``BACKGROUND_LOOP_START_JITTER_SECONDS``: loops that all start at once
+    and sleep the same interval would otherwise wake together every cycle."""
+    await asyncio.sleep(random.uniform(0, BACKGROUND_LOOP_START_JITTER_SECONDS))
+    await loop_fn()
+
 
 _mcp_app, _run_mcp = build_mcp_app()
 
@@ -1810,8 +1871,13 @@ async def lifespan(app: FastAPI):
                 exc,
             )
 
+    # Loops that run their first pass at start on purpose (the discovery
+    # scan, the one-off backfills); every other loop starts after a random
+    # delay (_start_jittered) so loops on the same interval do not all wake
+    # in the same second.
+    start_at_once = (_discovery_sync_loop, _interface_addresses_backfill, _opnsense_backup_encryption_backfill)
     background_tasks = [
-        asyncio.create_task(loop(), name=loop.__name__)
+        asyncio.create_task(loop() if loop in start_at_once else _start_jittered(loop), name=loop.__name__)
         for loop in (
             _job_retention_cleanup_loop,
             _discovery_sync_loop,
@@ -2139,68 +2205,49 @@ app.add_middleware(
     allow_headers=["Content-Type", "X-CSRF-Token", "X-API-Token", "Authorization"],
 )
 
-# Added last so it sits outermost in the stack and compresses every response,
-# including static assets. Starlette skips text/event-stream by default, so
+# Inside the HTTP middleware below and outside every route, so it compresses
+# every response, including static assets. Starlette skips text/event-stream by default, so
 # the SSE endpoints (monitoring, topology, inventory) are unaffected. Level 5
 # keeps nearly all of level 9's ratio on JSON at a fraction of the CPU, which
 # matters on the single event loop that also runs every poller.
 app.add_middleware(GZipMiddleware, minimum_size=500, compresslevel=5)
 
 
-@app.middleware("http")
-async def csrf_protection_middleware(request: Request, call_next):
-    """Validate CSRF token on state-changing requests authenticated via session cookie.
+def _session_precheck(request: Request) -> dict | None:
+    """The request's session cookie, verified once per request.
 
-    Requests authenticated via API token (X-API-Token / Bearer) are exempt
-    because they are not susceptible to cross-site request forgery.
-
-    Sign-in and registration (the POSTs of ``PUBLIC_PATHS``) take no token;
-    they are refused when the ``Origin`` header names another site
-    (``shared.origin_allowed``).
-    """
-    if request.method in _CSRF_PROTECTED_METHODS and request.url.path in PUBLIC_PATHS:
-        # Sign-in and registration have no session to bind a token to. They
-        # start one, so a page of another site must not send them for the
-        # visitor: its browser would end up signed in to an account the
-        # other site chose.
-        if not shared.origin_allowed(request):
-            LOGGER.warning(
-                "csrf: refused %s from another site (Origin %r, Host %r)",
-                request.url.path,
-                request.headers.get("origin", "")[:200],
-                request.headers.get("host", "")[:200],
-            )
-            return _api_error_response(403, "cross_site_request", CROSS_SITE_REFUSAL)
-    if request.method in _CSRF_PROTECTED_METHODS and request.url.path.startswith("/api/"):
-        # Skip CSRF check for public paths (login, register, etc.) and the
-        # SAML ACS (the IdP's signed POST, bound to the saml_tx cookie).
-        if (
-            request.url.path not in PUBLIC_PATHS
-            and request.url.path not in WEBHOOK_PATHS
-            and request.url.path != SAML_ACS_PATH
-        ):
-            # Only enforce when using cookie-based auth (no API-token header)
-            api_token = _extract_api_token(request)
-            using_api_token = bool(APP_API_TOKEN and api_token and secrets.compare_digest(api_token, APP_API_TOKEN))
-            if not using_api_token:
-                session_cookie = request.cookies.get("session")
-                if session_cookie:
-                    session = verify_session_token(session_cookie)
-                    if session:
-                        csrf_tok = (
-                            request.headers.get("x-csrf-token", "")
-                            or request.headers.get("x-csrftoken", "")
-                            or request.headers.get("x-xsrf-token", "")
-                        )
-                        if not csrf_tok or not _validate_csrf_token(csrf_tok, session):
-                            return _api_error_response(403, "csrf_error", "Missing or invalid CSRF token")
-                # No session cookie + no API token on a mutating /api/ request:
-                # let require_auth reject it (don't silently skip CSRF)
-    return await call_next(request)
+    The rate limiter and the CSRF check need it before routing, and
+    ``require_auth`` reads ``request.state.session_precheck`` instead of
+    verifying the same cookie again. ``None`` when there is no cookie or it
+    does not verify."""
+    if getattr(request.state, "session_precheck_done", False):
+        return getattr(request.state, "session_precheck", None)
+    token = request.cookies.get("session")
+    session = verify_session_token(token) if token else None
+    request.state.session_precheck_done = True
+    if session:
+        request.state.session_precheck = session
+    return session
 
 
-@app.middleware("http")
-async def api_rate_limit_middleware(request: Request, call_next):
+_HTTPS_REDIRECT_EXEMPT = {"/api/health"}
+
+
+async def https_redirect_guard(request: Request) -> Response | None:
+    """Redirect plaintext HTTP to HTTPS when APP_HTTPS_REDIRECT is enabled.
+
+    The health endpoint is exempt so load-balancer probes still work over
+    HTTP. The scheme comes from X-Forwarded-Proto behind a reverse proxy,
+    else the request's own (the OIDC redirect URI uses the same helper)."""
+    if not APP_HTTPS_REDIRECT or request.url.path in _HTTPS_REDIRECT_EXEMPT:
+        return None
+    scheme = shared._request_scheme(request)
+    if scheme != "https":
+        return RedirectResponse(str(request.url.replace(scheme="https")), status_code=301)
+    return None
+
+
+async def api_rate_limit_guard(request: Request) -> Response | None:
     """Enforce per-IP sliding-window rate limits on API endpoints.
 
     Read requests (GET) and write requests (POST/PUT/DELETE) have separate
@@ -2219,25 +2266,22 @@ async def api_rate_limit_middleware(request: Request, call_next):
     stays exempt, which is the stale-session case above.
     """
     cfg = state.API_RATE_LIMIT
-    if cfg.get("enabled") and request.url.path in WEBHOOK_PATHS:
+    path = request.url.path
+    if cfg.get("enabled") and path in WEBHOOK_PATHS:
         # Never authenticated by a session: counted on their own budget.
         client_ip = request.client.host if request.client else "unknown"
         retry_after = await _rate_limit_hit(f"webhook:{client_ip}", WEBHOOK_RATE_LIMIT_MAX, cfg)
         if retry_after is not None:
             return _api_error_response(429, "rate_limit_exceeded", f"Too many requests. Try again in {retry_after}s.")
-        return await call_next(request)
-    path = request.url.path
+        return None
     unlimited = path in PUBLIC_PATHS and path not in RATE_LIMITED_PUBLIC_PATHS
     if cfg.get("enabled") and path.startswith("/api/") and not unlimited:
         # Skip counting for authenticated requests - see docstring.
         api_token = _extract_api_token(request)
-        session_cookie = request.cookies.get("session")
-        verified_session = verify_session_token(session_cookie) if session_cookie else None
+        verified_session = _session_precheck(request)
         session_counts = False
         if verified_session:
-            # Stash for require_auth so the same cookie isn't decoded again;
-            # the user row is cached on the request for the same reason.
-            request.state.session_precheck = verified_session
+            # The user row is cached on the request for require_auth.
             session_user = await _load_request_user(request, verified_session)
             session_counts = shared.session_rejection(verified_session, session_user) not in (
                 "user_missing",
@@ -2248,7 +2292,7 @@ async def api_rate_limit_middleware(request: Request, call_next):
             (APP_API_TOKEN and api_token and secrets.compare_digest(api_token, APP_API_TOKEN)) or session_counts
         )
         if is_authenticated:
-            return await call_next(request)
+            return None
 
         client_ip = request.client.host if request.client else "unknown"
         is_write = request.method in _CSRF_PROTECTED_METHODS
@@ -2260,8 +2304,7 @@ async def api_rate_limit_middleware(request: Request, call_next):
                 "rate_limit_exceeded",
                 f"Too many requests. Try again in {retry_after}s.",
             )
-
-    return await call_next(request)
+    return None
 
 
 async def _rate_limit_hit(key: str, limit: int, cfg: dict) -> int | None:
@@ -2278,142 +2321,90 @@ async def _rate_limit_hit(key: str, limit: int, cfg: dict) -> int | None:
         # Prune entries outside the sliding window
         timestamps = [t for t in timestamps if now - t < window]
         if len(timestamps) >= limit:
-            return int(window - (now - timestamps[0])) + 1
+            # A limit of 0 refuses every request for the whole window.
+            return int(window - (now - timestamps[0])) + 1 if timestamps else window
         timestamps.append(now)
         tracker[key] = timestamps
     return None
 
 
-@app.middleware("http")
-async def correlation_id_middleware(request: Request, call_next):
-    """Attach a correlation ID to every request for log traceability.
+async def csrf_guard(request: Request) -> Response | None:
+    """Validate the CSRF token on state-changing requests authenticated via
+    the session cookie.
 
-    Callers may supply ``X-Correlation-ID``; otherwise one is generated.
-    The ID is returned in the response header for client-side linking.
+    Requests authenticated via API token (X-API-Token / Bearer) are exempt
+    because they are not susceptible to cross-site request forgery. A
+    mutating /api/ request with neither a session cookie nor an API token is
+    left to require_auth to reject.
+
+    Sign-in and registration (the POSTs of ``PUBLIC_PATHS``) take no token;
+    they are refused when the ``Origin`` header names another site
+    (``shared.origin_allowed``).
     """
-    corr_id = request.headers.get("x-correlation-id", "").strip() or secrets.token_hex(8)
-    request.state.correlation_id = corr_id
-    response = await call_next(request)
-    response.headers["X-Correlation-ID"] = corr_id
-    return response
-
-
-@app.middleware("http")
-async def metrics_and_logging_middleware(request: Request, call_next):
-    start = time.perf_counter()
-    corr_id = getattr(request.state, "correlation_id", "")
-    try:
-        response = await call_next(request)
-    except Exception:
-        duration_ms = (time.perf_counter() - start) * 1000
-        increment_metric("api.requests.total")
-        increment_metric("api.requests.failed")
-        observe_timing("api.request.duration_ms", duration_ms)
-        LOGGER.warning(
-            "request error path=%s correlation_id=%s duration_ms=%.1f", request.url.path, corr_id, duration_ms
+    if request.method not in _CSRF_PROTECTED_METHODS:
+        return None
+    path = request.url.path
+    if path in PUBLIC_PATHS:
+        # Sign-in and registration have no session to bind a token to. They
+        # start one, so a page of another site must not send them for the
+        # visitor: its browser would end up signed in to an account the
+        # other site chose.
+        if not shared.origin_allowed(request):
+            LOGGER.warning(
+                "csrf: refused %s from another site (Origin %r, Host %r)",
+                path,
+                request.headers.get("origin", "")[:200],
+                request.headers.get("host", "")[:200],
+            )
+            return _api_error_response(403, "cross_site_request", CROSS_SITE_REFUSAL)
+        return None
+    # The webhook receivers and the SAML ACS (the IdP's signed POST, bound to
+    # the saml_tx cookie) are exempt.
+    if not path.startswith("/api/") or path in WEBHOOK_PATHS or path == SAML_ACS_PATH:
+        return None
+    api_token = _extract_api_token(request)
+    if APP_API_TOKEN and api_token and secrets.compare_digest(api_token, APP_API_TOKEN):
+        return None
+    session = _session_precheck(request)
+    if session:
+        csrf_tok = (
+            request.headers.get("x-csrf-token", "")
+            or request.headers.get("x-csrftoken", "")
+            or request.headers.get("x-xsrf-token", "")
         )
-        raise
-
-    duration_ms = (time.perf_counter() - start) * 1000
-    increment_metric("api.requests.total")
-    if response.status_code >= 400:
-        increment_metric("api.requests.failed")
-    observe_timing("api.request.duration_ms", duration_ms)
-    return response
+        if not csrf_tok or not _validate_csrf_token(csrf_tok, session):
+            return _api_error_response(403, "csrf_error", "Missing or invalid CSRF token")
+    return None
 
 
-# Response types that are streams read event by event (SSE; NDJSON is
-# accepted by the SPA's stream readers too): sent with X-Accel-Buffering: no.
-_UNBUFFERED_STREAM_TYPES = frozenset({"text/event-stream", "application/x-ndjson"})
+def _hsts_header_value() -> str | None:
+    """The Strict-Transport-Security value, or None when HSTS is off."""
+    if not APP_HSTS_ENABLED:
+        return None
+    return f"max-age={max(0, APP_HSTS_MAX_AGE)}; includeSubDomains"
 
 
-@app.middleware("http")
-async def security_headers_middleware(request: Request, call_next):
-    """Add security headers to every response.
-
-    - HSTS when APP_HSTS/APP_HTTPS is enabled
-    - X-Content-Type-Options to prevent MIME sniffing
-    - X-Frame-Options to prevent clickjacking
-    - Referrer-Policy to limit referrer leakage
-    - Content-Security-Policy to mitigate XSS
-    - Permissions-Policy to disable unused browser features
-    """
-    response = await call_next(request)
-    if APP_HSTS_ENABLED:
-        response.headers["Strict-Transport-Security"] = f"max-age={max(0, APP_HSTS_MAX_AGE)}; includeSubDomains"
-    response.headers["X-Content-Type-Options"] = "nosniff"
-    response.headers["X-Frame-Options"] = "DENY"
-    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
-    response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
-    # CSP: restrict resource origins while allowing the SPA to function.
-    # script-src is 'self' only: the React bundle ships as external hashed
-    # modules from /assets, so no inline <script> or CDN is needed
-    # (the legacy index.html onclick= handlers were removed in the React
-    # migration). 'unsafe-inline' is kept for style-src alone (dynamic style=
-    # attrs from the React app and ECharts).
-    # setdefault (not assignment) so a single-purpose endpoint that needs a
-    # looser policy - e.g. the graph-export embed page, which renders only
-    # escaped JSON and pulls ECharts from a CDN - can set its own CSP without
-    # this middleware clobbering it.
-    response.headers.setdefault(
-        "Content-Security-Policy",
-        (
-            "default-src 'self'; "
-            "script-src 'self'; "
-            "style-src 'self' 'unsafe-inline'; "
-            "img-src 'self' data: blob:; "
-            "font-src 'self'; "
-            "connect-src 'self' ws: wss:; "
-            "frame-ancestors 'none'; "
-            "base-uri 'self'; "
-            "form-action 'self'"
-        ),
-    )
-    # Not a security header, but this hook already sees every response
-    # (mounted apps such as /mcp included). nginx buffers proxied responses
-    # (deploy/nginx.conf); a stream tells it to pass each event straight on.
-    content_type = response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
-    if content_type in _UNBUFFERED_STREAM_TYPES:
-        response.headers.setdefault("X-Accel-Buffering", "no")
-    return response
+def _internal_error_response(request: Request) -> JSONResponse:
+    """The 500 answer for an unhandled error (``unhandled_exception_handler``)."""
+    if request.url.path.startswith("/api/"):
+        return _api_error_response(500, "internal_error", "Internal server error")
+    return JSONResponse(status_code=500, content={"detail": "Internal server error"})
 
 
-# ── HTTPS redirect middleware ─────────────────────────────────────────────────
-# Registered after security_headers so Starlette runs it *first* (LIFO order).
-# Redirects plaintext HTTP to HTTPS when APP_HTTPS_REDIRECT is enabled.
-# Skips the health endpoint so load-balancer probes still work over HTTP.
-
-_HTTPS_REDIRECT_EXEMPT = {"/api/health"}
-
-
-@app.middleware("http")
-async def https_redirect_middleware(request: Request, call_next):
-    if not APP_HTTPS_REDIRECT:
-        return await call_next(request)
-
-    # Allow health checks through without redirect
-    if request.url.path in _HTTPS_REDIRECT_EXEMPT:
-        return await call_next(request)
-
-    # Detect scheme: trust X-Forwarded-Proto from reverse proxy, fall back to
-    # the actual request scheme (covers direct TLS termination by uvicorn).
-    # The OIDC redirect URI is derived with the same helper.
-    scheme = shared._request_scheme(request)
-
-    if scheme != "https":
-        target = request.url.replace(scheme="https")
-        return RedirectResponse(str(target), status_code=301)
-
-    return await call_next(request)
-
-
-# ── Request body limit ────────────────────────────────────────────────────────
-# Registered last so it is the outermost user middleware: an oversized body
-# gets 413 before CSRF, rate limiting, auth or form parsing touch it. Default
-# APP_MAX_REQUEST_BODY_MB (10 MB); the upload routes in
+# ── HTTP middleware ───────────────────────────────────────────────────────────
+# One pure ASGI middleware (netcontrol/http_middleware.py), registered last so
+# it is outermost: it sets the correlation id, adds the security headers to
+# every response and records request metrics, then enforces the request body
+# limit (an oversized body gets 413 before any guard, auth or form parsing
+# touches it; default APP_MAX_REQUEST_BODY_MB, the upload routes in
 # netcontrol/body_limit.py:default_path_limits get larger limits, mirrored by
-# the location blocks in deploy/nginx.conf.
-app.add_middleware(BodyLimitMiddleware)
+# deploy/nginx.conf), then runs the guards in this order.
+app.add_middleware(
+    PlexusHTTPMiddleware,
+    guards=(https_redirect_guard, api_rate_limit_guard, csrf_guard),
+    hsts_header=_hsts_header_value,
+    internal_error=_internal_error_response,
+)
 
 
 def _api_error_response(status_code: int, code: str, message: str, detail: dict | None = None) -> JSONResponse:
@@ -2488,8 +2479,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
     if request.url.path.startswith("/api/"):
         LOGGER.error("Unhandled error on %s: %s", request.url.path, redact_value(str(exc)))
         LOGGER.debug("Traceback: %s", traceback.format_exc())
-        return _api_error_response(500, "internal_error", "Internal server error")
-    return JSONResponse(status_code=500, content={"detail": "Internal server error"})
+    return _internal_error_response(request)
 
 
 async def _public_path_caller_authenticated(request: Request) -> bool:
@@ -2598,10 +2588,11 @@ async def version(request: Request):
 
 # The dashboard is the landing page and every SPA tab polls it; the data it
 # aggregates changes on the order of poll cycles, not per request. A short
-# shared TTL cache absorbs the fan-out (same pattern as /api/topology).
+# shared TTL cache absorbs the fan-out (same pattern as /api/topology), with
+# its JSON body and ETag for the callers who see all of it.
 _DASHBOARD_CACHE_TTL_SECONDS = 10.0
-_dashboard_cache: dict = {"data": None, "expires": 0.0}
-_dashboard_cache_lock = asyncio.Lock()
+_DASHBOARD_KEY = "unscoped"
+_dashboard_cache: PayloadCache[JsonPayload] = PayloadCache("dashboard", ttl=_DASHBOARD_CACHE_TTL_SECONDS, max_entries=1)
 
 
 async def _has_feature(request: Request, feature_key: str) -> bool:
@@ -2614,24 +2605,18 @@ async def _has_feature(request: Request, feature_key: str) -> bool:
     return True
 
 
-async def _dashboard_data() -> dict:
-    if _dashboard_cache["data"] is not None and time.monotonic() < _dashboard_cache["expires"]:
-        return _dashboard_cache["data"]
-    async with _dashboard_cache_lock:
-        # Double-checked: a concurrent request may have refreshed it while
-        # this one waited on the lock.
-        if _dashboard_cache["data"] is not None and time.monotonic() < _dashboard_cache["expires"]:
-            return _dashboard_cache["data"]
-        stats, recent_jobs, groups, monitoring, latest_polls, alerts, topology = await asyncio.gather(
-            db.get_dashboard_stats(),
-            db.get_all_jobs(limit=5),
-            db.get_all_groups(),
-            db.get_monitoring_summary(),
-            db.get_latest_monitoring_polls(),
-            db.get_monitoring_alerts(acknowledged=False, limit=50),
-            dashboard_topology_summary(),
-        )
-        data = {
+async def _build_dashboard() -> JsonPayload:
+    stats, recent_jobs, groups, monitoring, latest_polls, alerts, topology = await asyncio.gather(
+        db.get_dashboard_stats(),
+        db.get_all_jobs(limit=5),
+        db.get_all_groups(),
+        db.get_monitoring_summary(),
+        db.get_latest_monitoring_polls(),
+        db.get_monitoring_alerts(acknowledged=False, limit=50),
+        dashboard_topology_summary(),
+    )
+    return JsonPayload(
+        {
             "stats": stats,
             "recent_jobs": recent_jobs,
             "groups": groups,
@@ -2640,9 +2625,7 @@ async def _dashboard_data() -> dict:
             "open_alerts": alerts,
             "topology": topology,
         }
-        _dashboard_cache["data"] = data
-        _dashboard_cache["expires"] = time.monotonic() + _DASHBOARD_CACHE_TTL_SECONDS
-        return data
+    )
 
 
 @app.get("/api/dashboard", dependencies=[Depends(require_auth), Depends(require_feature("dashboard"))])
@@ -2653,10 +2636,17 @@ async def dashboard(request: Request) -> dict:
         # Limited to selected inventory groups: computed over its scope, uncached.
         data = await scoped_dashboard_data(scope, username)
     else:
-        data = await _dashboard_data()
+        cached = await _dashboard_cache.get_or_build(_DASHBOARD_KEY, _build_dashboard)
+        if await caller_features(request) is None:
+            # An admin or the API token sees the whole shared payload: its
+            # cached body is the answer.
+            return json_response(request, cached)  # type: ignore[return-value]
+        data = cached.value
     # The cache is shared by every user, so the per-user feature gate applies
-    # after it, to a copy (dashboard_for_caller).
-    return await dashboard_for_caller(request, data, scope, username)
+    # after it, to a copy (dashboard_for_caller); the body and ETag are this
+    # caller's own.
+    view = await dashboard_for_caller(request, data, scope, username)
+    return json_response(request, JsonPayload(view))  # type: ignore[return-value]
 
 
 # ═════════════════════════════════════════════════════════════════════════════

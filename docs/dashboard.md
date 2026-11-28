@@ -248,11 +248,29 @@ GET /api/metrics/query?metric=cpu_percent&host=12,13&range=24h
 ```json
 {
   "metric": "cpu_percent",
-  "step": "hourly",
+  "step": "raw",
   "range": "24h",
-  "count": 48,
+  "bucket_seconds": 300,
+  "count": 576,
+  "limit": 20000,
+  "truncated": false,
   "data": [
-    { "host_id": 12, "hostname": "core-sw-01", "period_start": "2026-11-13 10:00:00", "val_avg": 23.5 }
+    {
+      "host_id": 12, "hostname": "core-sw-01", "sampled_at": "2026-11-13 10:05:00",
+      "period_start": "2026-11-13 10:05:00", "value": 23.5, "val_avg": 23.5,
+      "val_min": 19.0, "val_max": 31.0, "sample_count": 5
+    }
   ]
 }
 ```
+
+Rows come newest first. With `step=auto` (the default) the server sizes the
+resolution to the range: up to 48 hours (the raw sample retention) the raw
+samples are averaged into buckets of `bucket_seconds` (one minute to six
+hours, about 360 points per series, fewer when many hosts share the 20,000
+row cap); longer ranges read the hourly rollups (up to 30 days, when they give
+at most 1,000 points per series) or the daily rollups. Each bucketed row has
+the mean as `value` and `val_avg`, plus `val_min`, `val_max` and
+`sample_count`. `step=raw`, `step=hourly` and `step=daily` return the stored
+rows unchanged (`bucket_seconds` 0), capped at 10,000. `limit` is the cap that
+applied and `truncated` is true when it cut the oldest rows.

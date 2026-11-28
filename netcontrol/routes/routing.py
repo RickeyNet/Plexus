@@ -44,6 +44,7 @@ from netcontrol.object_scope import (
     require_new_row,
     require_row,
     scoped,
+    sql_condition,
 )
 from netcontrol.routes.custom_fields import custom_list, with_custom_data
 from netcontrol.routes.shared import _audit, _corr_id, _session_user
@@ -282,18 +283,26 @@ async def _require_instance_write(request: Request, instance_id: int) -> None:
     )
 
 
+async def _instance_scope(request: Request) -> tuple[str, tuple]:
+    """The object scope SQL condition on the routing instance (alias ``ri``)
+    of instances, peer groups and peerings: ``filter_rows("routing_instance")``
+    in the query."""
+    return await sql_condition("routing_instance", request, alias="ri")
+
+
 async def _scoped_as_counts(request: Request, rows: list[dict]) -> list[dict]:
     """Autonomous systems with ``instance_count`` and ``peering_count``
     counting only the caller's routing instances and peerings (unchanged
     for an unrestricted caller)."""
     if (await request_scope(request)).unrestricted:
         return rows
+    scope = await _instance_scope(request)
     instances: dict[int, int] = {}
-    for instance in await filter_rows("routing_instance", await db.list_routing_instances(), request):
+    for instance in await db.list_routing_instances(scope_condition=scope):
         key = int(instance["autonomous_system_id"])
         instances[key] = instances.get(key, 0) + 1
     peerings: dict[int, int] = {}
-    for peering in await filter_rows("routing_instance", await db.list_bgp_peerings(), request):
+    for peering in await db.list_bgp_peerings(scope_condition=scope):
         if peering.get("remote_asn_id") is not None:
             key = int(peering["remote_asn_id"])
             peerings[key] = peerings.get(key, 0) + 1
@@ -329,10 +338,10 @@ async def get_autonomous_system(as_id: int, request: Request) -> dict:
         "autonomous_system",
         {
             **record,
-            "routing_instances": await filter_rows(
-                "routing_instance", await db.list_routing_instances(asn=record["asn"]), request
+            "routing_instances": await db.list_routing_instances(
+                asn=record["asn"], scope_condition=await _instance_scope(request)
             ),
-            "peerings": await filter_rows("routing_instance", await db.list_bgp_peerings(asn=record["asn"]), request),
+            "peerings": await db.list_bgp_peerings(asn=record["asn"], scope_condition=await _instance_scope(request)),
         },
     )
 
@@ -440,8 +449,9 @@ async def list_routing_instances(
         status=_status_filter(status, INSTANCE_STATUSES),
         tenant_id=tenant_id,
         search=_search(search),
+        scope_condition=await _instance_scope(request),
     )
-    return {"routing_instances": await filter_rows("routing_instance", rows, request)}
+    return {"routing_instances": rows}
 
 
 @router.get(f"{PREFIX}/instances/{{instance_id}}")
@@ -551,9 +561,12 @@ async def list_bgp_peer_groups(
     search: str | None = Query(default=None, max_length=_SEARCH_MAX),
 ) -> dict:
     rows = await db.list_bgp_peer_groups(
-        routing_instance_id=routing_instance_id, host_id=host_id, search=_search(search)
+        routing_instance_id=routing_instance_id,
+        host_id=host_id,
+        search=_search(search),
+        scope_condition=await _instance_scope(request),
     )
-    return {"peer_groups": await filter_rows("routing_instance", rows, request)}
+    return {"peer_groups": rows}
 
 
 @router.get(f"{PREFIX}/peer-groups/{{group_id}}")
@@ -648,8 +661,8 @@ async def list_bgp_peerings(
         status=_status_filter(status, PEERING_STATUSES),
         tenant_id=tenant_id,
         search=_search(search),
+        scope_condition=await _instance_scope(request),
     )
-    rows = await filter_rows("routing_instance", rows, request)
     return {"peerings": await custom_list("bgp_peering", rows, request)}
 
 

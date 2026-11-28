@@ -6,7 +6,6 @@ import {
   backupDiffAvailable,
   filterDriftEvents,
   groupDriftEvents,
-  normalizeDiffForGrouping,
   NO_CREDENTIAL,
   policyCredentialChoice,
   policyCredentialId,
@@ -37,33 +36,21 @@ describe('statusColor', () => {
   });
 });
 
-describe('normalizeDiffForGrouping', () => {
-  it('keeps only changed lines, dropping headers, hunks, and context', () => {
-    const diff = `--- a/host1\n+++ b/host1\n@@ -1,3 +1,3 @@\n context\n-old\n+new`;
-    expect(normalizeDiffForGrouping(diff)).toBe('-old\n+new');
-  });
-
-  it('produces the same key when only surrounding context differs', () => {
-    const h1 = `--- a/h1\n+++ b/h1\n@@ -1,3 +1,3 @@\n interface Gi0/1\n-old\n+new\n description host1`;
-    const h2 = `--- a/h2\n+++ b/h2\n@@ -4,3 +4,3 @@\n interface Gi0/9\n-old\n+new\n description host2`;
-    expect(normalizeDiffForGrouping(h1)).toBe(normalizeDiffForGrouping(h2));
-  });
-
-  it('handles empty input', () => {
-    expect(normalizeDiffForGrouping(null)).toBe('');
-    expect(normalizeDiffForGrouping('')).toBe('');
-  });
-});
-
 describe('groupDriftEvents', () => {
-  it('groups events with identical normalized diffs', () => {
-    const a = ev(1, { diff_text: '--- a/h1\n+++ b/h1\n+new line' });
-    const b = ev(2, { diff_text: '--- a/h2\n+++ b/h2\n+new line' });
-    const c = ev(3, { diff_text: '+different change' });
-    const groups = groupDriftEvents([a, b, c]);
+  it('groups events by the change key the server sends', () => {
+    const a = ev(1, { diff_key: 'aaaa' });
+    const b = ev(2, { diff_key: 'aaaa' });
+    const c = ev(3, { diff_key: 'bbbb' });
+    const groups = groupDriftEvents([c, a, b]);
     expect(groups).toHaveLength(2);
-    expect(groups[0].events).toHaveLength(2);
-    expect(groups[1].events).toHaveLength(1);
+    expect(groups[0].events.map((e) => e.id)).toEqual([1, 2]);
+    expect(groups[1].events.map((e) => e.id)).toEqual([3]);
+    // The first event of a group is the one whose diff the card shows.
+    expect(groups[0].representative_id).toBe(1);
+  });
+
+  it('puts events without a key in one group', () => {
+    expect(groupDriftEvents([ev(1, {}), ev(2, { diff_key: '' })])).toHaveLength(1);
   });
 });
 

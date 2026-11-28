@@ -447,11 +447,15 @@ async def list_host_graphs(
     host_id: int | None = None,
     graph_template_id: int | None = None,
     enabled_only: bool = False,
+    *,
+    scope_condition: tuple[str, tuple] = ("", ()),
 ) -> list[dict]:
+    """``scope_condition``: an object scope SQL condition on alias ``hg``
+    (``object_scope.sql_condition("host_record", ...)``)."""
     db = await _dbcore.get_db(read_only=True)
     try:
-        clauses: list[str] = []
-        params: list = []
+        clauses: list[str] = [scope_condition[0]] if scope_condition[0] else []
+        params: list = list(scope_condition[1])
         if host_id is not None:
             clauses.append("hg.host_id = ?")
             params.append(host_id)
@@ -815,16 +819,24 @@ async def delete_graph_tree_node(node_id: int) -> bool:
 # ═════════════════════════════════════════════════════════════════════════════
 
 
-async def list_data_source_profiles(host_id: int | None = None) -> list[dict]:
+async def list_data_source_profiles(
+    host_id: int | None = None, *, scope_condition: tuple[str, tuple] = ("", ())
+) -> list[dict]:
+    """``scope_condition``: an object scope SQL condition on the table's
+    own columns (``object_scope.sql_condition("host_record", ...)``)."""
+    scope_sql = f" AND {scope_condition[0]}" if scope_condition[0] else ""
     db = await _dbcore.get_db(read_only=True)
     try:
         if host_id is not None:
             cursor = await db.execute(
-                "SELECT * FROM data_source_profiles WHERE host_id = ? ORDER BY profile_name",
-                (host_id,),
+                f"SELECT * FROM data_source_profiles WHERE host_id = ?{scope_sql} ORDER BY profile_name",  # nosec B608 - scope condition: fixed columns, placeholders only
+                (host_id, *scope_condition[1]),
             )
         else:
-            cursor = await db.execute("SELECT * FROM data_source_profiles ORDER BY host_id, profile_name")
+            cursor = await db.execute(
+                f"SELECT * FROM data_source_profiles WHERE 1 = 1{scope_sql} ORDER BY host_id, profile_name",  # nosec B608 - scope condition: fixed columns, placeholders only
+                tuple(scope_condition[1]),
+            )
         return rows_to_list(await cursor.fetchall())
     finally:
         await db.close()
@@ -987,7 +999,7 @@ BUILT_IN_GRAPH_TEMPLATES = [
     },
     {
         "name": "Interface Errors & Discards",
-        "description": "Per-interface error and discard counters",
+        "description": "Per-interface error and discard rates",
         "graph_type": "line",
         "category": "traffic",
         "scope": "interface",
@@ -997,42 +1009,40 @@ BUILT_IN_GRAPH_TEMPLATES = [
         "y_max": None,
         "stacked": True,
         "area_fill": False,
+        # The poll samples the per-second rates, not the raw counters
+        # (migration 0143 moves a seeded copy of this template over).
         "items": [
             {
                 "sort_order": 0,
-                "metric_name": "if_in_errors",
+                "metric_name": "if_in_errors_rate",
                 "label": "In Errors",
                 "color": "#EF4444",
                 "line_type": "line",
                 "consolidation": "avg",
-                "transform": "rate",
             },
             {
                 "sort_order": 1,
-                "metric_name": "if_out_errors",
+                "metric_name": "if_out_errors_rate",
                 "label": "Out Errors",
                 "color": "#F97316",
                 "line_type": "line",
                 "consolidation": "avg",
-                "transform": "rate",
             },
             {
                 "sort_order": 2,
-                "metric_name": "if_in_discards",
+                "metric_name": "if_in_discards_rate",
                 "label": "In Discards",
                 "color": "#A855F7",
                 "line_type": "line",
                 "consolidation": "avg",
-                "transform": "rate",
             },
             {
                 "sort_order": 3,
-                "metric_name": "if_out_discards",
+                "metric_name": "if_out_discards_rate",
                 "label": "Out Discards",
                 "color": "#EC4899",
                 "line_type": "line",
                 "consolidation": "avg",
-                "transform": "rate",
             },
         ],
     },

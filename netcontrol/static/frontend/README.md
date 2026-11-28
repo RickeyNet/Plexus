@@ -15,7 +15,7 @@ frontend.
 | Build          | Vite                                                    |
 | Routing        | react-router-dom v7 (mounted at the site root)            |
 | Server state   | TanStack Query v5                                       |
-| Styling        | Legacy stylesheet `/static/css/style.css` (no PatternFly) |
+| Styling        | Legacy stylesheet `netcontrol/static/css/style.css`, imported by `src/main.tsx` and built by Vite (no PatternFly) |
 | Charts         | ECharts (`src/lib/echart.tsx`)                          |
 | Topology       | vis-network                                             |
 | Code editor    | CodeMirror 6 (`@uiw/react-codemirror`)                  |
