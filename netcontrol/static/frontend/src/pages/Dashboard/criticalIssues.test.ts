@@ -137,6 +137,15 @@ describe('buildIssues', () => {
       'interfaces-down',
     ]);
   });
+
+  it('counts every critical open alert, not only the newest ones listed', () => {
+    const alerts = [{ severity: 'critical', hostname: 'edge-rtr-1', message: 'down' }];
+    const [issue] = buildIssues(inputs({ alerts, criticalAlertCount: 120 }));
+    expect(issue).toMatchObject({ key: 'alerts-critical', count: 120, label: 'critical alerts' });
+    // None of them among the listed alerts: still reported.
+    const [unlisted] = buildIssues(inputs({ criticalAlertCount: 3 }));
+    expect(unlisted).toMatchObject({ key: 'alerts-critical', count: 3, items: [] });
+  });
 });
 
 describe('issueSummary', () => {

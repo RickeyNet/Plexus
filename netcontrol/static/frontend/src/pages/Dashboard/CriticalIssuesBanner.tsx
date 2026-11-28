@@ -10,6 +10,8 @@ import { type Issue, buildIssues, issueSummary, watchedSummary } from './critica
 interface Props {
   devices: DeviceHealth[];
   alerts: DashboardAlert[];
+  /** How many open alerts are critical in all; `alerts` is the newest few. */
+  criticalAlertCount?: number;
   /** Topology sources; empty for users without the topology feature. */
   sources?: TopologySource[];
   /** Absent for users without the monitoring feature. */
@@ -22,12 +24,12 @@ const NO_SOURCES: TopologySource[] = [];
 // be sourced without scrolling and guessing. Each issue is a row that names
 // what is affected and goes to the panel or page with the detail. With
 // nothing wrong it says so, as long as something is being watched.
-export function CriticalIssuesBanner({ devices, alerts, sources = NO_SOURCES, topology }: Props) {
+export function CriticalIssuesBanner({ devices, alerts, criticalAlertCount, sources = NO_SOURCES, topology }: Props) {
   const backups = useLatestConfigBackupsPerHost();
 
   const issues = useMemo(
-    () => buildIssues({ devices, alerts, backups: backups.data ?? [], sources, topology }),
-    [devices, alerts, backups.data, sources, topology],
+    () => buildIssues({ devices, alerts, criticalAlertCount, backups: backups.data ?? [], sources, topology }),
+    [devices, alerts, criticalAlertCount, backups.data, sources, topology],
   );
 
   if (issues.length === 0) {

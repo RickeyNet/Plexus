@@ -1887,13 +1887,24 @@ async def monitoring_polls(
     group_id: int | None = Query(default=None),
     limit: int = Query(default=200, ge=1, le=10000),
     include_details: bool = Query(default=False),
+    q: str = Query(default="", max_length=200),
+    offset: int = Query(default=0, ge=0),
+    with_total: bool = Query(default=False),
 ):
     # include_details appends the large per-poll blobs (if_details, vpn_details,
     # route_snapshot). Bound that path so a wide ?limit can't serialize thousands
     # of full blobs at once; the lean list view (default) keeps the full range.
     if include_details:
         limit = min(limit, 500)
-    return await db.get_latest_monitoring_polls(group_id, limit, include_details, **await group_filter(request))
+    # ``q`` matches hostname or IP address. The bare array stays the default
+    # answer (API clients read it); ``with_total`` wraps it with the number
+    # of matching hosts, counted under the same scope and search.
+    scope = await group_filter(request)
+    polls = await db.get_latest_monitoring_polls(group_id, limit, include_details, search=q, offset=offset, **scope)
+    if not with_total:
+        return polls
+    total = await db.count_latest_monitoring_polls(group_id, search=q, **scope)
+    return {"polls": polls, "total": total}
 
 
 @router.get("/api/monitoring/polls/{host_id}/history")
@@ -1920,8 +1931,21 @@ async def monitoring_alerts(
     acknowledged: bool | None = Query(default=None),
     severity: str | None = Query(default=None),
     limit: int = Query(default=200, ge=1, le=10000),
+    q: str = Query(default="", max_length=200),
+    metric: str | None = Query(default=None, max_length=200),
+    offset: int = Query(default=0, ge=0),
+    with_total: bool = Query(default=False),
 ):
-    return await db.get_monitoring_alerts(host_id, acknowledged, severity, limit, **await group_filter(request))
+    # ``q`` matches hostname, message or metric; ``with_total`` wraps the
+    # page with the number of matching alerts (same scope and filters).
+    scope = await group_filter(request)
+    alerts = await db.get_monitoring_alerts(
+        host_id, acknowledged, severity, limit, search=q, metric=metric, offset=offset, **scope
+    )
+    if not with_total:
+        return alerts
+    total = await db.count_monitoring_alerts(host_id, acknowledged, severity, search=q, metric=metric, **scope)
+    return {"alerts": alerts, "total": total}
 
 
 @router.post("/api/monitoring/alerts/{alert_id}/acknowledge")

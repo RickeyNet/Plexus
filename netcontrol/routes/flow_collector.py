@@ -53,6 +53,12 @@ FLOW_COLLECTOR_CONFIG = {
 
 FLOW_AGGREGATION_MIN_INTERVAL = 60
 
+
+def flow_retention_hours() -> int:
+    """Hours raw flow records are kept (the ``retention_hours`` setting)."""
+    return int(FLOW_COLLECTOR_CONFIG.get("retention_hours", 48))
+
+
 _flow_transport = None
 _flow_protocol = None
 _sflow_transport = None
@@ -1159,8 +1165,7 @@ async def flow_aggregation_cycle():
     await sync_exporter_hosts()
 
     # Cleanup old raw records
-    retention_hours = FLOW_COLLECTOR_CONFIG.get("retention_hours", 48)
-    cleaned = await db.cleanup_old_flow_records(retention_hours)
+    cleaned = await db.cleanup_old_flow_records(flow_retention_hours())
     if cleaned > 0:
         LOGGER.info("flow_collector: cleaned up %d old flow records", cleaned)
     summary_days = int(FLOW_COLLECTOR_CONFIG.get("summary_retention_days", 30))

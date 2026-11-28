@@ -34,6 +34,7 @@ from netcontrol.object_scope import (
 )
 from netcontrol.routes.monitoring import MONITORING_RULE, require_rule_change
 from netcontrol.routes.shared import _session_user
+from netcontrol.sample_history import history_complete
 from netcontrol.telemetry import configure_logging
 
 router = APIRouter()
@@ -108,16 +109,21 @@ async def compute_baselines_for_host(host_id: int, metric_name: str, learning_da
     Queries metric_samples for the past N days and aggregates by
     (day_of_week, hour_of_day) buckets.
 
-    Returns number of baseline entries created/updated.
+    Returns number of baseline entries created/updated; 0, writing
+    nothing, while the window still has history from before migration 0144
+    to move in (the next cycle computes it).
     """
     # Query raw samples from the learning window
     cutoff = (datetime.now(UTC) - timedelta(days=learning_days)).isoformat()
+    if not await history_complete("metric_samples", cutoff):
+        LOGGER.info("baseline: host=%d metric=%s deferred until the sample history move finishes", host_id, metric_name)
+        return 0
     ddb = await db.get_db()
     try:
         cursor = await ddb.execute(
-            """SELECT value, collected_at FROM metric_samples
-               WHERE host_id = ? AND metric_name = ? AND collected_at >= ?
-               ORDER BY collected_at""",
+            """SELECT value, sampled_at FROM metric_samples
+               WHERE host_id = ? AND metric_name = ? AND sampled_at >= ?
+               ORDER BY sampled_at""",
             (host_id, metric_name, cutoff),
         )
         rows = await cursor.fetchall()
@@ -130,9 +136,9 @@ async def compute_baselines_for_host(host_id: int, metric_name: str, learning_da
     # Group by (day_of_week, hour_of_day)
     buckets: dict[tuple[int, int], list[float]] = {}
     for row in rows:
-        r = dict(row) if hasattr(row, "keys") else {"value": row[0], "collected_at": row[1]}
+        r = dict(row) if hasattr(row, "keys") else {"value": row[0], "sampled_at": row[1]}
         try:
-            ts = datetime.fromisoformat(r["collected_at"])
+            ts = datetime.fromisoformat(r["sampled_at"])
             dow = ts.weekday()  # 0=Monday
             hod = ts.hour
             val = float(r["value"])

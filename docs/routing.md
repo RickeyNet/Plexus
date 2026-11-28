@@ -67,6 +67,13 @@ A **peering** is one intended BGP session of an instance:
 Lists filter by device, AS number (the local or the remote AS), status,
 tenant (of the device or of the AS) and free text.
 
+A user whose access is limited to some device groups sees a peering when
+they can read the device of its instance. The peer device is named only
+when they can read that device too; otherwise the peering shows no peer
+device (`remote_host_id` null, `remote_hostname` empty) and keeps its
+remote address and AS. Saving such a peering from the edit form keeps the
+stored peer device.
+
 ## Intended vs observed (Compliance)
 
 The **Compliance** tab compares every peering with the BGP neighbors that

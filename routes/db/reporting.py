@@ -397,7 +397,7 @@ async def generate_interface_report_data(
                        MAX(its.utilization_pct) AS peak_util
                 FROM interface_ts its
                 JOIN hosts h ON h.id = its.host_id
-                WHERE its.sampled_at >= datetime('now', '-' || ? || ' days')
+                WHERE its.sampled_at >= {_dbcore._now_minus_expr("days")}
                   AND {where}
                 GROUP BY h.id, its.if_index
                 ORDER BY h.hostname, if_name""",

@@ -256,12 +256,41 @@ async def _check_host(fields: _Fields, field: str, host_id: int | None) -> dict 
 # ── Object scope ─────────────────────────────────────────────────────────────
 
 
+async def _host_hidden(request: Request, host_id: int | None) -> bool:
+    """Whether ``host_id`` is a device the (scoped) caller cannot read."""
+    if host_id is None:
+        return False
+    readable = await readable_host_ids(request)
+    return readable is not None and int(host_id) not in readable
+
+
 async def _hide_unreadable_host(request: Request, fields: _Fields, field: str, host_id: int | None) -> None:
     """For a scoped caller, a device they cannot read is reported like an
     unknown one (``_check_host``'s message)."""
-    readable = await readable_host_ids(request)
-    if readable is not None and host_id is not None and int(host_id) not in readable and field not in fields.errors:
+    if field not in fields.errors and await _host_hidden(request, host_id):
         fields.add(field, "No device has this id.")
+
+
+async def _own_peer_devices(request: Request, peerings: list[dict]) -> list[dict]:
+    """The peerings as the caller may see them: a peering is in scope by the
+    device of its own routing instance, and its peer device may be one the
+    caller cannot read. That link (``remote_host_id``, ``remote_hostname``)
+    is then left out, as an unset one; the peer's address and AS, which are
+    the caller's device's own configuration, stay. Unchanged for an
+    unrestricted caller."""
+    readable = await readable_host_ids(request)
+    if readable is None:
+        return peerings
+    return [
+        p
+        if p.get("remote_host_id") is None or int(p["remote_host_id"]) in readable
+        else {**p, "remote_host_id": None, "remote_hostname": ""}
+        for p in peerings
+    ]
+
+
+async def _own_peer_device(request: Request, peering: dict) -> dict:
+    return (await _own_peer_devices(request, [peering]))[0]
 
 
 async def _instance_for_write(request: Request, fields: _Fields, instance_id: int) -> None:
@@ -341,7 +370,10 @@ async def get_autonomous_system(as_id: int, request: Request) -> dict:
             "routing_instances": await db.list_routing_instances(
                 asn=record["asn"], scope_condition=await _instance_scope(request)
             ),
-            "peerings": await db.list_bgp_peerings(asn=record["asn"], scope_condition=await _instance_scope(request)),
+            "peerings": await _own_peer_devices(
+                request,
+                await db.list_bgp_peerings(asn=record["asn"], scope_condition=await _instance_scope(request)),
+            ),
         },
     )
 
@@ -466,7 +498,7 @@ async def get_routing_instance(instance_id: int, request: Request) -> dict:
     return {
         **record,
         "peer_groups": await db.list_bgp_peer_groups(routing_instance_id=instance_id),
-        "peerings": await db.list_bgp_peerings(routing_instance_id=instance_id),
+        "peerings": await _own_peer_devices(request, await db.list_bgp_peerings(routing_instance_id=instance_id)),
     }
 
 
@@ -663,7 +695,7 @@ async def list_bgp_peerings(
         search=_search(search),
         scope_condition=await _instance_scope(request),
     )
-    return {"peerings": await custom_list("bgp_peering", rows, request)}
+    return {"peerings": await custom_list("bgp_peering", await _own_peer_devices(request, rows), request)}
 
 
 @router.get(f"{PREFIX}/peerings/{{peering_id}}")
@@ -672,7 +704,7 @@ async def get_bgp_peering(peering_id: int, request: Request) -> dict:
     record = await require_row(
         request, "routing_instance", await db.get_bgp_peering(peering_id), not_found="BGP peering not found"
     )
-    return await with_custom_data("bgp_peering", record)
+    return await with_custom_data("bgp_peering", await _own_peer_device(request, record))
 
 
 async def _peering_values(
@@ -712,7 +744,15 @@ async def _peering_values(
         await _check_host(fields, "remote_host_id", body.remote_host_id)
         if request is not None:
             await _hide_unreadable_host(request, fields, "remote_host_id", body.remote_host_id)
-        values["remote_host_id"] = body.remote_host_id
+        # A caller who cannot read the linked peer device is shown no link
+        # (``_own_peer_devices``); the blank their form sends back keeps it.
+        kept = (
+            body.remote_host_id is None
+            and request is not None
+            and await _host_hidden(request, (current or {}).get("remote_host_id"))
+        )
+        if not kept:
+            values["remote_host_id"] = body.remote_host_id
     if not partial or "status" in sent:
         values["status"] = fields.run("status", lambda: clean_status(body.status or "active", PEERING_STATUSES))
     if not partial or "address_families" in sent:
@@ -745,7 +785,7 @@ async def create_bgp_peering(body: PeeringCreate, request: Request) -> dict:
         "bgp_peering_create",
         f"id={record['id']} instance_id={body.routing_instance_id} remote={values['remote_address']}",
     )
-    return record
+    return await _own_peer_device(request, record)
 
 
 @router.put(f"{PREFIX}/peerings/{{peering_id}}")
@@ -763,7 +803,7 @@ async def update_bgp_peering(peering_id: int, body: PeeringBody, request: Reques
         raise _conflict(exc) from exc
     record = _found(record, "BGP peering")
     await _audit_write(request, "bgp_peering_update", f"id={peering_id} remote={record['remote_address']}")
-    return record
+    return await _own_peer_device(request, record)
 
 
 @router.delete(f"{PREFIX}/peerings/{{peering_id}}")

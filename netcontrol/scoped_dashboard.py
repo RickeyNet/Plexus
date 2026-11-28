@@ -12,6 +12,7 @@ left out: integration entities are not in any inventory group.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Iterable
 
 import routes.database as db
 from routes.db.jobs import job_scope_condition, launched_by_condition
@@ -31,8 +32,25 @@ DASHBOARD_KEY_FEATURES: dict[str, str] = {
     "monitoring": "monitoring",
     "device_health": "monitoring",
     "open_alerts": "monitoring",
+    "critical_open_alerts": "monitoring",
     "topology": "monitoring",
 }
+
+# The severities the Needs attention banner counts as critical alerts.
+_CRITICAL_ALERT_SEVERITIES = ("critical", "error")
+
+
+async def critical_open_alert_count(group_ids: Iterable[int] | None = None) -> int:
+    """How many unacknowledged alerts are critical (every one, not only the
+    newest ``open_alerts`` the dashboard lists); ``group_ids`` counts only
+    the alerts of hosts in those inventory groups (object scope)."""
+    counts = await asyncio.gather(
+        *(
+            db.count_monitoring_alerts(acknowledged=False, severity=sev, group_ids=group_ids)
+            for sev in _CRITICAL_ALERT_SEVERITIES
+        )
+    )
+    return sum(counts)
 
 
 async def _job_stats(scope: ObjectScope, username: str) -> dict:
@@ -80,13 +98,16 @@ async def scoped_dashboard_data(scope: ObjectScope, username: str) -> dict:
     admin); ``dashboard_for_caller`` then drops the keys of features the
     caller does not hold."""
     groups = scope.read_groups
-    stats, recent_jobs, all_groups, monitoring, latest_polls, alerts = await asyncio.gather(
+    stats, recent_jobs, all_groups, monitoring, latest_polls, (alerts, critical_alerts) = await asyncio.gather(
         _scoped_stats(scope, username),
         db.get_all_jobs(limit=5, group_ids=groups, launched_by=username, only_launched_by=username),
         db.get_all_groups(),
         db.get_monitoring_summary(group_ids=groups),
-        db.get_latest_monitoring_polls(group_ids=groups),
-        db.get_monitoring_alerts(acknowledged=False, limit=50, group_ids=groups),
+        db.get_latest_monitoring_polls(limit=None, group_ids=groups),
+        asyncio.gather(
+            db.get_monitoring_alerts(acknowledged=False, limit=50, group_ids=groups),
+            critical_open_alert_count(groups),
+        ),
     )
     return {
         "stats": stats,
@@ -95,6 +116,7 @@ async def scoped_dashboard_data(scope: ObjectScope, username: str) -> dict:
         "monitoring": monitoring,
         "device_health": latest_polls,
         "open_alerts": alerts,
+        "critical_open_alerts": critical_alerts,
     }
 
 

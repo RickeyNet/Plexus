@@ -14,6 +14,7 @@ import os
 import re
 from collections.abc import Iterable
 from datetime import UTC, datetime, timedelta
+from typing import NamedTuple
 
 from netcontrol.integrations.traffic import parse_time, store_time
 
@@ -21,6 +22,7 @@ import routes.database as _dbcore
 from routes.database import (
     _LOGGER,
     _is_unique_violation,
+    _now_minus_expr,
     _safe_dynamic_update,
     row_to_dict,
     rows_to_list,
@@ -44,6 +46,10 @@ __all__ = [
     "query_interface_ts_series",
     "query_interface_ts_multi",
     "delete_old_interface_ts",
+    "SAMPLE_TABLE_MOVES",
+    "get_sample_move_swapped_at",
+    "move_sample_batch",
+    "drop_sample_move_table",
     "INTERFACE_ERROR_COUNTERS",
     "get_interface_error_stats_for_host",
     "upsert_interface_error_stat",
@@ -139,9 +145,10 @@ async def create_metric_samples_batch(rows: list[tuple]) -> int:
 
 
 def _epoch_bucket_sql(column: str) -> str:
-    """SQL for the UTC-aligned bucket number of a naive-UTC timestamp text
-    ``column`` (a fixed identifier); takes one parameter, the width in
-    seconds. ``_bucket_start_sql`` turns the number back into stored text."""
+    """SQL for the UTC-aligned bucket number of a time ``column`` (a fixed
+    identifier: a ``timestamptz``, or naive-UTC timestamp text); takes one
+    parameter, the width in seconds. ``_bucket_start_sql`` turns the number
+    back into stored text."""
     return f"floor(extract(epoch FROM {column}::timestamptz) / CAST(? AS INTEGER))"
 
 
@@ -223,7 +230,7 @@ async def query_metric_samples(
 async def delete_old_metric_samples(hours: int = 48) -> int:
     return await _dbcore.chunked_delete(
         "metric_samples",
-        "sampled_at < datetime('now', '-' || ? || ' hours')",
+        f"sampled_at < {_now_minus_expr('hours')}",
         (hours,),
     )
 
@@ -683,9 +690,205 @@ async def query_interface_ts_multi(
 async def delete_old_interface_ts(retention_days: int = 30) -> int:
     return await _dbcore.chunked_delete(
         "interface_ts",
-        "sampled_at < datetime('now', '-' || ? || ' days')",
+        f"sampled_at < {_now_minus_expr('days')}",
         (retention_days,),
     )
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Sample history move (migration 0144)
+# ═════════════════════════════════════════════════════════════════════════════
+#
+# Migration 0144 renamed each of these tables to ``<table>_pre0144`` and put a
+# new one (BIGINT key, native time) in its place, without copying a row.
+# ``netcontrol.sample_history`` moves the old rows over with these helpers.
+
+SAMPLE_MOVE_OLD_SUFFIX = "_pre0144"
+
+
+class SampleTableMove(NamedTuple):
+    """How the rows of one swapped table move: its columns (the same in the
+    old and the new table, ids kept), its time column, and whether the new
+    table stores that time as ``timestamptz`` (cast on the way) or as TEXT
+    (copied as it is). Either way a row whose time is no timestamp, or is
+    older than the table's retention, is deleted, not moved."""
+
+    table: str
+    columns: tuple[str, ...]
+    time_column: str
+    native_time: bool
+
+    @property
+    def old_table(self) -> str:
+        return f"{self.table}{SAMPLE_MOVE_OLD_SUFFIX}"
+
+
+SAMPLE_TABLE_MOVES: dict[str, SampleTableMove] = {
+    move.table: move
+    for move in (
+        SampleTableMove(
+            "metric_samples",
+            ("id", "host_id", "metric_name", "labels_json", "value", "sampled_at"),
+            "sampled_at",
+            native_time=True,
+        ),
+        SampleTableMove(
+            "interface_ts",
+            (
+                "id",
+                "host_id",
+                "if_index",
+                "if_name",
+                "if_speed_mbps",
+                "in_octets",
+                "out_octets",
+                "in_rate_bps",
+                "out_rate_bps",
+                "utilization_pct",
+                "sampled_at",
+            ),
+            "sampled_at",
+            native_time=True,
+        ),
+        SampleTableMove(
+            "flow_records",
+            (
+                "id",
+                "exporter_ip",
+                "host_id",
+                "flow_type",
+                "src_ip",
+                "dst_ip",
+                "src_port",
+                "dst_port",
+                "protocol",
+                "bytes",
+                "packets",
+                "src_as",
+                "dst_as",
+                "input_if",
+                "output_if",
+                "tos",
+                "tcp_flags",
+                "start_time",
+                "end_time",
+                "received_at",
+            ),
+            "received_at",
+            native_time=False,
+        ),
+    )
+}
+
+# Where the comment migration 0144 puts on an old table records the swap.
+_SWAPPED_AT_RE = re.compile(r"swapped_at=(\S.*)$")
+# Before the swap time is known, every window counts as before it.
+_SWAP_UNKNOWN = "9999-12-31 00:00:00+00"
+_BIGINT_MAX = 2**63 - 1
+
+
+async def get_sample_move_swapped_at(table: str) -> str | None:
+    """When migration 0144 swapped ``table`` (PostgreSQL text), while its old
+    table still exists; ``None`` once that table is gone (or never was)."""
+    move = SAMPLE_TABLE_MOVES[table]
+    db = await _dbcore.get_db(read_only=True)
+    try:
+        cursor = await db.execute(
+            "SELECT to_regclass(?) IS NOT NULL, obj_description(to_regclass(?), 'pg_class')",
+            (move.old_table, move.old_table),
+        )
+        row = await cursor.fetchone()
+    finally:
+        await db.close()
+    if not row or not row[0]:
+        return None
+    m = _SWAPPED_AT_RE.search(row[1] or "")
+    return m.group(1).strip() if m else _SWAP_UNKNOWN
+
+
+def _move_batch_sql(move: SampleTableMove) -> str:
+    """One batch of the move, one statement: take the newest ``limit`` old
+    rows below an id (rows another mover holds are skipped), delete them,
+    insert the ones whose time is a timestamp inside the retention, and
+    count both. The time text is checked before the cast, so a bad value
+    cannot fail the batch. Identifiers come from ``SAMPLE_TABLE_MOVES``."""
+    tc = move.time_column
+    columns = ", ".join(move.columns)
+    values = ", ".join("plexus_at" if c == tc and move.native_time else c for c in move.columns)
+    return f"""WITH batch AS (
+                   SELECT id FROM {move.old_table}
+                   WHERE id < CAST(? AS BIGINT)
+                   ORDER BY id DESC LIMIT CAST(? AS INTEGER)
+                   FOR UPDATE SKIP LOCKED
+               ), taken AS (
+                   DELETE FROM {move.old_table} o USING batch b WHERE o.id = b.id
+                   RETURNING o.*,
+                       CASE WHEN o.{tc} ~ '^[0-9]{{4}}-[0-9]{{2}}-[0-9]{{2}}[ T][0-9]{{2}}:[0-9]{{2}}'
+                                 AND pg_input_is_valid(o.{tc}, 'timestamptz')
+                            THEN o.{tc}::timestamptz END AS plexus_at
+               ), moved AS (
+                   INSERT INTO {move.table} ({columns})
+                   SELECT {values} FROM taken
+                   WHERE plexus_at >= {_now_minus_expr("secs")}
+                   ON CONFLICT (id) DO NOTHING
+                   RETURNING 1
+               )
+               SELECT (SELECT COUNT(*) FROM taken) AS taken,
+                      (SELECT COUNT(*) FROM moved) AS moved,
+                      (SELECT MIN(id) FROM taken) AS low_id"""  # nosec B608 - fixed identifiers, placeholders only
+
+
+async def move_sample_batch(
+    table: str,
+    *,
+    below_id: int | None,
+    retention_seconds: int,
+    limit: int,
+) -> dict | None:
+    """Move one batch of ``table``'s old rows (ids below ``below_id``, all
+    when ``None``) into the new table. Returns ``taken`` (rows removed from
+    the old table), ``moved`` (rows inserted; the rest were past retention,
+    no timestamp, or already there) and ``low_id`` (the lowest id taken), or
+    ``None`` when the old table no longer exists. Autocommits: each batch
+    is one statement."""
+    move = SAMPLE_TABLE_MOVES[table]
+    db = await _dbcore.get_db()
+    try:
+        try:
+            cursor = await db.execute(
+                _move_batch_sql(move),
+                (_BIGINT_MAX if below_id is None else int(below_id), int(limit), int(retention_seconds)),
+            )
+        except Exception as exc:
+            if _dbcore.asyncpg is not None and isinstance(exc, _dbcore.asyncpg.UndefinedTableError):
+                return None
+            raise
+        row = await cursor.fetchone()
+    finally:
+        await db.close()
+    return {"taken": int(row["taken"]), "moved": int(row["moved"]), "low_id": row["low_id"]}
+
+
+async def drop_sample_move_table(table: str) -> bool:
+    """Drop ``table``'s old table when it holds no row. Rows another mover
+    has deleted but not committed still count, and nothing writes the old
+    table, so an empty one stays empty. True when it is gone."""
+    move = SAMPLE_TABLE_MOVES[table]
+    db = await _dbcore.get_db()
+    try:
+        cursor = await db.execute("SELECT to_regclass(?) IS NOT NULL", (move.old_table,))
+        row = await cursor.fetchone()
+        if not row or not row[0]:
+            return True
+        cursor = await db.execute(f"SELECT EXISTS (SELECT 1 FROM {move.old_table})")  # nosec B608 - fixed name
+        row = await cursor.fetchone()
+        if row and row[0]:
+            return False
+        await db.execute(f"DROP TABLE IF EXISTS {move.old_table}")
+        await db.commit()
+        return True
+    finally:
+        await db.close()
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -937,7 +1140,7 @@ async def get_interface_error_summary(
                FROM metric_samples ms
                WHERE ms.host_id = ?
                  AND ms.metric_name IN ({_ERROR_METRICS_SQL})
-                 AND ms.sampled_at >= datetime('now', '-' || ? || ' days')
+                 AND ms.sampled_at >= {_now_minus_expr("days")}
                GROUP BY ms.host_id, ms.metric_name, ms.labels_json""",
             (host_id, days),
         )
@@ -2023,7 +2226,7 @@ async def get_interface_utilization_summary(
                       {_nearest_rank_p95_sql("out_rate_bps")} AS p95_out_bps
                FROM interface_ts
                WHERE host_id = ?
-                 AND sampled_at >= datetime('now', '-' || ? || ' days')
+                 AND sampled_at >= {_now_minus_expr("days")}
                GROUP BY if_index
                HAVING COUNT(in_rate_bps) > 0
                ORDER BY MAX(if_name) FILTER (WHERE in_rate_bps IS NOT NULL), if_index""",

@@ -428,6 +428,75 @@ def test_routing_handlers_answer_the_scoped_rows(caller, monkeypatch):
     asyncio.run(check())
 
 
+def test_a_peering_names_its_peer_device_only_to_a_caller_who_can_read_it(monkeypatch):
+    # A peering is in scope by the device of its own routing instance; the
+    # peer device it links may be in another group.
+    w = asyncio.run(_world())
+    asyncio.run(_routing(w))
+    caller: dict = {}
+
+    async def as_scope(_request):
+        return caller["scope"]
+
+    async def no_audit(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(object_scope, "request_scope", as_scope)
+    monkeypatch.setattr(routing_routes, "request_scope", as_scope)
+    monkeypatch.setattr(routing_routes, "_audit_write", no_audit)
+    request = Request({"type": "http", "method": "GET", "path": "/", "headers": [], "query_string": b""})
+
+    async def views(peering_id: int, instance_id: int, as_id: int) -> list[dict]:
+        """The peering as each read handler answers it."""
+        listed = await routing_routes.list_bgp_peerings(
+            request, host_id=None, routing_instance_id=None, asn=None, status=None, tenant_id=None, search=None
+        )
+        instance = await routing_routes.get_routing_instance(instance_id, request)
+        system = await routing_routes.get_autonomous_system(as_id, request)
+        found = [
+            next(p for p in rows if p["id"] == peering_id)
+            for rows in (listed["peerings"], instance["peerings"], system["peerings"])
+        ]
+        return [*found, await routing_routes.get_bgp_peering(peering_id, request)]
+
+    async def run():
+        writer = await _user(
+            "east-writer",
+            access={"object_scope": "groups", "inventory_scopes": [{"inventory_group_id": w["a"], "can_write": True}]},
+        )
+        own, inside, outside = w["hosts"][0], w["hosts"][4], w["hosts"][2]  # groups a, a, b
+        by_host = {p["host_id"]: p for p in await db.list_bgp_peerings()}
+        to_outside, to_inside = by_host[own], by_host[inside]
+        await db.update_bgp_peering(to_outside["id"], values={"remote_host_id": outside})
+        await db.update_bgp_peering(to_inside["id"], values={"remote_host_id": own})
+
+        caller["scope"] = w["scopes"]["admin"]
+        for seen in await views(to_outside["id"], to_outside["routing_instance_id"], to_outside["remote_asn_id"]):
+            assert (seen["remote_host_id"], seen["remote_hostname"]) == (outside, "node-02")
+
+        caller["scope"] = writer
+        for seen in await views(to_outside["id"], to_outside["routing_instance_id"], to_outside["remote_asn_id"]):
+            assert (seen["remote_host_id"], seen["remote_hostname"]) == (None, "")
+            assert seen["remote_address"] == to_outside["remote_address"]  # the device's own configuration
+        for seen in await views(to_inside["id"], to_inside["routing_instance_id"], to_inside["remote_asn_id"]):
+            assert (seen["remote_host_id"], seen["remote_hostname"]) == (own, "node-00")
+
+        # The edit form sends back the blank it was shown: the link stays.
+        answer = await routing_routes.update_bgp_peering(
+            to_outside["id"], routing_routes.PeeringBody(remote_host_id=None, description="edited"), request
+        )
+        assert (answer["remote_host_id"], answer["remote_hostname"], answer["description"]) == (None, "", "edited")
+        stored = await db.get_bgp_peering(to_outside["id"])
+        assert (stored["remote_host_id"], stored["description"]) == (outside, "edited")
+        # A link the caller can see is theirs to clear.
+        await routing_routes.update_bgp_peering(
+            to_inside["id"], routing_routes.PeeringBody(remote_host_id=None), request
+        )
+        assert (await db.get_bgp_peering(to_inside["id"]))["remote_host_id"] is None
+
+    asyncio.run(run())
+
+
 # ── Metrics query bucketing ──────────────────────────────────────────────────
 
 

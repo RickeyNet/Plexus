@@ -23,6 +23,7 @@ from routes.database import (
     row_to_dict,
     rows_to_list,
 )
+from routes.db.hardware_components import _search_clause
 from routes.db.inventory import GROUP_SUBTREE_SQL as _GROUP_SUBTREE_SQL, group_ids_condition
 from routes.db.latest_rows import latest_row_lateral
 
@@ -36,11 +37,13 @@ __all__ = [
     "set_alert_created_hook",
     "create_monitoring_poll",
     "get_latest_monitoring_polls",
+    "count_latest_monitoring_polls",
     "get_monitoring_poll_history",
     "delete_old_monitoring_polls",
     "get_monitoring_summary",
     "create_monitoring_alert",
     "get_monitoring_alerts",
+    "count_monitoring_alerts",
     "get_monitoring_alert",
     "acknowledge_monitoring_alert",
     "delete_old_monitoring_alerts",
@@ -246,28 +249,55 @@ async def _fill_poll_details(db, host_id: int, rows: list[dict]) -> None:
             _copy_poll_details(row, sources[row["details_digest"]])
 
 
+def _latest_polls_where(group_id: int | None, group_ids: Iterable[int] | None, search: str | None) -> tuple[str, list]:
+    """The WHERE of the latest-poll list and of its count, built once so
+    the object scope (``group_ids``) and the search narrow both alike."""
+    clauses: list[str] = []
+    params: list = []
+    if group_id is not None:
+        clauses.append("h.group_id = ?")
+        params.append(group_id)
+    scope_sql, scope_params = group_ids_condition("h.group_id", group_ids)
+    if scope_sql:
+        clauses.append(scope_sql)
+        params.extend(scope_params)
+    search_sql = _search_clause(("h.hostname", "h.ip_address"), search, params)
+    if search_sql:
+        clauses.append(search_sql)
+    return (" AND ".join(clauses) or "1=1"), params
+
+
+def _limit_offset(limit: int | None, offset: int, params: list) -> str:
+    """``LIMIT ? OFFSET ?`` for a page (``limit=None``: every row)."""
+    sql = ""
+    if limit is not None:
+        sql += " LIMIT ?"
+        params.append(int(limit))
+    if offset:
+        sql += " OFFSET ?"
+        params.append(int(offset))
+    return sql
+
+
 async def get_latest_monitoring_polls(
     group_id: int | None = None,
-    limit: int = 200,
+    limit: int | None = 200,
     include_details: bool = False,
     *,
     group_ids: Iterable[int] | None = None,
+    search: str = "",
+    offset: int = 0,
 ) -> list[dict]:
-    """Return the most recent poll per host, with host info joined.
-    ``group_ids`` keeps the hosts of those inventory groups (object scope)."""
+    """Return the most recent poll per host, with host info joined, by
+    hostname. ``group_ids`` keeps the hosts of those inventory groups
+    (object scope); ``search`` keeps the hosts whose hostname or IP address
+    contains it (case-insensitive, wildcards literal). ``limit=None`` returns
+    every matching host; ``count_latest_monitoring_polls`` counts them."""
     detail_cols = ", p.if_details, p.vpn_details, p.route_snapshot" if include_details else ""
     db = await _dbcore.get_db(read_only=True)
     try:
-        group_filter = ""
-        params: list = []
-        if group_id is not None:
-            group_filter = "AND h.group_id = ?"
-            params.append(group_id)
-        scope_sql, scope_params = group_ids_condition("h.group_id", group_ids)
-        if scope_sql:
-            group_filter += f" AND {scope_sql}"
-            params.extend(scope_params)
-        params.append(limit)
+        where, params = _latest_polls_where(group_id, group_ids, search)
+        page_sql = _limit_offset(limit, offset, params)
         cursor = await db.execute(
             f"""SELECT p.id, p.host_id, p.cpu_percent, p.memory_percent,
                        p.memory_used_mb, p.memory_total_mb, p.uptime_seconds,
@@ -282,12 +312,33 @@ async def get_latest_monitoring_polls(
                 FROM hosts h
                 {_LATEST_POLL_JOIN}
                 LEFT JOIN inventory_groups g ON g.id = h.group_id
-                WHERE 1=1 {group_filter}
-                ORDER BY h.hostname
-                LIMIT ?""",
+                WHERE {where}
+                ORDER BY h.hostname, h.id{page_sql}""",
             tuple(params),
         )
         return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+async def count_latest_monitoring_polls(
+    group_id: int | None = None,
+    *,
+    group_ids: Iterable[int] | None = None,
+    search: str = "",
+) -> int:
+    """How many hosts ``get_latest_monitoring_polls`` returns with the same
+    filters and no limit."""
+    where, params = _latest_polls_where(group_id, group_ids, search)
+    db = await _dbcore.get_db(read_only=True)
+    try:
+        cursor = await db.execute(
+            f"""SELECT COUNT(*) FROM hosts h
+                {_LATEST_POLL_JOIN}
+                WHERE {where}""",
+            tuple(params),
+        )
+        return int((await cursor.fetchone())[0])
     finally:
         await db.close()
 
@@ -544,44 +595,94 @@ async def create_monitoring_alert(
     return new_id
 
 
+def _alerts_where(
+    host_id: int | None,
+    acknowledged: bool | None,
+    severity: str | None,
+    group_ids: Iterable[int] | None,
+    search: str | None,
+    metric: str | None,
+) -> tuple[str, list]:
+    """The WHERE of the alert list and of its count, built once so the
+    object scope (``group_ids``) and every filter narrow both alike."""
+    clauses: list[str] = []
+    params: list = []
+    if host_id is not None:
+        clauses.append("a.host_id = ?")
+        params.append(host_id)
+    scope_sql, scope_params = group_ids_condition("h.group_id", group_ids)
+    if scope_sql:
+        clauses.append(scope_sql)
+        params.extend(scope_params)
+    if acknowledged is not None:
+        clauses.append("a.acknowledged = ?")
+        params.append(1 if acknowledged else 0)
+    if severity:
+        clauses.append("a.severity = ?")
+        params.append(severity)
+    if metric:
+        clauses.append("a.metric = ?")
+        params.append(metric)
+    search_sql = _search_clause(("h.hostname", "a.message", "a.metric"), search, params)
+    if search_sql:
+        clauses.append(search_sql)
+    return (" AND ".join(clauses) or "1=1"), params
+
+
 async def get_monitoring_alerts(
     host_id: int | None = None,
     acknowledged: bool | None = None,
     severity: str | None = None,
-    limit: int = 200,
+    limit: int | None = 200,
     *,
     group_ids: Iterable[int] | None = None,
+    search: str = "",
+    metric: str | None = None,
+    offset: int = 0,
 ) -> list[dict]:
     """Alerts, newest first; ``group_ids`` keeps the alerts of hosts in
-    those inventory groups (object scope)."""
+    those inventory groups (object scope), ``metric`` the alerts of that
+    metric, and ``search`` those whose hostname, message or metric contains
+    it (case-insensitive, wildcards literal). ``count_monitoring_alerts``
+    counts them."""
     db = await _dbcore.get_db(read_only=True)
     try:
-        clauses = []
-        params: list = []
-        if host_id is not None:
-            clauses.append("a.host_id = ?")
-            params.append(host_id)
-        scope_sql, scope_params = group_ids_condition("h.group_id", group_ids)
-        if scope_sql:
-            clauses.append(scope_sql)
-            params.extend(scope_params)
-        if acknowledged is not None:
-            clauses.append("a.acknowledged = ?")
-            params.append(1 if acknowledged else 0)
-        if severity:
-            clauses.append("a.severity = ?")
-            params.append(severity)
-        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
-        params.append(limit)
+        where, params = _alerts_where(host_id, acknowledged, severity, group_ids, search, metric)
+        page_sql = _limit_offset(limit, offset, params)
         cursor = await db.execute(
             f"""SELECT a.*, h.hostname, h.ip_address, h.device_type
                 FROM monitoring_alerts a
                 JOIN hosts h ON h.id = a.host_id
-                {where}
-                ORDER BY a.created_at DESC LIMIT ?""",
+                WHERE {where}
+                ORDER BY a.created_at DESC, a.id DESC{page_sql}""",
             tuple(params),
         )
         return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+async def count_monitoring_alerts(
+    host_id: int | None = None,
+    acknowledged: bool | None = None,
+    severity: str | None = None,
+    *,
+    group_ids: Iterable[int] | None = None,
+    search: str = "",
+    metric: str | None = None,
+) -> int:
+    """How many alerts ``get_monitoring_alerts`` returns with the same
+    filters and no limit."""
+    where, params = _alerts_where(host_id, acknowledged, severity, group_ids, search, metric)
+    db = await _dbcore.get_db(read_only=True)
+    try:
+        cursor = await db.execute(
+            f"""SELECT COUNT(*) FROM monitoring_alerts a
+                JOIN hosts h ON h.id = a.host_id
+                WHERE {where}""",
+            tuple(params),
+        )
+        return int((await cursor.fetchone())[0])
     finally:
         await db.close()
 

@@ -64,10 +64,18 @@ def _stamp_param(value: str) -> str | datetime:
 
 
 def _iso_stamps(row: dict, *columns: str) -> None:
-    """Postgres returns TIMESTAMPTZ columns as datetimes; hand out ISO strings."""
+    """Hand out TIMESTAMPTZ columns as ISO strings. The pool reads them as
+    PostgreSQL's text (``2026-01-02 03:04:05.123456+00``, see
+    ``routes.database._pool_connection_options``); a datetime is taken too."""
     for column in columns:
-        if isinstance(row.get(column), datetime):
-            row[column] = row[column].isoformat()
+        value = row.get(column)
+        if isinstance(value, str) and value:
+            try:
+                value = datetime.fromisoformat(value)
+            except ValueError:
+                continue
+        if isinstance(value, datetime):
+            row[column] = value.isoformat()
 
 
 def _org_row(row) -> dict | None:
@@ -482,9 +490,8 @@ async def list_described_meraki_clients(networks: list[tuple[int, str]]) -> list
                     ORDER BY last_seen DESC, id DESC""",
                 (org_ref, network_id),
             )
-            for row in rows_to_list(await cursor.fetchall()):
-                _iso_stamps(row, "first_seen", "last_seen")
-                found.append(row)
+            # first_seen / last_seen are TEXT, handed out as stored.
+            found.extend(rows_to_list(await cursor.fetchall()))
         return found
     finally:
         await db.close()

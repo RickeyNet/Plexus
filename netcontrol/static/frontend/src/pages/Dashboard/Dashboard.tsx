@@ -144,7 +144,13 @@ export function Dashboard() {
         text="View device status, recent alerts, backup summaries, and quick stats. The Needs attention banner gathers unreachable or critical devices, interfaces down, failed backups, critical alerts, down or degraded sites, uplinks, tunnels and cloud connections reported by the integrations, and topology sources whose last collection failed, was partial, is overdue or has warnings; each row names what is affected and opens the panel or page with the detail, and All clear takes its place when nothing is wrong. A panel with nothing in the selected time range says so and offers the next longer range. Until setup is done, the Get started card lists what to set up next (connect a source, add devices, SNMP polling, a backup policy, a notification channel) with a link to each; hide it and bring it back with Setup guide in the header. Administrators can connect a new source with Add source in the header or the sidebar, from any page. The Integrations section has a card for each connected Meraki, Cato, FMC, Panorama, Appgate, AWS, Azure or GCP source with how its last collection went and how many of its sites, devices, uplinks, tunnels and other links are up, degraded or down, with links to its map and its availability. Every count is a link to exactly what it counted: a health bucket of the donut or a group tile opens the Devices panel or the health table with that filter selected, a backup count lists those hosts, and an integration count opens Monitoring > Availability filtered to its source, type and state. Panels whose data is not set up yet are folded into one Not set up yet card at the bottom. Use the dashboard switcher above to open or manage custom dashboards with your own metric panels."
       />
       <div className="stack">
-        <CriticalIssuesBanner devices={devices} alerts={alerts} sources={sources} topology={topology} />
+        <CriticalIssuesBanner
+          devices={devices}
+          alerts={alerts}
+          criticalAlertCount={data?.critical_open_alerts}
+          sources={sources}
+          topology={topology}
+        />
         {setupOpen && !setupHidden && (
           <SetupGuideCard steps={setup.steps} onDismiss={() => showSetupGuide(false)} />
         )}

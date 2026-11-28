@@ -4,21 +4,22 @@ import { Badge, SeverityBadge } from '@/components/Badge';
 import { BusyButton } from '@/components/BusyButton';
 import { useDialogs } from '@/components/DialogProvider-context';
 import {
+  MONITORING_PAGE_SIZE,
   useAcknowledgeAlert,
   useBulkAcknowledgeAlerts,
   useMonitoringAlerts,
   type MonitoringAlert,
 } from '@/api/monitoring';
 import { LoadingState } from '@/components/LoadingState';
+import { Pager } from '@/components/Pager';
 import { QueryError } from '@/components/QueryError';
 import { formatBackendDateTime } from '@/lib/datetime';
+import { useDebouncedValue } from '@/lib/useDebouncedValue';
+import { useFilterOffset } from '@/lib/useFilterOffset';
 import { usePendingKeys } from '@/lib/usePendingKeys';
 import { severityTone, toneColor } from '@/lib/severity';
+import { ROUTE_CHURN, alertsFilter } from './helpers';
 import { RouteSnapshotsModal } from './RouteSnapshotsModal';
-
-// Route churn used to be its own tab; it is the alert list filtered to this
-// metric, plus a per-host route history action.
-const ROUTE_CHURN = 'route_churn';
 
 export function AlertsTab() {
   const { alert, confirm } = useDialogs();
@@ -29,26 +30,19 @@ export function AlertsTab() {
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [historyHost, setHistoryHost] = useState<{ id: number; hostname: string } | null>(null);
 
-  const ackParam = ackFilter === 'open' ? false : ackFilter === 'ack' ? true : null;
-  const alerts = useMonitoringAlerts({ acknowledged: ackParam, severity: severity || undefined, limit: 200 });
+  // Every filter runs on the server over all alerts; it sends one page,
+  // newest first. A new filter starts again on the newest page.
+  const search = useDebouncedValue(query.trim());
+  const filter = alertsFilter({ ackFilter, severity, search, routeChurnOnly });
+  const [offset, setOffset] = useFilterOffset(filter);
+  const alerts = useMonitoringAlerts({ ...filter, offset });
   const ackMut = useAcknowledgeAlert();
   const bulkMut = useBulkAcknowledgeAlerts();
   const pendingAcks = usePendingKeys<number>();
 
-  const filtered = useMemo(() => {
-    let list = alerts.data ?? [];
-    if (routeChurnOnly) list = list.filter((a) => a.metric === ROUTE_CHURN);
-    const q = query.trim().toLowerCase();
-    if (!q) return list;
-    return list.filter(
-      (a) =>
-        (a.hostname ?? '').toLowerCase().includes(q) ||
-        (a.message ?? '').toLowerCase().includes(q) ||
-        (a.metric ?? '').toLowerCase().includes(q),
-    );
-  }, [alerts.data, query, routeChurnOnly]);
-
-  const unackedIds = useMemo(() => filtered.filter((a) => !a.acknowledged).map((a) => a.id), [filtered]);
+  const rows = useMemo(() => alerts.data?.alerts ?? [], [alerts.data]);
+  const total = alerts.data?.total ?? 0;
+  const unackedIds = useMemo(() => rows.filter((a) => !a.acknowledged).map((a) => a.id), [rows]);
   const visibleSelected = useMemo(() => {
     const set = new Set(unackedIds);
     return [...selected].filter((id) => set.has(id));
@@ -77,9 +71,18 @@ export function AlertsTab() {
 
   async function ackAll() {
     const count = unackedIds.length;
+    const plural = count === 1 ? '' : 's';
+    // The button acts on the alerts on screen, which is one page of them.
+    const others = total - rows.length;
+    const message =
+      others > 0
+        ? `Acknowledge the ${count} unacknowledged alert${plural} on this page? ` +
+          `The other ${others.toLocaleString()} matching alert${others === 1 ? '' : 's'}, on other pages, ` +
+          `${others === 1 ? 'is' : 'are'} not changed.`
+        : `Acknowledge all ${count} unacknowledged alert${plural} shown by the current filters?`;
     const ok = await confirm({
       title: 'Acknowledge all alerts',
-      message: `Acknowledge all ${count} unacknowledged alert${count === 1 ? '' : 's'} shown by the current filters?`,
+      message,
       confirmLabel: 'Acknowledge all',
       confirmVariant: 'primary',
     });
@@ -105,6 +108,7 @@ export function AlertsTab() {
           aria-label="Search alerts"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
+          maxLength={200}
           style={{ flex: 1, minWidth: 200 }}
         />
         <select className="form-select form-select-sm" aria-label="Filter by severity" value={severity} onChange={(e) => setSeverity(e.target.value)}>
@@ -133,11 +137,13 @@ export function AlertsTab() {
       ) : (
         alerts.isPending && <LoadingState />
       )}
-      {alerts.data && filtered.length === 0 && (
+      {alerts.data && rows.length === 0 && (
         <div className="empty-state">
-          {routeChurnOnly
+          {routeChurnOnly && !search
             ? 'No route churn alerts. They are generated when a route table changes between polling cycles.'
-            : 'No alerts'}
+            : search
+              ? 'No alert matches the search.'
+              : 'No alerts'}
         </div>
       )}
 
@@ -170,7 +176,7 @@ export function AlertsTab() {
       )}
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
-        {filtered.map((a) => (
+        {rows.map((a) => (
           <AlertRow
             key={a.id}
             alert={a}
@@ -186,6 +192,7 @@ export function AlertsTab() {
           />
         ))}
       </div>
+      <Pager offset={offset} pageSize={MONITORING_PAGE_SIZE} total={total} onChange={setOffset} />
 
       {historyHost && (
         <RouteSnapshotsModal

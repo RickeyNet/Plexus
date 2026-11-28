@@ -36,7 +36,10 @@ export interface Issue {
 
 export interface IssueInputs {
   devices: DeviceHealth[];
+  /** The newest open alerts (a capped list). */
   alerts: DashboardAlert[];
+  /** How many open alerts are critical in all; `alerts` may hold fewer. */
+  criticalAlertCount?: number;
   /** The latest backup of each host; empty while loading or without the feature. */
   backups: ConfigBackup[];
   /** Topology sources; empty for users without the topology feature. */
@@ -54,7 +57,7 @@ function pluralHost(n: number): string {
 }
 
 /** Everything currently wrong, critical first, then by count. */
-export function buildIssues({ devices, alerts, backups, sources, topology }: IssueInputs): Issue[] {
+export function buildIssues({ devices, alerts, criticalAlertCount, backups, sources, topology }: IssueInputs): Issue[] {
   const out: Issue[] = [];
 
   // Unreachable and critically degraded devices.
@@ -117,11 +120,13 @@ export function buildIssues({ devices, alerts, backups, sources, topology }: Iss
     const sev = (a.severity ?? '').toLowerCase();
     return sev === 'critical' || sev === 'error';
   });
-  if (critAlerts.length > 0) {
+  // The count is the server's total: the alert list is only the newest ones.
+  const critCount = Math.max(criticalAlertCount ?? 0, critAlerts.length);
+  if (critCount > 0) {
     out.push({
       key: 'alerts-critical',
-      count: critAlerts.length,
-      label: critAlerts.length === 1 ? 'critical alert' : 'critical alerts',
+      count: critCount,
+      label: critCount === 1 ? 'critical alert' : 'critical alerts',
       items: critAlerts.map((a) => `${a.hostname ?? '-'}: ${a.message ?? a.metric ?? '-'}`),
       severity: 'critical',
       target: ISSUE_ANCHORS.alerts,

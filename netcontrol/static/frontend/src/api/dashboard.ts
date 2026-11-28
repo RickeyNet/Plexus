@@ -107,7 +107,10 @@ export interface DashboardResponse {
   groups?: DashboardGroup[];
   monitoring?: DashboardMonitoring;
   device_health?: DeviceHealth[];
+  /** The newest 50 unacknowledged alerts. */
   open_alerts?: DashboardAlert[];
+  /** How many unacknowledged alerts are critical, all of them (open_alerts may list fewer). */
+  critical_open_alerts?: number;
   topology?: DashboardTopology;
 }
 

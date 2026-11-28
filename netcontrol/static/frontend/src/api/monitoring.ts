@@ -6,7 +6,7 @@
  */
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
-import { apiRequest, errorMessage, getCsrfToken } from './client';
+import { apiRequest, errorMessage, getCsrfToken, queryString } from './client';
 
 // ── Types ─────────────────────────────────────────────────────────────────
 
@@ -338,14 +338,42 @@ export function useMonitoringSummary(groupId: number | null = null) {
   });
 }
 
-export function useMonitoringPolls(groupId: number | null = null, limit = 200) {
-  const params = new URLSearchParams();
-  if (groupId) params.set('group_id', String(groupId));
-  if (limit) params.set('limit', String(limit));
-  return useQuery<MonitoringPoll[]>({
-    queryKey: ['monitoring-polls', groupId, limit],
-    queryFn: ({ signal }) => apiRequest(`/monitoring/polls?${params}`, { signal }),
+/** Rows per server page of the Devices and Alerts tabs. */
+export const MONITORING_PAGE_SIZE = 200;
+
+export interface MonitoringPollsQuery {
+  group_id?: number | null;
+  /** Hostname or IP address contains this (server side). */
+  q?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export interface MonitoringPollsPage {
+  polls: MonitoringPoll[];
+  /** Hosts matching the filter, every page. */
+  total: number;
+}
+
+/** GET path of one page of the latest poll per host, with the match count. */
+export function monitoringPollsPath(q: MonitoringPollsQuery): string {
+  return `/monitoring/polls${queryString({ ...q, with_total: true })}`;
+}
+
+/** The latest poll per host, one server page (searched on the server). */
+export function useMonitoringPolls(q: MonitoringPollsQuery = {}) {
+  const query = {
+    group_id: q.group_id ?? null,
+    q: q.q ?? '',
+    limit: q.limit ?? MONITORING_PAGE_SIZE,
+    offset: q.offset ?? 0,
+  };
+  return useQuery<MonitoringPollsPage>({
+    queryKey: ['monitoring-polls', query],
+    queryFn: ({ signal }) => apiRequest(monitoringPollsPath(query), { signal }),
     refetchInterval: 60_000,
+    // Keep the current page on screen while the next one or a new search loads.
+    placeholderData: keepPreviousData,
   });
 }
 
@@ -357,16 +385,44 @@ export function useMonitoringPollHistory(hostId: number | null, limit = 50) {
   });
 }
 
-export function useMonitoringAlerts(params: { acknowledged?: boolean | null; severity?: string; limit?: number } = {}) {
-  const qs = new URLSearchParams();
-  if (params.acknowledged === true) qs.set('acknowledged', 'true');
-  else if (params.acknowledged === false) qs.set('acknowledged', 'false');
-  if (params.severity) qs.set('severity', params.severity);
-  qs.set('limit', String(params.limit ?? 200));
-  return useQuery<MonitoringAlert[]>({
-    queryKey: ['monitoring-alerts', params.acknowledged ?? null, params.severity ?? '', params.limit ?? 200],
-    queryFn: ({ signal }) => apiRequest(`/monitoring/alerts?${qs}`, { signal }),
+export interface MonitoringAlertsQuery {
+  acknowledged?: boolean | null;
+  severity?: string;
+  /** Hostname, message or metric contains this (server side). */
+  q?: string;
+  /** Only alerts of this metric, e.g. `route_churn`. */
+  metric?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export interface MonitoringAlertsPage {
+  alerts: MonitoringAlert[];
+  /** Alerts matching the filter, every page. */
+  total: number;
+}
+
+/** GET path of one page of alerts, newest first, with the match count. */
+export function monitoringAlertsPath(q: MonitoringAlertsQuery): string {
+  return `/monitoring/alerts${queryString({ ...q, with_total: true })}`;
+}
+
+/** Monitoring alerts, newest first, one server page (filtered on the server). */
+export function useMonitoringAlerts(params: MonitoringAlertsQuery = {}) {
+  const query = {
+    acknowledged: params.acknowledged ?? null,
+    severity: params.severity ?? '',
+    q: params.q ?? '',
+    metric: params.metric ?? '',
+    limit: params.limit ?? MONITORING_PAGE_SIZE,
+    offset: params.offset ?? 0,
+  };
+  return useQuery<MonitoringAlertsPage>({
+    queryKey: ['monitoring-alerts', query],
+    queryFn: ({ signal }) => apiRequest(monitoringAlertsPath(query), { signal }),
     refetchInterval: 60_000,
+    // Keep the current page on screen while the next one or a new filter loads.
+    placeholderData: keepPreviousData,
   });
 }
 

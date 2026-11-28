@@ -44,6 +44,7 @@ from netcontrol.bounded_map import BoundedDict
 from netcontrol.integrations.apc.snmp import UPS_METRICS, ups_metric_samples
 from netcontrol.integrations.apc.traps import handle_apc_trap, parse_apc_trap
 from netcontrol.integrations.opnsense.health import FIREWALL_METRICS, firewall_metric_samples
+from netcontrol.integrations.traffic import parse_time
 from netcontrol.object_scope import (
     HOST_NOT_FOUND,
     group_filter,
@@ -56,6 +57,7 @@ from netcontrol.payload_cache import PayloadCache
 from netcontrol.routes import opnsense_filterlog
 from netcontrol.routes.shared import _audit, _corr_id, _get_session
 from netcontrol.routes.snmp import decode_snmp_trap, snmp_inform_response, trap_community_matches
+from netcontrol.sample_history import history_complete
 from netcontrol.snmp_traps import name_trap
 from netcontrol.snmpv3_traps import (
     REFUSED as SNMPV3_REFUSED,
@@ -739,17 +741,62 @@ _DOWNSAMPLE_METRICS = [
 ]
 
 
+# Raw retention of the two sample tables (run_retention_cleanup); the move
+# of their pre-0144 history (netcontrol.sample_history) uses the same.
+RAW_SAMPLE_RETENTION_HOURS = 48
+INTERFACE_TS_RETENTION_DAYS = 30
+
+
 async def _downsample_window(
     time_window: str,
     period_start: str,
     period_end: str,
+    *,
+    history_checked: bool = False,
 ) -> int:
     """Aggregate raw metric_samples into a rollup row for each host+metric+labels.
 
     The database aggregates the window in one statement (min, avg, max and
     an interpolated 95th percentile), so no raw sample reaches Python.
+
+    A rollup row is written once and never revised, so a window that starts
+    before migration 0144 swapped the table is deferred while its older
+    rows are still being moved (``history_checked`` skips the check, for
+    ``roll_up_windows_around``, which runs once they all are).
     """
+    if not history_checked and not await history_complete("metric_samples", period_start):
+        LOGGER.info(
+            "metrics: %s rollup of %s deferred until the sample history move finishes", time_window, period_start
+        )
+        return 0
     return await db.rollup_metric_samples(_DOWNSAMPLE_METRICS, time_window, period_start, period_end)
+
+
+async def roll_up_windows_around(swapped_at: str, now: datetime | None = None) -> int:
+    """Roll up the hour and the day that contain ``swapped_at`` (the swap of
+    migration 0144), the only windows ``_downsample_window`` deferred: later
+    windows start after the swap, earlier ones ended before this process
+    started. Called once the old rows are all moved; a window that has not
+    ended yet is left to the hourly and daily rollups."""
+    at = parse_time(swapped_at)
+    if at is None:
+        return 0
+    now = now or datetime.now(UTC)
+    hour = at.astimezone(UTC).replace(minute=0, second=0, microsecond=0)
+    day = hour.replace(hour=0)
+    created = 0
+    for time_window, start, end in (
+        ("hourly", hour, hour + timedelta(hours=1)),
+        ("daily", day, day + timedelta(days=1)),
+    ):
+        if end <= now:
+            created += await _downsample_window(
+                time_window,
+                start.strftime("%Y-%m-%d %H:%M:%S"),
+                end.strftime("%Y-%m-%d %H:%M:%S"),
+                history_checked=True,
+            )
+    return created
 
 
 async def run_hourly_rollup() -> int:
@@ -779,10 +826,10 @@ async def run_daily_rollup() -> int:
 
 async def run_retention_cleanup() -> dict:
     """Enforce tiered retention:  raw 48h, hourly 30d, daily 365d."""
-    raw_deleted = await db.delete_old_metric_samples(hours=48)
+    raw_deleted = await db.delete_old_metric_samples(hours=RAW_SAMPLE_RETENTION_HOURS)
     hourly_deleted = await db.delete_old_metric_rollups("hourly", 30)
     daily_deleted = await db.delete_old_metric_rollups("daily", 365)
-    ifts_deleted = await db.delete_old_interface_ts(30)
+    ifts_deleted = await db.delete_old_interface_ts(INTERFACE_TS_RETENTION_DAYS)
     traps_deleted = await db.delete_old_trap_syslog_events(30)
     error_events_deleted = await db.delete_old_interface_error_events(90)
     filterlog_deleted = await opnsense_filterlog.delete_old_evidence()

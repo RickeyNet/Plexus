@@ -15,6 +15,8 @@ import re
 from collections.abc import Iterable
 from datetime import UTC, datetime, timedelta
 
+import asyncpg
+
 import routes.database as _dbcore
 from routes.database import (
     _LOGGER,
@@ -54,24 +56,74 @@ __all__ = [
 # ═════════════════════════════════════════════════════════════════════════════
 
 
+_FLOW_INSERT = """INSERT INTO flow_records
+               (exporter_ip, host_id, flow_type, src_ip, dst_ip, src_port, dst_port,
+                protocol, bytes, packets, src_as, dst_as, input_if, output_if,
+                tos, tcp_flags, start_time, end_time)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"""
+
+_INT4_MAX = 2**31 - 1
+_INT8_MAX = 2**63 - 1
+# The integer fields of a flow row and the largest value their column takes,
+# by position in the tuple ``create_flow_records_batch`` is given.
+_FLOW_ROW_INT_MAX: dict[int, int] = {
+    5: _INT4_MAX,  # src_port
+    6: _INT4_MAX,  # dst_port
+    7: _INT4_MAX,  # protocol
+    8: _INT8_MAX,  # bytes
+    9: _INT8_MAX,  # packets
+    10: _INT8_MAX,  # src_as
+    11: _INT8_MAX,  # dst_as
+    12: _INT8_MAX,  # input_if
+    13: _INT8_MAX,  # output_if
+    14: _INT4_MAX,  # tos
+    15: _INT4_MAX,  # tcp_flags
+}
+
+
+def _flow_row_fits(row: tuple) -> bool:
+    """Whether every integer field of the flow ``row`` fits its column."""
+    for index, top in _FLOW_ROW_INT_MAX.items():
+        value = row[index]
+        if value is None:
+            continue
+        if type(value) is not int or not -top - 1 <= value <= top:
+            return False
+    return True
+
+
 async def create_flow_records_batch(rows: list[tuple]) -> int:
-    """Batch insert flow records.  Each tuple:
+    """Batch insert flow records; returns how many were stored. Each tuple:
     (exporter_ip, host_id, flow_type, src_ip, dst_ip, src_port, dst_port,
      protocol, bytes, packets, src_as, dst_as, input_if, output_if,
      tos, tcp_flags, start_time, end_time)
+
+    The integer fields come off the wire as the exporter sent them (a v9 or
+    IPFIX template sets each field's width). A row with one that fits no
+    column is dropped and counted in the log; the rest of the batch is
+    stored. The check runs only after the driver has refused the batch, so
+    it costs a well-formed batch nothing.
     """
     if not rows:
         return 0
     db = await _dbcore.get_db()
     try:
-        await db.executemany(
-            """INSERT INTO flow_records
-               (exporter_ip, host_id, flow_type, src_ip, dst_ip, src_port, dst_port,
-                protocol, bytes, packets, src_as, dst_as, input_if, output_if,
-                tos, tcp_flags, start_time, end_time)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            rows,
-        )
+        try:
+            await db.executemany(_FLOW_INSERT, rows)
+        except asyncpg.DataError:
+            await db.rollback()
+            kept = [row for row in rows if _flow_row_fits(row)]
+            if len(kept) == len(rows):
+                raise
+            _LOGGER.warning(
+                "flows: dropped %d of %d flow records holding a number too large for its column",
+                len(rows) - len(kept),
+                len(rows),
+            )
+            if not kept:
+                return 0
+            await db.executemany(_FLOW_INSERT, kept)
+            rows = kept
         await db.commit()
         return len(rows)
     finally:
@@ -161,7 +213,8 @@ async def _flow_aggregates(
             nulls = ", ".join("NULL" for _ in fields[1:])
             branches.append(f"(SELECT {masks[name]}, {nulls}, COUNT(*), 'c' FROM g WHERE gset = {masks[name]})")
     aggregate = f"""SELECT {gset} AS gset, {"".join(f"{col}, " for col in columns)}
-                          SUM(bytes) AS total_bytes, SUM(packets) AS total_packets, COUNT(*) AS flow_count,
+                          CAST(SUM(bytes) AS BIGINT) AS total_bytes,
+                          CAST(SUM(packets) AS BIGINT) AS total_packets, COUNT(*) AS flow_count,
                           {seen} AS first_seen, {last} AS last_seen
                    FROM (SELECT {", ".join(source)} FROM flow_records {where}) f"""
     if len(branches) == 1 and columns:

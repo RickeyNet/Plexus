@@ -75,6 +75,13 @@ address (the same in-memory map as above), and each exporter is limited to
 `dropped_source` and `dropped_rate` of `GET /api/flows/status` and
 `/api/admin/flows/config`.
 
+Byte and packet counts, AS numbers and interface indexes are stored as
+64-bit integers, so a flow over 2 GB or a 4-byte AS number is kept as
+sent. A record with a number that fits no column (a v9 or IPFIX template
+sets each field's width) is dropped by itself, and the server log counts
+it (`flows: dropped N of M flow records ...`); the records flushed with it
+are stored.
+
 An exporter that is not (yet) an inventory host is still supported, in one
 of two ways:
 

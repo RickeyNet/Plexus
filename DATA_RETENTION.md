@@ -92,6 +92,49 @@ boot only, that row is seeded from the legacy `APP_NETFLOW_*` env vars;
 after that the database row is authoritative and env-var changes are
 ignored.
 
+## Sample tables
+
+The three tables that take the most rows are stored so they stay small and
+fast to range-scan:
+
+- **`metric_samples`** (every poll's metric values, kept **48 hours**) and
+  **`interface_ts`** (per-poll interface counters and rates, kept
+  **30 days**) store `sampled_at` as `TIMESTAMPTZ` (8 bytes in the row and
+  in each of their time indexes, instead of about 29 as text). The
+  application reads and writes it as the same UTC text as before
+  (`2026-01-02 03:04:05.123456+00`).
+- All three, with **`flow_records`**, use a 64-bit `id`; the flow byte,
+  packet, AS and interface columns are 64-bit too. Flow times stay text.
+
+Retention deletes on these tables run in chunks through the time index
+(`idx_metric_samples_sampled_at`, `idx_interface_ts_sampled_at`,
+`idx_flow_received`).
+
+**Upgrading from a release before migration 0144.** The migration does not
+rewrite the tables at startup: it renames each one to `<table>_pre0144`
+(keeping only its primary key) and creates the new table in its place, so
+it takes moments whatever the table size. A background task then moves the
+old rows into the new table in batches of 5,000, newest first, keeping
+their ids; rows already past their retention, or whose time is not a
+timestamp, are deleted instead. Each old table is dropped when it is empty.
+Until then:
+
+- charts, tables and reports show the history moved so far (the most
+  recent arrives within the first seconds);
+- the hourly and daily rollups, metric baselines, billing periods and
+  scheduled interface reports, which store what they compute once, wait for
+  the windows that start before the upgrade; the rollups of the hour and
+  day of the upgrade are written when the move finishes. Generating a
+  billing period meanwhile answers 503;
+- disk use peaks near the old plus the new size of each table, and falls
+  back when the old table is dropped.
+
+The move resumes after a restart. The log lines are `sample history:
+moving the rows of ...` at the start, `sample history: still moving: ...`
+once a minute, and `sample history: <table> done: N rows moved, M past
+retention or unreadable dropped; old table removed` at the end of each
+table.
+
 ## Cloud visibility data
 
 Cloud flow-log pulls (AWS CloudWatch Logs, Azure NSG blobs, GCP Cloud

@@ -53,3 +53,25 @@ export const SLA_STATUS_BADGE: Record<SlaStatus | 'none', { cls: string; label: 
 export function slaStatusBadge(status: SlaStatus | null | undefined): { cls: string; label: string } {
   return SLA_STATUS_BADGE[status ?? 'none'];
 }
+
+// Route churn used to be its own tab; it is the alert list filtered to this
+// metric, plus a per-host route history action.
+export const ROUTE_CHURN = 'route_churn';
+
+/**
+ * The server-side filter of the Alerts tab: every control of its toolbar
+ * maps to a query parameter of GET /api/monitoring/alerts.
+ */
+export function alertsFilter(controls: {
+  ackFilter: 'all' | 'open' | 'ack';
+  severity: string;
+  search: string;
+  routeChurnOnly: boolean;
+}): { acknowledged: boolean | null; severity: string; q: string; metric: string } {
+  return {
+    acknowledged: controls.ackFilter === 'open' ? false : controls.ackFilter === 'ack' ? true : null,
+    severity: controls.severity,
+    q: controls.search,
+    metric: controls.routeChurnOnly ? ROUTE_CHURN : '',
+  };
+}

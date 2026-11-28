@@ -1,8 +1,10 @@
 import { useMemo, useState } from 'react';
 
 import type { DashboardGroup, DeviceHealth } from '@/api/dashboard';
+import { ShowMoreButton } from '@/components/ShowMoreButton';
 import { formatRelativeTime } from '@/lib/datetime';
 import { useParamFilter } from '@/lib/useLinkedParam';
+import { useShowMore } from '@/lib/useShowMore';
 
 import {
   DEVICE_HEALTH_FILTERS,
@@ -124,6 +126,9 @@ function UsageBar({ pct }: { pct: number | null | undefined }) {
 }
 
 function DeviceHealthTable({ devices, emptyMessage }: { devices: DeviceHealth[]; emptyMessage: string }) {
+  // A large fleet would render thousands of rows at once: the first 200 in
+  // the chosen order, the rest on demand.
+  const showMore = useShowMore(devices);
   if (!devices.length) {
     return (
       <div className="empty-state">
@@ -133,66 +138,69 @@ function DeviceHealthTable({ devices, emptyMessage }: { devices: DeviceHealth[];
   }
 
   return (
-    <table className="data-table table-sticky">
-      <thead>
-        <tr>
-          <th>Status</th>
-          <th>Hostname</th>
-          <th>IP Address</th>
-          <th>Group</th>
-          <th>Model</th>
-          <th>CPU</th>
-          <th>Memory</th>
-          <th>Interfaces</th>
-          <th>Response</th>
-          <th>Uptime</th>
-          <th>Last Poll</th>
-        </tr>
-      </thead>
-      <tbody>
-        {devices.map((d, i) => {
-          const health = classifyDeviceHealth(d);
-          const statusLabel = HEALTH_LABELS[health];
-          const dotClass = health === 'healthy' ? 'up' : health;
-          const statusClass = health === 'healthy' ? 'up' : health;
-          return (
-            <tr key={`${d.hostname ?? '-'}-${d.ip_address ?? '-'}-${i}`}>
-              <td>
-                <div className={`device-health-status status-${statusClass}`}>
-                  <span className={`status-dot ${dotClass}`} />
-                  {statusLabel}
-                </div>
-              </td>
-              <td>
-                <strong>{d.hostname ?? '-'}</strong>
-              </td>
-              <td>{d.ip_address ?? '-'}</td>
-              <td>{d.group_name ?? '-'}</td>
-              <td>{d.model ?? d.device_type ?? '-'}</td>
-              <td>
-                <UsageBar pct={d.cpu_percent} />
-              </td>
-              <td>
-                <UsageBar pct={d.memory_percent} />
-              </td>
-              <td>
-                {d.if_up_count != null ? (
-                  <>
-                    <span style={{ color: 'var(--success)' }}>{d.if_up_count}▲</span>
-                    {' / '}
-                    <span style={{ color: 'var(--danger)' }}>{d.if_down_count ?? 0}▼</span>
-                  </>
-                ) : (
-                  '-'
-                )}
-              </td>
-              <td>{d.response_time_ms != null ? `${Math.round(d.response_time_ms)}ms` : '-'}</td>
-              <td>{formatUptime(d.uptime_seconds)}</td>
-              <td title={d.polled_at ?? ''}>{formatRelativeTime(d.polled_at)}</td>
-            </tr>
-          );
-        })}
-      </tbody>
-    </table>
+    <>
+      <table className="data-table table-sticky">
+        <thead>
+          <tr>
+            <th>Status</th>
+            <th>Hostname</th>
+            <th>IP Address</th>
+            <th>Group</th>
+            <th>Model</th>
+            <th>CPU</th>
+            <th>Memory</th>
+            <th>Interfaces</th>
+            <th>Response</th>
+            <th>Uptime</th>
+            <th>Last Poll</th>
+          </tr>
+        </thead>
+        <tbody>
+          {showMore.visible.map((d, i) => {
+            const health = classifyDeviceHealth(d);
+            const statusLabel = HEALTH_LABELS[health];
+            const dotClass = health === 'healthy' ? 'up' : health;
+            const statusClass = health === 'healthy' ? 'up' : health;
+            return (
+              <tr key={`${d.hostname ?? '-'}-${d.ip_address ?? '-'}-${i}`}>
+                <td>
+                  <div className={`device-health-status status-${statusClass}`}>
+                    <span className={`status-dot ${dotClass}`} />
+                    {statusLabel}
+                  </div>
+                </td>
+                <td>
+                  <strong>{d.hostname ?? '-'}</strong>
+                </td>
+                <td>{d.ip_address ?? '-'}</td>
+                <td>{d.group_name ?? '-'}</td>
+                <td>{d.model ?? d.device_type ?? '-'}</td>
+                <td>
+                  <UsageBar pct={d.cpu_percent} />
+                </td>
+                <td>
+                  <UsageBar pct={d.memory_percent} />
+                </td>
+                <td>
+                  {d.if_up_count != null ? (
+                    <>
+                      <span style={{ color: 'var(--success)' }}>{d.if_up_count}▲</span>
+                      {' / '}
+                      <span style={{ color: 'var(--danger)' }}>{d.if_down_count ?? 0}▼</span>
+                    </>
+                  ) : (
+                    '-'
+                  )}
+                </td>
+                <td>{d.response_time_ms != null ? `${Math.round(d.response_time_ms)}ms` : '-'}</td>
+                <td>{formatUptime(d.uptime_seconds)}</td>
+                <td title={d.polled_at ?? ''}>{formatRelativeTime(d.polled_at)}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+      <ShowMoreButton hiddenCount={showMore.hiddenCount} onClick={showMore.showMore} style={{ marginTop: '0.5rem' }} />
+    </>
   );
 }

@@ -1,11 +1,13 @@
-import { useMemo, useState, useSyncExternalStore } from 'react';
+import { useState, useSyncExternalStore } from 'react';
 import { useNavigate } from 'react-router';
 
 import { EmptyState } from '@/components/EmptyState';
 import { LoadingState } from '@/components/LoadingState';
 import { QueryError } from '@/components/QueryError';
 import { Modal } from '@/components/Modal';
+import { Pager } from '@/components/Pager';
 import {
+  MONITORING_PAGE_SIZE,
   useMonitoringPollHistory,
   useMonitoringPolls,
   useMonitoringSummary,
@@ -13,6 +15,8 @@ import {
 } from '@/api/monitoring';
 import { StatGrid, StatTile } from '@/components/StatTile';
 import { formatBackendDateTime } from '@/lib/datetime';
+import { useDebouncedValue } from '@/lib/useDebouncedValue';
+import { useFilterOffset } from '@/lib/useFilterOffset';
 import { formatUptime } from './helpers';
 import {
   dismissPollProgress,
@@ -23,21 +27,17 @@ import {
 
 export function DevicesTab() {
   const navigate = useNavigate();
-  const polls = useMonitoringPolls();
   const [query, setQuery] = useState('');
+  // The server searches hostname and IP address over the whole fleet and
+  // sends one page; a new search starts again on the first page.
+  const search = useDebouncedValue(query.trim());
+  const [offset, setOffset] = useFilterOffset({ search });
+  const polls = useMonitoringPolls({ q: search, offset });
   const [historyHost, setHistoryHost] = useState<{ id: number; hostname: string } | null>(null);
   const progress = useSyncExternalStore(subscribePollProgress, getPollProgress, getPollProgress);
 
-  const filtered = useMemo(() => {
-    const list = polls.data ?? [];
-    const q = query.trim().toLowerCase();
-    if (!q) return list;
-    return list.filter(
-      (p) =>
-        (p.hostname ?? '').toLowerCase().includes(q) ||
-        (p.ip_address ?? '').toLowerCase().includes(q),
-    );
-  }, [polls.data, query]);
+  const rows = polls.data?.polls ?? [];
+  const total = polls.data?.total ?? 0;
 
   function pollNow() {
     void startPollNow();
@@ -56,6 +56,7 @@ export function DevicesTab() {
           aria-label="Search devices"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
+          maxLength={200}
           style={{ flex: 1, minWidth: 200 }}
         />
         <button className="btn btn-primary" onClick={pollNow} disabled={progress.active}>
@@ -115,12 +116,14 @@ export function DevicesTab() {
       ) : (
         polls.isPending && <LoadingState />
       )}
-      {polls.data && filtered.length === 0 && (
-        <EmptyState message="No monitoring data - click Poll Now to begin." />
+      {polls.data && rows.length === 0 && (
+        <EmptyState
+          message={search ? 'No device matches the search.' : 'No monitoring data - click Poll Now to begin.'}
+        />
       )}
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-        {filtered.map((p) => (
+        {rows.map((p) => (
           <PollRow
             key={p.host_id}
             poll={p}
@@ -129,6 +132,14 @@ export function DevicesTab() {
           />
         ))}
       </div>
+      <Pager
+        offset={offset}
+        pageSize={MONITORING_PAGE_SIZE}
+        total={total}
+        onChange={setOffset}
+        previousLabel="Previous"
+        nextLabel="Next"
+      />
 
       {historyHost && (
         <HostHistoryModal

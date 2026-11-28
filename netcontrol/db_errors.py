@@ -25,6 +25,8 @@ DUPLICATE = ClientError(409, "http_error", "A record with the same value already
 # One answer for both directions of a foreign key: a parent that does not
 # exist (insert, update) and a record other records still point at (delete).
 REFERENCE = ClientError(409, "http_error", "The request refers to a record that does not exist or is still in use")
+# A time bound PostgreSQL cannot read, against a TIMESTAMPTZ column.
+BAD_TIME = ClientError(422, "validation_error", "A time in the request is not a valid timestamp")
 
 # Reported by PostgreSQL for a value the column or the date arithmetic cannot hold.
 _SERVER_OUT_OF_RANGE = (
@@ -45,6 +47,8 @@ def client_error_for(exc: BaseException | None) -> ClientError | None:
         return REFERENCE
     if isinstance(exc, _SERVER_OUT_OF_RANGE):
         return OUT_OF_RANGE
+    if isinstance(exc, asyncpg.InvalidDatetimeFormatError):
+        return BAD_TIME
     # The driver refuses an argument before sending it ("invalid input for
     # query argument"). An integer past int32/int64 has an OverflowError as
     # its cause; a wrong type (a TypeError) is a bug in the query's caller.

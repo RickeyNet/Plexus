@@ -3,7 +3,9 @@ import { Link } from 'react-router';
 
 import type { DeviceHealth } from '@/api/dashboard';
 import { SegmentedControl } from '@/components/SegmentedControl';
+import { ShowMoreButton } from '@/components/ShowMoreButton';
 import { useParamFilter } from '@/lib/useLinkedParam';
+import { useShowMore } from '@/lib/useShowMore';
 
 import {
   DEVICES_FILTER_PARAM,
@@ -17,6 +19,9 @@ import { HEALTH_COLORS, HEALTH_LABELS, SEVERITY_ORDER, classifyDeviceHealth, typ
 
 // 'critical' is the merged critical + down bucket.
 type Filter = 'all' | DeviceHealthFilter;
+
+/** Tiles rendered before "Show more". */
+const DEVICE_TILES_SHOWN = 500;
 
 export function DevicesGridPanel({ devices }: { devices: DeviceHealth[] }) {
   // The filter lives in the URL (`?devices=`), so the donut and the Needs
@@ -43,6 +48,9 @@ export function DevicesGridPanel({ devices }: { devices: DeviceHealth[] }) {
     if (filter === 'all') return sorted;
     return sorted.filter((e) => deviceHealthFilterOf(e.status) === filter);
   }, [sorted, filter]);
+  // A large fleet would render thousands of tiles at once: show the worst
+  // first and the rest on demand.
+  const showMore = useShowMore(filtered, DEVICE_TILES_SHOWN);
 
   // Each chip carries its count, so the grid needs no separate legend.
   const filters = useMemo<{ key: Filter; label: string }[]>(() => {
@@ -67,15 +75,18 @@ export function DevicesGridPanel({ devices }: { devices: DeviceHealth[] }) {
           </p>
         </div>
       ) : (
-        <div className="dashboard-devices-grid">
-          {filtered.map((e, i) => (
-            <DeviceTile
-              key={`${e.device.host_id ?? '-'}-${e.device.hostname ?? '-'}-${i}`}
-              device={e.device}
-              status={e.status}
-            />
-          ))}
-        </div>
+        <>
+          <div className="dashboard-devices-grid">
+            {showMore.visible.map((e, i) => (
+              <DeviceTile
+                key={`${e.device.host_id ?? '-'}-${e.device.hostname ?? '-'}-${i}`}
+                device={e.device}
+                status={e.status}
+              />
+            ))}
+          </div>
+          <ShowMoreButton hiddenCount={showMore.hiddenCount} onClick={showMore.showMore} style={{ marginTop: '0.5rem' }} />
+        </>
       )}
     </div>
   );

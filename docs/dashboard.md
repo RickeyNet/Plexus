@@ -32,11 +32,11 @@ device detail page and Network Tools, Traffic Analysis.
 | **Average Response Time** | The mean response time of all polled devices, with **Avg** and **Peak** | Metric `response_time_ms` |
 | **Busiest Interfaces** | The 5 interfaces with the highest peak bandwidth, one line each (in + out) | Interface counters from SNMP polls |
 | **Top Talkers** | The 10 IP addresses with the most bytes, by **Source** or **Destination**. With the [optional ASN database](../deploy/DEPLOYMENT.md#netflow-network-labels-optional), public IPs can show their network operator; hover for the full label and ASN. | NetFlow / sFlow collector |
-| **Devices** | One tile per polled device, worst first, coloured by health. A tile opens the device detail page | Latest poll of each device |
+| **Devices** | One tile per polled device, worst first, coloured by health. A tile opens the device detail page. The first 500 tiles show; **Show more** adds the rest | Latest poll of each device |
 | **Backup Status** | Hosts per backup state and a list of problem hosts | Configuration backups |
 | **Recent Events** | Up to 50 deployments, configuration changes and alerts, filtered by **Deploy**, **Config** or **Alert** | Event annotations |
 | Stat rings | **Total Hosts**, **Playbooks**, **Total Jobs**, and **Sources Healthy** (or **Entities Up** when there are no sources) | Inventory, jobs, topology sources |
-| **Network Health Overview** | A table of polled devices with filters for group and status, and sort | Latest poll of each device |
+| **Network Health Overview** | A table of polled devices with filters for group and status, and sort. The first 200 rows show; **Show more** adds the rest | Latest poll of each device |
 | **Active Alerts** | Up to 20 open monitoring alerts, then up to 20 down or degraded integration entities | Unacknowledged alerts, integration availability |
 | **Not set up yet** | The panels left out because what they need is not set up, with a link to set it up | Setup state |
 
@@ -170,7 +170,10 @@ There is no drag-and-drop layout: each panel has a width and height on a
   on a timer. Open it again to see new data. The server caches the summary
   for 10 seconds for all users.
 - **Polled devices only.** The device panels and the backup **never** state
-  count only devices that have a poll.
+  count only devices that have a poll. They cover every polled device (or,
+  for an account limited to inventory groups, every one in those groups).
+- **Critical alerts** in Needs attention counts every open critical alert;
+  the row names the newest of them.
 - **Response time** comes from ICMP when it is available, else from the
   time the poll took. See [Monitoring](monitoring.md).
 - **Busiest Interfaces** and **Top Talkers** support 1h to 7d. With **30d**
@@ -210,7 +213,7 @@ API. The full list is in [API reference](api-reference.md).
 
 | Method and path | Purpose |
 |---|---|
-| `GET /api/dashboard` | The summary: `stats`, `recent_jobs` (with `jobs`), `groups` (with `inventory`), `monitoring`, `device_health`, `open_alerts` and `topology` (with `monitoring`). A section whose feature the caller lacks is left out |
+| `GET /api/dashboard` | The summary: `stats`, `recent_jobs` (with `jobs`), `groups` (with `inventory`), `monitoring`, `device_health` (the latest poll of every polled host), `open_alerts` (the newest 50 unacknowledged), `critical_open_alerts` (how many open alerts are critical) and `topology` (with `monitoring`). A section whose feature the caller lacks is left out |
 | `GET /api/dashboard/top-interfaces?range=6h&limit=5` | Busiest interfaces with their samples; `range` 1h, 6h, 24h or 7d; `limit` 1-20 |
 | `GET /api/annotations?start=&end=&categories=deployment,config,alert` | Events for the feed and chart markers |
 | `GET /api/dashboards`, `POST`, `GET/PUT/DELETE /api/dashboards/{id}` | Custom dashboards |

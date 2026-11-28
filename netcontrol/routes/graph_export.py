@@ -330,13 +330,13 @@ async def _fetch_metric_data(host_id: int, metric_name: str, instance_key: str, 
     ddb = await db.get_db()
     try:
         # Try metric_samples first
-        cutoff_sql = f"-{hours} hours"
+        since = db._now_minus_expr("hours")
         cursor = await ddb.execute(
-            """SELECT value, collected_at as ts FROM metric_samples
+            f"""SELECT value, sampled_at as ts FROM metric_samples
                WHERE host_id = ? AND metric_name = ?
-                     AND collected_at >= datetime('now', ?)
-               ORDER BY collected_at""",
-            (host_id, metric_name, cutoff_sql),
+                     AND sampled_at >= {since}
+               ORDER BY sampled_at""",  # nosec B608 - fixed expression, placeholders only
+            (host_id, metric_name, hours),
         )
         rows = await cursor.fetchall()
         if rows:
@@ -351,11 +351,11 @@ async def _fetch_metric_data(host_id: int, metric_name: str, instance_key: str, 
         # Try interface_ts for interface-scoped metrics
         if instance_key:
             cursor2 = await ddb.execute(
-                """SELECT in_rate_bps, out_rate_bps, collected_at as ts FROM interface_ts
+                f"""SELECT in_rate_bps, out_rate_bps, sampled_at as ts FROM interface_ts
                    WHERE host_id = ? AND if_index = ?
-                         AND collected_at >= datetime('now', ?)
-                   ORDER BY collected_at""",
-                (host_id, int(instance_key) if instance_key.isdigit() else 0, cutoff_sql),
+                         AND sampled_at >= {since}
+                   ORDER BY sampled_at""",  # nosec B608 - fixed expression, placeholders only
+                (host_id, int(instance_key) if instance_key.isdigit() else 0, hours),
             )
             rows2 = await cursor2.fetchall()
             if rows2:

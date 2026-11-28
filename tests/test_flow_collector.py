@@ -14,6 +14,7 @@ Covers:
 from __future__ import annotations
 
 import asyncio
+import importlib
 import socket
 import struct
 import threading
@@ -22,6 +23,8 @@ import pytest
 import routes.database as db_module
 from netcontrol import listener_sources
 from netcontrol.routes import flow_collector
+
+import pg_raw
 
 # ── shared fixture helpers ──────────────────────────────────────────────────
 
@@ -499,6 +502,131 @@ async def test_create_flow_records_batch_and_top_talkers():
 async def test_create_flow_records_batch_empty_is_noop():
     await _init_db()
     assert await db_module.create_flow_records_batch([]) == 0
+
+
+def _flow_row(host_id: int, src: str, **fields: int) -> tuple:
+    """A flow row for ``create_flow_records_batch``; ``fields`` set its integers."""
+    return (
+        "192.0.2.1",
+        host_id,
+        "netflow_v9",
+        src,
+        "203.0.113.9",
+        fields.get("src_port", 40000),
+        fields.get("dst_port", 443),
+        6,
+        fields.get("bytes", 100),
+        fields.get("packets", 1),
+        fields.get("src_as", 0),
+        fields.get("dst_as", 0),
+        fields.get("input_if", 1),
+        fields.get("output_if", 2),
+        0,
+        0,
+        "2026-05-12T00:00:00+00:00",
+        "2026-05-12T00:00:01+00:00",
+    )
+
+
+async def test_flow_numbers_past_32_bits_are_stored_and_summed_as_integers():
+    # The wire fields are unsigned 32-bit or wider: a v5 byte count, a 4-byte
+    # AS number, a v9 interface index. Each is past int4.
+    await _init_db()
+    host_id = await _add_host(ip="192.0.2.1")
+    rows = [
+        _flow_row(host_id, "198.51.100.1", bytes=4_294_967_295, packets=3_000_000_000),
+        _flow_row(
+            host_id,
+            "198.51.100.1",
+            bytes=5_000_000_000,
+            src_as=4_200_000_001,
+            dst_as=4_294_967_294,
+            input_if=4_000_000_000,
+            output_if=4_000_000_001,
+        ),
+    ]
+
+    assert await db_module.create_flow_records_batch(rows) == 2
+
+    (top,) = await db_module.get_flow_top_talkers(host_id=host_id, hours=1, direction="src", limit=10)
+    assert top["total_bytes"] == 9_294_967_295
+    assert top["total_packets"] == 3_000_000_001
+    # A sum of BIGINT is NUMERIC in PostgreSQL; the views still get integers.
+    assert type(top["total_bytes"]) is int
+    assert type(top["total_packets"]) is int
+
+
+async def test_a_flow_record_that_fits_no_column_is_dropped_without_its_batch(caplog):
+    # A v9 or IPFIX template sets each field's width, so any integer can come
+    # in wider than its column. Before, one such record failed the insert of
+    # every record flushed with it.
+    await _init_db()
+    host_id = await _add_host(ip="192.0.2.1")
+    rows = [
+        _flow_row(host_id, "198.51.100.1", bytes=1000),
+        _flow_row(host_id, "198.51.100.2", bytes=2**64),
+        _flow_row(host_id, "198.51.100.3", src_port=2**31),
+        _flow_row(host_id, "198.51.100.4", bytes=3000),
+    ]
+
+    with caplog.at_level("WARNING"):
+        assert await db_module.create_flow_records_batch(rows) == 2
+
+    assert "dropped 2 of 4 flow records" in caplog.text
+    top = await db_module.get_flow_top_talkers(host_id=host_id, hours=1, direction="src", limit=10)
+    assert {row["ip"]: row["total_bytes"] for row in top} == {"198.51.100.4": 3000, "198.51.100.1": 1000}
+
+    # A batch of nothing but such records stores nothing and does not raise.
+    assert await db_module.create_flow_records_batch([_flow_row(host_id, "198.51.100.5", packets=2**63)]) == 0
+    assert len(await db_module.get_flow_top_talkers(host_id=host_id, hours=1, direction="src", limit=10)) == 2
+
+
+async def test_exporter_packet_count_and_sampling_rate_pass_32_bits():
+    # packets_received counts every datagram an exporter ever sent; the
+    # sampling rate is an unsigned 32-bit wire value.
+    await _init_db()
+    for delta in (2_000_000_000, 2_000_000_000):
+        await db_module.upsert_flow_exporter(
+            exporter_ip="192.0.2.1",
+            flow_type="sflow_v5",
+            host_id=None,
+            packets_delta=delta,
+            sampling_rate=4_294_967_295,
+        )
+
+    (row,) = await db_module.list_flow_exporters()
+    assert row["packets_received"] == 4_000_000_000
+    assert row["sampling_rate"] == 4_294_967_295
+
+
+async def test_migration_0145_widens_the_exporter_counters_of_an_old_database():
+    migration = importlib.import_module("routes.migrations.0145_widen_flow_exporter_counters")
+    await _init_db()
+    # The columns of a database from before 0145, with a row near the limit.
+    await pg_raw.execute(
+        "ALTER TABLE flow_exporters ALTER COLUMN packets_received TYPE INTEGER, ALTER COLUMN sampling_rate TYPE INTEGER"
+    )
+    await db_module.upsert_flow_exporter("192.0.2.1", "netflow_v9", None, packets_delta=2_147_483_000)
+
+    conn = await db_module.get_db()
+    try:
+        await migration.up(conn)
+        await migration.up(conn)  # re-running is a no-op
+    finally:
+        await conn.close()
+    assert migration.VERSION == 145
+
+    types = await pg_raw.fetch(
+        "SELECT column_name, data_type FROM information_schema.columns "
+        "WHERE table_name = 'flow_exporters' AND column_name IN ('packets_received', 'sampling_rate')"
+    )
+    assert {r["column_name"]: r["data_type"] for r in types} == {
+        "packets_received": "bigint",
+        "sampling_rate": "bigint",
+    }
+    await db_module.upsert_flow_exporter("192.0.2.1", "netflow_v9", None, packets_delta=1000)
+    (row,) = await db_module.list_flow_exporters()
+    assert row["packets_received"] == 2_147_484_000
 
 
 # ═════════════════════════════════════════════════════════════════════════════

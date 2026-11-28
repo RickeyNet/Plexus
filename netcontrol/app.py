@@ -205,6 +205,7 @@ from netcontrol.routes.flow_collector import (
     _cancel_aggregation_task as _cancel_flow_aggregation_task,
     _ensure_aggregation_task as _ensure_flow_aggregation_task,
     admin_router as flow_collector_admin_router,
+    flow_retention_hours,
     router as flow_collector_router,
     start_flow_collector,
     stop_flow_collector,
@@ -397,7 +398,8 @@ from netcontrol.routes.virtualization import (
     admin_router as virtualization_admin_router,
     router as virtualization_router,
 )
-from netcontrol.scoped_dashboard import dashboard_for_caller, scoped_dashboard_data
+from netcontrol.sample_history import sample_history_move_loop
+from netcontrol.scoped_dashboard import critical_open_alert_count, dashboard_for_caller, scoped_dashboard_data
 from netcontrol.sso import safe_next
 from netcontrol.sync.runner import sync_jobs_loop
 
@@ -1609,8 +1611,7 @@ async def _cloud_flow_sync_loop() -> None:
             # aggregation cycle only runs when that collector is enabled, so
             # a cloud-only deployment would otherwise grow flow_records
             # without bound.
-            retention_hours = int(FLOW_COLLECTOR_CONFIG.get("retention_hours", 48))
-            cleaned = await db.cleanup_old_flow_records(retention_hours)
+            cleaned = await db.cleanup_old_flow_records(flow_retention_hours())
             if cleaned > 0:
                 LOGGER.info("Cloud flow sync: pruned %s old flow records", cleaned)
         except asyncio.CancelledError:
@@ -1874,10 +1875,16 @@ async def lifespan(app: FastAPI):
             )
 
     # Loops that run their first pass at start on purpose (the discovery
-    # scan, the one-off backfills); every other loop starts after a random
-    # delay (_start_jittered) so loops on the same interval do not all wake
-    # in the same second.
-    start_at_once = (_discovery_sync_loop, _interface_addresses_backfill, _opnsense_backup_encryption_backfill)
+    # scan, the one-off backfills, the move of the sample history migration
+    # 0144 left behind); every other loop starts after a random delay
+    # (_start_jittered) so loops on the same interval do not all wake in the
+    # same second.
+    start_at_once = (
+        _discovery_sync_loop,
+        _interface_addresses_backfill,
+        _opnsense_backup_encryption_backfill,
+        sample_history_move_loop,
+    )
     background_tasks = [
         asyncio.create_task(loop() if loop in start_at_once else _start_jittered(loop), name=loop.__name__)
         for loop in (
@@ -1912,6 +1919,7 @@ async def lifespan(app: FastAPI):
             lab_drift_scheduler_loop,
             _interface_addresses_backfill,
             _opnsense_backup_encryption_backfill,
+            sample_history_move_loop,
             intended_config_loop,
             git_sources_loop,
             _lifecycle_check_loop,
@@ -2610,13 +2618,15 @@ async def _has_feature(request: Request, feature_key: str) -> bool:
 
 
 async def _build_dashboard() -> JsonPayload:
-    stats, recent_jobs, groups, monitoring, latest_polls, alerts, topology = await asyncio.gather(
+    stats, recent_jobs, groups, monitoring, latest_polls, alerts, critical_alerts, topology = await asyncio.gather(
         db.get_dashboard_stats(),
         db.get_all_jobs(limit=5),
         db.get_all_groups(),
         db.get_monitoring_summary(),
-        db.get_latest_monitoring_polls(),
+        # The whole polled fleet: the dashboard's health figures cover every host.
+        db.get_latest_monitoring_polls(limit=None),
         db.get_monitoring_alerts(acknowledged=False, limit=50),
+        critical_open_alert_count(),
         dashboard_topology_summary(),
     )
     return JsonPayload(
@@ -2627,6 +2637,8 @@ async def _build_dashboard() -> JsonPayload:
             "monitoring": monitoring,
             "device_health": latest_polls,
             "open_alerts": alerts,
+            # Every critical open alert; ``open_alerts`` lists the newest 50.
+            "critical_open_alerts": critical_alerts,
             "topology": topology,
         }
     )

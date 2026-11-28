@@ -30,6 +30,7 @@ from netcontrol.csv_cells import csv_text_cell
 from netcontrol.integrations.traffic import format_bps
 from netcontrol.object_scope import filter_rows, readable_host_ids, require_new_row, require_row, scoped
 from netcontrol.routes.shared import _audit, _corr_id, _get_session, _session_user
+from netcontrol.sample_history import history_complete
 from netcontrol.telemetry import configure_logging
 
 router = APIRouter()
@@ -183,6 +184,13 @@ async def generate_billing_for_circuit(
         period_start,
         period_end,
     )
+    # A billing period is stored once: not from a history still moving in
+    # after migration 0144.
+    if not await history_complete("interface_ts", start):
+        raise HTTPException(
+            status_code=503,
+            detail="Interface history from before the upgrade is still loading; generate this period when it is done",
+        )
 
     # Fetch raw samples from interface_ts
     samples = await db.get_billing_samples_for_period(

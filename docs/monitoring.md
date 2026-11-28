@@ -519,18 +519,24 @@ an IDS alert reaches Plexus within one poll interval.
 The tiles show **Hosts**, **Avg CPU**, **Avg Mem**, **IF Up**, **IF Down**,
 **VPN Up**, **VPN Down**, **Routes** and **Open Alerts**. Each host row
 shows its last poll; **Detail** opens the device detail page and **History**
-lists the last 50 polls. **Poll Now** polls every host now and shows the
-progress per host. The tab refreshes every 60 seconds.
+lists the last 50 polls. **Search devices…** finds hosts by hostname or IP
+address across every polled host (the server searches, not the page). The
+list shows 200 hosts a page, by hostname; **Previous** and **Next** move
+between pages when there are more. **Poll Now** polls every host now and
+shows the progress per host. The tab refreshes every 60 seconds.
 
 ### Alerts
 
-1. Filter by **Search alerts…**, severity (**Critical**, **Warning**,
-   **Info**) and **Unacknowledged** / **Acknowledged** / **All**. **Route
-   churn** shows only route table change alerts; their **Route history**
-   button lists the stored route snapshots.
+1. Filter by **Search alerts…** (hostname, message or metric), severity
+   (**Critical**, **Warning**, **Info**) and **Unacknowledged** /
+   **Acknowledged** / **All**. **Route churn** shows only route table change
+   alerts; their **Route history** button lists the stored route snapshots.
+   Every filter runs on the server over all alerts. The list shows 200
+   alerts a page, newest first; **Newer** and **Older** move between pages.
 2. Click **Acknowledge** on an alert, or tick alerts and use **Acknowledge
-   Selected** or **Acknowledge All** (all unacknowledged alerts the filters
-   show).
+   Selected** or **Acknowledge All** (the unacknowledged alerts on the page
+   shown; with more pages, the confirmation says the alerts on the other
+   pages are not changed).
 
 A row shows the severity, **Escalated** when it was escalated, **Nx** when
 the same condition was seen N times, the host, the metric, the message,
@@ -749,7 +755,10 @@ Poll**, and the matching IPAM subnet when there is one.
   **Retention (days)** (1 to 365), checked at most once an hour after a poll
   cycle. Metric samples are kept 48 hours, hourly rollups 30 days and daily
   rollups 365 days; interface traffic and syslog / trap events 30 days;
-  interface error events 90 days.
+  interface error events 90 days. Metric samples and interface traffic store
+  their time as `TIMESTAMPTZ` (read as UTC text, as before) and have 64-bit
+  ids; after the upgrade to migration 0144 their older history is moved in
+  the background, newest first (see `DATA_RETENTION.md`, "Sample tables").
 - **Poll details are stored where they change.** A poll's interface list,
   VPN details and route snapshot are kept on the host's newest poll and on
   the first and last poll of each run in which they did not change
@@ -806,9 +815,10 @@ The full list is in [API reference](api-reference.md).
 
 | Method and path | Purpose |
 |---|---|
-| `GET /api/monitoring/summary`, `GET /api/monitoring/polls` | Tiles and the latest poll per host |
+| `GET /api/monitoring/summary` | Tiles |
+| `GET /api/monitoring/polls?group_id=&q=&limit=&offset=&with_total=` | The latest poll per host, by hostname. `q` (up to 200 characters) matches hostname or IP address; `limit` defaults to 200. The answer is a JSON array; with `with_total=true` it is `{"polls": [...], "total": n}`, `total` counting every matching host |
 | `GET /api/monitoring/polls/{host_id}/history?limit=` | Poll history of one host |
-| `GET /api/monitoring/alerts?acknowledged=&severity=&host_id=` | Alerts |
+| `GET /api/monitoring/alerts?acknowledged=&severity=&metric=&host_id=&q=&limit=&offset=&with_total=` | Alerts, newest first. `q` matches hostname, message or metric; `limit` defaults to 200. A JSON array; with `with_total=true`, `{"alerts": [...], "total": n}` |
 | `POST /api/monitoring/alerts/{id}/acknowledge`, `POST /api/monitoring/alerts/bulk-acknowledge` | Acknowledge one, or up to 1000 |
 | `GET/POST /api/monitoring/rules`, `PUT/DELETE /api/monitoring/rules/{id}` | Alert rules |
 | `GET/POST /api/monitoring/suppressions`, `DELETE /api/monitoring/suppressions/{id}` | Suppressions |

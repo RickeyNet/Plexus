@@ -269,21 +269,6 @@ export function useMonitoringPollHistory(hostId: number | null, limit = 1) {
   });
 }
 
-export function useMonitoringPolls(limit = 100) {
-  type PollsResult = { polls?: (MonitoringPoll & { host_id?: number })[] };
-  return useQuery<PollsResult>({
-    // Device-scoped: distinct prefix so page-level ['monitoring-polls']
-    // invalidations (poll-now / time-range refresh) don't refetch this shape.
-    queryKey: ['device-polls', limit],
-    queryFn: async ({ signal }) => {
-      const data = await apiRequest<
-        (MonitoringPoll & { host_id?: number })[] | PollsResult
-      >(`/monitoring/polls?limit=${limit}`, { signal });
-      return Array.isArray(data) ? { polls: data } : data;
-    },
-  });
-}
-
 export function useComplianceResults(hostId: number | null, limit = 20, enabled = true) {
   return useQuery<{ results?: ComplianceResult[] }>({
     queryKey: ['compliance-results', hostId, limit],

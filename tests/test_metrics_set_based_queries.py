@@ -14,6 +14,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 import routes.database as db_module
+from netcontrol import sample_history
 from netcontrol.routes import metrics_engine
 
 FMT = "%Y-%m-%d %H:%M:%S"
@@ -21,6 +22,11 @@ FMT = "%Y-%m-%d %H:%M:%S"
 
 def _ts(dt: datetime) -> str:
     return dt.strftime(FMT)
+
+
+def _stored(dt: datetime) -> str:
+    """``dt`` as a TIMESTAMPTZ column reads back (PostgreSQL's UTC text)."""
+    return _ts(dt) + "+00"
 
 
 def _now() -> datetime:
@@ -322,6 +328,9 @@ async def test_rollup_matches_python_aggregation_and_is_idempotent(count_queries
     seeded.append((h1, "cpu_percent", "{}", 1000.0, "2026-03-01 09:59:59"))
     seeded.append((h1, "not_a_rolled_up_metric", "{}", 1.0, "2026-03-01 10:30:00"))
     await _execmany(_SAMPLE_INSERT, seeded)
+    # The rollup first checks once per process that no pre-0144 history is
+    # still moving in (netcontrol.sample_history); done here, not counted.
+    assert await sample_history.history_complete("metric_samples")
 
     count_queries.clear()
     created = await metrics_engine._downsample_window("hourly", start, end)
@@ -452,13 +461,13 @@ async def test_interface_series_short_range_is_raw():
         (r["if_index"], r["sampled_at"]) for r in raw
     )
     assert [r["if_index"] for r in result["latest"]] == [1, 2]
-    assert [r["sampled_at"] for r in result["latest"]] == [_ts(now), _ts(now)]
+    assert [r["sampled_at"] for r in result["latest"]] == [_stored(now), _stored(now)]
 
     # The raw path caps each interface to its newest samples.
     capped = await db_module.query_interface_ts_series(host, start, raw_limit_per=3)
     assert len(capped["data"]) == 6
     assert [r["sampled_at"] for r in capped["data"][:3]] == [
-        _ts(now - timedelta(minutes=10)),
-        _ts(now - timedelta(minutes=5)),
-        _ts(now),
+        _stored(now - timedelta(minutes=10)),
+        _stored(now - timedelta(minutes=5)),
+        _stored(now),
     ]

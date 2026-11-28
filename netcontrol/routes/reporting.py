@@ -47,6 +47,7 @@ from netcontrol.object_scope import (
     scoped,
 )
 from netcontrol.routes.shared import _audit, _corr_id, _get_session, _session_user, require_owner_or_admin
+from netcontrol.sample_history import history_complete
 from netcontrol.telemetry import configure_logging, increment_metric, redact_value
 
 router = APIRouter()
@@ -528,6 +529,10 @@ async def _run_scheduled_reports_once() -> dict:
         report_id = int(report_def.get("id") or 0)
         report_type = str(report_def.get("report_type") or "availability").strip().lower()
         params = _parse_report_params(report_def.get("parameters_json"))
+        # A stored interface report waits (stays due) while the interface
+        # history from before migration 0144 is still moving in.
+        if report_type == "interface" and not await history_complete("interface_ts"):
+            continue
 
         try:
             await _execute_report_run(

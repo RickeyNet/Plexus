@@ -604,6 +604,23 @@ bash deploy/upgrade.sh --rollback
   the new `location` blocks and `X-Forwarded-For $remote_addr` lines into
   your copy.
 
+**Upgrading to the release with migration 0144 (sample tables):**
+
+- The metric, interface and flow history tables get 64-bit keys, and the
+  metric and interface sample times a native time type. The migration is
+  instant: it renames each old table to `<table>_pre0144` and starts a new
+  one, so the health check is not held up however large the tables are.
+- The history fills in in the background, newest first (metric samples,
+  interface traffic and flow records in turn, so each view gets its recent
+  history back within seconds). Look for `sample history: moving the rows
+  of ...` after startup and `sample history: <table> done: ...; old table
+  removed` for each table; `sample history: still moving: ...` reports
+  progress once a minute. Rollups, baselines, billing periods and scheduled
+  interface reports that cover time before the upgrade wait for it (see
+  [DATA_RETENTION.md](../DATA_RETENTION.md), "Sample tables").
+- Disk use peaks near the old plus the new size of these tables until each
+  old table is dropped. A restart during the move is safe; it carries on.
+
 ### Server API token
 
 New installs leave `APP_API_TOKEN` empty: the static token is off. It is an

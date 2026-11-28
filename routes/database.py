@@ -61,7 +61,7 @@ import ipaddress
 import json
 import os
 import re
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import NamedTuple
 
 try:
@@ -249,6 +249,23 @@ def _minutes_between_expr(later: str, earlier: str) -> str:
     parenthesized), never user text.
     """
     return f"(EXTRACT(EPOCH FROM (({later})::timestamp - ({earlier})::timestamp)) / 60.0)"
+
+
+_NOW_MINUS_UNITS = frozenset({"secs", "mins", "hours", "days"})
+
+
+def _now_minus_expr(unit: str) -> str:
+    """SQL for the instant ``NOW()`` minus a count of ``unit`` (``secs``,
+    ``mins``, ``hours`` or ``days``), as a ``timestamptz``; takes one
+    parameter, the count (an int, bound, never interpolated).
+
+    For ``TIMESTAMPTZ`` columns: ``datetime('now', '-' || ? || ' hours')``
+    translates to TEXT, and PostgreSQL has no ``timestamptz >= text``.
+    The expression is stable, so a range or retention filter on an indexed
+    column still uses the index."""
+    if unit not in _NOW_MINUS_UNITS:
+        raise ValueError(f"unsupported interval unit: {unit!r}")
+    return f"(NOW() - make_interval({unit} => CAST(? AS INTEGER)))"
 
 
 def _safe_dynamic_update(
@@ -928,12 +945,15 @@ CREATE TABLE IF NOT EXISTS sla_metrics (
 );
 
 CREATE TABLE IF NOT EXISTS metric_samples (
-    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    -- BIGINT key and native time (migration 0144): millions of rows a day
+    -- on a large fleet; asyncpg reads and binds the time as PostgreSQL's
+    -- text form (see _pool_connection_options).
+    id              BIGINT PRIMARY KEY AUTOINCREMENT,
     host_id         INTEGER NOT NULL REFERENCES hosts(id) ON DELETE CASCADE,
     metric_name     TEXT    NOT NULL,
     labels_json     TEXT    NOT NULL DEFAULT '{}',
     value           REAL    NOT NULL,
-    sampled_at      TEXT    NOT NULL DEFAULT (datetime('now'))
+    sampled_at      TIMESTAMPTZ NOT NULL DEFAULT (datetime('now'))
 );
 
 CREATE TABLE IF NOT EXISTS metric_rollups (
@@ -953,7 +973,8 @@ CREATE TABLE IF NOT EXISTS metric_rollups (
 );
 
 CREATE TABLE IF NOT EXISTS interface_ts (
-    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    -- BIGINT key and native time, like metric_samples (migration 0144).
+    id              BIGINT PRIMARY KEY AUTOINCREMENT,
     host_id         INTEGER NOT NULL REFERENCES hosts(id) ON DELETE CASCADE,
     if_index        INTEGER NOT NULL,
     if_name         TEXT    NOT NULL DEFAULT '',
@@ -963,7 +984,7 @@ CREATE TABLE IF NOT EXISTS interface_ts (
     in_rate_bps     REAL    DEFAULT NULL,
     out_rate_bps    REAL    DEFAULT NULL,
     utilization_pct REAL    DEFAULT NULL,
-    sampled_at      TEXT    NOT NULL DEFAULT (datetime('now'))
+    sampled_at      TIMESTAMPTZ NOT NULL DEFAULT (datetime('now'))
 );
 
 CREATE TABLE IF NOT EXISTS vendor_oid_registry (
@@ -1377,7 +1398,10 @@ ON mac_move_event_history(event_id, created_at DESC);
 -- ── NetFlow / sFlow / IPFIX ──────────────────────────────────────────────
 
 CREATE TABLE IF NOT EXISTS flow_records (
-    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    -- BIGINT (migration 0144): the key takes a value per record ever stored;
+    -- byte and packet counts, 4-byte AS numbers and interface indexes are
+    -- unsigned 32-bit or wider on the wire, past int4.
+    id              BIGINT PRIMARY KEY AUTOINCREMENT,
     exporter_ip     TEXT    NOT NULL,
     host_id         INTEGER REFERENCES hosts(id) ON DELETE SET NULL,
     flow_type       TEXT    NOT NULL DEFAULT 'netflow',
@@ -1386,12 +1410,12 @@ CREATE TABLE IF NOT EXISTS flow_records (
     src_port        INTEGER DEFAULT 0,
     dst_port        INTEGER DEFAULT 0,
     protocol        INTEGER DEFAULT 0,
-    bytes           INTEGER DEFAULT 0,
-    packets         INTEGER DEFAULT 0,
-    src_as          INTEGER DEFAULT 0,
-    dst_as          INTEGER DEFAULT 0,
-    input_if        INTEGER DEFAULT 0,
-    output_if       INTEGER DEFAULT 0,
+    bytes           BIGINT  DEFAULT 0,
+    packets         BIGINT  DEFAULT 0,
+    src_as          BIGINT  DEFAULT 0,
+    dst_as          BIGINT  DEFAULT 0,
+    input_if        BIGINT  DEFAULT 0,
+    output_if       BIGINT  DEFAULT 0,
     tos             INTEGER DEFAULT 0,
     tcp_flags       INTEGER DEFAULT 0,
     start_time      TEXT    NOT NULL DEFAULT (datetime('now')),
@@ -1420,8 +1444,9 @@ CREATE TABLE IF NOT EXISTS flow_exporters (
     exporter_ip     TEXT    NOT NULL,
     host_id         INTEGER REFERENCES hosts(id) ON DELETE SET NULL,
     flow_type       TEXT    NOT NULL DEFAULT 'netflow',
-    packets_received INTEGER NOT NULL DEFAULT 0,
-    sampling_rate   INTEGER NOT NULL DEFAULT 0,
+    -- BIGINT (migration 0145): a lifetime count, and an unsigned 32-bit wire value.
+    packets_received BIGINT NOT NULL DEFAULT 0,
+    sampling_rate   BIGINT  NOT NULL DEFAULT 0,
     first_seen      TEXT    NOT NULL DEFAULT (datetime('now')),
     last_seen       TEXT    NOT NULL DEFAULT (datetime('now')),
     last_record_at  TEXT,
@@ -2253,6 +2278,9 @@ def _convert_sqlite_schema_to_postgres(sqlite_schema: str) -> str:
     PostgreSQL types."""
     converted = sqlite_schema
     converted = converted.replace("INTEGER PRIMARY KEY AUTOINCREMENT", "SERIAL PRIMARY KEY")
+    # A SERIAL sequence stops at 2^31-1 and is never reused: a table that
+    # takes millions of rows a day spells its key BIGINT.
+    converted = converted.replace("BIGINT PRIMARY KEY AUTOINCREMENT", "BIGSERIAL PRIMARY KEY")
     converted = converted.replace("DEFAULT (datetime('now'))", "DEFAULT NOW()")
     converted = converted.replace(" BLOB", " BYTEA")
     converted = _REAL_TYPE_RE.sub("DOUBLE PRECISION", converted)
@@ -3022,10 +3050,44 @@ if asyncpg is not None:
             return super().get_reset_query()
 
 
+def _encode_timestamptz(value) -> str:
+    """A ``timestamptz`` parameter, sent in PostgreSQL's text form: a string
+    as it is (PostgreSQL parses ``YYYY-MM-DD HH:MM:SS``, the ISO ``T`` form
+    and offsets; a value without one is UTC, the session zone), a
+    ``datetime`` or ``date`` as ISO text (a naive one is UTC)."""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, datetime):
+        return (value if value.tzinfo else value.replace(tzinfo=UTC)).isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    raise TypeError(f"a timestamptz parameter takes a str or datetime, not {type(value).__name__}")
+
+
+def _decode_timestamptz(value: str) -> str:
+    """A ``timestamptz`` value as PostgreSQL prints it in the UTC session
+    (``2026-01-02 03:04:05.123456+00``): the text a TEXT column filled by
+    ``NOW()`` holds, so callers read native and TEXT time columns alike."""
+    return value
+
+
+async def _init_pool_connection(conn) -> None:
+    await conn.set_type_codec(
+        "timestamptz",
+        schema="pg_catalog",
+        encoder=_encode_timestamptz,
+        decoder=_decode_timestamptz,
+        format="text",
+    )
+
+
 def _pool_connection_options() -> dict:
     """``create_pool`` keyword arguments for the connection behaviour the
-    compat layer relies on (the trimmed reset above)."""
-    return {"connection_class": _PooledConnection}
+    compat layer relies on: the trimmed reset above, and ``timestamptz``
+    bound and read as text (``_init_pool_connection``), so the native time
+    columns (``metric_samples``, ``interface_ts``) take and give the same
+    strings as the TEXT ones."""
+    return {"connection_class": _PooledConnection, "init": _init_pool_connection}
 
 
 async def _get_pg_pool():
