@@ -3,9 +3,10 @@
 Both start a session and take no CSRF token (there is no session yet to
 bind one to), so a page of another site that could send them would sign the
 visitor's browser in to an account that site chose. Two things stop it: the
-request's ``Origin`` must be this site (``csrf_guard``), and the body is
-read only as ``application/json``, which a page cannot send to another site
-without a CORS preflight. Every name is invented.
+browser's ``Sec-Fetch-Site`` header, or without it the request's ``Origin``,
+must say this site (``csrf_guard``), and the body is read only as
+``application/json``, which a page cannot send to another site without a
+CORS preflight. Every name is invented.
 """
 
 from __future__ import annotations
@@ -69,10 +70,46 @@ def test_sign_in_from_this_site_or_from_no_page_works(admin, origin):
     assert resp.json()["csrf_token"]
 
 
+@pytest.mark.parametrize(
+    ("fetch_site", "origin"),
+    [
+        # A reverse proxy rewrote Host: the browser's own word still stands.
+        ("same-origin", "https://plexus.example.com"),
+        ("same-origin", None),
+        ("none", None),  # no page: an extension, the address bar
+    ],
+)
+def test_sign_in_the_browser_calls_same_origin_works_whatever_host_says(admin, fetch_site, origin):
+    headers = {"Sec-Fetch-Site": fetch_site} | ({"Origin": origin} if origin else {})
+    resp = _browser().post(LOGIN, json=ADMIN, headers=headers)
+    assert resp.status_code == 200, resp.text
+
+
+@pytest.mark.parametrize(
+    ("fetch_site", "origin"),
+    [
+        ("cross-site", "https://attacker.example"),
+        ("cross-site", None),
+        # The header outranks an Origin that names this host: another port
+        # of the same name is another origin.
+        ("same-site", "http://testserver:9000"),
+        ("same-site", "https://wiki.testserver"),
+        ("not-a-value", "http://testserver"),
+    ],
+)
+def test_sign_in_the_browser_calls_cross_origin_is_refused(admin, fetch_site, origin):
+    headers = {"Sec-Fetch-Site": fetch_site} | ({"Origin": origin} if origin else {})
+    browser = _browser()
+    assert _refused(browser.post(LOGIN, json=ADMIN, headers=headers))
+    assert "session" not in browser.cookies
+
+
 def test_configured_cors_origin_may_sign_in(admin, monkeypatch):
     monkeypatch.setattr(state, "APP_CORS_ALLOW_ORIGINS", ["https://portal.example.com"])
     assert _browser().post(LOGIN, json=ADMIN, headers={"Origin": "https://portal.example.com"}).status_code == 200
     assert _refused(_browser().post(LOGIN, json=ADMIN, headers={"Origin": "https://other.example.com"}))
+    listed = {"Origin": "https://portal.example.com", "Sec-Fetch-Site": "cross-site"}
+    assert _browser().post(LOGIN, json=ADMIN, headers=listed).status_code == 200
 
 
 def test_registration_from_another_site_is_refused(admin, monkeypatch):

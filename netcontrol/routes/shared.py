@@ -529,7 +529,12 @@ async def require_any_feature(request, *feature_keys: str) -> None:
     raise HTTPException(status_code=403, detail=f"Access denied: this needs the {names} feature")
 
 
-def origin_allowed(connection) -> bool:
+# ``Sec-Fetch-Site`` values that say no page of another origin sent the
+# request: the page is this origin, or there is no page (the address bar).
+OWN_PAGE_FETCH_SITES = frozenset({"same-origin", "none"})
+
+
+def origin_allowed(connection, *, handshake: bool = False) -> bool:
     """Whether ``connection`` (a WebSocket handshake or an HTTP request)
     comes from a page of this site.
 
@@ -540,16 +545,30 @@ def origin_allowed(connection) -> bool:
     registration requests have no session yet to bind a token to (the CSRF
     check in ``netcontrol.app``).
 
-    Allowed: no ``Origin`` (a non-browser client; a browser sends one with
-    every handshake and every POST), an ``Origin`` whose host is the
-    request's ``Host``, and the origins of ``APP_CORS_ORIGINS``. Ports are
-    not compared, because the shipped nginx forwards ``$host``, which
-    carries none.
+    Checked in this order:
+
+    1. An ``Origin`` listed in ``APP_CORS_ORIGINS`` is allowed.
+    2. ``Sec-Fetch-Site``. The browser sets it from the addresses it sees
+       and a page cannot set it, so it does not depend on the ``Host`` a
+       reverse proxy passes on. ``same-origin`` and ``none`` are allowed.
+       Any other value is refused on an HTTP request. On a ``handshake`` it
+       goes on to rule 3: which value each browser sends with a WebSocket
+       handshake is not established.
+    3. Without the header (a browser sends it only over HTTPS or to
+       localhost; a non-browser client sends none): no ``Origin`` is
+       allowed, and so is an ``Origin`` whose host is the request's
+       ``Host``. Ports are not compared, because the shipped nginx forwards
+       ``$host``, which carries none.
     """
     origin = (connection.headers.get("origin") or "").strip().rstrip("/").lower()
-    if not origin:
+    if origin and origin in {str(allowed).strip().rstrip("/").lower() for allowed in state.APP_CORS_ALLOW_ORIGINS}:
         return True
-    if origin in {str(allowed).strip().rstrip("/").lower() for allowed in state.APP_CORS_ALLOW_ORIGINS}:
+    fetch_site = (connection.headers.get("sec-fetch-site") or "").strip().lower()
+    if fetch_site in OWN_PAGE_FETCH_SITES:
+        return True
+    if fetch_site and not handshake:
+        return False
+    if not origin:
         return True
     try:
         origin_host = urlsplit(origin).hostname
@@ -577,7 +596,7 @@ async def verify_ws_session(token: str | None, websocket=None) -> dict | None:
     """
     if not token or _verify_session_token_fn is None:
         return None
-    if websocket is not None and not origin_allowed(websocket):
+    if websocket is not None and not origin_allowed(websocket, handshake=True):
         return None
     session = _verify_session_token_fn(token)
     if not session or "user_id" not in session:

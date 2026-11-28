@@ -405,7 +405,7 @@ resolved value. Audited as `secrets_providers`. See
 | GET    | `/api/jobs/approvals`   | Needs `jobs.approve`. Jobs in `pending_approval` the caller may decide, oldest first: within the caller's object scope (every target writable) and not launched by the caller. `limit` 1 to 500 (200). Same fields as `GET /api/jobs/{id}` |
 | POST   | `/api/jobs/{id}/approve` | Needs `jobs.approve`. `{comment?}` (at most 2000 characters). A job in `pending_approval` moves to `queued` and runs as usual: `{ok, job_id, status: "queued", approval_status: "approved"}`. `400` when the job is not awaiting approval, `403` for the job's own requester (admins included), `409` when another decision or a cancel won |
 | POST   | `/api/jobs/{id}/deny`   | Needs `jobs.approve`. `{comment?}`. The job ends in `denied` (terminal, never runs): `{ok, job_id, status: "denied", approval_status: "denied"}`; errors as for approve |
-| WS     | `/ws/jobs/{id}`         | Real-time event stream. Like every `/ws/*` socket, a handshake whose `Origin` header names another host than the request's `Host` is closed unless the origin is listed in `APP_CORS_ORIGINS`; a client that sends no `Origin` (a script, not a browser) is not affected. Messages are masked as on `GET /api/jobs/{id}/events` |
+| WS     | `/ws/jobs/{id}`         | Real-time event stream. Like every `/ws/*` socket, a handshake whose `Origin` header names another host than the request's `Host` is closed unless the origin is listed in `APP_CORS_ORIGINS` or the browser sends `Sec-Fetch-Site: same-origin`; a client that sends no `Origin` (a script, not a browser) is not affected. Messages are masked as on `GET /api/jobs/{id}/events` |
 
 **Launch payload:**
 ```json

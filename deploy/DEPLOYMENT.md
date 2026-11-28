@@ -280,13 +280,19 @@ real_ip_recursive on;
 can connect from in `set_real_ip_from`: anything sent from it is believed.
 Restart nginx after the change (`docker compose restart nginx`).
 
-The balancer must also pass the browser's `Host` header on unchanged, as
+The balancer should also pass the browser's `Host` header on unchanged, as
 `deploy/nginx.conf` does. Plexus refuses a sign-in, a registration and a
-WebSocket whose `Origin` names another host than the request's `Host`
-(ports are not compared), so that a page of another site cannot sign a
-browser in or open a live stream. Behind a proxy that rewrites `Host`,
-sign-in answers `403` (`cross_site_request`) and live pages stop updating:
-forward `Host`, or list the address users open in `APP_CORS_ORIGINS`.
+WebSocket sent by a page of another site, so that such a page cannot sign a
+browser in or open a live stream. It decides from the browser's
+`Sec-Fetch-Site` header, which no proxy changes. A browser sends that header
+only over HTTPS or to `localhost`; without it Plexus compares the host of
+the `Origin` header with the `Host` header (ports are not compared). So a
+proxy that rewrites `Host` works when users open Plexus over HTTPS in a
+browser that sends `Sec-Fetch-Site` on the request. Where the header is
+missing (plain HTTP, an old browser, a browser that leaves it off WebSocket
+handshakes), sign-in answers `403` (`cross_site_request`) or live pages stop
+updating: forward `Host`, or list the address users open in
+`APP_CORS_ORIGINS`.
 
 ### Request size limits
 

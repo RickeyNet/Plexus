@@ -954,11 +954,13 @@ PASSWORD_CHANGE_ALLOWED_PATHS = {
 # State-changing methods that require CSRF validation for cookie-auth
 _CSRF_PROTECTED_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 
-# Answer to a sign-in or registration request whose Origin is another site
-# (the CSRF check). Names both remedies for a reverse proxy that rewrites Host.
+# Answer to a sign-in or registration request sent by a page of another site
+# (the CSRF check). Names both remedies for a reverse proxy that rewrites
+# Host, which matters only where the browser sends no Sec-Fetch-Site (plain
+# HTTP).
 CROSS_SITE_REFUSAL = (
-    "This request came from a page of another site. Open Plexus at its own address; behind a reverse proxy, "
-    "forward the Host header or list the address in APP_CORS_ORIGINS."
+    "This request came from a page of another site. Open Plexus at its own address; behind a reverse proxy "
+    "reached over plain HTTP, forward the Host header or list the address in APP_CORS_ORIGINS."
 )
 
 # Sentinel distinguishing "not resolved yet this request" from a legitimate
@@ -2338,7 +2340,8 @@ async def csrf_guard(request: Request) -> Response | None:
     left to require_auth to reject.
 
     Sign-in and registration (the POSTs of ``PUBLIC_PATHS``) take no token;
-    they are refused when the ``Origin`` header names another site
+    they are refused when the browser's ``Sec-Fetch-Site`` or ``Origin``
+    header says a page of another site sent them
     (``shared.origin_allowed``).
     """
     if request.method not in _CSRF_PROTECTED_METHODS:
@@ -2351,10 +2354,11 @@ async def csrf_guard(request: Request) -> Response | None:
         # other site chose.
         if not shared.origin_allowed(request):
             LOGGER.warning(
-                "csrf: refused %s from another site (Origin %r, Host %r)",
+                "csrf: refused %s from another site (Origin %r, Host %r, Sec-Fetch-Site %r)",
                 path,
                 request.headers.get("origin", "")[:200],
                 request.headers.get("host", "")[:200],
+                request.headers.get("sec-fetch-site", "")[:40],
             )
             return _api_error_response(403, "cross_site_request", CROSS_SITE_REFUSAL)
         return None

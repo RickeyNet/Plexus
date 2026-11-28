@@ -670,13 +670,17 @@ with `403`. See [api-reference.md](api-reference.md) for the general rules.
 
 Sign-in (`POST /api/auth/login`) and registration (`POST /api/auth/register`)
 take no token, because there is no session yet. A browser request to them is
-accepted only from Plexus's own pages: when the `Origin` header names another
-host than the request's `Host`, and is not one of `APP_CORS_ORIGINS`, the
-answer is `403` with the code `cross_site_request`. A client that sends no
-`Origin` (a script, `curl`) is not affected. Both routes read the body only
-as `application/json`. A reverse proxy in front of Plexus must pass the
-`Host` header on unchanged
+accepted only from Plexus's own pages, or from an origin listed in
+`APP_CORS_ORIGINS`; any other answers `403` with the code
+`cross_site_request`. Plexus reads the browser's `Sec-Fetch-Site` header:
+`same-origin` and `none` are accepted, any other value is refused. A browser
+sends that header only over HTTPS or to `localhost`. Without it, the request
+is refused when its `Origin` header names another host than its `Host`
+header, so a reverse proxy that serves Plexus over plain HTTP must pass
+`Host` on unchanged
 ([deploy/DEPLOYMENT.md](../deploy/DEPLOYMENT.md#behind-another-load-balancer)).
+A client that sends neither header (a script, `curl`) is not affected. Both
+routes read the body only as `application/json`.
 
 ```
 GET    /api/admin/users
