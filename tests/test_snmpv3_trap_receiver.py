@@ -260,10 +260,26 @@ async def test_a_v3_trap_from_a_non_inventory_source_is_stored_undecoded(v3_rece
 
 
 async def test_a_pending_v3_trap_whose_host_is_gone_is_stored_undecoded(v3_receiver, monkeypatch):
-    """In the listener's address set but no longer in the database."""
-    monkeypatch.setitem(ls.INVENTORY_ADDRESSES, "198.51.100.162", 999999)
-    await _receive("198.51.100.162", message(pdu=module_failed()))
-    assert len(await _stored("198.51.100.162")) == 1 and _v3_drops() == 0
+    """A stale listener entry must not roll back other traps in the batch."""
+    missing_source = "198.51.100.162"
+    live_source = "192.0.2.162"
+    host_id = await _host(monkeypatch, "v3-live", live_source)
+    monkeypatch.setitem(ls.INVENTORY_ADDRESSES, missing_source, 999999)
+
+    protocol = me._TrapSyslogProtocol("trap")
+    protocol._handle_trap(message(pdu=module_failed()), missing_source)
+    assert isinstance(me._trap_event_buffer[0][7], v3.PendingV3Trap)
+    protocol._handle_trap(message(pdu=module_failed()), live_source)
+    await me._flush_trap_syslog_batch(me._take_trap_event_batch())
+
+    (missing,) = await _stored(missing_source)
+    assert missing["host_id"] is None
+    assert missing["message"].startswith(f"SNMP trap from {missing_source} (")
+    (live,) = await _stored(live_source)
+    assert live["host_id"] == host_id
+    assert live["oid"] == f"{CEFC}.2.0.1"
+    assert list(await _open(host_id)) == [f"trap:module:{host_id}:entPhysicalIndex 1001"]
+    assert _v3_drops() == 0
 
 
 async def test_the_receiver_holds_a_bounded_number_of_v3_datagrams(v3_receiver, monkeypatch):

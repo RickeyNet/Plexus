@@ -1084,17 +1084,20 @@ async def create_trap_syslog_events_batch(rows: list[tuple]) -> int:
     message, raw_data[, transport]) tuples; ``transport`` (``udp``, ``tcp``
     or ``tls``) is ``udp`` when left out. The receivers buffer per-message
     events and flush here so a device log storm costs one commit per flush
-    tick instead of one per packet.
+    tick instead of one per packet. If a cached host ID no longer exists,
+    keep the event with no host instead of rejecting the batch.
     """
     if not rows:
         return 0
     values = [tuple(row) if len(row) > 8 else (*row, "udp") for row in rows]
     db = await _dbcore.get_db()
     try:
+        # Lock each existing host key until commit so a concurrent deletion
+        # cannot invalidate it between the lookup and the foreign-key check.
         await db.executemany(
             """INSERT INTO trap_syslog_events
                (source_ip, host_id, event_type, facility, severity, oid, message, raw_data, transport)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (?, (SELECT id FROM hosts WHERE id = ? FOR KEY SHARE), ?, ?, ?, ?, ?, ?, ?)""",
             values,
         )
         await db.commit()
