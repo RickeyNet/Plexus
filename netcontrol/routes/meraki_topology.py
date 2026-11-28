@@ -210,6 +210,7 @@ from netcontrol.object_scope import (
     group_filter,
     refuse_scoped,
     request_scope,
+    require_group,
     scoped,
 )
 from netcontrol.routes import background_jobs, state
@@ -3151,12 +3152,14 @@ async def export_topology_html_api(
 
     A scoped caller exports the map it sees, and the tracer over it.
     """
-    from netcontrol.routes.topology import get_topology
+    from netcontrol.routes.topology import topology_graph
 
     asked_path = _parse_export_path(path)
     scope = await request_scope(request)
     # 404 for a scoped caller's unreadable group; the graph it sees.
-    graph = await get_topology(group_id, request)
+    if scope.restricted and group_id is not None:
+        await require_group(request, group_id)
+    graph = await topology_graph(group_id, scope)
     picks: list[dict[str, Any]] = []
     if asked_path is not None:
         picks = _export_path_picks(asked_path, {str(n["id"]) for n in graph.get("nodes") or []})
