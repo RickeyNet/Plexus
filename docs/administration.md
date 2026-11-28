@@ -664,6 +664,16 @@ belongs to one session: use the `csrf_token` the sign-in returned, or the one
 another session of the same account, or from before a new sign-in, is refused
 with `403`. See [api-reference.md](api-reference.md) for the general rules.
 
+Sign-in (`POST /api/auth/login`) and registration (`POST /api/auth/register`)
+take no token, because there is no session yet. A browser request to them is
+accepted only from Plexus's own pages: when the `Origin` header names another
+host than the request's `Host`, and is not one of `APP_CORS_ORIGINS`, the
+answer is `403` with the code `cross_site_request`. A client that sends no
+`Origin` (a script, `curl`) is not affected. Both routes read the body only
+as `application/json`. A reverse proxy in front of Plexus must pass the
+`Host` header on unchanged
+([deploy/DEPLOYMENT.md](../deploy/DEPLOYMENT.md#behind-another-load-balancer)).
+
 ```
 GET    /api/admin/users
 POST   /api/admin/users

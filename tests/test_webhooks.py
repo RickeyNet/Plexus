@@ -458,3 +458,76 @@ async def test_audit_hook_feeds_siem_slot_and_extra_subscribers():
         db.remove_audit_event_hook(other)
     assert len(primary) == 1 and len(extra) == 1
     assert primary[0]["action"] == "webhook.test"
+
+
+# ── Delivery log ─────────────────────────────────────────────────────────────
+
+HEADER_VALUE = "Bearer header-token-value"
+MASKED = "***"  # what telemetry.redact_text writes in place of a secret
+
+
+class _Reply:
+    def __init__(self, status_code: int, text: str):
+        self.status_code = status_code
+        self.text = text
+
+
+async def _logged(monkeypatch, send) -> tuple[wh.DeliveryOutcome, dict]:
+    """One delivery of a webhook with a secret and a custom header through
+    ``send``; the outcome and the delivery log row it wrote."""
+    rows: list[dict] = []
+
+    async def add(**row):
+        rows.append(row)
+
+    monkeypatch.setattr(wh.db, "add_webhook_delivery", add)
+    monkeypatch.setattr(wh, "send_request", send)
+    cfg = _cfg(secret=SECRET, headers={"Authorization": HEADER_VALUE, "X-Tenant": "tenant-key-5150"})
+    job = wh.DeliveryJob(1, "d-1", "host.create", "host", "7", "create", payload={"event": "host.create"})
+    outcome = await wh.deliver_once(cfg, job, allow_retry=False)
+    return outcome, rows[0]
+
+
+def _holds_nothing_sent(text: str) -> bool:
+    return not any(value in text for value in (SECRET, "header-token-value", "tenant-key-5150", "sha256="))
+
+
+async def test_delivery_log_masks_what_the_receiver_quotes_back(monkeypatch):
+    async def echo(method, url, *, headers, **kwargs):
+        # A receiver that answers with the headers it got, and the token alone.
+        return _Reply(401, json.dumps({"received": headers, "detail": "unknown token header-token-value"}))
+
+    outcome, row = await _logged(monkeypatch, echo)
+
+    assert row["status"] == "failed" and row["status_code"] == 401
+    assert "X-Plexus-Event" in row["response_body"] and MASKED in row["response_body"]
+    assert _holds_nothing_sent(row["response_body"])
+    assert outcome.error == "HTTP 401"
+
+
+async def test_delivery_log_masks_a_value_cut_by_the_length_limit(monkeypatch):
+    async def long_reply(method, url, **kwargs):
+        return _Reply(200, "x" * (wh.RESPONSE_KEEP - 6) + "tenant-key-5150 and more")
+
+    _, row = await _logged(monkeypatch, long_reply)
+
+    assert len(row["response_body"]) == wh.RESPONSE_KEEP
+    assert "tenant" not in row["response_body"]
+
+
+@pytest.mark.parametrize(
+    ("error", "status"),
+    [
+        (RuntimeError(f"peer said: bad Authorization {HEADER_VALUE!r} for tenant-key-5150"), "failed"),
+        (wh.OutboundRequestError(f"redirect to https://rx.example.com/?token=x with {SECRET}"), "blocked"),
+    ],
+)
+async def test_delivery_log_masks_the_error_text(monkeypatch, error, status):
+    async def fail(method, url, **kwargs):
+        raise error
+
+    outcome, row = await _logged(monkeypatch, fail)
+
+    assert row["status"] == status and row["error"] == outcome.error
+    assert MASKED in row["error"] and _holds_nothing_sent(row["error"])
+    assert len(row["error"]) <= wh.ERROR_KEEP

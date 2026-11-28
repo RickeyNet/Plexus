@@ -142,7 +142,11 @@ def verify(secret: str, body: bytes, header: str) -> bool:
 - Redirects are not followed.
 - Every attempt is logged: time, event, object, attempt number, status
   (`success`, `retrying`, `failed`, `blocked`), HTTP status, latency, and the
-  first 2000 characters of the response or the error. Open it with
+  first 2000 characters of the response or the error. The signing secret,
+  the custom header values and the signature are replaced by `***` in the
+  logged response and error, so a receiver that answers with what it was
+  sent does not put them in the log; a short header value is replaced
+  wherever the same text occurs. Open it with
   **Deliveries** on the webhook's row. **Redeliver** sends a logged body again
   with the same `X-Plexus-Delivery` id.
 - Delivery log rows are kept 30 days (`APP_WEBHOOK_DELIVERY_RETENTION_DAYS`),

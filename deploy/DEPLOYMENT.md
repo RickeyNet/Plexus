@@ -271,6 +271,14 @@ real_ip_recursive on;
 can connect from in `set_real_ip_from`: anything sent from it is believed.
 Restart nginx after the change (`docker compose restart nginx`).
 
+The balancer must also pass the browser's `Host` header on unchanged, as
+`deploy/nginx.conf` does. Plexus refuses a sign-in, a registration and a
+WebSocket whose `Origin` names another host than the request's `Host`
+(ports are not compared), so that a page of another site cannot sign a
+browser in or open a live stream. Behind a proxy that rewrites `Host`,
+sign-in answers `403` (`cross_site_request`) and live pages stop updating:
+forward `Host`, or list the address users open in `APP_CORS_ORIGINS`.
+
 ### Request size limits
 
 nginx and the app both cap request bodies, so an unauthenticated client

@@ -529,26 +529,31 @@ async def require_any_feature(request, *feature_keys: str) -> None:
     raise HTTPException(status_code=403, detail=f"Access denied: this needs the {names} feature")
 
 
-def ws_origin_allowed(websocket) -> bool:
-    """Whether a WebSocket handshake comes from a page of this site.
+def origin_allowed(connection) -> bool:
+    """Whether ``connection`` (a WebSocket handshake or an HTTP request)
+    comes from a page of this site.
 
-    CORS does not cover WebSockets, and the SameSite=Strict session cookie
-    is still sent by a page on a sibling subdomain (same site), so without
-    this check such a page could read the signed-in user's streams.
+    Used where no CSRF token can be asked for. CORS does not cover
+    WebSockets, and the SameSite=Strict session cookie is still sent by a
+    page on a sibling subdomain (same site), so without this check such a
+    page could read the signed-in user's streams. The sign-in and
+    registration requests have no session yet to bind a token to (the CSRF
+    check in ``netcontrol.app``).
 
-    Allowed: no ``Origin`` (a non-browser client; a browser always sends
-    one), an ``Origin`` whose host is the request's ``Host``, and the
-    origins of ``APP_CORS_ORIGINS``. Ports are not compared, because the
-    shipped nginx forwards ``$host``, which carries none.
+    Allowed: no ``Origin`` (a non-browser client; a browser sends one with
+    every handshake and every POST), an ``Origin`` whose host is the
+    request's ``Host``, and the origins of ``APP_CORS_ORIGINS``. Ports are
+    not compared, because the shipped nginx forwards ``$host``, which
+    carries none.
     """
-    origin = (websocket.headers.get("origin") or "").strip().rstrip("/").lower()
+    origin = (connection.headers.get("origin") or "").strip().rstrip("/").lower()
     if not origin:
         return True
     if origin in {str(allowed).strip().rstrip("/").lower() for allowed in state.APP_CORS_ALLOW_ORIGINS}:
         return True
     try:
         origin_host = urlsplit(origin).hostname
-        request_host = urlsplit("//" + (websocket.headers.get("host") or "")).hostname
+        request_host = urlsplit("//" + (connection.headers.get("host") or "")).hostname
     except ValueError:
         return False
     return bool(origin_host) and origin_host == request_host
@@ -565,14 +570,14 @@ async def verify_ws_session(token: str | None, websocket=None) -> dict | None:
     ``session_never_expires`` kiosk opt-out.
 
     A handler passes its ``websocket`` so a handshake from a page of
-    another site is refused too (``ws_origin_allowed``).
+    another site is refused too (``origin_allowed``).
 
     Returns the session dict on success, or None (caller should close the
     socket with code 1008).
     """
     if not token or _verify_session_token_fn is None:
         return None
-    if websocket is not None and not ws_origin_allowed(websocket):
+    if websocket is not None and not origin_allowed(websocket):
         return None
     session = _verify_session_token_fn(token)
     if not session or "user_id" not in session:

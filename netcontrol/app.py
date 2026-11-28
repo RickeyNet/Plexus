@@ -923,6 +923,13 @@ PASSWORD_CHANGE_ALLOWED_PATHS = {
 # State-changing methods that require CSRF validation for cookie-auth
 _CSRF_PROTECTED_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 
+# Answer to a sign-in or registration request whose Origin is another site
+# (the CSRF check). Names both remedies for a reverse proxy that rewrites Host.
+CROSS_SITE_REFUSAL = (
+    "This request came from a page of another site. Open Plexus at its own address; behind a reverse proxy, "
+    "forward the Host header or list the address in APP_CORS_ORIGINS."
+)
+
 # Sentinel distinguishing "not resolved yet this request" from a legitimate
 # None result in the per-request auth caches on request.state.
 _AUTH_STATE_UNSET = object()
@@ -2146,7 +2153,24 @@ async def csrf_protection_middleware(request: Request, call_next):
 
     Requests authenticated via API token (X-API-Token / Bearer) are exempt
     because they are not susceptible to cross-site request forgery.
+
+    Sign-in and registration (the POSTs of ``PUBLIC_PATHS``) take no token;
+    they are refused when the ``Origin`` header names another site
+    (``shared.origin_allowed``).
     """
+    if request.method in _CSRF_PROTECTED_METHODS and request.url.path in PUBLIC_PATHS:
+        # Sign-in and registration have no session to bind a token to. They
+        # start one, so a page of another site must not send them for the
+        # visitor: its browser would end up signed in to an account the
+        # other site chose.
+        if not shared.origin_allowed(request):
+            LOGGER.warning(
+                "csrf: refused %s from another site (Origin %r, Host %r)",
+                request.url.path,
+                request.headers.get("origin", "")[:200],
+                request.headers.get("host", "")[:200],
+            )
+            return _api_error_response(403, "cross_site_request", CROSS_SITE_REFUSAL)
     if request.method in _CSRF_PROTECTED_METHODS and request.url.path.startswith("/api/"):
         # Skip CSRF check for public paths (login, register, etc.) and the
         # SAML ACS (the IdP's signed POST, bound to the saml_tx cookie).

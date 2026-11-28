@@ -66,8 +66,10 @@ from routes.db.change_events import (
 from netcontrol.intended_config import Renderer, check_syntax
 from netcontrol.mcp.redact import redact_value
 from netcontrol.routes.outbound_http import (
+    DELIVERY_ERROR_MAX_CHARS,
     DELIVERY_RESPONSE_MAX_BYTES,
     OutboundRequestError,
+    delivery_error_text,
     guard_url,
     send_request,
     tls_verify,
@@ -79,7 +81,7 @@ from netcontrol.secret_fields import (
     refuse_secret_reuse,
     url_origin,
 )
-from netcontrol.telemetry import configure_logging
+from netcontrol.telemetry import configure_logging, redact_text
 
 LOGGER = configure_logging("plexus.webhooks")
 
@@ -93,7 +95,7 @@ QUEUE_SIZE = 1000
 BACKOFF_BASE = 2.0  # seconds before the first retry; doubles per retry
 BACKOFF_CAP = 300.0
 RESPONSE_KEEP = 2000  # characters of the response body kept in the log
-ERROR_KEEP = 500
+ERROR_KEEP = DELIVERY_ERROR_MAX_CHARS  # characters of an error kept in the log
 REQUEST_BODY_KEEP = 262_144  # bodies larger than this are not kept for redelivery
 PRUNE_INTERVAL = 3600.0
 REFRESH_INTERVAL = 30.0
@@ -458,18 +460,34 @@ def _retryable(code: int) -> bool:
     return code >= 500 or code in (408, 429)
 
 
+def _sent_secrets(cfg: WebhookConfig, headers: dict[str, str] | None = None) -> list[str]:
+    """What a delivery sends that the delivery log must not hold: the signing
+    secret, the custom header values and the signature of ``headers``. A
+    receiver can quote any of them in its reply or its error, and of
+    ``Authorization: Bearer <token>`` it may quote the token alone."""
+    signature = (headers or {}).get("X-Plexus-Signature-256", "")
+    values = list(cfg.headers.values())
+    credentials = [parts[1] for parts in (value.split() for value in values) if len(parts) == 2]
+    return [cfg.secret, signature, *values, *credentials]
+
+
 async def deliver_once(cfg: WebhookConfig, job: DeliveryJob, *, allow_retry: bool = True) -> DeliveryOutcome:
-    """Send one attempt and log it. Never raises."""
+    """Send one attempt and log it. Never raises.
+
+    The reply and the error text are logged with what the request sent in
+    secret masked (``_sent_secrets``) and with the redaction of a log line.
+    """
     outcome: DeliveryOutcome
     response_text = ""
     try:
         if job.body is None:
             job.body = await asyncio.to_thread(render_body, cfg, job.payload or {})
     except Exception as exc:
-        outcome = DeliveryOutcome(False, False, "failed", error=str(exc)[:ERROR_KEEP])
+        outcome = DeliveryOutcome(False, False, "failed", error=redact_text(str(exc), _sent_secrets(cfg))[:ERROR_KEEP])
     else:
         body = job.body.encode("utf-8")
         headers = build_headers(cfg, job.event, job.delivery_id, body)
+        secrets = _sent_secrets(cfg, headers)
         started = time.monotonic()
         try:
             resp = await send_request(
@@ -483,15 +501,15 @@ async def deliver_once(cfg: WebhookConfig, job: DeliveryJob, *, allow_retry: boo
                 truncate=True,
             )
         except OutboundRequestError as exc:
-            outcome = DeliveryOutcome(False, False, "blocked", error=f"target rejected: {exc}"[:ERROR_KEEP])
+            reason = redact_text(f"target rejected: {exc}", secrets)[:ERROR_KEEP]
+            outcome = DeliveryOutcome(False, False, "blocked", error=reason)
         except Exception as exc:
             latency = round((time.monotonic() - started) * 1000, 1)
-            outcome = DeliveryOutcome(
-                False, True, "retrying", None, latency, f"{type(exc).__name__}: {exc}"[:ERROR_KEEP]
-            )
+            outcome = DeliveryOutcome(False, True, "retrying", None, latency, delivery_error_text(exc, secrets))
         else:
             latency = round((time.monotonic() - started) * 1000, 1)
-            response_text = resp.text[:RESPONSE_KEEP]
+            # Masked before the cut, so a value on the boundary is not left in part.
+            response_text = redact_text(resp.text, secrets)[:RESPONSE_KEEP]
             code = resp.status_code
             if 200 <= code < 300:
                 outcome = DeliveryOutcome(True, False, "success", code, latency)

@@ -41,13 +41,13 @@ class _Socket:
 )
 def test_origin_must_be_this_site(monkeypatch, host, origin, allowed):
     monkeypatch.setattr(state, "APP_CORS_ALLOW_ORIGINS", [])
-    assert shared.ws_origin_allowed(_Socket(host, origin)) is allowed
+    assert shared.origin_allowed(_Socket(host, origin)) is allowed
 
 
 def test_configured_cors_origin_is_allowed(monkeypatch):
     monkeypatch.setattr(state, "APP_CORS_ALLOW_ORIGINS", ["https://portal.example.com/"])
-    assert shared.ws_origin_allowed(_Socket("plexus.example.com", "https://portal.example.com"))
-    assert not shared.ws_origin_allowed(_Socket("plexus.example.com", "https://other.example.com"))
+    assert shared.origin_allowed(_Socket("plexus.example.com", "https://portal.example.com"))
+    assert not shared.origin_allowed(_Socket("plexus.example.com", "https://other.example.com"))
 
 
 async def test_verify_ws_session_refuses_a_foreign_origin_before_reading_the_token(monkeypatch):
